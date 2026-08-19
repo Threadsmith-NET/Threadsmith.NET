@@ -377,8 +377,16 @@ FodyWeavers.xsd
 spikes/
 artifacts/release/
 
-# Threadsmith local repository state
-.threadsmith/
+# Threadsmith local repository state; repo-owned examples/docs remain source.
+.threadsmith/*
+!.threadsmith/
+!.threadsmith/AGENTS.md
+!.threadsmith/*.example
+!.threadsmith/*.example.json
+!.threadsmith/prompts/
+!.threadsmith/prompts/**
+!.threadsmith/skills/
+!.threadsmith/skills/**
 
 
 /.crew/

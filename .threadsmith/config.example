@@ -1,0 +1,629 @@
+// Threadsmith.NET repository configuration example (strategy §21.2)
+//
+// Copy to .threadsmith/config.json (or .toml/.yaml per your configuration provider)
+// and edit. Every key listed here is a documented Threadsmith.NET repository-
+// configuration option. Repo config is DATA, not code — it is never executed.
+//
+// Ordinary configuration precedence (§21.1, lowest to highest):
+//   compiled defaults  <  machine  <  user  <  repo  <  session  <  CLI  <  env
+// Higher layers override lower layers. Static secret values never enter this
+// configuration graph. Typed `secrets:` references resolve separately at final
+// privileged boundaries through environment -> eligible repository -> user providers.
+//
+// Layer locations:
+//   machine  %ProgramData%/Threadsmith/config.json   (admin-managed; trusted)
+//   user     ~/.threadsmith/config.json               (user home; trusted, cross-platform)
+//   repo     <repo>/.threadsmith/config.json          (per-key overrides only; untrusted, §22.2)
+//   session  <repo>/.threadsmith/session.json         (per-key overrides; untrusted)
+//   secrets  ~/.threadsmith/secrets/config.json (recommended personal store)
+//            <repo>/.threadsmith/secrets/config.json (lower-trust optional store)
+// The repository secret store must be confined, untracked/not staged, and effectively
+// Git-ignored before Threadsmith reads it. Secret JSON is separately strict/bounded.
+//
+// This file is loaded by Microsoft.Extensions.Configuration (plan-01 establishes the
+// binding; plan-09 consumes it). Unknown keys are ignored; invalid values fail loudly.
+// The file is JSON-with-comments (// and /* */), which the .NET JSON configuration
+// provider supports.
+
+{
+  // ── Solution selection (§21.2) ──────────────────────────────────────────
+  // The solution Threadsmith.NET opens for a repository. Successful startup
+  // selection remembers a slash-normalized repository-relative path here;
+  // a valid value auto-loads next time, while a stale value is cleared safely.
+  "solution": {
+    "path": "src/Threadsmith.sln",
+    // Optional: restrict discovery to these project name prefixes.
+    "projectFilter": [ "Threadsmith.*" ]
+  },
+
+  // ── Interactive terminal themes and status (M7.1 plans 25–26) ─────────
+  // Built-ins: system, forge-dark, ocean, high-contrast. Configured themes
+  // replace a matching id as a whole or append in declared order. Theme data
+  // is bounded presentation data and cannot contain terminal control sequences.
+  "tui": {
+    // Display total request, ordinary-tool, and MCP operation durations together.
+    // This is presentation-only and defaults to true.
+    "showOperationDurations": true,
+    // Render complete ordinary model answers as bounded semantic Markdown.
+    // Set false to retain terminal-safe source chunk cadence.
+    "renderMarkdown": true,
+    // Interactive /theme selection writes this key to ordinary user configuration.
+    "defaultTheme": "system",
+    "footer": {
+      // Uses the native-scrollback-safe composer-adjacent status row.
+      "enabled": true
+    },
+    "themes": [
+      {
+        "id": "project-blue",
+        "name": "Project Blue",
+        "styles": {
+          "Default": { "foreground": null, "background": null },
+          "Hyperlink": { "foreground": "#5FAFFF", "underline": true },
+          "ToolSuccess": { "foreground": "green" },
+          "ToolFailure": { "foreground": "red", "bold": true },
+          "SelectionHighlight": { "foreground": "black", "background": "cyan", "bold": true }
+        },
+        "ui": {
+          "spinner": "dots",
+          "selectionMarker": ">",
+          "footerSeparator": " | "
+        }
+      }
+    ]
+  },
+
+  // ── Build commands (§21.2) ─────────────────────────────────────────────
+  // How the harness builds affected projects. Defaults use `dotnet build`.
+  "build": {
+    "command": "dotnet",
+    "args": [ "build", "--no-restore" ],
+    "configuration": "Debug"
+  },
+
+  // ── NuGet advisory sources (M14 / plan 42) ────────────────────────────
+  // Honored only from repository-excluding trusted machine/user configuration.
+  // Sources must be HTTPS and remain subject to invocation network-host policy.
+  // Optional private-source credentials use logical secret references; values are
+  // resolved only into the child-process environment and never enter arguments/results.
+  "nuget": {
+    "advisorySources": [
+      {
+        "name": "nuget-org",
+        "uri": "https://api.nuget.org/v3/index.json"
+        // "username": "token",
+        // "secretReference": "secrets:nuget:nuget-org"
+      }
+    ]
+  },
+
+  // ── Approved-plan execution orchestration (M11 / plan 37) ─────────────
+  "execution": {
+    // Combined compiler/test correction attempts. Every attempt repeats exact
+    // diff, policy, transactional apply, and validation gates.
+    "correctionBudget": 3
+  },
+
+  // ── Parallel agents and isolated workers (M11.1 / plan 38) ────────────
+  // Delegation is one level deep. Children are in-process asynchronous runs;
+  // these limits never authorize mutation, process, network, or model access.
+  "agents": {
+    // Bounded fair admission queue across parents.
+    "queueCapacity": 32,
+    // Concurrent child limits; implementation workers also require an approved
+    // non-overlapping partition and a managed detached Git worktree.
+    "maxActiveGlobal": 4,
+    "maxActivePerParent": 3,
+    "maxActiveImplementers": 2,
+    // Bounded host-shutdown join/cleanup backstop.
+    "shutdownTimeoutSeconds": 30,
+    // Advisory configured profile preferences. Host capability, sensitivity,
+    // context, budget, and provider constraints remain authoritative.
+    "roleProfiles": {
+      "explorer": "default",
+      "implementer": "default",
+      "securityReviewer": "default",
+      "testReviewer": "default",
+      "performanceReviewer": "default",
+      "architectureReviewer": "default"
+    }
+  },
+
+  // ── Governed skills and reusable workflows (M12 / plan 39) ───────────
+  "skills": {
+    // Repository packages under .threadsmith/skills are untrusted data. This
+    // switch can narrow discovery only; it cannot establish package trust.
+    "repositoryCatalogEnabled": true
+    // Trusted signer keys, exact digest/publisher/source allowlists, revocations,
+    // organization catalog paths, and user enablement live only in repository-
+    // excluding organization/machine/user configuration and ~/.threadsmith/skill-policy.json.
+  },
+
+  // ── Lifecycle hooks (M13 / plan 40) ──────────────────────────────────
+  // Repository declarations are untrusted requests. They remain disabled until
+  // the user externally approves the exact repository identity and normalized
+  // declaration digest; repository handlers are always advisory and fail-open.
+  // Managed blocking grants, trust, and approval records cannot be stored here.
+  "hooks": {
+    "repositoryHandlers": [
+      {
+        "schemaVersion": 1,
+        "id": "example-advisory-check",
+        "version": "1.0.0",
+        "type": "executable",
+        "enabled": false,
+        "target": "threadsmith-example-hook",
+        "hookPoints": [ "BeforeValidation", "RunCompleted" ],
+        "authority": "Advisory",
+        "failureMode": "FailOpen",
+        "timeoutSeconds": 10,
+        "maximumInputBytes": 65536,
+        "maximumOutputBytes": 65536,
+        "maximumConcurrency": 1,
+        "maximumRetries": 0,
+        "dataScope": [ "Metadata" ],
+        "secretReferences": []
+      }
+    ]
+  },
+
+  // ── Test policy (§21.2) ────────────────────────────────────────────────
+  // How the harness discovers and runs tests. Defaults use the Microsoft Testing
+  // Platform via `dotnet test`.
+  "test": {
+    "command": "dotnet",
+    "args": [ "test", "--no-build" ],
+    // Projects whose names match these patterns are considered test projects.
+    "testProjectPattern": [ "*.Tests", "*Test*" ],
+    // Maximum test execution wall-clock (seconds) before cancellation.
+    "timeoutSeconds": 300
+  },
+
+  // ── Editable roots (§21.2) ─────────────────────────────────────────────
+  // File-system roots the model may propose mutations within. Paths are
+  // relative to the repository root. Mutations outside these roots are rejected
+  // by policy (§5.4, plan-10).
+  "editableRoots": [ "src/" ],
+
+  // ── Prohibited paths (§21.2) ───────────────────────────────────────────
+  // Paths the model may never read or mutate, regardless of editableRoots.
+  "prohibitedPaths": [
+    ".threadsmith/secrets/",
+    "**/*.env",
+    "**/*.snk"
+  ],
+
+  // ── Model profile (§21.2) ──────────────────────────────────────────────
+  // The default model profile for a session. Profiles are defined in the
+  // user/machine configuration layers; this selects which profile a repo
+  // prefers. Plan-07 defines the profile schema and capability negotiation.
+  "model": {
+    // Repository model memory written atomically by /models and /reasoning.
+    // Both ids must be present together and resolve to one enabled provider binding.
+    // Null means no repository selection, allowing the user provider-catalog default.
+    "providerId": null,
+    "profileId": null,
+    "reasoningLevel": null,
+    "defaultProfile": "default",
+    // When true (default), HTTP endpoints are rejected unless they are loopback
+    // (localhost/127.0.0.1). Set to false to allow non-loopback HTTP endpoints
+    // for trusted local-network providers (e.g. vLLM on another machine).
+    "enforceModelEndpointHttps": true,
+    // Shared application-lifetime HTTP connection pool. These scalar settings
+    // follow normal configuration layering and fail startup when outside their
+    // documented bounds. Per-model request deadlines remain `timeoutSeconds`.
+    "http": {
+      // DNS-aware pooled connection recycling: 60–86400 seconds.
+      "pooledConnectionLifetimeSeconds": 900,
+      // Unused connection retention: 10–3600 seconds.
+      "pooledConnectionIdleTimeoutSeconds": 120,
+      // Connection establishment deadline: 1–300 seconds.
+      "connectTimeoutSeconds": 30,
+      // Per-endpoint concurrency cap: 1–1024.
+      "maxConnectionsPerServer": 16
+    },
+    // Optional workload-class → profile overrides (§11.4, §11.5).
+    "workloadProfiles": {
+      "planning": "planner",
+      "mutation": "coder"
+    },
+    // Ordered configured-model universe used by plan-07 selection. Define full
+    // profiles in machine/user/session configuration; see
+    // docs/operations/model-providers.md. Empty preserves the deterministic fake.
+    //
+    // Reasoning models (e.g. Qwen3 via vLLM) should declare the reasoning levels
+    // they support. The host sends `reasoning_effort` accordingly and streams
+    // `delta.reasoning` (legacy `reasoning_content`) as `ModelChunk.Reasoning`,
+    // surfaced via `ModelReasoningObserved` and the `/reasoning` command.
+    //
+    // Per-profile reasoning keys:
+    //   reasoning:supportedLevels — array of none|minimal|low|medium|high.
+    //     Absent ⇒ [none] (non-reasoning model). `none` is always included.
+    //   reasoningEffort — default reasoning level (string); parsed into
+    //     ReasoningLevel. When `reasoning:supportedLevels` is absent but
+    //     `reasoningEffort` is set, the level is auto-added to supported levels.
+    //
+    // Example reasoning profile:
+    //   {
+    //     "id": "qwen3-vllm",
+    //     "name": "qwen3",
+    //     "provider": "openai-compatible",
+    //     "endpoint": "http://localhost:8000/v1/chat/completions",
+    //     "modelId": "Qwen/Qwen3-32B",
+    //     "contextWindow": 131072,
+    //     "maximumOutputTokens": 8192,
+    //     "capabilities": { "streaming": true, "toolCalls": true, "structuredOutput": true },
+    //     "reasoningEffort": "medium",
+    //     "reasoning": { "supportedLevels": [ "none", "low", "medium", "high" ] }
+    //   }
+    "profiles": []
+  },
+
+  // ── Context rules (§21.2) ──────────────────────────────────────────────
+  // Per-phase context assembly policy (plan-09). Controls how much evidence is
+  // included in each model request.
+  "context": {
+    // Maximum tokens per request before the governor trims evidence.
+    "maxTokensPerRequest": 32000,
+    // Bounded cross-turn continuity (plans 33-35). Historical content remains
+    // untrusted, sanitized, provenance-linked, and subject to these hard bounds.
+    "conversation": {
+      "mode": "conversationAware",
+      "recentTurnTokens": 8000,
+      "summaryTokens": 4000,
+      "retrievedMemoryTokens": 4000,
+      "recentTurnCount": 12,
+      "recentTurnMaximumAge": "7.00:00:00",
+      "compactionPressurePercent": 75,
+      "maximumRetrievedItems": 24,
+      "artifactThresholdCharacters": 16384,
+      "compaction": {
+        "archivedTokenThreshold": 8000,
+        "archivedMessageThreshold": 12,
+        "maximumActiveMemoryItems": 128,
+        "maximumCandidateItems": 64,
+        "maximumItemCharacters": 2000,
+        "maximumSourceMessages": 100,
+        "maximumProviderRetries": 1,
+        "maximumProviderCalls": 2,
+        "maximumInputTokens": 16000
+      }
+    },
+    // Phase-specific evidence inclusion toggles (plan-09 §14).
+    "phases": {
+      "RepositoryDiscovery": { "includeSemanticFacts": true },
+      "ChangePlanning": { "includeEvidence": true, "includeDiagnostics": false }
+    }
+  },
+
+  // ── Tool permissions (§21.2) ────────────────────────────────────────────
+  // Per-tool allow/deny policy. Plan-08 defines the tool registry and policy
+  // pipeline. Repo config can narrow (but not widen) the host's defaults.
+  // Per-tool operational limits below override the compiled defaults; see the
+  // ── Execution limits section for the execution subsystem limits.
+  "tools": {
+    // Plan-27 availability state. When enabled is present, non-essential tools must
+    // be listed explicitly; disabled wins over enabled. Essential tools remain on.
+    "enabled": [ "list_files", "read_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
+    "disabled": [ "csharp_script", "example_optional_tool" ],
+    "allow": [ "list_files", "read_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "csharp_script", "invoke_skill" ],
+    "deny": [ "shell", "write_file" ],
+    // web_search is default-disabled. Repository entries request availability but
+    // cannot grant outbound consent; the user must confirm through /tools.
+    // MCP entries likewise cannot grant execution availability: /mcp enable writes an
+    // exact repository/schema approval to the owner-protected user store outside the repo.
+    // Allowing a shell permits its complete command language, including pipelines and
+    // child processes. Both platform defaults are listed so this scaffold remains portable;
+    // the host selects inbox Windows PowerShell on Windows and bash elsewhere.
+    "allowedExecutables": [ "powershell", "bash", "dotnet", "git" ],
+    // Network-aware tools are denied unless their destination hostname appears here.
+    "allowedNetworkHosts": [ "api.example.invalid", "api.search.brave.com", "api.nuget.org" ],
+    // Credential-bearing secret allowlists are effective only from trusted machine/user/env
+    // configuration. Repository/session/CLI values cannot grant a secret reference.
+    "allowedSecretReferences": [ "secrets:BRAVE_SEARCH_API_KEY" ],
+    // Approval required before these tools execute (§10.5).
+    "requireApproval": [ "run_tests", "apply_mutation" ],
+    // M21 sibling scheduling. Repository configuration may narrow but never broaden
+    // compiled tool/source limits. CompleteStarted preserves every admitted result.
+    "parallel": {
+      "enabled": true,
+      "maximumConcurrency": 4,
+      "failureMode": "CompleteStarted"
+    },
+
+    // ── Per-tool operational limits (§21.2) ─────────────────────────────
+    // These override the compiled-in defaults for the built-in tool suite.
+    // An input field of 0 means "use the host default" listed here.
+    "listFiles": {
+      "defaultEntries": 200,
+      "maxEntries": 2000
+    },
+    "readFile": {
+      "maxBytes": 1048576,
+      "defaultLines": 200,
+      "maxLines": 1000
+    },
+    "search": {
+      "maxBytes": 1048576,
+      "defaultMatches": 100,
+      "maxMatches": 500
+    },
+    "findSymbol": { "maxResults": 1000 },
+    "findReferences": { "maxResults": 1000 },
+    "findImplementations": { "maxResults": 1000 },
+    "runProcess": {
+      "defaultTimeoutSeconds": 30,
+      "maxTimeoutSeconds": 60,
+      // Null retains the platform default (powershell on Windows, bash elsewhere).
+      "shellExecutable": null,
+      // Only machine/user configuration can disable per-call approval. A repository
+      // value is ignored by the trusted configuration snapshot.
+      "requireApproval": true
+    },
+
+    // Plan-28 arbitrary per-tool scalar configuration. csharp_script runs in a
+    // fresh tracked worker, is disabled by default, and rejects file/network/process APIs.
+    "config": {
+      "csharp_script": {
+        "timeout_ms": "5000",
+        "max_output_bytes": "65536",
+        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic"
+      }
+    }
+  },
+
+  // ── Governed web search (M7.5 plan 36) ─────────────────────────────────
+  // Put provider settings in trusted user/machine configuration. Repository
+  // values cannot create consent. The API key remains outside IConfiguration in
+  // ~/.threadsmith/secrets/config.json or an exact THREADSMITH_ secret variable.
+  "webSearch": {
+    "provider": {
+      "id": "brave",
+      "kind": "brave",
+      "endpoint": "https://api.search.brave.com/res/v1/web/search",
+      "secretReference": "secrets:BRAVE_SEARCH_API_KEY",
+      "timeoutSeconds": 15,
+      "maximumResponseBytes": 1048576,
+      "retryLimit": 1,
+      "minimumRequestIntervalMilliseconds": 200
+    }
+  },
+
+  // ── Governed web fetch (M22 plan 58) ──────────────────────────────────
+  // Public HTTPS textual retrieval only. Values may narrow, but cannot broaden,
+  // the compiled SSRF, transport, parser, and output safety caps.
+  "webFetch": {
+    "maximumUrlCharacters": 2048,
+    "maximumRedirects": 3,
+    "timeoutSeconds": 15,
+    "maximumCompressedBytes": 1048576,
+    "maximumDecodedBytes": 2097152,
+    "maximumExtractedCharacters": 131072
+  },
+
+  // ── Plan approval policy (M23.4 plan 75) ───────────────────────────────
+  // Plans remain mandatory structured execution contracts. This policy controls
+  // only whether a sanity-checked valid plan pauses for manual approval before
+  // mutation proposal; it never approves exact diffs or repository writes.
+  // Repository-persisted values: reviewAll (default), reviewRisky,
+  // autoApproveAllValid, and alwaysTrustRepo. TrustSession is session-only.
+  // alwaysTrustRepo also writes an exact repository marker plus a user-owned
+  // trust grant outside the repository.
+  "planning": {
+    "approvalPolicy": "reviewAll",
+    // Host-written repository marker for AlwaysTrustRepo. It is accepted only when
+    // the matching user-owned plan-policy trust store also grants this repository.
+    "approvalRepositoryIdentity": null
+  },
+
+  // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────
+  // reviewAll (default), reviewRisky, trustPlan, and trustSession are process-
+  // session choices. alwaysTrustRepo is an explicit persistent repository opt-in;
+  // selecting another policy through /policy revokes that persisted trust.
+  "mutation": {
+    "approvalPolicy": "reviewAll",
+    // ReviewRisky pauses when the exact preview exceeds this many changed lines.
+    "largeDiffThreshold": 500
+  },
+
+  // ── Execution limits (§21.2) ───────────────────────────────────────────
+  // Host-owned operational limits for the execution subsystem. Override the
+  // compiled defaults at the machine/user/repo/session layer as needed.
+  "execution": {
+    // Maximum model continuation rounds within one plan-generation cycle.
+    "maxModelRounds": 16,
+    // Initial evidence-collection rounds that may advertise repository inspection
+    // tools. Later rounds retain propose_plan only so planning must converge.
+    "maxPlanningToolRounds": 4,
+    // Automatic malformed propose_plan argument repair attempts before the host
+    // fails closed.
+    "maxPlanProposalRepairAttempts": 3,
+    // Automatic repair attempts when plan sanity checks find repairable scope
+    // problems before any manual plan prompt or policy auto-approval.
+    "maxPlanRevisionRepairAttempts": 3,
+    // Automatic mutation-proposal repair attempts after repairable schema,
+    // exact-text, or pre-mutation validation failures before staging.
+    "maxMutationProposalRepairAttempts": 3,
+    // Maximum structured (JSON) mutation output characters accumulated from a
+    // streaming model before it is rejected as malformed.
+    "maxStructuredOutputCharacters": 8388608,
+    // Maximum characters of a tool result preview retained in session projections.
+    "toolResultPreviewCharacters": 4096
+  },
+
+  // ── Repository configuration safety (§22.2) ───────────────────────────
+  // Maximum byte size of the ordinary repo/session config files. This guard is
+  // sourced from the trusted machine/user/env layers ONLY (never the repo config
+  // it guards), so an untrusted repository cannot widen it. Static secret stores
+  // are outside IConfiguration and use their own compiled strict 64-KiB bound.
+  "repository": {
+    "configurationBytes": 1048576
+  },
+
+  // ── Extension allow list (§21.2) ───────────────────────────────────────
+  // Extensions (by id or package name) this repo permits to load. Plan-15/16
+  // define discovery and the capability registry. An empty list means no
+  // extensions are loaded.
+  "extensions": {
+    "allowList": [ "Threadsmith.SampleExtension" ],
+    // Directory scanned for extension packages (relative to repo root).
+    "directory": ".threadsmith/extensions/"
+  },
+
+  // ── Prompt append files (§21.2) ─────────────────────────────────────────
+  // Ordered list of files whose contents are appended to the model's system
+  // prompt at request-assembly time (plan-09 / §14.3). Paths are relative to
+  // the repository root unless absolute. Files under .threadsmith/prompts/ are
+  // the conventional location.
+  //
+  // Repo-provided append content is UNTRUSTED INPUT (§22.2): sanitized + bounded,
+  // never executed as code, never allowed to override host policy or the
+  // guardrails. Append files are versioned and referenced by id+version in
+  // execution records (§11.6).
+  "prompt append files": [
+    ".threadsmith/prompts/coding-standards.md",
+    ".threadsmith/prompts/domain-glossary.md"
+  ],
+
+  // ── Formatting rules (§21.2) ───────────────────────────────────────────
+  // Code formatting applied to proposed mutations (plan-10/11).
+  "formatting": {
+    "style": "editorconfig",
+    "applyOnMutation": true
+  },
+
+  // ── Validation requirements (§21.2) ────────────────────────────────────
+  // The post-approval validation gate a mutation must pass before it can be
+  // accepted (plan-12/13). Stages run in order; a failing stage blocks later
+  // stages. Omitting this key uses the compiled default shown here: fast
+  // semantic diagnostics plus process-based compile, diagnostics, and affected
+  // tests. This key does NOT disable always-on proposal/schema/path checks or
+  // automatic pre-mutation Roslyn screening of proposed .cs overlays before
+  // staging/approval; those cheap gates degrade explicitly when unavailable.
+  "validation": {
+    "stages": [ "semantic", "compile", "diagnostics", "tests" ],
+    // Treat baseline diagnostics as non-blocking (plan-12 §16.3).
+    "ignoreBaselineDiagnostics": true,
+    // Required test selection scope (plan-13).
+    "testScope": "affected"
+  },
+
+  // ── Persistence, artifacts, and retention (§19, plan-18) ─────────────────────
+  // The SQLite database path (relative to the repository root) and the
+  // content-addressed artifact directory. Ordered transactional migrations run
+  // at startup; a failed migration rolls back and leaves prior data readable (§19.5).
+  "persistence": {
+    "path": ".threadsmith/threadsmith.db",
+    // Directory holding content-addressed artifact files (process output, diffs,
+    // build logs, etc.). Metadata lives in SQLite (§19.3).
+    "artifactDirectory": ".threadsmith/artifacts",
+    "retention": {
+      // Whether age-based retention cleanup is enabled (§19.6).
+      "enabled": true,
+      // Minimum session age before retention may remove it.
+      "sessionAgeDays": 30,
+      // Metadata-only mode for sensitive repositories: no large artifacts retained.
+      "metadataOnly": false,
+      // Per-kind retention toggles. Setting any to false drops that artifact kind on cleanup.
+      "retainFullPrompts": true,
+      "retainFullModelOutput": true,
+      "retainProcessLogs": true,
+      "retainSourceExcerpts": true,
+      "retainDiffs": true,
+      "retainTelemetry": true,
+      "retainSessionSummaries": true,
+      // Cold structured memory/provenance remains durable; full message bodies have
+      // an independent age window and may be removed without orphaning metadata.
+      "retainConversationBodies": false,
+      "conversationMessageBodyAge": "30.00:00:00"
+    },
+    // Defense-in-depth startup scan of persisted events/artifacts for unredacted secrets (plan-20, §19.6).
+    // Event payloads are immutable history and are never rewritten; artifacts are re-sanitized when
+    // repairArtifacts is set.
+    "redactionAudit": {
+      "enabled": true,
+      "repairArtifacts": true
+    }
+  },
+
+  // ── MCP connections (§20, plans 19/21/22) ───────────────────────────────────
+  // MCP server connection profiles. Imported tools/resources/prompts pass through
+  // the standard tool runtime and are governed like built-ins (M8 exit). Servers
+  // run as tracked child processes; an unresponsive server is killed after the
+  // drain/kill timeout so cancellation holds through the MCP transport (gap #6).
+  // Only the secrets named in a profile's secretScope are injected into the
+  // server environment or resolved into HTTP headers (§21.3, gap #6). Interactive
+  // OAuth uses authorization-code + PKCE and a user-owned per-profile token cache.
+  "mcp": {
+    // Default drain/kill timeout for unresponsive servers (seconds). Per-profile
+    // drainKillTimeoutSeconds overrides this.
+    "defaultDrainKillTimeoutSeconds": 10,
+    "profiles": [
+      {
+        "id": "example-stdio",
+        "name": "Example stdio server",
+        "transport": "stdio",
+        // stdio: bare executable basename resolved from the host PATH. Path-qualified
+        // commands are rejected (§22.4).
+        "command": "npx",
+        "arguments": [ "-y", "@modelcontextprotocol/server-filesystem", "/tmp" ],
+        "trust": "TrustedRead",
+        // Logical secrets: references this server may see. Only these are injected (§21.3).
+        "secretScope": [ "secrets:MCP_API_KEY" ],
+        "startupTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 60,
+        "drainKillTimeoutSeconds": 10,
+        // Capability kinds permitted to be imported. Omit to allow all
+        // (tools/resources/resource-templates/prompts).
+        "allowedCapabilities": [ "tools" ],
+        "environment": {
+          "EXTRA_OPTION": "value"
+        },
+        "workingDirectory": ".",
+        "autoConnect": false
+      },
+      {
+        "id": "example-http",
+        "name": "Example streamable HTTP server",
+        "transport": "http",
+        "command": "https://mcp.example.com/mcp",
+        "trust": "TrustedExecution",
+        "secretScope": [ "secrets:MCP_HTTP_TOKEN", "secrets:MCP_OAUTH_CLIENT_SECRET" ],
+        // Static-token SSO uses headers. Do not configure Authorization when oauth.enabled is true.
+        "headers": {
+          "Authorization": "secrets:MCP_HTTP_TOKEN",
+          "X-Tenant-Id": "example"
+        },
+        // Interactive authorization-code + PKCE for HTTP/SSE. clientId must be
+        // pre-registered; redirectPort 0 selects an ephemeral localhost port.
+        "oauth": {
+          "enabled": false,
+          "scopes": [ "tools.read" ],
+          "clientId": "threadsmith",
+          "clientSecret": "secrets:MCP_OAUTH_CLIENT_SECRET",
+          "redirectPort": 8400
+        },
+        "startupTimeoutSeconds": 30,
+        "requestTimeoutSeconds": 60,
+        "drainKillTimeoutSeconds": 10,
+        "allowedCapabilities": [ "tools" ],
+        "autoConnect": false
+      }
+    ]
+  },
+
+  // ── Diagnostic bundles (§23.4, plan-20) ──────────────────────────────────────
+  // Secret-free diagnostic bundles for support. Every entry is sanitized before
+  // it is written; a canary-secret test gates the "no secrets in bundles" exit.
+  "diagnostics": {
+    "enabled": true,
+    "directory": ".threadsmith/diagnostics",
+    "includeLogs": true,
+    "includeEvents": true,
+    "includeArtifacts": true,
+    "includeConfiguration": true,
+    "includeVersionInfo": true,
+    "maxBytes": 67108864,
+    "recentEventsPerSession": 1000
+  }
+}

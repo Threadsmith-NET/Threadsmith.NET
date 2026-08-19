@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "defaultProviderId": "local-openai",
+  "defaultModelId": "4d36e96e-292b-4c25-bb63-2f63821d5729",
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "id": "local-openai",
+      "name": "Local OpenAI-compatible",
+      "enabled": true,
+      "baseUri": "http://127.0.0.1:1234/v1/",
+      "chatCompletionsPath": "chat/completions",
+      "headers": {
+        "X-Client-Name": "Threadsmith.NET"
+      },
+      "secretKeyReference": "secrets:models:local-openai",
+      "models": [
+        {
+          "type": "openai-compatible",
+          "id": "4d36e96e-292b-4c25-bb63-2f63821d5729",
+          "name": "Local coding model",
+          "enabled": true,
+          "modelId": "local-model",
+          "contextWindow": 32768,
+          "maximumOutputTokens": 4096,
+          "capabilities": {
+            "streaming": true,
+            "toolCalls": true,
+            "structuredOutput": true
+          },
+          "cost": {
+            "inputPerMillionTokens": 0,
+            "outputPerMillionTokens": 0
+          },
+          "sensitiveDataPolicy": "prohibited",
+          "intendedWorkloadClasses": [ "general", "planning", "codeEdit", "review" ],
+          "defaultReasoningLevel": "medium",
+          "supportedReasoningLevels": [ "none", "low", "medium", "high" ],
+          "reasoningCompatibility": {
+            "schemaVersion": 1,
+            "mode": "standardEffort",
+            "responseMode": "reasoningContent"
+          },
+          "timeoutSeconds": 120,
+          "retryMaxAttempts": 3,
+          "retryDelayMilliseconds": 250
+        }
+      ]
+    }
+  ]
+}

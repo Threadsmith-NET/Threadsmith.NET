@@ -1,0 +1,5 @@
+{
+  "//": "Repo-level extension selection (strategy §21). Selects which discovered extensions are loaded at application startup. This file is repo-level ONLY and is never read from the user ~/ config (per the user's standing instruction).",
+  "discoveryDirectory": ".threadsmith/extensions",
+  "autoLoad": []
+}

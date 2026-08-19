@@ -1,0 +1,3 @@
+# Placeholder so the .threadsmith/prompts/ directory is tracked by git.
+# Add repo-level system-prompt-append files here (see .threadsmith/config.example,
+# "prompt append files" key). These are untrusted input (strategy §22.2).

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.SampleExtensions.MinimalTool</RootNamespace>
+    <Description>Sample Threadsmith.NET extension contributing a callable tool and an advisory model-preference contributor (plan-14 §17.25). Demonstrates the reference convention that excludes the contract assembly from the extension output.</Description>
+    <IsPackable>false</IsPackable>
+    <ThreadsmithExtension>true</ThreadsmithExtension>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- An extension compiles against the contract assembly but must NOT copy it into its output;
+         the extension loads the host's single shared copy from the default load context at runtime
+         (strategy §17.11, plan-14 gap #5). CopyLocalLockFileAssemblies=false keeps transitive
+         runtime assets out of the extension output as well. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <!--
+    Reference convention (plan-14 task 8, gap #5). For a ProjectReference the equivalent of the
+    NuGet PrivateAssets="all" + ExcludeAssets="runtime" convention is Private="false", which keeps
+    the compile-time reference while excluding the contract DLL from this extension's output. The
+    build-time authoring guard target below fails the build if the DLL is ever copied.
+  -->
+  <ItemGroup>
+    <ProjectReference
+      Include="..\..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj"
+      Private="false"
+      PrivateAssets="all"
+      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- Import the authoring guard target shipped with the abstractions package (plan-14 task 9). -->
+  <Import Project="..\..\..\src\Threadsmith.Extensions.Abstractions\build\Threadsmith.Extensions.Abstractions.targets" />
+
+  <!-- Ship the extension manifest so discovery reads the canonical id without loading the assembly. -->
+  <ItemGroup>
+    <None Include="threadsmith.extension.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

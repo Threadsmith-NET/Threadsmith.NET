@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "turns": [
+    {
+      "text": "inspect the request",
+      "toolName": "read_file",
+      "argumentsJson": "{\"path\":\"README.md\"}",
+      "usage": {
+        "inputTokens": 8,
+        "outputTokens": 3
+      },
+      "failure": "None"
+    }
+  ]
+}

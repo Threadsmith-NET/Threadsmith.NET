@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Models</RootNamespace>
+    <Description>Threadsmith.NET provider-neutral model contracts, selection, configuration, and dispatch. Provider SDK and wire types must not leak into this facade, domain events, or persistent state (strategy §7.1, §8.1).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+  </ItemGroup>
+
+</Project>

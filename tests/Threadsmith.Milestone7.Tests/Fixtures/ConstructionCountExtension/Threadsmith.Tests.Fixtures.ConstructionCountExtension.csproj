@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Tests.Fixtures.ConstructionCount</RootNamespace>
+    <Description>Minimal extension that counts how many times its constructor runs, used by the F2 double-construction test (plan-15).</Description>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <ThreadsmithExtension>true</ThreadsmithExtension>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference
+      Include="..\..\..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj"
+      Private="false"
+      PrivateAssets="all"
+      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <Import Project="..\..\..\..\src\Threadsmith.Extensions.Abstractions\build\Threadsmith.Extensions.Abstractions.targets" />
+
+  <!-- Ship the extension manifest so discovery reads the canonical id without loading the assembly. -->
+  <ItemGroup>
+    <None Include="threadsmith.extension.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

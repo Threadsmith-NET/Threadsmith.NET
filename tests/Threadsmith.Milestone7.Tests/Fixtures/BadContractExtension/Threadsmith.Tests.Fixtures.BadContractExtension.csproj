@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Tests.Fixtures.BadContract</RootNamespace>
+    <Description>Fixture extension that deliberately bundles the shared contract assembly, exercising the runtime duplicate-contract rejection (plan-15 task 5, gap #5).</Description>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    Deliberately BAD: the contract assembly is copied into this fixture's output (no
+    ExcludeAssets="runtime"). At runtime the collectible load context detects the bundled
+    duplicate and rejects it with DuplicateContractAssemblyException. This fixture is NOT
+    marked ThreadsmithExtension so the authoring guard target does not fail its build.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

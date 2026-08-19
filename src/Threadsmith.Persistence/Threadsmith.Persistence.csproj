@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Persistence</RootNamespace>
+    <Description>Threadsmith.NET SQLite schema, event store, artifact storage, migrations, retention, and session restore (strategy §8).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    Analyzer wiring for all non-spike projects (plan-01 task 4).
+    Severity rules live in .editorconfig; this file only adds the analyzer
+    assemblies and the StyleCop ruleset so they participate in the build.
+  -->
+
+  <ItemGroup Condition="'$(IsSpike)' != 'true'">
+    <PackageReference Include="StyleCop.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(IsSpike)' != 'true'">
+    <CodeAnalysisRuleSet>$(MSBuildThisFileDirectory)stylecop.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
+
+  <!-- Source link for packable builds (deterministic; ADR not required for M0). -->
+  <ItemGroup Condition="'$(SourceLinkEnabled)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

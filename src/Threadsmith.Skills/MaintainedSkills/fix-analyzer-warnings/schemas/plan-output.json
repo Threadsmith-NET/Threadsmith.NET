@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "plan"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1, "maximum": 1 },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
+      "properties": {
+        "schemaVersion": { "type": "integer", "minimum": 2, "maximum": 2 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+            "properties": {
+              "stepId": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["value"],
+                "properties": { "value": { "type": "string", "minLength": 36, "maxLength": 36 } }
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "fileIntents": { "type": "array", "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] }, "path": { "type": "string", "maxLength": 512 }, "destinationPath": { "type": "string", "maxLength": 512 } } } },
+              "expectedOutcome": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "validation": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 512 } }
+            }
+          }
+        },
+        "risks": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } },
+        "outstandingQuestions": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } }
+      }
+    }
+  }
+}

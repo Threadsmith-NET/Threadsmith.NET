@@ -1,0 +1,115 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer used for a dry-run package build (no release upload)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release contracts
+        shell: pwsh
+        run: ./eng/release/Test-ReleaseContracts.ps1
+
+  package:
+    needs: contracts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+            script: Build-WindowsInstaller.ps1
+          - rid: win-arm64
+            os: windows-latest
+            script: Build-WindowsInstaller.ps1
+          - rid: linux-x64
+            os: ubuntu-latest
+            script: Build-LinuxArchive.ps1
+          - rid: linux-arm64
+            os: ubuntu-latest
+            script: Build-LinuxArchive.ps1
+          - rid: osx-x64
+            os: macos-15-intel
+            script: Build-MacPackage.ps1
+          - rid: osx-arm64
+            os: macos-15
+            script: Build-MacPackage.ps1
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.204'
+      - name: Install Inno Setup
+        if: startsWith(matrix.rid, 'win-')
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.Substring(1) }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') { throw 'Tag/input is not a supported SemVer.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Build platform artifact
+        shell: pwsh
+        run: ./eng/release/${{ matrix.script }} -Version '${{ steps.version.outputs.version }}' -RuntimeIdentifier '${{ matrix.rid }}' -OutputRoot '${{ runner.temp }}/threadsmith-release'
+      - name: Reject secret canary leakage
+        shell: pwsh
+        env:
+          THREADSMITH_RELEASE_SECRET_CANARY: ${{ secrets.THREADSMITH_RELEASE_SECRET_CANARY }}
+        run: |
+          if (-not [string]::IsNullOrEmpty($env:THREADSMITH_RELEASE_SECRET_CANARY)) {
+            Get-ChildItem '${{ runner.temp }}/threadsmith-release/artifacts' -File | ForEach-Object {
+              $content = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($_.FullName))
+              if ($content.Contains($env:THREADSMITH_RELEASE_SECRET_CANARY, [StringComparison]::Ordinal)) {
+                throw "Secret canary detected in $($_.Name)."
+              }
+            }
+          }
+      - name: Upload matrix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.rid }}
+          path: ${{ runner.temp }}/threadsmith-release/artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify aggregate release
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          ./eng/release/New-ReleaseManifest.ps1 -Version $version -ReleaseTag '${{ github.ref_name }}' -SourceCommit '${{ github.sha }}' -ArtifactDirectory artifacts
+      - name: Publish immutable GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts/* --verify-tag --generate-notes --title "Threadsmith.NET ${{ github.ref_name }}"

@@ -1,0 +1,10 @@
+# Threadsmith.NET test-project analyzer overrides (mirrors Architecture.Tests).
+
+[*.cs]
+dotnet_diagnostic.SA1000.severity = none
+dotnet_diagnostic.SA1117.severity = none
+dotnet_diagnostic.SA1118.severity = none
+dotnet_diagnostic.SA1515.severity = none
+dotnet_diagnostic.SA1516.severity = none
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1601.severity = none

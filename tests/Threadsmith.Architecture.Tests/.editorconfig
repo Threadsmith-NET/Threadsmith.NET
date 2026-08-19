@@ -1,0 +1,15 @@
+# Threadsmith.NET test-project analyzer overrides.
+# Test projects relax certain StyleCop style rules that conflict with target-typed
+# new() collection initializers and multi-line parameters (plan-01 task 5).
+# Product projects (src/) remain fully enforced via the root .editorconfig.
+
+[*.cs]
+# SA1000: keyword 'new' should be followed by a space — fires on target-typed new().
+dotnet_diagnostic.SA1000.severity = none
+# SA1118: parameter spans multiple lines — unavoidable for large collection literals.
+dotnet_diagnostic.SA1118.severity = none
+# SA1515: single-line comment should be preceded by blank line.
+dotnet_diagnostic.SA1515.severity = none
+# SA1600/SA1601: XML docs — test code is not a public API surface.
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1601.severity = none

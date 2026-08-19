@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/testfx/main/src/Platform/Microsoft.Testing.Platform/configschema/testingplatform.schema.json",
+  "platformOptions": {
+    "telemetryOptOut": true
+  }
+}

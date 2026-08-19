@@ -1,0 +1,1 @@
+Inspect central package management, all direct uses, relevant release constraints supplied by the user, and existing validation patterns. Do not edit project files or run package-manager mutation commands. Return exact schema-versioned propose_plan tool arguments for a phased upgrade including compatibility risks, affected projects, rollback, build, and focused test validation.

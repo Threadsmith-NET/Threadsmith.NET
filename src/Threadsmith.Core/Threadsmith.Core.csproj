@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Core</RootNamespace>
+    <Description>Threadsmith.NET core domain types, identifiers, results, policies, commands, events, and state-machine contracts. References no UI, no Roslyn, no terminal library, no model-provider SDK, no extension implementations (strategy §8.1).</Description>
+  </PropertyGroup>
+
+  <!-- Threadsmith.Core intentionally has NO project or package references. -->
+
+</Project>

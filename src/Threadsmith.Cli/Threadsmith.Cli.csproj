@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Cli</RootNamespace>
+    <Description>Threadsmith.NET headless commands, scripting output, and CI behavior (strategy §8). Drives the host through application commands, not TUI actions, so headless and interactive runs are identical.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+  </ItemGroup>
+
+</Project>

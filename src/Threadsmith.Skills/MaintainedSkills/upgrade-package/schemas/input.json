@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["packageId", "targetVersion"],
+  "properties": {
+    "packageId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "targetVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "constraints": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } }
+  }
+}

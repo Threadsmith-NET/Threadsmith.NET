@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accepted", "planId"],
+  "properties": {
+    "accepted": { "type": "boolean" },
+    "planId": { "type": "string", "maxLength": 128 }
+  }
+}

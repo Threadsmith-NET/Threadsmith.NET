@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Context</RootNamespace>
+    <Description>Threadsmith.NET evidence store, context selection, summarization, provenance, and prompt assembly (strategy §8).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
+  </ItemGroup>
+
+</Project>

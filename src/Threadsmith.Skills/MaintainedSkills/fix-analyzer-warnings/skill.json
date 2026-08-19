@@ -1,0 +1,130 @@
+{
+    "schemaVersion":  1,
+    "skillId":  {
+                    "value":  "fix-analyzer-warnings"
+                },
+    "packageId":  "threadsmith.fix-analyzer-warnings",
+    "version":  "1.0.0",
+    "displayName":  "Analyzer Fix",
+    "description":  "Investigate bounded analyzer diagnostics and propose a governed, testable fix plan.",
+    "tags":  [
+                 "analyzers",
+                 "csharp",
+                 "planning"
+             ],
+    "publisher":  "Threadsmith.NET",
+    "license":  "MIT",
+    "assets":  [
+                   {
+                       "path":  "instructions/analyze.md",
+                       "bytes":  347,
+                       "sha256":  "bf5c672074e005bdb127c3b9be22a583153c8f35f0a22d00d66d5186901124cd",
+                       "required":  true,
+                       "kind":  "instructions"
+                   },
+                   {
+                       "path":  "schemas/host-result.json",
+                       "bytes":  209,
+                       "sha256":  "dfb4434429def34a4450c489dc9a93a217e1502cdc1ea2fa4fd848fcec7e18ea",
+                       "required":  true,
+                       "kind":  "reference"
+                   },
+                   {
+                       "path":  "schemas/input.json",
+                       "bytes":  331,
+                       "sha256":  "d02aab8e138553476a3416ec20418ea9287c9aa11f898143aad8772494c2f651",
+                       "required":  true,
+                       "kind":  "input-schema"
+                   },
+                   {
+                       "path":  "schemas/plan-output.json",
+                       "bytes":  2200,
+                       "sha256":  "f2be152c55a534b632b34d8438ad33d8d810772fe27bdc42ff09e5922e14c215",
+                       "required":  true,
+                       "kind":  "output-schema"
+                   }
+               ],
+    "requirements":  {
+                         "requiredTools":  [
+                                               "read_file",
+                                               "search",
+                                               "find_symbol",
+                                               "find_references"
+                                           ],
+                         "optionalTools":  [
+                                               "git_status"
+                                           ],
+                         "toolContractVersions":  {
+
+                                                  },
+                         "minimumTrust":  "TrustedRead",
+                         "approvalCategories":  [
+                                                    "read-only discovery",
+                                                    "governed plan proposal"
+                                                ],
+                         "model":  {
+                                       "workloads":  [
+                                                         "Planning",
+                                                         "CodeEdit"
+                                                     ],
+                                       "requiresToolCalls":  true,
+                                       "requiresStructuredOutput":  true,
+                                       "minimumContextWindow":  8192,
+                                       "allowedProfiles":  [
+
+                                                           ],
+                                       "deniedProfiles":  [
+
+                                                          ]
+                                   },
+                         "minimumHostVersion":  "1.0.0",
+                         "maximumHostVersion":  "1.999.999"
+                     },
+    "budget":  {
+                   "contentTokens":  8000,
+                   "workflowSteps":  8,
+                   "modelTurns":  6,
+                   "toolCalls":  24,
+                   "mutations":  16,
+                   "validationAttempts":  4,
+                   "delegatedChildren":  8,
+                   "parallelChildren":  4,
+                   "worktrees":  2,
+                   "reviewerFindings":  128,
+                   "wallTime":  "00:20:00"
+               },
+    "agents":  [
+
+               ],
+    "workflow":  {
+                     "schemaVersion":  1,
+                     "workflowId":  "fix-analyzer-warnings",
+                     "steps":  [
+                                   {
+                                       "instructionAsset":  "instructions/analyze.md",
+                                       "inputSchemaAsset":  "schemas/input.json",
+                                       "stepId":  "analyze",
+                                       "maximumIterations":  1,
+                                       "hostAction":  null,
+                                       "outputSchemaAsset":  "schemas/plan-output.json",
+                                       "dependsOn":  [
+
+                                                     ],
+                                       "kind":  "invokeProcedure"
+                                   },
+                                   {
+                                       "instructionAsset":  null,
+                                       "inputSchemaAsset":  null,
+                                       "stepId":  "propose-plan",
+                                       "maximumIterations":  1,
+                                       "hostAction":  "proposePlan",
+                                       "outputSchemaAsset":  "schemas/host-result.json",
+                                       "dependsOn":  [
+                                                         "analyze"
+                                                     ],
+                                       "kind":  "proposePlan"
+                                   }
+                               ]
+                 },
+    "signature":  null
+}

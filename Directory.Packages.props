@@ -1,0 +1,70 @@
+<Project>
+
+  <!--
+    Central Package Management for Threadsmith.NET (strategy §6: all external
+    packages centrally versioned, pinned, upgraded deliberately). Every package
+    version in the repo is declared here; projects reference packages by
+    <PackageReference Include="..." /> without a Version attribute.
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Conversation-first interactive terminal (ADR-15). -->
+    <PackageVersion Include="Markdig" Version="1.3.2" />
+    <PackageVersion Include="PrettyPrompt" Version="6.0.4" />
+    <PackageVersion Include="Spectre.Console" Version="0.57.0" />
+    <!-- Historical retained spike only; excluded from product/release closure. -->
+    <PackageVersion Include="Terminal.Gui" Version="2.4.17" />
+
+    <!-- Roslyn + MSBuild (strategy §6; ADR-4). Microsoft.Build.Locator registers the MSBuild host for MSBuildWorkspace. -->
+    <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
+    <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.6.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.6.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" />
+
+    <!-- Model abstraction (strategy §6: host-owned facade, optionally backed by Microsoft.Extensions.AI). -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
+
+    <!-- Microsoft.Extensions.* — configuration, DI, logging, options, hosting (strategy §6). -->
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+
+    <!-- Persistence (strategy §6: SQLite + artifact files; ADR-3). -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+
+    <!-- MCP (strategy §6: official C# MCP SDK behind a host adapter; ADR for §20). Version-isolated in Threadsmith.Mcp only. -->
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.0.0" />
+    <PackageVersion Include="ModelContextProtocol" Version="2.0.0" />
+
+    <!-- Testing (strategy §6: xUnit + Microsoft.Testing.Platform). xUnit v3 with the MTP v2 variant matches the pinned Microsoft.Testing.Platform 2.3.3. -->
+    <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
+    <PackageVersion Include="xunit.analyzers" Version="1.27.0" />
+    <PackageVersion Include="Microsoft.Testing.Platform.MSBuild" Version="2.3.3" />
+
+    <!-- Static analysis (plan-01 task 4; portable-csharp-guardrails G-1..G-29). -->
+    <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
+    <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.7.23" />
+
+    <!-- Source link (deterministic builds). -->
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
+  </ItemGroup>
+
+</Project>

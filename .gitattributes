@@ -1,0 +1,32 @@
+# Normalize text files to LF in the repository regardless of checkout platform.
+# This enforces the `end_of_line = lf` rule declared in .editorconfig at the VCS
+# layer and prevents line-ending churn from mixed-platform contributors.
+* text=auto eol=lf
+
+# Source and config files are always text with LF line endings.
+*.cs    text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.sln   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.editorconfig text eol=lf
+*.props text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.sh    text eol=lf
+*.ps1   text eol=lf
+
+# Binary assets — never normalize.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.bmp   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.nupkg binary
+*.snupkg binary
+*.pfx   binary

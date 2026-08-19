@@ -1,0 +1,9 @@
+{
+  "Id": "threadsmith.tests.construction-count",
+  "Name": "Construction Count Fixture",
+  "Version": "1.0.0",
+  "HostApiVersion": "current",
+  "EntryAssembly": "Threadsmith.Tests.Fixtures.ConstructionCount.dll",
+  "Capabilities": ["tool-provider"],
+  "Permissions": []
+}

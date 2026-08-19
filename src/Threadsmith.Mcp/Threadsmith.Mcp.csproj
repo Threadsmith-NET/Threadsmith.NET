@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Mcp</RootNamespace>
+    <Description>Threadsmith.NET MCP client adapters, connection lifecycle, tool/resource import, and policy (strategy §8). Depends on the stable tool runtime and capability registry.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.App" />
+    <InternalsVisibleTo Include="Threadsmith.Milestone9.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Milestone10.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Milestone23.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+    <ProjectReference Include="..\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

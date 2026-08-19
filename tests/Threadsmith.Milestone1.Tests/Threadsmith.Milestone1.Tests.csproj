@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <PackageReference Include="xunit.analyzers" />
+    <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Cli\Threadsmith.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Tui\Threadsmith.Tui.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\fixtures\scripts\*.json"
+          Link="fixtures\scripts\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

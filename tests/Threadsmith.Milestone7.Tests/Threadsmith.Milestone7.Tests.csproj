@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <PackageReference Include="xunit.analyzers" />
+    <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+  </ItemGroup>
+  <!-- Fixture extensions live under this project directory as separate projects; exclude their sources and outputs from the test compile glob. -->
+  <ItemGroup>
+    <Compile Remove="Fixtures\\**\\*.cs" />
+    <Compile Remove="Fixtures\\**\\*.vb" />
+    <None Remove="Fixtures\\**" />
+    <EmbeddedResource Remove="Fixtures\\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Context\Threadsmith.Context.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Extensions.Runtime\Threadsmith.Extensions.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+    <ProjectReference Include="..\..\samples\extensions\MinimalToolExtension\Threadsmith.SampleExtensions.MinimalTool.csproj" />
+    <ProjectReference Include="Fixtures\BadContractExtension\Threadsmith.Tests.Fixtures.BadContractExtension.csproj" />
+    <ProjectReference Include="Fixtures\ThrowingExtension\Threadsmith.Tests.Fixtures.ThrowingExtension.csproj" />
+    <ProjectReference Include="Fixtures\LeakingExtension\Threadsmith.Tests.Fixtures.LeakingExtension.csproj" />
+    <ProjectReference Include="Fixtures\ConflictingDepA\Threadsmith.Tests.Fixtures.ConflictingDepA.csproj" />
+    <ProjectReference Include="Fixtures\ConflictingDepB\Threadsmith.Tests.Fixtures.ConflictingDepB.csproj" />
+    <ProjectReference Include="Fixtures\CleanUnloadExtension\Threadsmith.Tests.Fixtures.CleanUnloadExtension.csproj" />
+    <ProjectReference Include="Fixtures\ConstructionCountExtension\Threadsmith.Tests.Fixtures.ConstructionCountExtension.csproj" />
+    <ProjectReference Include="Fixtures\InvalidSecondToolExtension\Threadsmith.Tests.Fixtures.InvalidSecondToolExtension.csproj" />
+  </ItemGroup>
+
+</Project>

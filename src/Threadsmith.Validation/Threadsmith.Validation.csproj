@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Validation</RootNamespace>
+    <Description>Threadsmith.NET syntax, compilation, analyzers, tests, validation policy, diagnostic correlation, and gates (strategy §8).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+  </ItemGroup>
+
+</Project>

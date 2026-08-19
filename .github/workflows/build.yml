@@ -1,0 +1,91 @@
+# Threadsmith.NET CI (plan-01 task 9).
+# Restore + build + test on Windows, Linux, and macOS. All completed milestone suites run
+# with the architecture-direction tests as the dependency correctness gate.
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.204'
+
+      - name: Restore
+        run: dotnet restore src/Threadsmith.sln
+
+      - name: Build
+        run: dotnet build src/Threadsmith.sln --configuration Debug --no-restore
+
+      - name: Test
+        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+
+  # Spikes are throwaway validation projects (plan-01 tasks 10-15). They build as a set;
+  # the Terminal.Gui spike is headless-safe (no TTY required for the PASS assertion).
+  spikes:
+    name: build spikes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.204'
+
+      - name: Build spikes
+        run: dotnet build spikes/Spikes.sln --configuration Debug
+
+      # Run the headless-safe spikes. (Spike.TerminalGui runs in headless mode when CI is set.)
+      - name: Run Spike.OpenAiStreaming
+        run: dotnet run --project spikes/Spike.OpenAiStreaming/Spike.OpenAiStreaming.csproj --configuration Debug --no-build
+        env:
+          CI: 'true'
+
+      - name: Run Spike.Sqlite
+        run: dotnet run --project spikes/Spike.Sqlite/Spike.Sqlite.csproj --configuration Debug --no-build
+
+      # Build the extension in Release to match the spike's Release run configuration.
+      # The spike probes Release then Debug, so either works, but aligning configs is cleaner.
+      - name: Run Spike.CollectibleAlc
+        run: |
+          dotnet build spikes/Spike.CollectibleAlc.Extension/Spike.CollectibleAlc.Extension.csproj --configuration Release
+          dotnet run --project spikes/Spike.CollectibleAlc/Spike.CollectibleAlc.csproj --configuration Release
+
+      - name: Run Spike.ProcessTree
+        run: |
+          dotnet build spikes/Spike.ProcessTree.Worker/Spike.ProcessTree.Worker.csproj --configuration Debug
+          dotnet run --project spikes/Spike.ProcessTree/Spike.ProcessTree.csproj --configuration Debug --no-build
+
+      - name: Run Spike.TerminalGui (headless)
+        run: dotnet run --project spikes/Spike.TerminalGui/Spike.TerminalGui.csproj --configuration Debug --no-build
+        env:
+          CI: 'true'
+
+      - name: Run Spike.MsBuildWorkspace
+        run: dotnet run --project spikes/Spike.MsBuildWorkspace/Spike.MsBuildWorkspace.csproj --configuration Debug --no-build

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Tests.Fixtures.InvalidSecondTool</RootNamespace>
+    <Description>Extension fixture with a valid tool followed by invalid runtime bounds.</Description>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <ThreadsmithExtension>true</ThreadsmithExtension>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference
+      Include="..\..\..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj"
+      Private="false"
+      PrivateAssets="all"
+      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <Import Project="..\..\..\..\src\Threadsmith.Extensions.Abstractions\build\Threadsmith.Extensions.Abstractions.targets" />
+
+</Project>

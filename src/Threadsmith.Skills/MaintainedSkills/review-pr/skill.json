@@ -1,0 +1,129 @@
+{
+    "schemaVersion":  1,
+    "skillId":  {
+                    "value":  "review-pr"
+                },
+    "packageId":  "threadsmith.review-pr",
+    "version":  "1.0.0",
+    "displayName":  "Pull Request Review",
+    "description":  "Perform a bounded evidence-backed security, test, performance, and architecture review.",
+    "tags":  [
+                 "review",
+                 "security",
+                 "testing",
+                 "architecture"
+             ],
+    "publisher":  "Threadsmith.NET",
+    "license":  "MIT",
+    "assets":  [
+                   {
+                       "path":  "instructions/review.md",
+                       "bytes":  364,
+                       "sha256":  "d5c815681886efe84f426c66edff40e0c41733172fed6616d25a4e45e42059bd",
+                       "required":  true,
+                       "kind":  "instructions"
+                   },
+                   {
+                       "path":  "instructions/summarize.md",
+                       "bytes":  193,
+                       "sha256":  "9627ab845e436f347bebb6f901c871ed5e6f0110949bbe9f1d3b6f5b27d9fe42",
+                       "required":  true,
+                       "kind":  "instructions"
+                   },
+                   {
+                       "path":  "schemas/input.json",
+                       "bytes":  412,
+                       "sha256":  "de6bf731f7fb3a202955ed50a7ee8c6b425088d22d0f6c92e9751bfbafee3929",
+                       "required":  true,
+                       "kind":  "input-schema"
+                   },
+                   {
+                       "path":  "schemas/review-output.json",
+                       "bytes":  898,
+                       "sha256":  "7c00735a0b941f5c5d02fe1ae89c0d09cb37ac54a0c9a5c787d312a20c873ec0",
+                       "required":  true,
+                       "kind":  "output-schema"
+                   }
+               ],
+    "requirements":  {
+                         "requiredTools":  [
+                                               "read_file",
+                                               "search",
+                                               "git_status"
+                                           ],
+                         "optionalTools":  [
+
+                                           ],
+                         "toolContractVersions":  {
+
+                                                  },
+                         "minimumTrust":  "TrustedRead",
+                         "approvalCategories":  [
+                                                    "read-only discovery",
+                                                    "governed plan proposal"
+                                                ],
+                         "model":  {
+                                       "workloads":  [
+                                                         "Review"
+                                                     ],
+                                       "requiresToolCalls":  true,
+                                       "requiresStructuredOutput":  true,
+                                       "minimumContextWindow":  8192,
+                                       "allowedProfiles":  [
+
+                                                           ],
+                                       "deniedProfiles":  [
+
+                                                          ]
+                                   },
+                         "minimumHostVersion":  "1.0.0",
+                         "maximumHostVersion":  "1.999.999"
+                     },
+    "budget":  {
+                   "contentTokens":  8000,
+                   "workflowSteps":  8,
+                   "modelTurns":  6,
+                   "toolCalls":  24,
+                   "mutations":  16,
+                   "validationAttempts":  4,
+                   "delegatedChildren":  8,
+                   "parallelChildren":  4,
+                   "worktrees":  2,
+                   "reviewerFindings":  128,
+                   "wallTime":  "00:20:00"
+               },
+    "agents":  [
+
+               ],
+    "workflow":  {
+                     "schemaVersion":  1,
+                     "workflowId":  "review-pr",
+                     "steps":  [
+                                   {
+                                       "instructionAsset":  "instructions/review.md",
+                                       "inputSchemaAsset":  "schemas/input.json",
+                                       "stepId":  "review",
+                                       "maximumIterations":  1,
+                                       "hostAction":  null,
+                                       "outputSchemaAsset":  "schemas/review-output.json",
+                                       "dependsOn":  [
+
+                                                     ],
+                                       "kind":  "invokeProcedure"
+                                   },
+                                   {
+                                       "instructionAsset":  "instructions/summarize.md",
+                                       "inputSchemaAsset":  "schemas/review-output.json",
+                                       "stepId":  "summarize",
+                                       "maximumIterations":  1,
+                                       "hostAction":  null,
+                                       "outputSchemaAsset":  "schemas/review-output.json",
+                                       "dependsOn":  [
+                                                         "review"
+                                                     ],
+                                       "kind":  "summarize"
+                                   }
+                               ]
+                 },
+    "signature":  null
+}

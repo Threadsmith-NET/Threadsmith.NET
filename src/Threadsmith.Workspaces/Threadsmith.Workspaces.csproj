@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Workspaces</RootNamespace>
+    <Description>Threadsmith.NET repository sessions, baselines, snapshots, mutation staging, patching, conflicts, rollback, and Git (strategy §8).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.App" />
+    <InternalsVisibleTo Include="Threadsmith.Milestone5.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Milestone14.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+  </ItemGroup>
+
+</Project>

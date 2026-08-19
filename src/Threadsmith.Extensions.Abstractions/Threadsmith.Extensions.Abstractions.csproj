@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Extensions.Abstractions</RootNamespace>
+    <Description>Threadsmith.NET stable public extension SDK + compatibility contracts. Stays small and stable; extension implementations reference this, not Threadsmith.Extensions.Runtime (strategy Â§8.1). References no host implementation assemblies.</Description>
+  </PropertyGroup>
+
+  <!-- Threadsmith.Extensions.Abstractions intentionally has NO project references. -->
+
+  <!-- Ship the authoring guard target in the package build/ folder (plan-14 task 9, gap #5). -->
+  <ItemGroup>
+    <None
+      Include="build\Threadsmith.Extensions.Abstractions.targets"
+      PackagePath="build\$(PackageId).targets"
+      Pack="true" />
+  </ItemGroup>
+</Project>

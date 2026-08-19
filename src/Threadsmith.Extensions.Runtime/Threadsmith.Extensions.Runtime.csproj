@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Extensions.Runtime</RootNamespace>
+    <Description>Threadsmith.NET extension discovery, loading, collectible AssemblyLoadContext, capability registration, draining, unload, and hot replacement (strategy Â§8). Uses AssemblyLoadContext, not AppDomain (Â§36).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.Milestone7.Tests" />
+  </ItemGroup>
+
+</Project>

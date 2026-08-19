@@ -1,0 +1,9 @@
+{
+  "Id": "threadsmith.sample.minimal-tool",
+  "Name": "Minimal Tool Extension",
+  "Version": "1.0.0",
+  "HostApiVersion": "current",
+  "EntryAssembly": "Threadsmith.SampleExtensions.MinimalTool.dll",
+  "Capabilities": [ "tool-provider", "model-preference-contributor" ],
+  "Permissions": [ "repository-read" ]
+}

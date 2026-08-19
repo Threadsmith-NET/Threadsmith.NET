@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Threadsmith.App": {
+      "commandName": "Project",
+      "commandLineArgs": "--tui"
+    }
+  }
+}

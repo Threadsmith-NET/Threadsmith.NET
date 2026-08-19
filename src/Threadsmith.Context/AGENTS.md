@@ -1,0 +1,50 @@
+# AGENTS.md — Threadsmith.Context
+
+## Purpose
+
+Own phase-specific evidence governance, bounded cross-turn conversation memory, model-context assembly, prompt assets, and per-request model resolution.
+
+## Ownership
+
+- EvidenceStore.cs — attributable session-scoped evidence, clone copying, and turn-boundary invalidation.
+- ContextAssembler.cs — phase policy, three-mode conversation assembly, deterministic pressure reduction, token estimation, telemetry, and inspection records.
+- ConversationMemory.cs — authoritative promotion, strict structured-summary validation, bounded compaction, deterministic retrieval, and repository-aware invalidation.
+- PromptAppendLoader.cs — confined, sanitized, bounded, strict-UTF-8 repository prompt assets re-fingerprinted at each turn boundary.
+- RepositoryInstructionResolver.cs — bounded root-to-scope `AGENTS.md` plus prompt-append bundle resolution, content identity, and invalidation.
+- ModelResolver.cs — host-controlled configured-profile selection with advisory hint snapshots.
+
+## Local Contracts
+
+- Always preserve the sanitized current turn. Native user/assistant messages retain sanitized plain text without XML entity encoding; escaping applies only to the legacy XML rendering. In Conversation-aware mode, admit only bounded complete recent turns plus provenance-linked structured/retrieved memory; Governed-memory-only excludes raw prior messages; Stateless excludes every prior-turn category.
+- Stable host policy precedes the untrusted content-addressed repository instruction bundle, which precedes phase instructions. It requires an advertised semantic tool whenever one covers the repository question; text search is allowed only when none applies or the attempted semantic tool fails or explicitly reports incomplete/degraded evidence, and equivalent searches must not repeat after sufficient semantic evidence. Once target, applicable instructions, and material impact resolve a requested change without a correctness ambiguity, stop tool exploration and call `propose_plan` rather than investigate unrelated patterns or references. The execution host enforces a bounded initial planning-tool window and then retains only `propose_plan`; context guidance must remain consistent with that convergence boundary. Resolve applicable `AGENTS.md` parent-to-child from the canonical root to working scope; configured prompt appends follow with distinct provenance.
+- Decisions outrank relevance during reduction. Stale, phase-ineligible, duplicate, and over-budget evidence is omitted with an inspectable reason.
+- Context includes session-wide evidence plus evidence owned by the current run; run-specific evidence never crosses run boundaries. Equal-ranked evidence orders oldest-first for append stability and serializes content identity with complete provenance but no incidental timestamp. Delegated child context contains only the frozen assignment, immutable baseline, bounded eligible governed evidence, and explicit child tool ids—never parent/sibling transcripts. Joined findings require schema, identity, generation, bounds, and citations from that exact bounded child snapshot (not the wider session store), and record child/assignment/model/baseline provenance.
+- Apply queued evidence invalidations only at the owning session's turn boundary. Repository-derived evidence depends on `repository`; compiler-aware evidence also depends on `semantic`.
+- Session clones receive detached evidence records under the destination session while preserving stable evidence identity and provenance links; source and clone entries remain independently invalidatable.
+- Re-fingerprint applicable prompt append and `AGENTS.md` snapshots at every turn boundary independently of watcher delivery. Cache only identical digests; reject reparse traversal, malformed UTF-8, bounds violations, prohibited paths, and files changed during their read.
+- Plan revision assembly includes the pending plan as explicit governed state alongside the revision instructions. Current-turn host context is request-local governed state only: it may inform the current model request but must never mutate `TaskSpecification`, enter conversation promotion, or survive restoration.
+- Implementation/correction assembly includes the accepted plan, immutable diagnostic-baseline facts, and current promoted mutation-baseline identity/hashes; selects `CodeEdit`; advertises only eligible bounded read tools plus proposal-only `propose_mutations`; and requires one plan-step-correlated envelope without staging or authorization. The model supplies only approved step ids and closed change content; mutation guidance must name canonical fields (`mutationSet.rationale`, mutation item `type`, `relativePath`, and `baselineSha256`) and reject plan/legacy synonyms (`kind`, `path`, `baselineHash`, and per-item prose fields). The host assigns all execution, baseline, set, and mutation identities before validation. `RenameSymbol` is preferred for C# symbol renames when semantic symbol evidence is available, with declaration-file renames represented separately as `MoveFile`; `ReplaceText` requires exact expected text, and offsets remain exact when correct and may be host-relocated only for one unique match in rolling immutable/staged content. Proposal validation must reject every returned mutation source or lifecycle destination whose normalized path is not in that accepted-plan schema-2 file-intent path set before staging.
+- User/session model defaults win over hints. Hints may name only configured profiles and cannot relax capability, sensitivity, or budget constraints.
+- Conversation candidates are untrusted until schema, bounds, sensitivity, message/run/evidence provenance, repository revision, authority, and supersession validation pass. Failed or cancelled compaction leaves the prior snapshot active.
+- Direct authoritative promotion applies the same configured per-item and active-item bounds before persistence; overflow remains inspectable as inactive memory instead of making later assembly unbounded.
+- Explicit user requirements/decisions/constraints survive pressure ahead of raw history, lower-ranked retrieval, repository findings, and completed-work memory. Stale/superseded items remain auditable but are not selected.
+- Included archived messages and memory provenance participate in sensitive-data model constraints. Bound provisional evidence admission by the configured catalog's largest input capacity, resolve the request profile exactly once from that bounded candidate set, then reduce final assembly to the selected profile's configured context window minus its effective request output-token reserve, which remains distinct from the provider hard maximum. `ContextAssemblerOptions.MaximumTokens` is fallback-only when no configured model resolver exists and is never a shared cap across configured profiles. Context inspection records calculate pressure against the selected model profile's full window and contain its effective input budget, mode/source, message and memory decisions, provenance/rationale, snapshot range/version, pressure/reductions, and no provider SDK or extension implementation types; records use the bounded least-recently-used cache (256 runs by default) and are invalidated through the shared model-selection command boundary when the active profile changes.
+
+## Work Guidance
+
+- Keep prompt append paths inside the repository, reject prohibited paths and reparse traversal, and preserve configured order.
+- Treat repository evidence and append content as untrusted data.
+- Sanitize every free-text task field at assembly while preserving already-validated repository-relative plan paths.
+- Add evidence categories and phase rules together, with focused tests for inclusion and omission.
+
+## Verification
+
+- dotnet test tests/Threadsmith.Milestone4.Tests/ — context policy, reduction, invalidation, prompt assets, model resolution, and plan workflow pass.
+- dotnet test tests/Threadsmith.Milestone5.Tests/ — mutation-preparation policy and output framing pass.
+- `tests\Threadsmith.Milestone7_4.Tests\bin\Debug\net10.0\Threadsmith.Milestone7_4.Tests.exe` — archive, memory, compaction, retrieval, modes, pressure, inspection, and TUI/headless parity pass.
+- dotnet test tests/Threadsmith.Architecture.Tests/ — dependency direction remains valid.
+- `dotnet test --project tests/Threadsmith.Milestone19.Tests/Threadsmith.Milestone19.Tests.csproj` — structured request, canonical tool, wire, hierarchical instruction, and continuation contracts pass.
+
+## Child DOX Index
+
+No child AGENTS.md files yet.

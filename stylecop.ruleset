@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RuleSet Name="Threadsmith.NET StyleCop rules" Description="StyleCop rule enablement for Threadsmith.NET (guardrails G-1..G-29). Per-rule severity is overridden in .editorconfig." ToolsVersion="17.0">
+  <Rules AnalyzerId="StyleCop.Analyzers" RuleNamespace="StyleCop.Analyzers">
+    <!-- Documentation rules (G-18) -->
+    <Rule Id="SA1600" Action="Error" />
+    <Rule Id="SA1601" Action="Error" />
+    <Rule Id="SA1602" Action="None" />
+    <Rule Id="SA1633" Action="None" />
+    <!-- Layout / ordering -->
+    <Rule Id="SA1124" Action="Error" />
+    <Rule Id="SA1200" Action="None" />
+    <Rule Id="SA1309" Action="None" />
+    <Rule Id="SA1101" Action="None" />
+  </Rules>
+  <Rules AnalyzerId="Roslynator.Analyzers" RuleNamespace="Roslynator.Analyzers">
+    <Rule Id="RCS1001" Action="Info" />
+    <Rule Id="RCS1007" Action="Info" />
+    <Rule Id="RCS1090" Action="None" />
+  </Rules>
+  <Rules AnalyzerId="Microsoft.VisualStudio.Threading.Analyzers" RuleNamespace="Microsoft.VisualStudio.Threading.Analyzers">
+    <Rule Id="VSTHRD100" Action="Warning" />
+    <Rule Id="VSTHRD200" Action="Info" />
+    <Rule Id="VSTHRD003" Action="Warning" />
+  </Rules>
+</RuleSet>

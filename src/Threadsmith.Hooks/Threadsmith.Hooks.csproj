@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Host-owned lifecycle hook policy, coordination, and bounded transport adapters.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+  </ItemGroup>
+</Project>

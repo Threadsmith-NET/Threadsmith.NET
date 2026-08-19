@@ -1,0 +1,64 @@
+<Project>
+
+  <PropertyGroup>
+    <Product>Threadsmith.NET</Product>
+    <Company>Threadsmith</Company>
+    <Copyright>Copyright (c) Threadsmith. All rights reserved.</Copyright>
+    <Authors>Threadsmith</Authors>
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0.0</FileVersion>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+
+    <!-- .NET 10 LTS baseline (strategy §6; ADR-1). -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- Avoid cross-process Roslyn analyzer-config reuse between CLI and multiple Visual Studio installations. -->
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);CS1591</WarningsNotAsErrors>
+    <!--
+      Mirror repository-wide StyleCop rules intentionally disabled in .editorconfig into compiler
+      NoWarn. This prevents clean parallel builds from intermittently applying analyzer defaults when
+      an MSBuild/Roslyn node misses analyzer-config severity data; enabled StyleCop rules remain errors.
+    -->
+    <NoWarn>$(NoWarn);SA1000;SA1009;SA1010;SA1011;SA1101;SA1200;SA1201;SA1204;SA1206;SA1309;SA1313;SA1316;SA1402;SA1518;SA1602;SA1611;SA1615;SA1618;SA1623;SA1633;SA1649</NoWarn>
+
+    <!-- Deterministic + source-linked builds. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Central Package Management is enabled in Directory.Packages.props. -->
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+
+    <NeutralLanguage>en-US</NeutralLanguage>
+  </PropertyGroup>
+
+  <!--
+    Spikes are throwaway validation projects (plan-01 tasks 10-15). They may use
+    console templates, additional frameworks, and relaxed analyzers so they do
+    not constrain the product surface. They are excluded from the product .sln.
+  -->
+  <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('Spike.'))">
+    <IsSpike>true</IsSpike>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Test projects relax the public-API documentation rule. -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsTestProject>true</IsTestProject>
+    <!-- Test-only layout/documentation relaxations must also survive clean parallel compilation. -->
+    <NoWarn>$(NoWarn);SA1118;SA1515;SA1600;SA1601</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsPackable)' == ''">
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

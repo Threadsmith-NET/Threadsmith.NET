@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Threadsmith.Extensions.Abstractions authoring guard (plan-14 task 9, gap #5).
+
+  The #1 AssemblyLoadContext failure mode is a second copy of the contract assembly
+  loaded into an extension's collectible context (strategy §17.11/§17.18). Prevention
+  is layered:
+
+    1. Authoring convention: extensions reference the contract package with
+       PrivateAssets="all" + ExcludeAssets="runtime" so the contract DLL is NOT
+       copied into the extension package; the extension loads the host's single
+       copy from the default load context (plan-14 task 8).
+    2. This build-time target: fails the build of a project marked
+       <ThreadsmithExtension>true</ThreadsmithExtension> when the contract DLL is
+       present in its output directory, so a mis-configured extension cannot ship.
+    3. Runtime rejection: the loader rejects a duplicate contract assembly at load
+       (plan-15 task 5).
+
+  Import this target from extension projects (or consume it via the NuGet package's
+  build/ folder) and set <ThreadsmithExtension>true</ThreadsmithExtension>.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target
+    Name="ThreadsmithExtensionContractAssemblyGuard"
+    AfterTargets="Build"
+    Condition="'$(ThreadsmithExtension)' == 'true' AND '$(DesignTimeBuild)' != 'true'">
+
+    <Error
+      Text="Threadsmith extension '$(MSBuildProjectName)' copies Threadsmith.Extensions.Abstractions.dll into its output. Reference the contract package with PrivateAssets='all' ExcludeAssets='runtime' so the extension loads the host's single shared copy (strategy §17.11, plan-14 gap #5)."
+      Condition="Exists('$(TargetDir)Threadsmith.Extensions.Abstractions.dll')" />
+
+    <Message
+      Text="Threadsmith extension '$(MSBuildProjectName)' verified: contract assembly excluded from output."
+      Importance="normal"
+      Condition="!Exists('$(TargetDir)Threadsmith.Extensions.Abstractions.dll')" />
+  </Target>
+</Project>

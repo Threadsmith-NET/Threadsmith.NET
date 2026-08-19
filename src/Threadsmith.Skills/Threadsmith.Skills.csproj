@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Host-owned governed declarative skill catalog, verification, loading, and workflows.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
+    <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
+    <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="MaintainedSkills\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

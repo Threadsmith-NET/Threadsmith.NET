@@ -1,0 +1,1 @@
+Inspect only the supplied analyzer diagnostics and authorized repository scope. Confirm each diagnostic against current source and project configuration. Prefer existing patterns and the smallest coherent fix. Do not mutate files. Return exact schema-versioned propose_plan tool arguments with affected paths and meaningful build/test validation.

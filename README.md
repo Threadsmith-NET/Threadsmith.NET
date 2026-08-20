@@ -250,6 +250,10 @@ Threadsmith/
 └── .threadsmith/config.example             # annotated repository configuration schema
 ```
 
+### DOX Framework
+
+Not so much a "framework" but an addition to AGENTS.MD - this project uses the process described in https://github.com/agent0ai/dox to help provide localized (in the project) details to AI agents. I think it's been helpful, and using it is nothing more than a block on AGENTS.md - the additional, localized documentation in the sub-AGENTS.md files is useful for humans, too!
+
 ## Documentation
 
 The documentation folder contains user and developer docs, as well as implementation milestones, requirerments, checklists, plans, etc. I have made a best-effort to keep everything aligned and in sync with the actual state of the code. If you find any gaps or inconsistencies, please let me know or submit a PR with the correction.

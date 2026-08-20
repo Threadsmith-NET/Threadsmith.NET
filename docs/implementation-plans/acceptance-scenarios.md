@@ -676,3 +676,32 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 - Staging is not visible to read tools mid-turn (Scenario B step 6/8 ordering).
 - Introduced-vs-baseline classification is authoritative at `FullSemantic` and reports `ConfidenceDegraded` otherwise (Scenario C step 2).
 - The correction loop stops at the configured budget (Scenario C step 8).
+
+---
+
+## Scenario AM - Repository-Scoped Cross-Session Memory
+
+1. Open a repository and explicitly remember a repo-scoped fact. Confirm the host writes bounded structured memory with user-authored authority, repository identity, source message provenance, sensitivity metadata, and active validity into the existing ignored repository SQLite store.
+2. Start a new independent session in the same repository and run memory list/inspect plus the headless equivalents. Confirm the remembered item is visible with stable JSON, provenance, validity, and no dependency on the prior session transcript.
+3. Ask a relevant follow-up question or task. Confirm context assembly retrieves the active memory only when relevant and within budget, and `/context inspect` reports inclusion or omission rationale, token accounting, authority, and source identity.
+4. Supersede the item with a user correction. Confirm retrieval prefers the replacement, the older item becomes superseded/rejected rather than silently deleted, and audit provenance remains inspectable.
+5. Create repository-dependent memory backed by a file, symbol, project, or repository revision, then change the supporting repository state. Confirm turn-boundary invalidation marks the item stale and excludes it until validation reactivates it or keeps it stale with a bounded reason.
+6. Attempt to create, authorize, or elevate memory from tracked repository files, prompt appends, skills, hooks, ordinary repository configuration, model text, and assistant claims. Confirm none can create authoritative memory without an explicit host command, host-observed event, or validated governed evidence.
+7. Exercise optional model-proposed memory candidates with malformed schema, unsupported source IDs, oversized content, secret-like text, invented completed work, and stale repository claims. Confirm every unsafe candidate is rejected and the previous active memory snapshot remains valid.
+8. Inspect Git status, diagnostics, logs, events, support bundles, persistence restore, `/new`, `/resume`, and process restart. Confirm `.threadsmith/threadsmith.db` remains ignored/local, raw secrets/hidden reasoning/provider payloads are absent, and repository memory survives local lifecycle operations without becoming shared/team memory.
+
+**Verifies:** repository identity and persistence, conversation/context governance, session lifecycle, repository instruction safety, skill/hook/config trust boundaries, redaction, invalidation, and local repository-scoped memory that is structured, attributable, bounded, inspectable, and not shared through Git.
+
+---
+
+## Scenario AN - Packaged Local Documentation Help Skill
+
+1. Build each published release payload and installer fixture. Confirm the curated local documentation bundle contains user, operation, authoring, architecture, testing, guardrail, license, and reference docs selected by the manifest, and confirm no `docs/implementation-plans/**` file or generated/local runtime state is present.
+2. Launch Threadsmith from the packaged payload with no repository open and ask a natural product-help question, such as how to compact context. Confirm the ordinary model request does not advertise any new docs-specific tool, but may invoke the maintained docs-help skill through the existing `invoke_skill` path when phase, trust, and tool policy allow it.
+3. Ask questions about commands, configuration, skills, model providers, context, hooks, extension authoring, release packaging, and troubleshooting. Confirm the skill searches/reads only the packaged local docs root, returns bounded answers citing doc paths/headings/snippets, and states uncertainty when shipped docs do not answer.
+4. Open a repository containing conflicting prompt appends, `.threadsmith` configuration, repo skills, hooks, MCP content, and documentation-like files. Confirm none can replace the packaged docs root, alter the maintained docs skill, widen tool policy, or override host/user/repository-work authority.
+5. Disable `invoke_skill`, lower trust below the required level, enter an ineligible phase, remove/corrupt the packaged docs bundle, and exceed docs search/read/answer budgets. Confirm the model cannot use the skill, failures are bounded and actionable, and ordinary Threadsmith operation continues without fabricated documentation answers.
+6. Inspect `/skills`, `/context inspect`, tool inventory, logs, events, telemetry, diagnostics, and support bundles. Confirm maintained skill identity, docs bundle version/path, search/read counts, citation counts, omissions, and failure reasons are bounded and secret-free, with no hidden reasoning, raw provider payloads, unbounded docs excerpts, or private runtime paths.
+7. Run package validation, skill workflow, context/tool-advertisement, redaction, architecture, and release-gate tests. Confirm the docs-help feature does not change mutation, approval, process, network, MCP, hook, extension, or repository trust behavior.
+
+**Verifies:** release packaging, maintained skill integrity/invocation, canonical tool/context governance, local documentation authority, repository trust boundaries, diagnostics/redaction, and natural Threadsmith documentation Q&A without always-advertised docs-specific tools.

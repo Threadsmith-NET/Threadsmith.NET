@@ -99,10 +99,10 @@ Expected examples:
 
 ```text
 • TOOLS: find_symbol - completed · 688ms
-  └ symbol: SectorEntityStandardizer
+  └ symbol: SomeClassName
 
 • TOOLS: read_file - completed · 3ms
-  └ lines 1-200, container/source/AI.Inference.Fusion/Pipelines/Common/Standardization/EntityStandardizers/SectorEntityStandardizer.cs
+  └ lines 1-200, some_file_path/someFile.cs
 
 • TOOLS: git_diff - failed · 42ms
   └ repository diff query failed; see sanitized error above
@@ -123,7 +123,7 @@ Add a TUI diff presentation formatter used by every interactive mutation-diff di
 
  using Example;
 +public override string Name => "Test";
--public override string Name => StandardizerName;
+-public override string Name => SomeNameName;
 ```
 
 Rules:

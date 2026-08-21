@@ -34,6 +34,34 @@ Headless integrations use the same host-owned contracts:
 
 `HeadlessShell.WriteContextInspectionAsync` emits the shared inspection projection as stable JSON.
 
+## Repository-scoped memory
+
+Repository memory is local, repository-scoped, and stored in the ignored repository database at `.threadsmith/threadsmith.db`. It is separate from session conversation memory: `/new`, `/resume`, process restart, and independent sessions opened against the same repository identity can reuse it, but it is not shared/team memory and is not tracked by Git.
+
+Interactive commands:
+
+```text
+/memory remember repo <text>
+/memory list repo [active|stale|superseded|forgotten|rejected|all]
+/memory inspect <memory-id>
+/memory supersede <memory-id> <replacement-text>
+/memory forget <memory-id>
+/memory validate repo
+```
+
+Headless integrations use the same host-owned contracts:
+
+- `RememberRepositoryMemoryCommand`
+- `ListRepositoryMemoryCommand`
+- `InspectRepositoryMemoryCommand`
+- `SupersedeRepositoryMemoryCommand`
+- `ForgetRepositoryMemoryCommand`
+- `ValidateRepositoryMemoryCommand`
+
+Explicit commands sanitize and bound text, attach user-command provenance, preserve inactive audit rows, and publish metadata-only events. Context assembly retrieves only active items for the current repository identity, applies authority/relevance ranking plus item/token budgets, treats content as untrusted prompt data, propagates sensitivity, and reports every included and omitted repository-memory item in inspection. Repository-dependent items with path, symbol, project, or revision support become stale after matching host-observed repository mutations and remain omitted until corrected or explicitly validated.
+
+Model-proposed repository-memory candidates are disabled in this implementation. Assistant prose, repository files, prompt appends, skills, hooks, and repository configuration cannot create or authorize durable repository memory.
+
 ## Inspection
 
 `/context inspect` reports:
@@ -42,7 +70,8 @@ Headless integrations use the same host-owned contracts:
 - current archived message identity;
 - summary version and compacted-through sequence;
 - included and omitted recent messages;
-- included, retrieved, stale, superseded, and invalid memory;
+- included, retrieved, stale, superseded, and invalid conversation memory;
+- included, omitted, stale, superseded, forgotten, and budget-excluded repository memory;
 - source message, run, and evidence identifiers;
 - deterministic retrieval score and rationale;
 - category token accounting and exact pressure reductions;
@@ -84,6 +113,8 @@ Compiled defaults:
 | `compaction.maximumProviderRetries` | 1 |
 | `compaction.maximumProviderCalls` | 2 |
 | `compaction.maximumInputTokens` | 16,000 |
+| `context:repositoryMemory:maximumItems` | 12 |
+| `context:repositoryMemory:maximumTokens` | 2,000 |
 
 Invalid enum values, non-positive budgets, pressure outside 1–100%, or retries exceeding the provider-call cap fail before model invocation.
 

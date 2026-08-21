@@ -1,6 +1,6 @@
 // Threadsmith.NET Milestone 23.1 — Plan 65: Application composition boundary tests.
 //
-// Guards the cohesive non-owning composition inputs that replaced the flat 31-property
+// Guards the cohesive non-owning composition inputs that replaced the flat 32-property
 // ApplicationCompositionContext, without requiring a full production composition run.
 namespace Threadsmith.Architecture.Tests;
 
@@ -37,9 +37,9 @@ public static class CompositionBoundariesTests
             p => Assert.True(IsInitOnly(p), $"{p.Name} must be init-only."));
     }
 
-    /// <summary>The five sub-records preserve all 31 already-initialized dependencies.</summary>
+    /// <summary>The five sub-records preserve all 32 already-initialized dependencies.</summary>
     [Fact]
-    public static void SubRecords_PreserveThirtyOneDependencies()
+    public static void SubRecords_PreserveThirtyTwoDependencies()
     {
         var total = SubRecordPropertyCount<HostCompositionInputs>()
             + SubRecordPropertyCount<PersistenceCompositionInputs>()
@@ -47,13 +47,13 @@ public static class CompositionBoundariesTests
             + SubRecordPropertyCount<SemanticCompositionInputs>()
             + SubRecordPropertyCount<IntegrationCompositionInputs>();
 
-        Assert.Equal(31, total);
+        Assert.Equal(32, total);
     }
 
     /// <summary>Each sub-record has one clear responsibility with the expected dependency distribution.</summary>
     [Theory]
     [InlineData(typeof(HostCompositionInputs), 10)]
-    [InlineData(typeof(PersistenceCompositionInputs), 10)]
+    [InlineData(typeof(PersistenceCompositionInputs), 11)]
     [InlineData(typeof(ToolPolicyCompositionInputs), 7)]
     [InlineData(typeof(SemanticCompositionInputs), 2)]
     [InlineData(typeof(IntegrationCompositionInputs), 2)]

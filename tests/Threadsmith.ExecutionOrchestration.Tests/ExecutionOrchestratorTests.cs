@@ -717,7 +717,7 @@ public sealed class ExecutionOrchestratorTests
             var version = await runner.RunAsync();
 
             // Assert
-            Assert.Equal(8, version);
+            Assert.Equal(9, version);
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();

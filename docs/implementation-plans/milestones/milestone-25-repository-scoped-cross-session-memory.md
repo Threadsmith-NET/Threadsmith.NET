@@ -7,8 +7,8 @@
 - Repository-scoped durable memory records stored in the existing repository-local `.threadsmith/threadsmith.db` persistence boundary.
 - Typed memory categories for explicit user preferences/constraints, repository conventions, workflow facts, architecture decisions, known failures, unresolved questions, and evidence-backed repository facts.
 - Explicit user commands and headless contracts to remember, list, inspect, supersede, forget, and validate repository memory.
-- Host-observed promotion from accepted plans, completed execution/build/test results, and governed evidence without treating assistant prose as authoritative.
-- Optional model-proposed memory candidates only through bounded structured output with strict host validation, provenance, sanitization, and supersession checks.
+- Conservative host-observed promotion from accepted plans and completed approved executions without treating assistant prose as authoritative.
+- Model-proposed memory candidates are deferred/disabled; the shipped creation path is explicit host command input plus host-observed workflow boundaries.
 - Repository identity, revision, path/symbol/file provenance, sensitivity, authority, validity, and invalidation metadata on every memory item.
 - Context assembly integration that retrieves only active, relevant, bounded, sensitivity-compatible repository memory and exposes inclusion/omission rationale in context inspection.
 - Retention, diagnostics, redaction, backup/restoration, and migration behavior consistent with existing repository persistence.

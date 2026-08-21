@@ -204,6 +204,94 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
+    /// <summary>Creates an explicit repository-scoped memory item through the shared host boundary.</summary>
+    public Task<RepositoryMemoryItem> RememberRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string text,
+        RepositoryMemoryKind kind = RepositoryMemoryKind.WorkflowFact,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, kind),
+            cancellationToken);
+    }
+
+    /// <summary>Lists repository-scoped memory through the shared host boundary.</summary>
+    public Task<RepositoryMemorySnapshot> ListRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryValidity? validity = null,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ListRepositoryMemoryCommand(sessionId, repositoryIdentity, validity),
+            cancellationToken);
+    }
+
+    /// <summary>Inspects one repository-scoped memory item through the shared host boundary.</summary>
+    public Task<RepositoryMemoryItem?> InspectRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new InspectRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId),
+            cancellationToken);
+    }
+
+    /// <summary>Supersedes one repository-scoped memory item through the shared host boundary.</summary>
+    public Task<RepositoryMemoryItem> SupersedeRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        string replacementText,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SupersedeRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText),
+            cancellationToken);
+    }
+
+    /// <summary>Forgets one repository-scoped memory item through the shared host boundary.</summary>
+    public Task<bool> ForgetRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ForgetRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId),
+            cancellationToken);
+    }
+
+    /// <summary>Validates repository-scoped memory through the shared host boundary.</summary>
+    public Task<RepositoryMemorySnapshot> ValidateRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ValidateRepositoryMemoryCommand(sessionId, repositoryIdentity),
+            cancellationToken);
+    }
+
+    /// <summary>Writes stable JSON repository-memory list output for automation.</summary>
+    public async Task WriteRepositoryMemoryListAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryValidity? validity = null,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await ListRepositoryMemoryAsync(
+            sessionId,
+            repositoryIdentity,
+            validity,
+            cancellationToken);
+        await _output.WriteLineAsync(JsonSerializer.Serialize(snapshot).AsMemory(), cancellationToken);
+    }
+
     /// <summary>Lists configured lifecycle-hook handlers.</summary>
     public Task<IReadOnlyList<HookHandlerDescriptor>> ListHooksAsync(CancellationToken cancellationToken = default)
     {

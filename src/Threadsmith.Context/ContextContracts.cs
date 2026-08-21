@@ -160,6 +160,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Normalized repository root used to resolve append files.</summary>
     public required string RepositoryPath { get; init; }
 
+    /// <summary>Stable repository identity used for repository-scoped local memory.</summary>
+    public string? RepositoryIdentity { get; init; }
+
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 

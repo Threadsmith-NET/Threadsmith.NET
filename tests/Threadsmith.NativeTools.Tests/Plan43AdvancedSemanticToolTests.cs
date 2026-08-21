@@ -1,5 +1,6 @@
 namespace Threadsmith.NativeTools.Tests;
 
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
@@ -184,6 +185,34 @@ public sealed class Plan43AdvancedSemanticToolTests
                 Pattern = new CSharpPattern { Version = 2, Kind = CSharpPatternKind.Invocation },
             },
             TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The pattern-search schema matches strict host argument deserialization.</summary>
+    [Fact]
+    public void PatternSearch_ToolSchema_SealsObjectsAndDocumentsNestedShape()
+    {
+        var tool = new CSharpPatternSearchTool(new StubAdvancedSemanticService());
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var root = schema.RootElement;
+        Assert.False(root.GetProperty("additionalProperties").GetBoolean());
+        var pattern = root.GetProperty("properties").GetProperty("pattern");
+        Assert.False(pattern.GetProperty("additionalProperties").GetBoolean());
+        Assert.False(pattern.GetProperty("properties").TryGetProperty("version", out _));
+        Assert.Contains(
+            "{pattern:{kind,name?",
+            tool.Definition.Description,
+            StringComparison.Ordinal);
+        Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
+            "{\"kind\":\"Invocation\",\"name\":\"Run\"}"));
+        var valid = Assert.IsType<CSharpPatternSearchRequest>(tool.DeserializeInput(
+            "{\"pattern\":{\"kind\":\"Invocation\",\"name\":\"Run\"}}"));
+        Assert.Equal(CSharpPatternKind.Invocation, valid.Pattern.Kind);
+        var explicitNullDefaults = Assert.IsType<CSharpPatternSearchRequest>(tool.DeserializeInput(
+            "{\"maximumMatches\":30,\"path\":\"container/source/AI.Inference.Fusion\",\"pattern\":{\"capture\":null,\"containingType\":null,\"kind\":\"MethodDeclaration\",\"name\":null,\"requiredAttributes\":null,\"requiredModifiers\":null,\"version\":null},\"timeoutMilliseconds\":30000}"));
+        Assert.Equal(CSharpPatternKind.MethodDeclaration, explicitNullDefaults.Pattern.Kind);
+        Assert.Null(explicitNullDefaults.Pattern.Version);
+        Assert.Null(explicitNullDefaults.Pattern.RequiredAttributes);
+        Assert.Null(explicitNullDefaults.Pattern.RequiredModifiers);
     }
 
     /// <summary>Verifies generated inventory uses loaded documents, bounded content, and explicit origin classification.</summary>

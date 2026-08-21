@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Execution;
 using Xunit;
 
 /// <summary>
@@ -221,8 +222,8 @@ public static class RepoConfigTests
     public static void ExecutionAndRepositoryLimitsBindToConfiguredValues()
     {
         var config = LoadConfigExample();
-        Assert.Equal(16, config.GetValue("execution:maxModelRounds", 0));
-        Assert.Equal(4, config.GetValue("execution:maxPlanningToolRounds", 0));
+        Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, config.GetValue("execution:maxModelRounds", 0));
+        Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, config.GetValue("execution:maxPlanningToolRounds", 0));
         Assert.Equal(3, config.GetValue("execution:maxPlanProposalRepairAttempts", 0));
         Assert.Equal(3, config.GetValue("execution:maxPlanRevisionRepairAttempts", 0));
         Assert.Equal(3, config.GetValue("execution:maxMutationProposalRepairAttempts", 0));
@@ -322,8 +323,8 @@ public static class RepoConfigTests
                 .AddJsonFile(userConfig, optional: false)
                 .Build();
             // The scaffold carries the documented defaults, so the catalog keys bind.
-            Assert.Equal(16, scaffolded.GetValue("execution:maxModelRounds", 0));
-            Assert.Equal(4, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
+            Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, scaffolded.GetValue("execution:maxModelRounds", 0));
+            Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Equal(60, scaffolded.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
 

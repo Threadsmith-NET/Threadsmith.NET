@@ -699,6 +699,79 @@ public sealed class TuiPresenter
             cancellationToken);
     }
 
+    /// <summary>Creates an explicit repository-scoped memory item through the host boundary.</summary>
+    public Task<RepositoryMemoryItem> RememberRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string text,
+        RepositoryMemoryKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, kind),
+            cancellationToken);
+    }
+
+    /// <summary>Lists repository-scoped memory through the host boundary.</summary>
+    public Task<RepositoryMemorySnapshot> ListRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryValidity? validity = null,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ListRepositoryMemoryCommand(sessionId, repositoryIdentity, validity),
+            cancellationToken);
+    }
+
+    /// <summary>Inspects one repository-scoped memory item through the host boundary.</summary>
+    public Task<RepositoryMemoryItem?> InspectRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new InspectRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId),
+            cancellationToken);
+    }
+
+    /// <summary>Supersedes one repository-scoped memory item through the host boundary.</summary>
+    public Task<RepositoryMemoryItem> SupersedeRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        string replacementText,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SupersedeRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText),
+            cancellationToken);
+    }
+
+    /// <summary>Forgets one repository-scoped memory item through the host boundary.</summary>
+    public Task<bool> ForgetRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ForgetRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId),
+            cancellationToken);
+    }
+
+    /// <summary>Validates repository-scoped memory through the host boundary.</summary>
+    public Task<RepositoryMemorySnapshot> ValidateRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ValidateRepositoryMemoryCommand(sessionId, repositoryIdentity),
+            cancellationToken);
+    }
+
     /// <summary>Renders host-owned state.</summary>
     public async Task<ShellSnapshot> RenderAsync(
         SessionId sessionId,
@@ -750,6 +823,11 @@ public sealed class TuiPresenter
                     string.Empty,
                     state.ContextInspection.Evidence.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} "
+                        + $"{item.Kind}: {item.Rationale}\n"))
+                + string.Join(
+                    string.Empty,
+                    state.ContextInspection.RepositoryMemoryItems.Select(item =>
+                        $"  {(item.Included ? "included" : "omitted")} repository-memory "
                         + $"{item.Kind}: {item.Rationale}\n"))
                 + string.Join(
                     string.Empty,

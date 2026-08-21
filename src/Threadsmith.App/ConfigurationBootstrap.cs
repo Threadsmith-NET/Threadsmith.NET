@@ -3,6 +3,7 @@ namespace Threadsmith.App;
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Execution;
 
 /// <summary>Resolves configuration locations and builds the bounded normal-layer configuration.</summary>
 internal static class ConfigurationBootstrap
@@ -164,8 +165,8 @@ internal static class ConfigurationBootstrap
             ["budget:calls"] = "1000",
             ["budget:wallClockSeconds"] = "3600",
             ["budget:cost"] = "0",
-            ["execution:maxModelRounds"] = "16",
-            ["execution:maxPlanningToolRounds"] = "4",
+            ["execution:maxModelRounds"] = ExecutionLimits.DefaultMaxModelRounds.ToString(CultureInfo.InvariantCulture),
+            ["execution:maxPlanningToolRounds"] = ExecutionLimits.DefaultMaxPlanningToolRounds.ToString(CultureInfo.InvariantCulture),
             ["execution:maxStructuredOutputCharacters"] = (8 * 1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["execution:toolResultPreviewCharacters"] = "4096",
             ["model:http:pooledConnectionLifetimeSeconds"] = "900",

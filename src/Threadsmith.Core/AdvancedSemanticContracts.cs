@@ -206,7 +206,7 @@ public enum CSharpPatternKind
 public sealed record CSharpPattern
 {
     /// <summary>Pattern schema version. Version 1 is currently supported.</summary>
-    public int Version { get; init; } = 1;
+    public int? Version { get; init; } = 1;
 
     /// <summary>Required syntax shape.</summary>
     public CSharpPatternKind Kind { get; init; }
@@ -218,10 +218,10 @@ public sealed record CSharpPattern
     public string? ContainingType { get; init; }
 
     /// <summary>Required closed C# modifiers, such as public, static, async, or partial.</summary>
-    public IReadOnlyList<string> RequiredModifiers { get; init; } = [];
+    public IReadOnlyList<string>? RequiredModifiers { get; init; } = [];
 
     /// <summary>Required exact attribute simple names, with or without the Attribute suffix.</summary>
-    public IReadOnlyList<string> RequiredAttributes { get; init; } = [];
+    public IReadOnlyList<string>? RequiredAttributes { get; init; } = [];
 
     /// <summary>Optional capture name for the complete matched node.</summary>
     public string? Capture { get; init; }

@@ -46,9 +46,9 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 ## Verification
 
 - `dotnet build src\Threadsmith.Skills\Threadsmith.Skills.csproj --no-restore`
-- `tests\Threadsmith.Milestone12.Tests\bin\Debug\net10.0\Threadsmith.Milestone12.Tests.exe`
+- `tests\Threadsmith.Skills.Tests\bin\Debug\net10.0\Threadsmith.Skills.Tests.exe`
 - `tests\Threadsmith.Architecture.Tests\bin\Debug\net10.0\Threadsmith.Architecture.Tests.exe`
-- `tests\Threadsmith.Milestone1.Tests\bin\Debug\net10.0\Threadsmith.Milestone1.Tests.exe`
-- `tests\Threadsmith.Milestone8.Tests\bin\Debug\net10.0\Threadsmith.Milestone8.Tests.exe`
+- `tests\Threadsmith.CoreRuntime.Tests\bin\Debug\net10.0\Threadsmith.CoreRuntime.Tests.exe`
+- `tests\Threadsmith.PersistenceMcpHardening.Tests\bin\Debug\net10.0\Threadsmith.PersistenceMcpHardening.Tests.exe`
 
 ## Child DOX Index

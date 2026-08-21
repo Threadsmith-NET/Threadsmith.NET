@@ -170,7 +170,7 @@ Expected areas:
 - `Threadsmith.Persistence` — SQLite migration/store in the existing repository DB boundary.
 - `Threadsmith.Execution` — host-observed promotion at safe turn/completion boundaries.
 - `Threadsmith.App` / `Threadsmith.Cli` / `Threadsmith.Tui` — composition and interactive/headless command routing.
-- `tests/Threadsmith.Milestone7_4.Tests` or a new focused milestone test project — persistence, promotion, retrieval, invalidation, and command parity.
+- `tests/Threadsmith.ConversationContext.Tests` or a new focused milestone test project — persistence, promotion, retrieval, invalidation, and command parity.
 - `docs/user-guide.md`, `docs/operations/conversation-context.md`, and architecture docs — implemented behavior updates when shipped.
 
 ## 9. Ordered Tasks

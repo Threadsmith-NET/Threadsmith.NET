@@ -77,7 +77,7 @@ The initial semantic roles are:
 
 - `src/Threadsmith.Tui/` — semantic roles, theme/style records, validation, resolution, and surface rendering.
 - `src/Threadsmith.Tui/ConversationalShell.cs` — replace `ConsoleTone` call sites with semantic roles/segments.
-- `tests/Threadsmith.Milestone1.Tests/` or a new `tests/Threadsmith.Milestone7_1.Tests/` — role mapping, terminal-default inheritance, plain-text parity, invalid-style, and `NO_COLOR` coverage.
+- `tests/Threadsmith.CoreRuntime.Tests/` or a new `tests/Threadsmith.SessionStatus.Tests/` — role mapping, terminal-default inheritance, plain-text parity, invalid-style, and `NO_COLOR` coverage.
 - `docs/operations/` — document theme color syntax and accessibility behavior when plan-25 lands.
 - `docs/implementation-plans/manual-test-plan.md` — add real-terminal color/default/background/selection regression cases during implementation.
 

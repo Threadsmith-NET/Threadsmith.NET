@@ -34,9 +34,9 @@ Own host-controlled lifecycle hook policy, deterministic coordination, bounded t
 
 ## Verification
 
-- `tests\Threadsmith.Milestone13.Tests\bin\Debug\net10.0\Threadsmith.Milestone13.Tests.exe`
+- `tests\Threadsmith.LifecycleHooks.Tests\bin\Debug\net10.0\Threadsmith.LifecycleHooks.Tests.exe`
 - `dotnet test --project tests\Threadsmith.Architecture.Tests\Threadsmith.Architecture.Tests.csproj`
-- `tests\Threadsmith.Milestone3.Tests\bin\Debug\net10.0\Threadsmith.Milestone3.Tests.exe`
+- `tests\Threadsmith.ModelTooling.Tests\bin\Debug\net10.0\Threadsmith.ModelTooling.Tests.exe`
 
 ## Child DOX Index
 

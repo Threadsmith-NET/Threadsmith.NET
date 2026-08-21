@@ -231,8 +231,8 @@ Track which mutations are covered by the approved plan. The plan approval step r
 
 ## Verification
 
-- `dotnet test --project tests/Threadsmith.Milestone5.Tests/Threadsmith.Milestone5.Tests.csproj` passes.
-- `dotnet test --project tests/Threadsmith.Milestone1.Tests/Threadsmith.Milestone1.Tests.csproj` passes.
+- `dotnet test --project tests/Threadsmith.Mutations.Tests/Threadsmith.Mutations.Tests.csproj` passes.
+- `dotnet test --project tests/Threadsmith.CoreRuntime.Tests/Threadsmith.CoreRuntime.Tests.csproj` passes.
 - `/policy` command lists all policies and allows selection.
 - `ReviewAll` requires approval for every mutation set.
 - `ReviewRisky` auto-applies ordinary edits.

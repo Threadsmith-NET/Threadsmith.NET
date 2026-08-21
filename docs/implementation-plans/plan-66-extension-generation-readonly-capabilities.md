@@ -43,7 +43,7 @@ lists. Consumers cannot recover the backing `List<T>` by downcast, and mutation 
 `AddModelPreferenceContributor`, and `ClearCapabilities` are unchanged and remain immediately visible
 through previously captured views; `ClearCapabilities()` empties already-captured views without
 substituting a snapshot, so collectible extension capability references are released on unload.
-`Threadsmith.Extensions.Runtime` grants `InternalsVisibleTo` to `Threadsmith.Milestone7.Tests` so the
+`Threadsmith.Extensions.Runtime` grants `InternalsVisibleTo` to `Threadsmith.Extensions.Tests` so the
 focused view tests can drive the internal registration and clearing paths directly (following the
 established repo pattern used by Workspaces, Mcp, and Tui). Public property signatures, ordering,
 activation, registry publication, replacement, unload, telemetry, and dependency direction are
@@ -67,7 +67,7 @@ Do not return a copied array or immutable snapshot: stale snapshots could retain
 ## 8. Project/File Changes
 
 - `Threadsmith.Extensions.Runtime/ExtensionRuntimeContracts.cs` — cache and expose read-only wrappers while retaining private mutable backing lists.
-- `Threadsmith.Milestone7.Tests` — focused encapsulation, activation, clearing, replacement, and unload-retention regression tests.
+- `Threadsmith.Extensions.Tests` — focused encapsulation, activation, clearing, replacement, and unload-retention regression tests.
 - Architecture/public-API tests — update only if required to assert unchanged public shape and dependency direction.
 - Documentation — implementation closeout updates this plan, Plan 64's issue register, milestone/index/DAG status, Scenario AF coverage, and affected DOX/manual-test records.
 

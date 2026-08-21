@@ -49,12 +49,12 @@ Owner: implementer (Threadsmith.Models + Threadsmith.Core only — no other proj
   ```
   (Reasoning deltas do not produce `Text`; keep them separate.)
 
-## Tests (task4 will own suites, but add/extend unit tests in Threadsmith.Milestone3 if adjacent)
+## Tests (task4 will own suites, but add/extend unit tests in Threadsmith.ModelTooling if adjacent)
 - Add minimal provider test: a scripted SSE line with only `delta.reasoning` yields a `ModelChunk`
   with `Reasoning` set and `Text` null. A line with `delta.content` still yields `Text`.
 - Add loader test: `reasoning:supportedLevels` parses; absent ⇒ `[None]`.
 
 ## Verify
 - `dotnet build src\Threadsmith.sln`
-- `dotnet test tests\Threadsmith.Milestone3.Tests` (provider tests)
+- `dotnet test tests\Threadsmith.ModelTooling.Tests` (provider tests)
 - No `!` suppression, XML docs on public members, no analyzer warnings.

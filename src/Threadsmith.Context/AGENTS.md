@@ -39,11 +39,11 @@ Own phase-specific evidence governance, bounded cross-turn conversation memory, 
 
 ## Verification
 
-- dotnet test tests/Threadsmith.Milestone4.Tests/ — context policy, reduction, invalidation, prompt assets, model resolution, and plan workflow pass.
-- dotnet test tests/Threadsmith.Milestone5.Tests/ — mutation-preparation policy and output framing pass.
-- `tests\Threadsmith.Milestone7_4.Tests\bin\Debug\net10.0\Threadsmith.Milestone7_4.Tests.exe` — archive, memory, compaction, retrieval, modes, pressure, inspection, and TUI/headless parity pass.
+- dotnet test tests/Threadsmith.Planning.Tests/ — context policy, reduction, invalidation, prompt assets, model resolution, and plan workflow pass.
+- dotnet test tests/Threadsmith.Mutations.Tests/ — mutation-preparation policy and output framing pass.
+- `tests\Threadsmith.ConversationContext.Tests\bin\Debug\net10.0\Threadsmith.ConversationContext.Tests.exe` — archive, memory, compaction, retrieval, modes, pressure, inspection, and TUI/headless parity pass.
 - dotnet test tests/Threadsmith.Architecture.Tests/ — dependency direction remains valid.
-- `dotnet test --project tests/Threadsmith.Milestone19.Tests/Threadsmith.Milestone19.Tests.csproj` — structured request, canonical tool, wire, hierarchical instruction, and continuation contracts pass.
+- `dotnet test --project tests/Threadsmith.ContextCaching.Tests/Threadsmith.ContextCaching.Tests.csproj` — structured request, canonical tool, wire, hierarchical instruction, and continuation contracts pass.
 
 ## Child DOX Index
 

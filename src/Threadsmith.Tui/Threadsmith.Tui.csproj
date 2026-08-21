@@ -18,9 +18,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Threadsmith.Milestone1.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone2.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone7_1.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.RepositoryLifecycle.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.SessionStatus.Tests" />
   </ItemGroup>
 
 </Project>

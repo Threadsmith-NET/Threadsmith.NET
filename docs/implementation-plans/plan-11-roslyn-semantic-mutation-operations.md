@@ -1,4 +1,4 @@
-﻿# Implementation Plan 11: Roslyn Semantic Mutation Operations
+# Implementation Plan 11: Roslyn Semantic Mutation Operations
 
 **Milestone:** M5 — Transactional Mutation
 **Strategy source:** §13.7 (Semantic Edits), §15 (mutation model), §10.7 (turn/visibility), §35 (open decision: first semantic mutation scope), §16.2 (`relatedSymbolId` at ≥ PartialCompilation)
@@ -23,7 +23,7 @@ Parent: Workspace baseline → Mutation engine (§28), layered on plan-10. This 
 - No build/diagnostics (plan-12).
 
 ## 5. Current State
-Implemented. `SemanticMutationEngine` captures one workspace-isolated Roslyn mutation snapshot, rejects confidence below `PartialCompilation`, uses Roslyn rename conflict handling across the compiled subset, and supports exact expression/statement/member syntax-node replacement with changed-region formatting. Both operations emit plan-10 `MutationSet` text replacements with baseline hashes and `RelatedSymbolId`; generated or non-baseline changes are omitted with warnings. Transactional preview, conflict detection, approval, commit, and rollback remain owned by `Threadsmith.Workspaces`. `Threadsmith.Milestone5.Tests` verifies full-confidence rename, bounded syntax replacement, correlation, preview reuse, and the text-only rejection path.
+Implemented. `SemanticMutationEngine` captures one workspace-isolated Roslyn mutation snapshot, rejects confidence below `PartialCompilation`, uses Roslyn rename conflict handling across the compiled subset, and supports exact expression/statement/member syntax-node replacement with changed-region formatting. Both operations emit plan-10 `MutationSet` text replacements with baseline hashes and `RelatedSymbolId`; generated or non-baseline changes are omitted with warnings. Transactional preview, conflict detection, approval, commit, and rollback remain owned by `Threadsmith.Workspaces`. `Threadsmith.Mutations.Tests` verifies full-confidence rename, bounded syntax replacement, correlation, preview reuse, and the text-only rejection path.
 
 ## 6. Proposed Design
 - `RenameSymbolMutation` and `SyntaxReplacementMutation` operate on the Roslyn `Compilation`/`SyntaxTree` for the affected project (from plan-06), produce a `SyntaxNode` change, and emit a text-patch `Mutation` into the plan-10 staging view.

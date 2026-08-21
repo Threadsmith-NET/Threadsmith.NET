@@ -26,7 +26,7 @@ No autonomous delegation, recursive agent spawning, transcript merging, or uncon
 
 M11.1 is implemented as a host-owned one-level delegation layer over Plan 37. `Threadsmith.Core` owns immutable delegation, assignment, role, scope, budget, policy, finding, review, change-set, conflict, worktree-lease, command, checkpoint, and provenance contracts. `Threadsmith.Execution` validates fixed-depth acyclic plans, dot-segment-free repository-relative scope, and dominating parent budgets; conservatively partitions mutation ownership; schedules observed in-process child tasks under global/actual-parent-run/implementer limits with linked cancellation, deadlines, returned-or-thrown failure policy, and generation fencing; and persists durable run-tree boundaries. `Threadsmith.Context`, `Threadsmith.Models`, and `Threadsmith.Tools` provide transcript-free child context, cited-finding admission, role-aware configured-model selection, authority-narrowing tool contexts with explicit deny-all representation, and atomic non-negative hierarchical usage ledgers.
 
-`Threadsmith.Workspaces` creates/freeze/removes only host-owned detached worktrees under the managed root and rejects stale, incomplete, out-of-scope, or overlapping worker packages before parent restaging. SQLite migration 4 stores delegation run trees and recoverable worktree leases. Shared TUI/headless commands inspect and cancel delegations/children; `/agents <delegation-id>` renders bounded structured state rather than child prose. The dedicated `Threadsmith.Milestone11_1.Tests` suite covers bounded concurrency, cancellation, generation fencing, authority denial, partition fallback, budget accounting, persistence, conflict detection, and real local Git worktrees.
+`Threadsmith.Workspaces` creates/freeze/removes only host-owned detached worktrees under the managed root and rejects stale, incomplete, out-of-scope, or overlapping worker packages before parent restaging. SQLite migration 4 stores delegation run trees and recoverable worktree leases. Shared TUI/headless commands inspect and cancel delegations/children; `/agents <delegation-id>` renders bounded structured state rather than child prose. The dedicated `Threadsmith.ParallelAgents.Tests` suite covers bounded concurrency, cancellation, generation fencing, authority denial, partition fallback, budget accounting, persistence, conflict detection, and real local Git worktrees.
 
 Worker changes remain artifacts until the existing Plan-37 parent transactional path converts/restages selected typed changes, obtains a fresh exact-diff policy decision, and performs aggregate validation. No Git merge, commit, rebase, cherry-pick, push, or automatic conflict resolution was added.
 
@@ -236,7 +236,7 @@ No provider SDK, Roslyn/MSBuild workspace, terminal library, Git library/process
 - `Threadsmith.Persistence` — run-tree/checkpoint/worktree/change/review records and tolerant restoration migrations.
 - `Threadsmith.App` — scheduler/coordinator composition and bounded shutdown ordering.
 - `Threadsmith.Tui` / `Threadsmith.Cli` — delegation review, live tree/progress, cancellation, findings, conflict/disposition, integration, and final evidence surfaces.
-- Dedicated `Threadsmith.Milestone11_1.Tests`, expanded architecture/workspace/execution tests, fixtures, docs, configuration, and DOX.
+- Dedicated `Threadsmith.ParallelAgents.Tests`, expanded architecture/workspace/execution tests, fixtures, docs, configuration, and DOX.
 
 ## 17 Ordered Tasks
 

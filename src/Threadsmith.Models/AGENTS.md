@@ -49,10 +49,10 @@ Normalize model identity, capabilities, streaming output, tool requests, usage, 
 
 ## Verification
 
-- `dotnet test tests/Threadsmith.Milestone3.Tests/` — profiles, selection, recorded SSE normalization, usage estimation, cost pause, retries, structured validation, and mid-stream cancellation pass.
-- `dotnet test tests/Threadsmith.Milestone4.Tests/` — per-request resolution and structured plan output pass.
-- `dotnet test tests/Threadsmith.Milestone5.Tests/` — structured mutation-set validation passes.
-- `dotnet test --project tests/Threadsmith.Milestone19.Tests/Threadsmith.Milestone19.Tests.csproj` — canonical tools, wire estimates, instruction bundles, structured ordering, and continuation bindings pass.
+- `dotnet test tests/Threadsmith.ModelTooling.Tests/` — profiles, selection, recorded SSE normalization, usage estimation, cost pause, retries, structured validation, and mid-stream cancellation pass.
+- `dotnet test tests/Threadsmith.Planning.Tests/` — per-request resolution and structured plan output pass.
+- `dotnet test tests/Threadsmith.Mutations.Tests/` — structured mutation-set validation passes.
+- `dotnet test --project tests/Threadsmith.ContextCaching.Tests/Threadsmith.ContextCaching.Tests.csproj` — canonical tools, wire estimates, instruction bundles, structured ordering, and continuation bindings pass.
 - `dotnet test tests/Threadsmith.Architecture.Tests/` — provider types and packages remain outside forbidden layers.
 
 ## Child DOX Index

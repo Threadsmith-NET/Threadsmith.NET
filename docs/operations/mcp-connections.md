@@ -155,7 +155,7 @@ $env:THREADSMITH_MCP_HTTP_ENDPOINT = "https://mcp.example.com/mcp"
 $env:THREADSMITH_MCP_HTTP_TOOL = "echo"
 $env:THREADSMITH_MCP_HTTP_ARGUMENTS = '{"message":"hello"}'
 $env:THREADSMITH_MCP_HTTP_MODE = "http" # or sse
-tests\Threadsmith.Milestone9.Tests\bin\Debug\net10.0\Threadsmith.Milestone9.Tests.exe
+tests\Threadsmith.McpTransports.Tests\bin\Debug\net10.0\Threadsmith.McpTransports.Tests.exe
 ```
 
 Unset the variables after testing. Use only an endpoint you trust and are authorized to call.

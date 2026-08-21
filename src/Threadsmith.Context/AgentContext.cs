@@ -55,7 +55,7 @@ public sealed class AgentContextAssembler
         var used = TokenEstimator.Estimate(assignment.Objective)
             + assignment.Tasks.Sum(TokenEstimator.Estimate);
         var selected = new List<Evidence>();
-        foreach (Evidence evidence in _evidence.Snapshot(plan.Provenance.SessionId)
+        foreach (var evidence in _evidence.Snapshot(plan.Provenance.SessionId)
             .Where(item => !item.IsStale)
             .Where(item => item.RunId is null || item.RunId == plan.Provenance.ParentRunId)
             .OrderByDescending(item => item.Relevance)
@@ -121,12 +121,12 @@ public sealed class AgentFindingAdmission
             throw new InvalidDataException("Finding-set identity, generation, schema, or role is invalid.");
         }
 
-        AgentContextSnapshot snapshot = new AgentContextAssembler(_evidence).Assemble(plan, assignment);
+        var snapshot = new AgentContextAssembler(_evidence).Assemble(plan, assignment);
         IReadOnlySet<EvidenceId> admitted = snapshot.Evidence
             .Select(item => item.EvidenceId)
             .ToHashSet();
         var added = new List<EvidenceId>();
-        foreach (AgentFinding finding in findings.Findings)
+        foreach (var finding in findings.Findings)
         {
             if (finding.FindingId == Guid.Empty
                 || string.IsNullOrWhiteSpace(finding.Category)
@@ -139,7 +139,7 @@ public sealed class AgentFindingAdmission
                 throw new InvalidDataException("A child finding is malformed or cites evidence not admitted by the parent.");
             }
 
-            EvidenceId evidenceId = EvidenceId.New();
+            var evidenceId = EvidenceId.New();
             await _evidence.AddAsync(
                 new Evidence
                 {

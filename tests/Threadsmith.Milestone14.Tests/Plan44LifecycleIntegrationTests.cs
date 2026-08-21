@@ -23,7 +23,7 @@ public sealed class Plan44LifecycleIntegrationTests
             new("App.Tests", tests, ["net10.0"], SemanticConfidenceLevel.FullSemantic, [app], []),
         ];
 
-        AffectedProjectSet affected = AffectedProjectCalculator.Calculate(
+        var affected = AffectedProjectCalculator.Calculate(
             root,
             ["src/Library/Before.cs", "src/App/After.cs"],
             projects);
@@ -38,14 +38,14 @@ public sealed class Plan44LifecycleIntegrationTests
     [Fact]
     public void LifecycleEndpoints_RequireWorkerOwnershipAndRemainOverlapKeys()
     {
-        AgentAssignment sourceOwner = CreateAssignment("src/Before.cs");
-        DelegationPlan singlePlan = CreatePlan([sourceOwner]);
-        WorkerChangeSet scopeExcess = CreateChangeSet(
+        var sourceOwner = CreateAssignment("src/Before.cs");
+        var singlePlan = CreatePlan([sourceOwner]);
+        var scopeExcess = CreateChangeSet(
             singlePlan,
             sourceOwner,
             ["src/Before.cs", "src/After.cs"]);
 
-        IReadOnlyList<AgentConflict> scopeConflicts = new WorkerIntegrationCoordinator().DetectConflicts(
+        var scopeConflicts = new WorkerIntegrationCoordinator().DetectConflicts(
             singlePlan,
             [scopeExcess],
             singlePlan.Provenance.BaselineIdentity);
@@ -54,18 +54,18 @@ public sealed class Plan44LifecycleIntegrationTests
             conflict.Code == "assignment-scope-exceeded"
             && conflict.Paths.SequenceEqual(["src/After.cs"]));
 
-        AgentAssignment destinationOwner = CreateAssignment("src/After.cs");
-        DelegationPlan overlapPlan = CreatePlan([sourceOwner, destinationOwner]);
-        WorkerChangeSet move = CreateChangeSet(
+        var destinationOwner = CreateAssignment("src/After.cs");
+        var overlapPlan = CreatePlan([sourceOwner, destinationOwner]);
+        var move = CreateChangeSet(
             overlapPlan,
             sourceOwner,
             ["src/Before.cs", "src/After.cs"]);
-        WorkerChangeSet edit = CreateChangeSet(
+        var edit = CreateChangeSet(
             overlapPlan,
             destinationOwner,
             ["src/After.cs"]);
 
-        IReadOnlyList<AgentConflict> overlapConflicts = new WorkerIntegrationCoordinator().DetectConflicts(
+        var overlapConflicts = new WorkerIntegrationCoordinator().DetectConflicts(
             overlapPlan,
             [move, edit],
             overlapPlan.Provenance.BaselineIdentity);

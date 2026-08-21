@@ -344,7 +344,7 @@ public static class ModelToolCanonicalizer
     public static string ComputeDigest(IReadOnlyList<ModelToolDefinition> definitions)
     {
         ArgumentNullException.ThrowIfNull(definitions);
-        string encoded = JsonSerializer.Serialize(definitions, JsonOptions);
+        var encoded = JsonSerializer.Serialize(definitions, JsonOptions);
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(encoded)));
     }
 
@@ -379,7 +379,7 @@ public static class ModelToolCanonicalizer
             throw new InvalidOperationException($"Tool '{toolName}' argument schema must be a JSON object.");
         }
 
-        using (JsonDocument document = JsonDocument.Parse(schemaJson))
+        using (var document = JsonDocument.Parse(schemaJson))
         {
             ValidateNoDuplicateProperties(toolName, document.RootElement, "$");
         }
@@ -393,7 +393,7 @@ public static class ModelToolCanonicalizer
         if (node is JsonObject jsonObject)
         {
             var result = new JsonObject();
-            foreach ((string key, var value) in jsonObject.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            foreach ((var key, var value) in jsonObject.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 result.Add(key, value is null ? null : CanonicalizeNode(value, key));
             }
@@ -444,7 +444,7 @@ public static class ModelToolCanonicalizer
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            int index = 0;
+            var index = 0;
             foreach (var item in element.EnumerateArray())
             {
                 ValidateNoDuplicateProperties(toolName, item, $"{path}[{index}]");
@@ -455,7 +455,7 @@ public static class ModelToolCanonicalizer
 
     private static string ResolveGroup(string toolName)
     {
-        int separator = toolName.IndexOfAny([':', '.', '/']);
+        var separator = toolName.IndexOfAny([':', '.', '/']);
         return separator > 0 ? toolName[..separator] : "core";
     }
 }
@@ -478,13 +478,13 @@ public static class ModelWireEstimator
         ArgumentOutOfRangeException.ThrowIfNegative(outputReserveTokens);
 
         var sections = new Dictionary<string, int>(StringComparer.Ordinal);
-        int logicalTokens = 0;
-        int stablePrefixTokens = 0;
-        for (int index = 0; index < messages.Count; index++)
+        var logicalTokens = 0;
+        var stablePrefixTokens = 0;
+        for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
-            int tokens = EstimateCharacters(message.Content.Sum(part => part.Content.Length));
-            sections[message.SectionId] = sections.TryGetValue(message.SectionId, out int current)
+            var tokens = EstimateCharacters(message.Content.Sum(part => part.Content.Length));
+            sections[message.SectionId] = sections.TryGetValue(message.SectionId, out var current)
                 ? checked(current + tokens)
                 : tokens;
             logicalTokens = checked(logicalTokens + tokens);
@@ -494,14 +494,14 @@ public static class ModelWireEstimator
             }
         }
 
-        int nativeToolTokens = toolTransportMode == ToolTransportMode.Native
+        var nativeToolTokens = toolTransportMode == ToolTransportMode.Native
             ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
             : 0;
-        int textToolTokens = toolTransportMode == ToolTransportMode.Text
+        var textToolTokens = toolTransportMode == ToolTransportMode.Text
             ? EstimateCharacters(ModelToolCanonicalizer.RenderText(tools).Length)
             : 0;
-        int framingTokens = checked((messages.Count * 3) + 3);
-        int wireInputTokens = checked(logicalTokens + nativeToolTokens + textToolTokens + framingTokens);
+        var framingTokens = checked((messages.Count * 3) + 3);
+        var wireInputTokens = checked(logicalTokens + nativeToolTokens + textToolTokens + framingTokens);
         return new ModelWireEstimate
         {
             LogicalTokens = logicalTokens,

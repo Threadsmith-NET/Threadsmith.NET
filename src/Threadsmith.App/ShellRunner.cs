@@ -100,7 +100,7 @@ internal static class ShellRunner
                     processCancellation.Token);
             }
 
-            string request = string.Join(' ', context.CommandLine.RequestArguments);
+            var request = string.Join(' ', context.CommandLine.RequestArguments);
             return await headlessShell.RunAsync("Headless", request, processCancellation.Token);
         }
         catch (OperationCanceledException) when (processCancellation.IsCancellationRequested)
@@ -118,7 +118,7 @@ internal static class ShellRunner
     private static McpManagementRequest ParseMcpRequest(CommandLineOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        string actionText = options.McpAction
+        var actionText = options.McpAction
             ?? throw new InvalidOperationException("A headless MCP action is required.");
         var action = actionText.ToLowerInvariant() switch
         {
@@ -140,15 +140,15 @@ internal static class ShellRunner
             "diagnose" => McpManagementAction.Diagnose,
             _ => throw new InvalidOperationException($"Unknown MCP action '{actionText}'."),
         };
-        string? profileId = options.RequestArguments.ElementAtOrDefault(0);
-        string? capabilityId = action is McpManagementAction.InspectCapability
+        var profileId = options.RequestArguments.ElementAtOrDefault(0);
+        var capabilityId = action is McpManagementAction.InspectCapability
             or McpManagementAction.EnableTool
             or McpManagementAction.DisableTool
             or McpManagementAction.ReadResource
             or McpManagementAction.GetPrompt
             ? options.RequestArguments.ElementAtOrDefault(1)
             : null;
-        int argumentStart = capabilityId is null ? 1 : 2;
+        var argumentStart = capabilityId is null ? 1 : 2;
         McpManagedCapabilityKind? capabilityKind = null;
         if (action == McpManagementAction.ListCapabilities
             && options.RequestArguments.ElementAtOrDefault(1) is { } kindText)
@@ -171,9 +171,9 @@ internal static class ShellRunner
         }
 
         var arguments = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string argument in options.RequestArguments.Skip(argumentStart))
+        foreach (var argument in options.RequestArguments.Skip(argumentStart))
         {
-            string[] pair = argument.Split('=', 2);
+            var pair = argument.Split('=', 2);
             if (pair.Length != 2 || string.IsNullOrWhiteSpace(pair[0]))
             {
                 throw new InvalidOperationException(

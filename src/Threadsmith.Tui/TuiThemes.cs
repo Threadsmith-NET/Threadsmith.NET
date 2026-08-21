@@ -143,22 +143,22 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         await gate.WaitAsync(cancellationToken);
         try
         {
-            string directory = Path.GetDirectoryName(_configurationPath)
+            var directory = Path.GetDirectoryName(_configurationPath)
                 ?? throw new InvalidOperationException("The user configuration path has no parent directory.");
             Directory.CreateDirectory(directory);
             RejectReparsePoint(directory);
             RejectReparsePoint(_configurationPath);
 
-            (byte[] original, var root) = await ReadRootAsync(cancellationToken).ConfigureAwait(false);
+            (var original, var root) = await ReadRootAsync(cancellationToken).ConfigureAwait(false);
             var tui = GetOrCreateObject(root, "tui");
             SetProperty(tui, "defaultTheme", themeId);
-            byte[] updated = UpdateThemeDefault(original, themeId);
+            var updated = UpdateThemeDefault(original, themeId);
             if (updated.Length > MaximumConfigurationBytes)
             {
                 throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
             }
 
-            string temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
+            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
             try
             {
                 await File.WriteAllBytesAsync(
@@ -231,19 +231,19 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
     private static byte[] UpdateThemeDefault(byte[] original, string themeId)
     {
         var location = LocateTheme(original);
-        byte[] serializedTheme = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(themeId));
+        var serializedTheme = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(themeId));
         if (location.DefaultTheme is ValueLocation existing)
         {
             return ReplaceRange(original, existing.Start, existing.End, serializedTheme);
         }
 
-        byte[] property = Combine(Encoding.UTF8.GetBytes("\"defaultTheme\":"), serializedTheme);
+        var property = Combine(Encoding.UTF8.GetBytes("\"defaultTheme\":"), serializedTheme);
         if (location.Tui is ObjectLocation tui)
         {
             return InsertProperty(original, tui, property);
         }
 
-        byte[] tuiProperty = Combine(
+        var tuiProperty = Combine(
             Encoding.UTF8.GetBytes("\"tui\":{"),
             property,
             Encoding.UTF8.GetBytes("}"));
@@ -252,7 +252,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static ThemeJsonLocation LocateTheme(byte[] original)
     {
-        int prefixLength = original.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
+        var prefixLength = original.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
         var reader = new Utf8JsonReader(original.AsSpan(prefixLength), new JsonReaderOptions
         {
             AllowTrailingCommas = true,
@@ -273,15 +273,15 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         ObjectPurpose purpose,
         int prefixLength)
     {
-        bool hasProperties = false;
-        int lastValueEnd = checked((int)reader.BytesConsumed) + prefixLength;
+        var hasProperties = false;
+        var lastValueEnd = checked((int)reader.BytesConsumed) + prefixLength;
         ObjectLocation? tui = null;
         ValueLocation? defaultTheme = null;
         while (ReadSignificantToken(ref reader))
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
-                int closingBrace = checked((int)reader.TokenStartIndex) + prefixLength;
+                var closingBrace = checked((int)reader.TokenStartIndex) + prefixLength;
                 return new ObjectScanResult(
                     new ObjectLocation(closingBrace, hasProperties, lastValueEnd),
                     tui,
@@ -294,17 +294,17 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             }
 
             hasProperties = true;
-            string propertyName = reader.GetString()
+            var propertyName = reader.GetString()
                 ?? throw new InvalidOperationException("The user configuration property name is invalid.");
             if (!ReadSignificantToken(ref reader))
             {
                 throw new InvalidOperationException("The user configuration property has no value.");
             }
 
-            int valueStart = checked((int)reader.TokenStartIndex) + prefixLength;
-            bool isTui = purpose == ObjectPurpose.Root
+            var valueStart = checked((int)reader.TokenStartIndex) + prefixLength;
+            var isTui = purpose == ObjectPurpose.Root
                 && string.Equals(propertyName, "tui", StringComparison.OrdinalIgnoreCase);
-            bool isDefaultTheme = purpose == ObjectPurpose.Tui
+            var isDefaultTheme = purpose == ObjectPurpose.Tui
                 && string.Equals(propertyName, "defaultTheme", StringComparison.OrdinalIgnoreCase);
             if (isTui && reader.TokenType == JsonTokenType.StartObject)
             {
@@ -336,7 +336,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             return;
         }
 
-        int depth = 1;
+        var depth = 1;
         while (depth > 0 && reader.Read())
         {
             if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
@@ -370,7 +370,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static byte[] InsertProperty(byte[] original, ObjectLocation location, byte[] property)
     {
-        bool hasTrailingComma = location.HasProperties
+        var hasTrailingComma = location.HasProperties
             && HasTrailingComma(original.AsSpan(location.LastValueEnd, location.ClosingBrace - location.LastValueEnd));
         byte[] separator = location.HasProperties && !hasTrailingComma ? [(byte)','] : [];
         return ReplaceRange(
@@ -382,10 +382,10 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static bool HasTrailingComma(ReadOnlySpan<byte> trailingTrivia)
     {
-        int index = 0;
+        var index = 0;
         while (index < trailingTrivia.Length)
         {
-            byte current = trailingTrivia[index];
+            var current = trailingTrivia[index];
             if (current is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
             {
                 index++;
@@ -440,10 +440,10 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static byte[] Combine(params byte[][] segments)
     {
-        int length = segments.Sum(segment => segment.Length);
+        var length = segments.Sum(segment => segment.Length);
         var combined = new byte[length];
-        int offset = 0;
-        foreach (byte[] segment in segments)
+        var offset = 0;
+        foreach (var segment in segments)
         {
             segment.CopyTo(combined, offset);
             offset += segment.Length;
@@ -456,7 +456,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
     {
         if (!File.Exists(_configurationPath))
         {
-            byte[] emptyRoot = Encoding.UTF8.GetBytes("{}");
+            var emptyRoot = Encoding.UTF8.GetBytes("{}");
             return (emptyRoot, new JsonObject());
         }
 
@@ -466,8 +466,8 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             throw new InvalidOperationException("The user configuration exceeds the supported size.");
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(_configurationPath, cancellationToken).ConfigureAwait(false);
-        JsonNode? node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
+        var bytes = await File.ReadAllBytesAsync(_configurationPath, cancellationToken).ConfigureAwait(false);
+        var node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
         {
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
@@ -520,8 +520,8 @@ internal static class TuiThemeConfigurationLoader
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
             var themes = BuiltInThemes.Create();
-            string detail = SafeMessage(exception.Message);
-            string warning = $"Configured themes are invalid; using system. {detail}";
+            var detail = SafeMessage(exception.Message);
+            var warning = $"Configured themes are invalid; using system. {detail}";
             return (new ConfiguredThemeCatalog(themes, [warning]), "system");
         }
     }
@@ -541,14 +541,14 @@ internal static class TuiThemeConfigurationLoader
                 var layerValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 var pendingPaths = new Stack<string>();
                 pendingPaths.Push("tui:themes");
-                while (pendingPaths.TryPop(out string? parentPath))
+                while (pendingPaths.TryPop(out var parentPath))
                 {
-                    foreach (string childKey in provider
+                    foreach (var childKey in provider
                         .GetChildKeys([], parentPath)
                         .Distinct(StringComparer.OrdinalIgnoreCase))
                     {
-                        string childPath = ConfigurationPath.Combine(parentPath, childKey);
-                        if (provider.TryGet(childPath, out string? value))
+                        var childPath = ConfigurationPath.Combine(parentPath, childKey);
+                        if (provider.TryGet(childPath, out var value))
                         {
                             layerValues[childPath] = value;
                         }
@@ -589,7 +589,7 @@ internal static class TuiThemeConfigurationLoader
 
         foreach (var theme in configuredThemes)
         {
-            if (positions.TryGetValue(theme.Theme.Id, out int existingIndex))
+            if (positions.TryGetValue(theme.Theme.Id, out var existingIndex))
             {
                 themes[existingIndex] = theme;
                 warnings.Add($"Theme '{theme.Theme.Id}' replaced an earlier definition.");
@@ -602,7 +602,7 @@ internal static class TuiThemeConfigurationLoader
         }
 
         var catalog = new ConfiguredThemeCatalog(themes, warnings);
-        string requestedDefault = configuration?["tui:defaultTheme"] ?? "system";
+        var requestedDefault = configuration?["tui:defaultTheme"] ?? "system";
         if (!catalog.TryGet(requestedDefault, out _))
         {
             warnings.Add($"Unknown default theme '{SafeId(requestedDefault)}'; using system.");
@@ -626,7 +626,7 @@ internal static class TuiThemeConfigurationLoader
             }
             catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
             {
-                string configuredId = section["id"] ?? section.Key;
+                var configuredId = section["id"] ?? section.Key;
                 warnings.Add(
                     $"Configured theme '{SafeId(configuredId)}' is invalid and was ignored. {SafeMessage(exception.Message)}");
             }
@@ -635,8 +635,8 @@ internal static class TuiThemeConfigurationLoader
 
     private static ConfiguredTheme ParseTheme(IConfigurationSection section)
     {
-        string id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
-        string name = section["name"] ?? id;
+        var id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
+        var name = section["name"] ?? id;
         ValidateText(name, MaximumNameLength, "Theme names");
         var styles = new List<KeyValuePair<TuiTextRole, TuiTextStyle>>();
         foreach (var styleSection in section.GetSection("styles").GetChildren())
@@ -645,7 +645,7 @@ internal static class TuiThemeConfigurationLoader
             [
                 "foreground", "background", "bold", "dim", "italic", "underline", "strikethrough", "invert",
             ];
-            string? unknownStyleSetting = styleSection.GetChildren().Select(child => child.Key)
+            var unknownStyleSetting = styleSection.GetChildren().Select(child => child.Key)
                 .FirstOrDefault(key => !supportedStyleSettings.Contains(key, StringComparer.OrdinalIgnoreCase));
             if (unknownStyleSetting is not null)
             {
@@ -658,9 +658,9 @@ internal static class TuiThemeConfigurationLoader
                 throw new InvalidOperationException($"Unknown semantic theme role '{SafeId(styleSection.Key)}'.");
             }
 
-            bool hasDecorationSetting = Decorations.Any(item => styleSection[item.Key] is not null);
+            var hasDecorationSetting = Decorations.Any(item => styleSection[item.Key] is not null);
             TuiTextDecoration? decorations = hasDecorationSetting ? TuiTextDecoration.None : null;
-            foreach ((string key, var decoration) in Decorations)
+            foreach ((var key, var decoration) in Decorations)
             {
                 if (styleSection.GetValue<bool?>(key) == true)
                 {
@@ -678,16 +678,16 @@ internal static class TuiThemeConfigurationLoader
 
         var uiSection = section.GetSection("ui");
         string[] supportedUi = ["spinner", "selectionMarker", "footerSeparator"];
-        string? unknownUi = uiSection.GetChildren().Select(child => child.Key)
+        var unknownUi = uiSection.GetChildren().Select(child => child.Key)
             .FirstOrDefault(key => !supportedUi.Contains(key, StringComparer.OrdinalIgnoreCase));
         if (unknownUi is not null)
         {
             throw new InvalidOperationException($"Unsupported theme UI setting '{SafeId(unknownUi)}'.");
         }
 
-        string spinner = uiSection["spinner"] ?? TuiThemeUi.Default.Spinner;
-        string marker = uiSection["selectionMarker"] ?? TuiThemeUi.Default.SelectionMarker;
-        string separator = uiSection["footerSeparator"] ?? TuiThemeUi.Default.FooterSeparator;
+        var spinner = uiSection["spinner"] ?? TuiThemeUi.Default.Spinner;
+        var marker = uiSection["selectionMarker"] ?? TuiThemeUi.Default.SelectionMarker;
+        var separator = uiSection["footerSeparator"] ?? TuiThemeUi.Default.FooterSeparator;
         ValidateText(spinner, MaximumUiValueLength, "Theme spinner names");
         ValidateText(marker, MaximumUiValueLength, "Theme selection markers");
         ValidateText(separator, MaximumUiValueLength, "Theme footer separators");

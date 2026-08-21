@@ -40,7 +40,7 @@ public static class DiagnosticBundleTests
                 SanitizedConfigurationJson = "{\"model\":{\"defaultProfile\":\"default\",\"secretKeyReference\":\"secrets:KEY\",\"endpoint\":\"https://api.example.com?token=" + canary + "\"}}",
             };
 
-            DiagnosticBundleResult result = await generator.GenerateAsync(options, inputs, CancellationToken.None);
+            var result = await generator.GenerateAsync(options, inputs, CancellationToken.None);
 
             Assert.True(result.RedactionCount > 0);
             var excludesCanary = await DiagnosticBundleGenerator.BundleExcludesCanaryAsync(
@@ -131,7 +131,7 @@ public static class RedactionAuditTests
                 new SecretOutputSanitizer(),
                 new RedactionAuditOptions { Enabled = true, RepairArtifacts = false },
                 NullLogger<RedactionAudit>.Instance);
-            RedactionAuditOutcome outcome = await audit.RunAsync();
+            var outcome = await audit.RunAsync();
 
             Assert.True(outcome.Findings >= 1);
             Assert.Equal(0, outcome.RepairedArtifacts);
@@ -164,7 +164,7 @@ public static class RedactionAuditTests
                 new SecretOutputSanitizer(),
                 new RedactionAuditOptions { Enabled = true, RepairArtifacts = true },
                 NullLogger<RedactionAudit>.Instance);
-            RedactionAuditOutcome outcome = await audit.RunAsync();
+            var outcome = await audit.RunAsync();
 
             Assert.True(outcome.Findings >= 1);
             Assert.Equal(1, outcome.RepairedArtifacts);

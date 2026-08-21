@@ -72,7 +72,7 @@ public sealed class DiagnosticCorrelator
     {
         ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(mutationSet);
-        StringComparer comparer = OperatingSystem.IsWindows()
+        var comparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
         var mutationsByPath = mutationSet.Mutations
@@ -82,13 +82,13 @@ public sealed class DiagnosticCorrelator
             .Select(diagnostic =>
             {
                 if (diagnostic.File is null
-                    || !mutationsByPath.TryGetValue(diagnostic.File.Replace('\\', '/'), out Mutation[]? matches)
+                    || !mutationsByPath.TryGetValue(diagnostic.File.Replace('\\', '/'), out var matches)
                     || matches is not { Length: > 0 })
                 {
                     return diagnostic;
                 }
 
-                Mutation mutation = matches.Length == 1
+                var mutation = matches.Length == 1
                     ? matches[0]
                     : matches.FirstOrDefault(candidate => candidate.RelatedSymbolId is not null) ?? matches[0];
                 return diagnostic with

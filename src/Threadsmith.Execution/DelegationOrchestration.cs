@@ -100,7 +100,7 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Assignment tasks must be bounded non-empty text.");
         }
 
-        bool implementer = assignment.Role == AgentRole.Implementer;
+        var implementer = assignment.Role == AgentRole.Implementer;
         if (implementer != (assignment.Mode == AgentRunMode.IsolatedWorktreeMutation)
             || (implementer && (!plan.ImplementationAuthorized || assignment.PlanStepIds.Count == 0)))
         {
@@ -108,7 +108,7 @@ public static class DelegationPlanValidator
                 "Only explicitly authorized implementers may use isolated-worktree mutation mode.");
         }
 
-        bool reviewer = assignment.Role is AgentRole.SecurityReviewer
+        var reviewer = assignment.Role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
             or AgentRole.ArchitectureReviewer;
@@ -144,14 +144,14 @@ public static class DelegationPlanValidator
             .Concat(scope.Projects)
             .Concat(scope.Symbols)
             .Concat(scope.SharedSurfaces);
-        foreach (string value in values)
+        foreach (var value in values)
         {
             if (string.IsNullOrWhiteSpace(value) || value.Length > 1_024 || Path.IsPathRooted(value))
             {
                 throw new InvalidDataException("Assignment ownership must be bounded and repository-relative.");
             }
 
-            string normalized = value.Replace('\\', '/');
+            var normalized = value.Replace('\\', '/');
             if (normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
                     .Any(segment => segment is "." or "..")
                 || normalized.Equals(".git", StringComparison.OrdinalIgnoreCase)
@@ -282,7 +282,7 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
         ];
         var conflicts = new List<AgentConflict>();
         var serial = new HashSet<AgentAssignmentId>();
-        for (int leftIndex = 0; leftIndex < workers.Length; leftIndex++)
+        for (var leftIndex = 0; leftIndex < workers.Length; leftIndex++)
         {
             var left = workers[leftIndex];
             if (!left.Scope.IsOwnershipProven)
@@ -295,7 +295,7 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
                 AddConflict(conflicts, serial, "shared-surface", "Assignment owns an exclusive shared surface.", left);
             }
 
-            for (int rightIndex = leftIndex + 1; rightIndex < workers.Length; rightIndex++)
+            for (var rightIndex = leftIndex + 1; rightIndex < workers.Length; rightIndex++)
             {
                 var right = workers[rightIndex];
                 var paths = FindOverlap(left.Scope, right.Scope);
@@ -361,14 +361,14 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
         var overlaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string[] leftFiles = [.. left.Files.Select(Normalize)];
         string[] rightFiles = [.. right.Files.Select(Normalize)];
-        foreach (string file in leftFiles.Intersect(rightFiles, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in leftFiles.Intersect(rightFiles, StringComparer.OrdinalIgnoreCase))
         {
             overlaps.Add(file);
         }
 
-        foreach (string file in leftFiles)
+        foreach (var file in leftFiles)
         {
-            foreach (string directory in right.Directories.Select(Normalize))
+            foreach (var directory in right.Directories.Select(Normalize))
             {
                 if (IsUnder(file, directory))
                 {
@@ -377,9 +377,9 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
             }
         }
 
-        foreach (string file in rightFiles)
+        foreach (var file in rightFiles)
         {
-            foreach (string directory in left.Directories.Select(Normalize))
+            foreach (var directory in left.Directories.Select(Normalize))
             {
                 if (IsUnder(file, directory))
                 {
@@ -388,9 +388,9 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
             }
         }
 
-        foreach (string directory in left.Directories.Select(Normalize))
+        foreach (var directory in left.Directories.Select(Normalize))
         {
-            foreach (string other in right.Directories.Select(Normalize))
+            foreach (var other in right.Directories.Select(Normalize))
             {
                 if (IsUnder(directory, other) || IsUnder(other, directory))
                 {
@@ -399,12 +399,12 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
             }
         }
 
-        foreach (string symbol in left.Symbols.Intersect(right.Symbols, StringComparer.Ordinal))
+        foreach (var symbol in left.Symbols.Intersect(right.Symbols, StringComparer.Ordinal))
         {
             overlaps.Add($"symbol:{symbol}");
         }
 
-        foreach (string project in left.Projects.Intersect(right.Projects, StringComparer.OrdinalIgnoreCase))
+        foreach (var project in left.Projects.Intersect(right.Projects, StringComparer.OrdinalIgnoreCase))
         {
             overlaps.Add($"project:{Normalize(project)}");
         }
@@ -414,7 +414,7 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
 
     private static bool IsUnder(string path, string directory)
     {
-        string prefix = directory.EndsWith("/", StringComparison.Ordinal) ? directory : directory + "/";
+        var prefix = directory.EndsWith("/", StringComparison.Ordinal) ? directory : directory + "/";
         return path.Equals(directory, StringComparison.OrdinalIgnoreCase)
             || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
@@ -457,7 +457,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         DelegationPlanValidator.Validate(plan);
         ArgumentNullException.ThrowIfNull(runner);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _stopped) != 0, this);
-        int admitted = Interlocked.Add(ref _admittedOrQueued, plan.Assignments.Count);
+        var admitted = Interlocked.Add(ref _admittedOrQueued, plan.Assignments.Count);
         if (admitted > _options.QueueCapacity)
         {
             Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
@@ -471,7 +471,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             item => item.AssignmentId,
             static _ => new TaskCompletionSource<AgentRunOutcome>(
                 TaskCreationOptions.RunContinuationsAsynchronously));
-        Channel<AgentRunOutcome> terminalResults = Channel.CreateBounded<AgentRunOutcome>(
+        var terminalResults = Channel.CreateBounded<AgentRunOutcome>(
             new BoundedChannelOptions(plan.Assignments.Count)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -649,9 +649,9 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         deadline.CancelAfter(remaining < assignment.Budget.WallTime ? remaining : assignment.Budget.WallTime);
         _children[(plan.DelegationId, assignment.AssignmentId)] = deadline;
-        bool globalHeld = false;
-        bool parentHeld = false;
-        bool implementerHeld = false;
+        var globalHeld = false;
+        var parentHeld = false;
+        var implementerHeld = false;
         try
         {
             await _global.WaitAsync(deadline.Token);
@@ -767,7 +767,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         if (outcome.Status == AgentRunStatus.Completed)
         {
-            int resultCount = (outcome.Findings is null ? 0 : 1)
+            var resultCount = (outcome.Findings is null ? 0 : 1)
                 + (outcome.ChangeSet is null ? 0 : 1)
                 + (outcome.Review is null ? 0 : 1);
             if (resultCount != 1)

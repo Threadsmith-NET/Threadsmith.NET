@@ -18,7 +18,7 @@ internal static class McpOAuthClientMetadataDocumentUri
             return false;
         }
 
-        if (!Uri.TryCreate(configuredText, UriKind.Absolute, out Uri? candidate) || !IsValid(candidate))
+        if (!Uri.TryCreate(configuredText, UriKind.Absolute, out var candidate) || !IsValid(candidate))
         {
             return false;
         }
@@ -56,7 +56,7 @@ internal static class McpOAuthClientMetadataDocumentUri
         }
 
         var pathEnd = configuredText.IndexOfAny(['?', '#'], pathStart);
-        string path = pathEnd < 0
+        var path = pathEnd < 0
             ? configuredText[pathStart..]
             : configuredText[pathStart..pathEnd];
         if (path.Contains('\\'))
@@ -82,7 +82,7 @@ internal static class McpOAuthClientMetadataDocumentUri
             return true;
         }
 
-        foreach (string segment in decodedPath.Split('/'))
+        foreach (var segment in decodedPath.Split('/'))
         {
             if (string.Equals(segment, ".", StringComparison.Ordinal)
                 || string.Equals(segment, "..", StringComparison.Ordinal))

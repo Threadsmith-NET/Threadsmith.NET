@@ -160,7 +160,7 @@ public static class Plan31ModelProviderCatalogTests
         // Arrange
         using var fixture = new CatalogFixture();
         fixture.WriteUser(BaseCatalog());
-        string provider = level == "providers"
+        var provider = level == "providers"
             ? replacement
             : $"{{ \"id\": \"primary\", \"models\": [ {replacement} ] }}";
         fixture.WriteRepository($"{{ \"providers\": [ {provider} ] }}");
@@ -209,7 +209,7 @@ public static class Plan31ModelProviderCatalogTests
     {
         // Arrange
         using var fixture = new CatalogFixture();
-        string userCatalog = BaseCatalog().Replace(
+        var userCatalog = BaseCatalog().Replace(
             "\"defaultReasoningLevel\": \"medium\",",
             "\"defaultReasoningLevel\": \"medium\",\n"
                 + "                      \"reasoningCompatibility\": { \"schemaVersion\": 1, \"mode\": \"standardEffort\" },",

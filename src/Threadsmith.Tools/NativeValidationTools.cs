@@ -55,7 +55,7 @@ public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDe
         NuGetDependencyHealthRequest input,
         ToolInvocationContext context)
     {
-        string directory = Path.GetDirectoryName(input.ProjectPath.Replace('/', Path.DirectorySeparatorChar)) ?? string.Empty;
+        var directory = Path.GetDirectoryName(input.ProjectPath.Replace('/', Path.DirectorySeparatorChar)) ?? string.Empty;
         return [input.ProjectPath, Path.Combine(directory, "obj", "project.assets.json")];
     }
 
@@ -220,7 +220,7 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
             input,
             cancellationToken);
         DiagnosticQueryItem[] allowed = [.. result.Items.Where(item => IsAllowed(item, context.Invocation))];
-        bool omitted = allowed.Length != result.Items.Count;
+        var omitted = allowed.Length != result.Items.Count;
         result = result with
         {
             Items = allowed,
@@ -330,7 +330,7 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
             throw new ArgumentException("Trait names contain only ASCII letters, digits, underscores, and periods.", nameof(input));
         }
 
-        string? oversized = new[] { input.Namespace, input.ClassName, input.MethodName, input.TraitName, input.TraitValue }
+        var oversized = new[] { input.Namespace, input.ClassName, input.MethodName, input.TraitName, input.TraitValue }
             .FirstOrDefault(value => value is { Length: > 512 });
         if (oversized is not null)
         {

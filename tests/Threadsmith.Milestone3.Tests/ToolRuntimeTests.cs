@@ -31,9 +31,9 @@ public static class ToolRuntimeTests
             var store = new SqliteEventStore($"Data Source={databasePath};Pooling=False");
             await store.InitializeAsync();
             var projections = new InMemoryProjectionStore();
-            await using IDomainEventSubscription persistenceSubscription = events.Subscribe(store.AppendAsync);
-            await using IDomainEventSubscription projectionSubscription = events.Subscribe(projections.ApplyAsync);
-            ToolInvocationPipeline pipeline = CreatePipeline(events, [new ListFilesTool()]);
+            await using var persistenceSubscription = events.Subscribe(store.AppendAsync);
+            await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
+            var pipeline = CreatePipeline(events, [new ListFilesTool()]);
             var model = new FakeModelProvider(new ScriptedSession
             {
                 Turns =
@@ -54,21 +54,21 @@ public static class ToolRuntimeTests
                 pipeline,
                 (_, _) => Task.FromResult(CreateContext(repository)));
             var dispatcher = new CommandDispatcher([application]);
-            SessionId sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
-            RunId runId = await application.HandleAsync(
+            var sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
+            var runId = await application.HandleAsync(
                 new SubmitRequestCommand(sessionId, "inspect"));
 
             Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
-            IReadOnlyList<IDomainEvent> stored = await store.ReadAsync(sessionId);
-            ToolInvocationStarted started = Assert.IsType<ToolInvocationStarted>(
+            var stored = await store.ReadAsync(sessionId);
+            var started = Assert.IsType<ToolInvocationStarted>(
                 Assert.Single(stored, item => item is ToolInvocationStarted));
-            ToolInvocationCompleted completed = Assert.IsType<ToolInvocationCompleted>(
+            var completed = Assert.IsType<ToolInvocationCompleted>(
                 Assert.Single(stored, item => item is ToolInvocationCompleted));
             Assert.Equal("model", started.RequestedBy);
             Assert.True(completed.Succeeded);
             Assert.Contains("sample.txt", completed.ResultJson, StringComparison.Ordinal);
 
-            ShellSnapshot snapshot = await new TuiPresenter(dispatcher, projections).RenderAsync(sessionId);
+            var snapshot = await new TuiPresenter(dispatcher, projections).RenderAsync(sessionId);
             Assert.Contains("Tool list_files (model): succeeded", snapshot.Workspace, StringComparison.Ordinal);
             Assert.Contains("sample.txt", snapshot.Workspace, StringComparison.Ordinal);
         }
@@ -109,8 +109,8 @@ public static class ToolRuntimeTests
                 new SearchTextTool(),
                 new RunProcessTool(processManager),
             ];
-            ToolInvocationPipeline pipeline = CreatePipeline(events, tools);
-            ToolInvocationResult invalid = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var pipeline = CreatePipeline(events, tools);
+            var invalid = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -118,7 +118,7 @@ public static class ToolRuntimeTests
                 ArgumentsJson = "{\"value\":\"\"}",
                 Context = CreateContext(repository),
             });
-            ToolInvocationResult escaped = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var escaped = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -129,7 +129,7 @@ public static class ToolRuntimeTests
                     TrustLevel = RepositoryTrustLevel.TrustedRead,
                 },
             });
-            ToolInvocationResult approvalDenied = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var approvalDenied = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -140,12 +140,12 @@ public static class ToolRuntimeTests
                     RequireApprovalToolIds = ["counting"],
                 },
             });
-            ToolInvocationContext recursiveContext = CreateContext(repository) with
+            var recursiveContext = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
                 ProhibitedPaths = [".threadsmith/secrets/", "**/*.env"],
             };
-            ToolInvocationResult listed = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var listed = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -153,7 +153,7 @@ public static class ToolRuntimeTests
                 ArgumentsJson = "{\"path\":\".\"}",
                 Context = recursiveContext,
             });
-            ToolInvocationResult searched = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var searched = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -161,7 +161,7 @@ public static class ToolRuntimeTests
                 ArgumentsJson = "{\"query\":\"hidden-marker\"}",
                 Context = recursiveContext,
             });
-            ToolInvocationResult qualifiedExecutable = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var qualifiedExecutable = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -214,9 +214,9 @@ public static class ToolRuntimeTests
             var outsideFile = Path.Combine(outside, "outside.txt");
             await File.WriteAllTextAsync(outsideFile, "outside");
             await using var events = new DomainEventStream();
-            ToolInvocationPipeline pipeline = CreatePipeline(events, [new ReadFileTool()]);
+            var pipeline = CreatePipeline(events, [new ReadFileTool()]);
 
-            ToolInvocationResult result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -266,7 +266,7 @@ public static class ToolRuntimeTests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 CreateBudget());
 
-            ToolInvocationResult result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -308,7 +308,7 @@ public static class ToolRuntimeTests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 new ExecutionBudget(new BudgetDimensions(100, 0, TimeSpan.FromMinutes(1))));
 
-            ToolInvocationResult result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -339,7 +339,7 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var observed = new List<IDomainEvent>();
-            await using IDomainEventSubscription subscription = events.Subscribe((domainEvent, _) =>
+            await using var subscription = events.Subscribe((domainEvent, _) =>
             {
                 observed.Add(domainEvent);
                 return Task.CompletedTask;
@@ -383,7 +383,7 @@ public static class ToolRuntimeTests
     [Fact]
     public static async Task SecretStore_ResolvesLogicalReferencesOnly()
     {
-        IConfigurationRoot configuration = new ConfigurationBuilder()
+        var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["secrets:models:test"] = "credential",
@@ -410,14 +410,14 @@ public static class ToolRuntimeTests
             var manager = new ProcessManager(
                 new TestSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [new ReadFileTool(), new SearchTextTool(), new GitStatusTool(manager)]);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
-            ToolInvocationResult read = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var read = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -425,7 +425,7 @@ public static class ToolRuntimeTests
                 ArgumentsJson = "{\"path\":\"visible.txt\",\"maximumLines\":2}",
                 Context = context,
             });
-            ToolInvocationResult search = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var search = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -435,7 +435,7 @@ public static class ToolRuntimeTests
             });
             var sourceRepository = Path.GetFullPath(
                 Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-            ToolInvocationResult git = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var git = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -482,23 +482,23 @@ public static class ToolRuntimeTests
             var tool = new SearchTextTool(
                 processManager: processManager,
                 ripgrepExecutable: bundledRipgrep);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle", MaximumMatches = 1 },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal(".hidden/endpoint.cs", match.Path);
             Assert.Equal(12, match.Line);
             Assert.Equal(8, match.Column);
             Assert.True(result.Value.IsTruncated);
             Assert.Null(result.Value.Warning);
-            ProcessExecutionRequest request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
+            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.Equal(bundledRipgrep, request.FileName);
             Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
             Assert.Contains("--fixed-strings", request.Arguments);
@@ -547,12 +547,12 @@ public static class ToolRuntimeTests
                 false,
                 TimeSpan.FromMilliseconds(10)));
             var tool = new SearchTextTool(processManager: processManager);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput
                 {
                     Query = @"class\s+\w+\s*:\s*IRetriever",
@@ -562,10 +562,10 @@ public static class ToolRuntimeTests
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("src/Retriever.cs", match.Path);
             Assert.Null(result.Value.Warning);
-            ProcessExecutionRequest request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
+            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.DoesNotContain("--fixed-strings", request.Arguments);
             Assert.DoesNotContain("--ignore-case", request.Arguments);
             Assert.Contains("--iglob=*.cs", request.Arguments);
@@ -589,12 +589,12 @@ public static class ToolRuntimeTests
                 Path.Combine(repository, "markers.txt"),
                 "TODO\ntodo\n");
             var tool = new SearchTextTool();
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput
                 {
                     Query = "TODO",
@@ -604,7 +604,7 @@ public static class ToolRuntimeTests
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("TODO", match.Text);
         }
         finally
@@ -630,20 +630,20 @@ public static class ToolRuntimeTests
                     ? CreateProcessResult("src/visible.txt\0")
                     : CreateProcessResult(string.Empty, exitCode: 2));
             var tool = new SearchTextTool(processManager: processManager);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("src/visible.txt", match.Path);
             Assert.Contains("Ripgrep could not execute", result.Value.Warning, StringComparison.Ordinal);
-            ProcessExecutionRequest gitRequest = Assert.Single(
+            var gitRequest = Assert.Single(
                 processManager.Requests,
                 request => request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase));
             Assert.Equal(
@@ -688,12 +688,12 @@ public static class ToolRuntimeTests
                     ? CreateProcessResult("linked.txt\0")
                     : CreateProcessResult(string.Empty, exitCode: 2));
             var tool = new SearchTextTool(processManager: processManager);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "outside needle" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
@@ -730,17 +730,17 @@ public static class ToolRuntimeTests
             var tool = new SearchTextTool(
                 processManager: processManager,
                 ripgrepExecutable: $"missing-ripgrep-{Guid.NewGuid():N}");
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("visible.txt", match.Path);
             Assert.Contains("Ripgrep was not found", result.Value.Warning, StringComparison.Ordinal);
         }
@@ -780,17 +780,17 @@ public static class ToolRuntimeTests
             await File.WriteAllTextAsync(Path.Combine(hostStateDirectory, "threadsmith.db"), "needle");
 
             var tool = new SearchTextTool();
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("visible.txt", match.Path);
         }
         finally
@@ -840,17 +840,17 @@ public static class ToolRuntimeTests
                 FileAccess.ReadWrite,
                 FileShare.None);
             var tool = new SearchTextTool();
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolExecution<SearchTextOutput> result = await tool.ExecuteAsync(
+            var result = await tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
-            TextSearchMatch match = Assert.Single(result.Value.Matches);
+            var match = Assert.Single(result.Value.Matches);
             Assert.Equal("visible.txt", match.Path);
         }
         finally
@@ -883,15 +883,15 @@ public static class ToolRuntimeTests
             }
 
             await using var events = new DomainEventStream();
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [new ListFilesTool(), new SearchTextTool()]);
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            ToolInvocationResult listed = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var listed = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -899,7 +899,7 @@ public static class ToolRuntimeTests
                 ArgumentsJson = "{}",
                 Context = context,
             });
-            ToolInvocationResult searched = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var searched = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -941,7 +941,7 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var observed = new List<IDomainEvent>();
-            await using IDomainEventSubscription subscription = events.Subscribe((domainEvent, _) =>
+            await using var subscription = events.Subscribe((domainEvent, _) =>
             {
                 observed.Add(domainEvent);
                 return Task.CompletedTask;
@@ -962,7 +962,7 @@ public static class ToolRuntimeTests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 CreateBudget());
 
-            ToolInvocationResult result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
@@ -998,8 +998,8 @@ public static class ToolRuntimeTests
             allowedExecutables: ["pwsh"],
             shellExecutable: "pwsh");
 
-        using JsonDocument schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
-        JsonElement properties = schema.RootElement.GetProperty("properties");
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var properties = schema.RootElement.GetProperty("properties");
 
         Assert.True(properties.TryGetProperty("command", out _));
         Assert.True(properties.TryGetProperty("timeoutSeconds", out _));
@@ -1086,7 +1086,7 @@ public static class ToolRuntimeTests
 
             await tool.ExecuteAsync(input, context);
 
-            ProcessExecutionRequest request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
+            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.Equal(repository, request.WorkingDirectory);
             Assert.Equal(["-c", "pwd"], request.Arguments);
         }
@@ -1109,8 +1109,8 @@ public static class ToolRuntimeTests
             var manager = new ProcessManager(
                 new TestSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            ProcessExecutionRequest request = CreateTreeProcessRequest(repository, processIdPath);
-            Task<ProcessExecutionResult> running = manager.RunAsync(request, cancellation.Token);
+            var request = CreateTreeProcessRequest(repository, processIdPath);
+            var running = manager.RunAsync(request, cancellation.Token);
             await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(10));
             var processIdText = await File.ReadAllTextAsync(processIdPath);
             var processId = int.Parse(processIdText, System.Globalization.CultureInfo.InvariantCulture);
@@ -1167,7 +1167,7 @@ public static class ToolRuntimeTests
             var listTool = new ListFilesTool(tightLimits);
 
             // Custom ReadFileMaximumBytes rejects a file that exceeds the configured bound.
-            ToolInvocationContext context = CreateContext(repository) with
+            var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
@@ -1178,7 +1178,7 @@ public static class ToolRuntimeTests
                     CancellationToken.None));
 
             // Custom ReadFileDefaultLines is applied when the model omits maximumLines (sentinel 0).
-            ToolExecution<ReadFileOutput> readResult = await readTool.ExecuteAsync(
+            var readResult = await readTool.ExecuteAsync(
                 new ReadFileInput { Path = "small.txt" },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
@@ -1190,7 +1190,7 @@ public static class ToolRuntimeTests
 
             // Default tool limits (no injection) still apply the compiled 1 MiB read bound, so big.txt reads fine.
             var defaultReadTool = new ReadFileTool();
-            ToolExecution<ReadFileOutput> defaultResult = await defaultReadTool.ExecuteAsync(
+            var defaultResult = await defaultReadTool.ExecuteAsync(
                 new ReadFileInput { Path = "big.txt", MaximumLines = 4 },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
@@ -1206,14 +1206,14 @@ public static class ToolRuntimeTests
     [Fact]
     public static async Task DateTimeTool_ReturnsCurrentHostClockInformation()
     {
-        DateTimeOffset before = DateTimeOffset.UtcNow;
+        var before = DateTimeOffset.UtcNow;
         var tool = new DateTimeTool();
-        ToolExecution<DateTimeOutput> result = await tool.ExecuteAsync(
+        var result = await tool.ExecuteAsync(
             new DateTimeInput(),
             new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory)),
             CancellationToken.None);
-        DateTimeOffset utc = DateTimeOffset.Parse(result.Value.UtcNow, System.Globalization.CultureInfo.InvariantCulture);
-        DateTimeOffset local = DateTimeOffset.Parse(result.Value.LocalNow, System.Globalization.CultureInfo.InvariantCulture);
+        var utc = DateTimeOffset.Parse(result.Value.UtcNow, System.Globalization.CultureInfo.InvariantCulture);
+        var local = DateTimeOffset.Parse(result.Value.LocalNow, System.Globalization.CultureInfo.InvariantCulture);
         Assert.InRange(utc, before, DateTimeOffset.UtcNow);
         Assert.Equal(TimeZoneInfo.Local.Id, result.Value.TimeZoneId);
         Assert.Equal(utc.UtcDateTime, local.UtcDateTime);
@@ -1235,7 +1235,7 @@ public static class ToolRuntimeTests
         var config = new ToolConfig(configuration);
         Assert.Equal(1234, config.Get("csharp_script", "timeout_ms", 5000));
         Assert.Equal(99, config.Get("csharp_script", "missing", 99));
-        IReadOnlyDictionary<string, string> all = config.GetAll("csharp_script");
+        var all = config.GetAll("csharp_script");
         Assert.Equal("2048", all["max_output_bytes"]);
         Assert.Equal(2, all.Count);
     }
@@ -1265,45 +1265,45 @@ public static class ToolRuntimeTests
                 SessionId.New(),
                 RunId.New(),
                 CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
-            CSharpScriptOutput expression = await engine.ExecuteAsync(
+            var expression = await engine.ExecuteAsync(
                 "Enumerable.Range(1, 4).Sum()",
                 ScriptKind.Expression,
                 context);
             Assert.True(expression.Success, expression.Error);
             Assert.Equal("10", expression.Output);
-            CSharpScriptOutput statement = await engine.ExecuteAsync(
+            var statement = await engine.ExecuteAsync(
                 "var value = 6 * 7; return value;",
                 ScriptKind.Statement,
                 context);
             Assert.True(statement.Success, statement.Error);
             Assert.Equal("42", statement.Output);
-            CSharpScriptOutput invalid = await engine.ExecuteAsync(
+            var invalid = await engine.ExecuteAsync(
                 "var value = ;",
                 ScriptKind.Statement,
                 context);
             Assert.False(invalid.Success);
             Assert.NotNull(invalid.Error);
             Assert.NotEmpty(invalid.Error);
-            CSharpScriptOutput oversized = await engine.ExecuteAsync(
+            var oversized = await engine.ExecuteAsync(
                 "new string('x', 1000)",
                 ScriptKind.Expression,
                 context);
             Assert.True(oversized.Success, oversized.Error);
             Assert.True(oversized.IsTruncated);
             Assert.Equal(256, System.Text.Encoding.UTF8.GetByteCount(oversized.Output ?? string.Empty));
-            CSharpScriptOutput forbidden = await engine.ExecuteAsync(
+            var forbidden = await engine.ExecuteAsync(
                 "System.IO.File.Exists(\"anything\")",
                 ScriptKind.Expression,
                 context);
             Assert.False(forbidden.Success);
             Assert.Contains("prohibited", forbidden.Error, StringComparison.OrdinalIgnoreCase);
-            CSharpScriptOutput escapedForbidden = await engine.ExecuteAsync(
+            var escapedForbidden = await engine.ExecuteAsync(
                 "System.\\u0049O.\\u0046ile.ReadAllText(\"anything\")",
                 ScriptKind.Expression,
                 context);
             Assert.False(escapedForbidden.Success);
             Assert.Contains("prohibited", escapedForbidden.Error, StringComparison.OrdinalIgnoreCase);
-            CSharpScriptOutput disallowedAssembly = await engine.ExecuteAsync(
+            var disallowedAssembly = await engine.ExecuteAsync(
                 "new System.Text.StringBuilder().Append(42).ToString()",
                 ScriptKind.Expression,
                 context);
@@ -1321,7 +1321,7 @@ public static class ToolRuntimeTests
                 processManager,
                 new ToolConfig(timeoutConfiguration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
-            CSharpScriptOutput timeout = await timeoutEngine.ExecuteAsync(
+            var timeout = await timeoutEngine.ExecuteAsync(
                 "while (true) { }",
                 ScriptKind.Statement,
                 context);
@@ -1365,11 +1365,11 @@ public static class ToolRuntimeTests
                 RunId.New(),
                 CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
 
-            CSharpScriptOutput result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context);
+            var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context);
 
             Assert.True(result.Success);
             Assert.Equal("42", result.Output);
-            ProcessExecutionRequest request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
+            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.Equal(workerPath, request.FileName);
             Assert.Empty(request.Arguments);
             Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
@@ -1380,7 +1380,7 @@ public static class ToolRuntimeTests
                 new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance),
                 new ToolConfig(new ConfigurationBuilder().Build()),
                 actualWorkerPath);
-            CSharpScriptOutput actualResult = await actualEngine.ExecuteAsync(
+            var actualResult = await actualEngine.ExecuteAsync(
                 "6 * 7",
                 ScriptKind.Expression,
                 context);
@@ -1410,9 +1410,9 @@ public static class ToolRuntimeTests
             Assert.DoesNotContain(registry.Definitions, definition => definition.Id == "csharp_script");
             Assert.Throws<KeyNotFoundException>(() => registry.Get("csharp_script"));
             await state.EnableAsync("csharp_script");
-            ITool registeredScript = registry.Get("csharp_script");
+            var registeredScript = registry.Get("csharp_script");
             Assert.Equal("csharp_script", registeredScript.Definition.Id);
-            ToolExecutionEnvelope execution = await registeredScript.ExecuteAsync(
+            var execution = await registeredScript.ExecuteAsync(
                 registeredScript.DeserializeInput("{\"code\":\"6 * 7\",\"kind\":\"expression\"}"),
                 new ToolExecutionContext(
                     ToolInvocationId.New(),
@@ -1442,10 +1442,10 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var gate = new ParallelToolGate(2);
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [new BarrierReadTool("parallel_a", gate), new BarrierReadTool("parallel_b", gate)]);
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
             ToolBatchRequest[] requests =
             [
                 CreateBatchRequest(2, "call-b", "parallel_b", context),
@@ -1453,11 +1453,11 @@ public static class ToolRuntimeTests
             ];
 
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            Task<IReadOnlyList<ToolBatchResult>> execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
+            var execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
             await gate.AllEntered.Task.WaitAsync(timeout.Token);
             Assert.Equal(2, gate.PeakActive);
             gate.Release.TrySetResult();
-            IReadOnlyList<ToolBatchResult> results = await execution;
+            var results = await execution;
 
             Assert.Equal([1, 2], results.Select(result => result.Ordinal));
             Assert.All(results, result => Assert.True(result.Result.Succeeded));
@@ -1477,10 +1477,10 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var executionOrder = new ConcurrentQueue<string>();
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [new OrderedReadTool("valid_read", ToolConcurrencyMode.ParallelSafe, executionOrder)]);
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
             ToolBatchRequest[] requests =
             [
                 CreateBatchRequest(1, "call-missing", "missing_tool", context),
@@ -1488,7 +1488,7 @@ public static class ToolRuntimeTests
                 CreateBatchRequest(3, "call-valid", "valid_read", context),
             ];
 
-            IReadOnlyList<ToolBatchResult> results = await pipeline.InvokeBatchAsync(requests);
+            var results = await pipeline.InvokeBatchAsync(requests);
 
             Assert.Equal([1, 2, 3], results.Select(result => result.Ordinal));
             Assert.Equal(ToolErrorClassification.InvalidArguments, results[0].Result.ErrorClassification);
@@ -1515,16 +1515,16 @@ public static class ToolRuntimeTests
             {
                 FailureMode = ToolBatchFailureMode.CancelBatchOnFailure,
             };
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [
                     new CoordinatedFailureTool("fails", gate, fails: true),
                     new CoordinatedFailureTool("cancelled", gate, fails: false),
                 ],
                 options);
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
 
-            IReadOnlyList<ToolBatchResult> results = await pipeline.InvokeBatchAsync(
+            var results = await pipeline.InvokeBatchAsync(
                 [
                     CreateBatchRequest(1, "call-fails", "fails", context),
                     CreateBatchRequest(2, "call-cancelled", "cancelled", context),
@@ -1553,15 +1553,15 @@ public static class ToolRuntimeTests
             {
                 FailureMode = ToolBatchFailureMode.CancelBatchOnFailure,
             };
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [
                     new OrderedReadTool("later", ToolConcurrencyMode.SerializedPerRegistration, executionOrder),
                 ],
                 options);
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
 
-            IReadOnlyList<ToolBatchResult> results = await pipeline.InvokeBatchAsync(
+            var results = await pipeline.InvokeBatchAsync(
                 [
                     CreateBatchRequest(1, "call-fails", "missing", context),
                     CreateBatchRequest(2, "call-later", "later", context),
@@ -1590,20 +1590,20 @@ public static class ToolRuntimeTests
             var gate = new ParallelToolGate(4);
             ITool[] tools = [.. Enumerable.Range(1, 5)
                 .Select(index => new BarrierReadTool($"parallel_{index}", gate))];
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 tools,
                 new ToolParallelOptions { MaximumConcurrency = 8 });
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
             ToolBatchRequest[] requests = [.. Enumerable.Range(1, 5)
                 .Select(index => CreateBatchRequest(index, $"call-{index}", $"parallel_{index}", context))];
 
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            Task<IReadOnlyList<ToolBatchResult>> execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
+            var execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
             await gate.AllEntered.Task.WaitAsync(timeout.Token);
             Assert.Equal(4, gate.PeakActive);
             gate.Release.TrySetResult();
-            IReadOnlyList<ToolBatchResult> results = await execution;
+            var results = await execution;
 
             Assert.Equal(5, results.Count);
             Assert.Equal(4, gate.PeakActive);
@@ -1625,18 +1625,18 @@ public static class ToolRuntimeTests
             var gate = new ParallelToolGate(4);
             ITool[] tools = [.. Enumerable.Range(1, 8)
                 .Select(index => new BarrierReadTool($"parallel_{index}", gate))];
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 tools,
                 new ToolParallelOptions { MaximumConcurrency = 8 });
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
 
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            Task<IReadOnlyList<ToolBatchResult>> first = pipeline.InvokeBatchAsync(
+            var first = pipeline.InvokeBatchAsync(
                 [.. Enumerable.Range(1, 4)
                     .Select(index => CreateBatchRequest(index, $"first-{index}", $"parallel_{index}", context))],
                 timeout.Token);
-            Task<IReadOnlyList<ToolBatchResult>> second = pipeline.InvokeBatchAsync(
+            var second = pipeline.InvokeBatchAsync(
                 [.. Enumerable.Range(5, 4)
                     .Select(index => CreateBatchRequest(index, $"second-{index}", $"parallel_{index}", context))],
                 timeout.Token);
@@ -1662,12 +1662,12 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var gate = new ParallelToolGate(1);
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [new BarrierReadTool("parallel", gate)]);
             using var cancellation = new CancellationTokenSource();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            Task<IReadOnlyList<ToolBatchResult>> execution = pipeline.InvokeBatchAsync(
+            var execution = pipeline.InvokeBatchAsync(
                 [CreateBatchRequest(1, "call", "parallel", CreateContext(repository))],
                 cancellation.Token);
 
@@ -1687,7 +1687,7 @@ public static class ToolRuntimeTests
     [Fact]
     public static void Search_SchedulingDescriptor_SerializesPotentialProcessExecution()
     {
-        ToolSchedulingDescriptor scheduling = new SearchTextTool().Definition.Scheduling;
+        var scheduling = new SearchTextTool().Definition.Scheduling;
 
         Assert.Equal(ToolConcurrencyMode.SerializedPerRegistration, scheduling.ConcurrencyMode);
         Assert.Equal(1, scheduling.MaximumSourceConcurrency);
@@ -1702,16 +1702,16 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var executionOrder = new ConcurrentQueue<string>();
-            ToolInvocationPipeline pipeline = CreatePipeline(
+            var pipeline = CreatePipeline(
                 events,
                 [
                     new OrderedReadTool("first", ToolConcurrencyMode.ParallelSafe, executionOrder),
                     new OrderedReadTool("serialized", ToolConcurrencyMode.SerializedPerRegistration, executionOrder),
                     new OrderedReadTool("third", ToolConcurrencyMode.ParallelSafe, executionOrder),
                 ]);
-            ToolInvocationContext context = CreateContext(repository);
+            var context = CreateContext(repository);
 
-            IReadOnlyList<ToolBatchResult> results = await pipeline.InvokeBatchAsync(
+            var results = await pipeline.InvokeBatchAsync(
                 [
                     CreateBatchRequest(1, "call-first", "first", context),
                     CreateBatchRequest(2, "call-serialized", "serialized", context),
@@ -2032,7 +2032,7 @@ public static class ToolRuntimeTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using Process process = Process.Start(new ProcessStartInfo
+            using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = request.FileName,
                 WorkingDirectory = request.WorkingDirectory,

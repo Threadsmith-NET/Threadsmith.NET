@@ -27,10 +27,10 @@ public sealed class SkillSubsystemTests
         var catalog = package.CreateCatalog(SkillScope.Repository);
 
         // Act
-        SkillCatalogSnapshot snapshot = await catalog.RefreshAsync();
+        var snapshot = await catalog.RefreshAsync();
 
         // Assert
-        SkillCatalogCandidate candidate = Assert.Single(snapshot.Candidates);
+        var candidate = Assert.Single(snapshot.Candidates);
         Assert.Equal(SkillVerificationState.Unverified, candidate.Verification);
         Assert.False(candidate.Enabled);
     }
@@ -43,7 +43,7 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogSnapshot snapshot = await catalog.RefreshAsync();
+        var snapshot = await catalog.RefreshAsync();
         var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
 
         // Act
@@ -67,14 +67,14 @@ public sealed class SkillSubsystemTests
     {
         // Arrange
         using var package = TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
-        SkillCatalog catalog = package.CreateCatalog(SkillScope.User);
-        SkillCatalogCandidate candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
+        var catalog = package.CreateCatalog(SkillScope.User);
+        var candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
         await File.AppendAllTextAsync(
             Path.Combine(package.PackageRoot, "instructions", "analyze.md"),
             "tampered");
 
         // Act
-        SkillCatalogCandidate verified = await new SkillPackageVerifier(
+        var verified = await new SkillPackageVerifier(
             new SkillTrustPolicySnapshot()).VerifyAsync(candidate);
 
         // Assert
@@ -88,9 +88,9 @@ public sealed class SkillSubsystemTests
     {
         // Arrange
         using var package = TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
-        SkillCatalog unsignedCatalog = package.CreateCatalog(SkillScope.User);
-        SkillCatalogCandidate unsigned = Assert.Single((await unsignedCatalog.RefreshAsync()).Candidates);
-        using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var unsignedCatalog = package.CreateCatalog(SkillScope.User);
+        var unsigned = Assert.Single((await unsignedCatalog.RefreshAsync()).Candidates);
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var signature = key.SignHash(
             Convert.FromHexString(unsigned.Identity.Digest.Value),
             DSASignatureFormat.Rfc3279DerSequence);
@@ -98,8 +98,8 @@ public sealed class SkillSubsystemTests
             Path.Combine(package.PackageRoot, "skill.json"),
             "test-signer",
             Convert.ToBase64String(signature));
-        SkillCatalog catalog = package.CreateCatalog(SkillScope.User);
-        SkillCatalogCandidate candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
+        var catalog = package.CreateCatalog(SkillScope.User);
+        var candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
         var policy = new SkillTrustPolicySnapshot
         {
             TrustedSignerPublicKeys = new Dictionary<string, string>
@@ -111,8 +111,8 @@ public sealed class SkillSubsystemTests
             + $"+{candidate.Identity.Digest.Value}";
 
         // Act
-        SkillCatalogCandidate verified = await new SkillPackageVerifier(policy).VerifyAsync(candidate);
-        SkillCatalogCandidate enabled = await new SkillPackageVerifier(
+        var verified = await new SkillPackageVerifier(policy).VerifyAsync(candidate);
+        var enabled = await new SkillPackageVerifier(
             policy with { EnabledSelectors = new HashSet<string> { selector } }).VerifyAsync(candidate);
 
         // Assert
@@ -130,7 +130,7 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogCandidate candidate = (await catalog.RefreshAsync()).Candidates.Single(item =>
+        var candidate = (await catalog.RefreshAsync()).Candidates.Single(item =>
             item.Metadata.SkillId.Value == "fix-analyzer-warnings");
         var policy = new SkillTrustPolicySnapshot
         {
@@ -139,7 +139,7 @@ public sealed class SkillSubsystemTests
         };
 
         // Act
-        SkillCatalogCandidate verified = await new SkillPackageVerifier(policy).VerifyAsync(candidate);
+        var verified = await new SkillPackageVerifier(policy).VerifyAsync(candidate);
 
         // Assert
         Assert.Equal(SkillVerificationState.Revoked, verified.Verification);
@@ -152,18 +152,18 @@ public sealed class SkillSubsystemTests
     {
         // Arrange
         using var package = TemporaryPackage.CopyMaintained("upgrade-package");
-        SkillCatalog catalog = package.CreateCatalog(SkillScope.Repository);
-        SkillCatalogCandidate candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
+        var catalog = package.CreateCatalog(SkillScope.Repository);
+        var candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
         var policyPath = Path.Combine(package.Root, "outside-repository-policy.json");
         var provider = new FileSkillTrustPolicyProvider(
             policyPath,
             new SkillTrustPolicySnapshot());
         var verifier = new SkillPackageVerifier(provider);
-        SkillCatalogCandidate before = await verifier.VerifyAsync(candidate);
+        var before = await verifier.VerifyAsync(candidate);
 
         // Act
         await provider.SetEnabledAsync(candidate, enabled: true);
-        SkillCatalogCandidate after = await verifier.VerifyAsync(candidate);
+        var after = await verifier.VerifyAsync(candidate);
 
         // Assert
         Assert.Equal(SkillVerificationState.Unverified, before.Verification);
@@ -183,7 +183,7 @@ public sealed class SkillSubsystemTests
             {"type":"object","additionalProperties":false,"required":["count"],
              "properties":{"count":{"type":"integer","minimum":1,"maximum":3}}}
             """;
-        SkillCompiledSchema compiled = validator.Compile(safe);
+        var compiled = validator.Compile(safe);
 
         // Act / Assert
         Assert.Throws<NotSupportedException>(() =>
@@ -205,9 +205,9 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogCandidate discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
+        var discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
             item.Metadata.SkillId.Value == "fix-analyzer-warnings");
-        SkillCatalogCandidate candidate = await new SkillPackageVerifier(
+        var candidate = await new SkillPackageVerifier(
             new SkillTrustPolicySnapshot()).VerifyAsync(discovered);
         var evaluator = new SkillCompatibilityEvaluator(
             new ToolRegistry([]),
@@ -215,7 +215,7 @@ public sealed class SkillSubsystemTests
             "1.0.0");
 
         // Act
-        SkillCompatibilityResult result = evaluator.Evaluate(
+        var result = evaluator.Evaluate(
             candidate,
             new SkillInvocationRequest
             {
@@ -247,9 +247,9 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogCandidate discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
+        var discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
             item.Metadata.SkillId.Value == "fix-analyzer-warnings");
-        SkillCatalogCandidate verified = await new SkillPackageVerifier(
+        var verified = await new SkillPackageVerifier(
             new SkillTrustPolicySnapshot()).VerifyAsync(discovered);
         SkillWorkflowStep[] steps =
         [
@@ -257,7 +257,7 @@ public sealed class SkillSubsystemTests
                 ? step with { Kind = SkillWorkflowStepKind.CollectEvidence }
                 : step),
         ];
-        SkillCatalogCandidate candidate = verified with
+        var candidate = verified with
         {
             Metadata = verified.Metadata with
             {
@@ -270,7 +270,7 @@ public sealed class SkillSubsystemTests
             "1.0.0");
 
         // Act
-        SkillCompatibilityResult result = evaluator.Evaluate(
+        var result = evaluator.Evaluate(
             candidate,
             new SkillInvocationRequest
             {
@@ -327,11 +327,11 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogCandidate discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
+        var discovered = (await catalog.RefreshAsync()).Candidates.Single(item =>
             item.Metadata.SkillId.Value == "fix-analyzer-warnings");
-        SkillCatalogCandidate candidate = await new SkillPackageVerifier(
+        var candidate = await new SkillPackageVerifier(
             new SkillTrustPolicySnapshot()).VerifyAsync(discovered);
-        SkillWorkflowStep step = candidate.Metadata.Workflow.Steps.Single(item => item.StepId == "analyze");
+        var step = candidate.Metadata.Workflow.Steps.Single(item => item.StepId == "analyze");
         var loader = new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer());
 
         // Act / Assert
@@ -360,8 +360,8 @@ public sealed class SkillSubsystemTests
                 FileOptions.Asynchronous))
             using (var archive = new ZipArchive(archiveStream, ZipArchiveMode.Create, leaveOpen: false))
             {
-                ZipArchiveEntry entry = archive.CreateEntry("../escape.txt");
-                await using Stream stream = await entry.OpenAsync();
+                var entry = archive.CreateEntry("../escape.txt");
+                await using var stream = await entry.OpenAsync();
                 await stream.WriteAsync("bad"u8.ToArray());
             }
 
@@ -408,10 +408,10 @@ public sealed class SkillSubsystemTests
                 Phase = RunPhase.EvidenceCollection,
             }),
             events);
-        SkillInvocationId invocationId = SkillInvocationId.New();
+        var invocationId = SkillInvocationId.New();
 
         // Act
-        SkillInvocationResult waiting = await orchestrator.InvokeAsync(
+        var waiting = await orchestrator.InvokeAsync(
             new SkillInvocationRequest
             {
                 InvocationId = invocationId,
@@ -423,7 +423,7 @@ public sealed class SkillSubsystemTests
                 Phase = RunPhase.EvidenceCollection,
                 HostBudget = new SkillBudget(),
             });
-        SkillInvocationResult completed = await orchestrator.ContinueAsync(
+        var completed = await orchestrator.ContinueAsync(
             invocationId,
             "{\"accepted\":true,\"planId\":\"plan-1\"}");
 
@@ -447,7 +447,7 @@ public sealed class SkillSubsystemTests
         await catalog.RefreshAsync();
         var state = new InMemorySkillStateStore();
         await using var events = new DomainEventStream();
-        WorkspaceId workspaceId = WorkspaceId.New();
+        var workspaceId = WorkspaceId.New();
         SkillInvocationHostContext current = new()
         {
             WorkspaceId = workspaceId,
@@ -465,7 +465,7 @@ public sealed class SkillSubsystemTests
             state,
             (_, _) => Task.FromResult(current),
             events);
-        SkillInvocationId invocationId = SkillInvocationId.New();
+        var invocationId = SkillInvocationId.New();
         _ = await orchestrator.InvokeAsync(new SkillInvocationRequest
         {
             InvocationId = invocationId,
@@ -498,7 +498,7 @@ public sealed class SkillSubsystemTests
         await catalog.RefreshAsync();
         var state = new InMemorySkillStateStore();
         await using var events = new DomainEventStream();
-        WorkspaceId workspaceId = WorkspaceId.New();
+        var workspaceId = WorkspaceId.New();
         SkillInvocationHostContext current = new()
         {
             WorkspaceId = workspaceId,
@@ -515,7 +515,7 @@ public sealed class SkillSubsystemTests
             state,
             (_, _) => Task.FromResult(current),
             events);
-        SkillInvocationId invocationId = SkillInvocationId.New();
+        var invocationId = SkillInvocationId.New();
         _ = await orchestrator.InvokeAsync(new SkillInvocationRequest
         {
             InvocationId = invocationId,
@@ -531,7 +531,7 @@ public sealed class SkillSubsystemTests
         current = current with { WorkspaceId = WorkspaceId.New() };
 
         // Act / Assert
-        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             orchestrator.ContinueAsync(
                 invocationId,
                 "{\"accepted\":true,\"planId\":\"plan-1\"}"));
@@ -546,16 +546,16 @@ public sealed class SkillSubsystemTests
         var root = MaintainedRoot();
         var source = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        SkillCatalogCandidate discovered = (await source.RefreshAsync()).Candidates.Single(item =>
+        var discovered = (await source.RefreshAsync()).Candidates.Single(item =>
             item.Metadata.SkillId.Value == "review-pr");
-        SkillCatalogCandidate first = discovered with
+        var first = discovered with
         {
             Metadata = discovered.Metadata with { Version = "1.0.0" },
             Identity = discovered.Identity with { Version = "1.0.0" },
             Enabled = true,
             Verification = SkillVerificationState.Maintained,
         };
-        SkillCatalogCandidate pinned = discovered with
+        var pinned = discovered with
         {
             Metadata = discovered.Metadata with { Version = "2.0.0" },
             Identity = discovered.Identity with
@@ -613,9 +613,9 @@ public sealed class SkillSubsystemTests
         {
             var version = await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
             var store = new SqliteSkillStateStore(connectionString);
-            SkillPackageIdentity identity = PackageIdentity();
-            SkillInvocationId invocationId = SkillInvocationId.New();
-            SkillWorkflowCheckpoint checkpoint = CreateCheckpoint(invocationId, identity);
+            var identity = PackageIdentity();
+            var invocationId = SkillInvocationId.New();
+            var checkpoint = CreateCheckpoint(invocationId, identity);
             var verification = new SkillVerificationRecord
             {
                 Package = identity,
@@ -634,7 +634,7 @@ public sealed class SkillSubsystemTests
             // Assert
             Assert.Equal(8, version);
             Assert.Equal(identity, await store.GetPinAsync(identity.SkillId));
-            SkillWorkflowCheckpoint? restored = await store.GetCheckpointAsync(invocationId);
+            var restored = await store.GetCheckpointAsync(invocationId);
             Assert.NotNull(restored);
             Assert.Equal(checkpoint.InvocationId, restored.InvocationId);
             Assert.Equal(checkpoint.WorkflowId, restored.WorkflowId);
@@ -646,7 +646,7 @@ public sealed class SkillSubsystemTests
                 await store.GetVerificationAsync(identity.Digest, SkillScope.User, "user:test"));
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
-            await using SqliteCommand command = connection.CreateCommand();
+            await using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM skill_package_provenance;";
             Assert.Equal(1L, (long)(await command.ExecuteScalarAsync() ?? -1L));
             Assert.True(await store.HasActivePackageReferenceAsync(identity));
@@ -654,7 +654,7 @@ public sealed class SkillSubsystemTests
                 0,
                 await store.DeleteCheckpointsOlderThanAsync(DateTimeOffset.UtcNow.AddMinutes(1)));
             Assert.NotNull(await store.GetCheckpointAsync(invocationId));
-            SkillWorkflowCheckpoint completed = checkpoint with
+            var completed = checkpoint with
             {
                 Status = SkillInvocationStatus.Completed,
                 RecordedAt = DateTimeOffset.UtcNow,
@@ -684,14 +684,14 @@ public sealed class SkillSubsystemTests
         {
             _ = await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
             var store = new SqliteSkillStateStore(connectionString);
-            SkillWorkflowCheckpoint accepted = CreateCheckpoint(
+            var accepted = CreateCheckpoint(
                 SkillInvocationId.New(),
                 PackageIdentity()) with
             {
                 Status = SkillInvocationStatus.Accepted,
             };
             await store.SaveCheckpointAsync(accepted, expectedVersion: null);
-            SkillWorkflowCheckpoint running = accepted with
+            var running = accepted with
             {
                 Status = SkillInvocationStatus.Running,
                 RecordedAt = DateTimeOffset.UtcNow,
@@ -699,7 +699,7 @@ public sealed class SkillSubsystemTests
             await store.SaveCheckpointAsync(
                 running,
                 new SkillCheckpointVersion(accepted.Generation, accepted.Status));
-            SkillWorkflowCheckpoint stale = accepted with
+            var stale = accepted with
             {
                 Generation = checked(accepted.Generation + 1),
                 RecordedAt = DateTimeOffset.UtcNow,
@@ -710,7 +710,7 @@ public sealed class SkillSubsystemTests
                 store.SaveCheckpointAsync(
                     stale,
                     new SkillCheckpointVersion(accepted.Generation, accepted.Status)));
-            SkillWorkflowCheckpoint? restored = await store.GetCheckpointAsync(accepted.InvocationId);
+            var restored = await store.GetCheckpointAsync(accepted.InvocationId);
             Assert.Equal(SkillInvocationStatus.Running, restored?.Status);
         }
         finally
@@ -737,7 +737,7 @@ public sealed class SkillSubsystemTests
 
     private static void AddSignature(string manifestPath, string signerId, string signature)
     {
-        JsonObject manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
             ?? throw new InvalidDataException("Test skill manifest is invalid.");
         manifest["signature"] = new JsonObject
         {
@@ -973,7 +973,7 @@ public sealed class SkillSubsystemTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Request = request;
-            SkillPackageIdentity package = PackageIdentity();
+            var package = PackageIdentity();
             var checkpoint = new SkillWorkflowCheckpoint
             {
                 WorkflowId = SkillWorkflowId.New(),
@@ -1066,7 +1066,7 @@ public sealed class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _verifications.TryGetValue($"{digest.Value}|{scope}|{source}", out SkillVerificationRecord? record);
+            _verifications.TryGetValue($"{digest.Value}|{scope}|{source}", out var record);
             return Task.FromResult(record);
         }
 
@@ -1078,7 +1078,7 @@ public sealed class SkillSubsystemTests
             cancellationToken.ThrowIfCancellationRequested();
             var exists = _checkpoints.TryGetValue(
                 checkpoint.InvocationId,
-                out SkillWorkflowCheckpoint? current);
+                out var current);
             var matches = expectedVersion is null
                 ? !exists
                 : current is not null
@@ -1098,7 +1098,7 @@ public sealed class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _checkpoints.TryGetValue(invocationId, out SkillWorkflowCheckpoint? checkpoint);
+            _checkpoints.TryGetValue(invocationId, out var checkpoint);
             return Task.FromResult(checkpoint);
         }
 
@@ -1117,7 +1117,7 @@ public sealed class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _pins.TryGetValue(skillId, out SkillPackageIdentity? identity);
+            _pins.TryGetValue(skillId, out var identity);
             return Task.FromResult(identity);
         }
 

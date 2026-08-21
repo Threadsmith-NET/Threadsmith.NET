@@ -77,8 +77,8 @@ internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
         }
 
         var canonicalServers = new JsonArray();
-        bool changed = false;
-        foreach (JsonNode? value in authorizationServers)
+        var changed = false;
+        foreach (var value in authorizationServers)
         {
             if (value is not JsonValue jsonValue
                 || !jsonValue.TryGetValue<string>(out var advertisedValue)
@@ -121,10 +121,10 @@ internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
         Uri advertisedServer,
         CancellationToken cancellationToken)
     {
-        foreach (Uri metadataUri in BuildMetadataCandidates(advertisedServer))
+        foreach (var metadataUri in BuildMetadataCandidates(advertisedServer))
         {
             using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
-            foreach (ProductInfoHeaderValue product in sourceRequest.Headers.UserAgent)
+            foreach (var product in sourceRequest.Headers.UserAgent)
             {
                 metadataRequest.Headers.UserAgent.Add(product);
             }

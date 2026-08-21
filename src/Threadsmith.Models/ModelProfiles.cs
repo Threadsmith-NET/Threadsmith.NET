@@ -248,7 +248,7 @@ public sealed class ConfiguredModelCatalog
             ArgumentException.ThrowIfNullOrWhiteSpace(profile.Name);
             ArgumentException.ThrowIfNullOrWhiteSpace(profile.Provider);
             ArgumentException.ThrowIfNullOrWhiteSpace(profile.ModelId);
-            bool isPermittedEndpoint = string.Equals(
+            var isPermittedEndpoint = string.Equals(
                     profile.Endpoint.Scheme,
                     Uri.UriSchemeHttps,
                     StringComparison.OrdinalIgnoreCase)
@@ -317,7 +317,7 @@ public sealed class ConfiguredModelCatalog
             return profile;
         }
 
-        bool selectable = profile.SupportedReasoningLevels.Count > 1;
+        var selectable = profile.SupportedReasoningLevels.Count > 1;
         return profile with
         {
             ReasoningCapability = capability with
@@ -407,7 +407,7 @@ public sealed class ConfiguredModelProvider : IModelProvider
         }
 
         var profile = _catalog.Get(selection.ProfileId);
-        string? resolvedSecret = profile.SecretKeyReference is { } secretReference
+        var resolvedSecret = profile.SecretKeyReference is { } secretReference
             ? await _resolveSecretAsync(secretReference, cancellationToken)
             : null;
         var definition = _effectiveCatalog.Get(selection.ProfileId);
@@ -444,13 +444,13 @@ public static class ModelProfileConfigurationLoader
         var profiles = new List<ModelProfile>();
         foreach (var section in configuration.GetSection("model:profiles").GetChildren())
         {
-            string idText = GetRequired(section, "id");
+            var idText = GetRequired(section, "id");
             if (!Guid.TryParse(idText, out var id))
             {
                 throw new InvalidOperationException($"Model profile id '{idText}' is not a GUID.");
             }
 
-            string endpointText = GetRequired(section, "endpoint");
+            var endpointText = GetRequired(section, "endpoint");
             if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint))
             {
                 throw new InvalidOperationException(
@@ -464,7 +464,7 @@ public static class ModelProfileConfigurationLoader
                         ? workload
                         : throw new InvalidOperationException(
                             $"Unknown workload class '{item.Value}' in profile '{idText}'."))];
-            string policyText = section["sensitiveDataPolicy"] ?? nameof(ModelSensitiveDataPolicy.Prohibited);
+            var policyText = section["sensitiveDataPolicy"] ?? nameof(ModelSensitiveDataPolicy.Prohibited);
             if (!Enum.TryParse<ModelSensitiveDataPolicy>(policyText, true, out var sensitiveDataPolicy)
                 || !Enum.IsDefined(sensitiveDataPolicy))
             {
@@ -472,7 +472,7 @@ public static class ModelProfileConfigurationLoader
                     $"Unknown sensitive-data policy '{policyText}' in profile '{idText}'.");
             }
 
-            string? reasoningEffort = section["reasoningEffort"];
+            var reasoningEffort = section["reasoningEffort"];
             var defaultReasoningLevel = ReasoningLevel.None;
             if (!string.IsNullOrWhiteSpace(reasoningEffort)
                 && (!Enum.TryParse(reasoningEffort, true, out defaultReasoningLevel)
@@ -541,7 +541,7 @@ public static class ModelProfileConfigurationLoader
             });
         }
 
-        bool enforceHttps = configuration.GetValue("model:enforceModelEndpointHttps", true);
+        var enforceHttps = configuration.GetValue("model:enforceModelEndpointHttps", true);
         return new ConfiguredModelCatalog(profiles, enforceHttps);
     }
 
@@ -628,7 +628,7 @@ public static class ModelCapabilityNegotiator
                 + request.Constraints.MinimumContextWindow);
         }
 
-        decimal combinedCost = profile.Cost.InputPerMillionTokens
+        var combinedCost = profile.Cost.InputPerMillionTokens
             + profile.Cost.OutputPerMillionTokens;
         if (request.Constraints.MaximumCombinedCostPerMillionTokens is { } costCeiling
             && combinedCost > costCeiling)

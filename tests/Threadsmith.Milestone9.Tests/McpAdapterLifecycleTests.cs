@@ -33,7 +33,7 @@ public static class McpAdapterLifecycleTests
     [Fact]
     public static async Task Startup_timeout_bounds_secret_resolution()
     {
-        int transportCreations = 0;
+        var transportCreations = 0;
         var adapter = new McpAdapter(
             _ =>
             {
@@ -127,7 +127,7 @@ public static class McpAdapterLifecycleTests
             timeProvider);
         var connection = await adapter.ConnectAsync(CreateProfile());
         var tool = Assert.Single(connection.Tools);
-        object input = tool.DeserializeInput("{}");
+        var input = tool.DeserializeInput("{}");
 
         var execution = await tool.ExecuteAsync(
             input,

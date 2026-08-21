@@ -357,7 +357,7 @@ public sealed class FakeModelProvider : IModelProvider
 
         var random = new Random(request.Seed);
         var skippedToolRounds = 0;
-        foreach (ScriptedTurn turn in _script.Turns)
+        foreach (var turn in _script.Turns)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (skippedToolRounds < request.ToolContinuationRound)

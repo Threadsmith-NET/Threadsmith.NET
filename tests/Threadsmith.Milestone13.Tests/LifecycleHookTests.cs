@@ -226,9 +226,9 @@ public sealed class LifecycleHookTests
         var adapter = new RecordingAdapter();
         await using var coordinator = Coordinator(descriptor, store, adapter, []);
         var observer = new HookEventObserver(coordinator);
-        SessionId sessionId = SessionId.New();
-        MutationSetId mutationSetId = MutationSetId.New();
-        ApprovalId approvalId = ApprovalId.New();
+        var sessionId = SessionId.New();
+        var mutationSetId = MutationSetId.New();
+        var approvalId = ApprovalId.New();
 
         await observer.ObserveAsync(new MutationSetProposed(
             sessionId,
@@ -281,8 +281,8 @@ public sealed class LifecycleHookTests
     [Fact]
     public async Task MigrationAndSqliteStore_RoundTripApprovalAndAudit()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"threadsmith-hooks-{Guid.NewGuid():N}.db");
-        string connectionString = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-hooks-{Guid.NewGuid():N}.db");
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
         try
         {
             var runner = new MigrationRunner(connectionString, DefaultMigrations.All);

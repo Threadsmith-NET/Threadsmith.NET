@@ -82,7 +82,7 @@ public sealed class PlanApprovalPolicyService :
         string repositoryRoot,
         CancellationToken cancellationToken = default)
     {
-        PlanApprovalRepositoryBinding binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(repositoryRoot);
+        var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(repositoryRoot);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -158,8 +158,8 @@ public sealed class PlanApprovalPolicyService :
             };
         }
 
-        bool trustedForStrongModes = trustLevel >= RepositoryTrustLevel.TrustedMutation;
-        bool autoApprove = _currentPolicy switch
+        var trustedForStrongModes = trustLevel >= RepositoryTrustLevel.TrustedMutation;
+        var autoApprove = _currentPolicy switch
         {
             PlanApprovalPolicy.ReviewAll => false,
             PlanApprovalPolicy.ReviewRisky => result.Risk == PlanRiskClassification.Low,
@@ -242,15 +242,15 @@ public sealed class PlanApprovalPolicyService :
         IReadOnlyDictionary<string, string?> repositoryConfiguration)
     {
         const string policyKey = "planning:approvalPolicy";
-        string configured = configuration?[policyKey] ?? "reviewAll";
+        var configured = configuration?[policyKey] ?? "reviewAll";
         var parsed = ParsePolicy(configured);
-        bool overriddenAfterRepository = _configurationAfterRepository.ContainsKey(policyKey);
-        bool repositorySourced = !overriddenAfterRepository
-            && repositoryConfiguration.TryGetValue(policyKey, out string? repositoryValue)
+        var overriddenAfterRepository = _configurationAfterRepository.ContainsKey(policyKey);
+        var repositorySourced = !overriddenAfterRepository
+            && repositoryConfiguration.TryGetValue(policyKey, out var repositoryValue)
             && string.Equals(configured, repositoryValue, StringComparison.OrdinalIgnoreCase);
         if (repositorySourced && parsed == PlanApprovalPolicy.TrustSession)
         {
-            configured = _configurationBeforeRepository.TryGetValue(policyKey, out string? trustedValue)
+            configured = _configurationBeforeRepository.TryGetValue(policyKey, out var trustedValue)
                 ? trustedValue ?? "reviewAll"
                 : "reviewAll";
             parsed = ParsePolicy(configured);
@@ -258,7 +258,7 @@ public sealed class PlanApprovalPolicyService :
 
         if (parsed is PlanApprovalPolicy.AlwaysTrustRepo)
         {
-            string? configuredIdentity = configuration?["planning:approvalRepositoryIdentity"];
+            var configuredIdentity = configuration?["planning:approvalRepositoryIdentity"];
             if (binding is null
                 || !string.Equals(configuredIdentity, binding.RepositoryIdentity, StringComparison.Ordinal)
                 || !_trustGrantStore.IsGranted(binding.RepositoryIdentity))
@@ -297,7 +297,7 @@ public sealed class PlanApprovalPolicyService :
         }
 
         IReadOnlyList<IConfigurationProvider> providers = [.. root.Providers];
-        int repositoryProviderIndex = FindRepositoryProviderIndex(providers, repositoryConfigurationPath);
+        var repositoryProviderIndex = FindRepositoryProviderIndex(providers, repositoryConfigurationPath);
         if (repositoryProviderIndex < 0)
         {
             var repository = SnapshotRepositoryConfiguration(
@@ -334,9 +334,9 @@ public sealed class PlanApprovalPolicyService :
         IReadOnlyDictionary<string, string?> repository)
     {
         var trusted = new Dictionary<string, string?>(effective, StringComparer.OrdinalIgnoreCase);
-        foreach ((string key, string? repositoryValue) in repository)
+        foreach ((var key, var repositoryValue) in repository)
         {
-            if (trusted.TryGetValue(key, out string? effectiveValue)
+            if (trusted.TryGetValue(key, out var effectiveValue)
                 && string.Equals(effectiveValue, repositoryValue, StringComparison.Ordinal))
             {
                 trusted.Remove(key);
@@ -369,11 +369,11 @@ public sealed class PlanApprovalPolicyService :
         }
 
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (string key in keys)
+        foreach (var key in keys)
         {
-            for (int index = providerList.Length - 1; index >= 0; index--)
+            for (var index = providerList.Length - 1; index >= 0; index--)
             {
-                if (providerList[index].TryGet(key, out string? value) && value is not null)
+                if (providerList[index].TryGet(key, out var value) && value is not null)
                 {
                     values[key] = value;
                     break;
@@ -389,9 +389,9 @@ public sealed class PlanApprovalPolicyService :
         string? parentPath,
         HashSet<string> keys)
     {
-        foreach (string child in provider.GetChildKeys([], parentPath))
+        foreach (var child in provider.GetChildKeys([], parentPath))
         {
-            string key = parentPath is null
+            var key = parentPath is null
                 ? child
                 : ConfigurationPath.Combine(parentPath, child);
             if (keys.Add(key))
@@ -410,8 +410,8 @@ public sealed class PlanApprovalPolicyService :
             return -1;
         }
 
-        string normalizedRepositoryConfigurationPath = Path.GetFullPath(repositoryConfigurationPath);
-        for (int index = 0; index < providers.Count; index++)
+        var normalizedRepositoryConfigurationPath = Path.GetFullPath(repositoryConfigurationPath);
+        for (var index = 0; index < providers.Count; index++)
         {
             if (providers[index] is FileConfigurationProvider fileProvider
                 && IsSamePath(fileProvider, normalizedRepositoryConfigurationPath))
@@ -425,7 +425,7 @@ public sealed class PlanApprovalPolicyService :
 
     private static bool IsSamePath(FileConfigurationProvider fileProvider, string normalizedPath)
     {
-        string? providerPath = fileProvider.Source.Path;
+        var providerPath = fileProvider.Source.Path;
         if (string.IsNullOrWhiteSpace(providerPath))
         {
             return false;
@@ -441,7 +441,7 @@ public sealed class PlanApprovalPolicyService :
             return false;
         }
 
-        string rootedCandidate = Path.GetFullPath(Path.Combine(physicalFileProvider.Root, providerPath));
+        var rootedCandidate = Path.GetFullPath(Path.Combine(physicalFileProvider.Root, providerPath));
         return string.Equals(rootedCandidate, normalizedPath, PathComparison);
     }
 

@@ -41,7 +41,7 @@ public static class CompositionBoundariesTests
     [Fact]
     public static void SubRecords_PreserveThirtyOneDependencies()
     {
-        int total = SubRecordPropertyCount<HostCompositionInputs>()
+        var total = SubRecordPropertyCount<HostCompositionInputs>()
             + SubRecordPropertyCount<PersistenceCompositionInputs>()
             + SubRecordPropertyCount<ToolPolicyCompositionInputs>()
             + SubRecordPropertyCount<SemanticCompositionInputs>()

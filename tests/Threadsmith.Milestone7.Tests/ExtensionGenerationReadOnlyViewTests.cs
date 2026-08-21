@@ -80,7 +80,7 @@ public sealed class ExtensionGenerationReadOnlyViewTests
     {
         var generation = await LoadSampleGenerationAsync();
         var view = generation.Tools;
-        string firstId = view[0].Definition.Id;
+        var firstId = view[0].Definition.Id;
         var second = new ConfigurableToolCapability("view_added_tool", "view_added_tool");
         var third = new ConfigurableToolCapability("view_added_tool_2", "view_added_tool_2");
 
@@ -101,7 +101,7 @@ public sealed class ExtensionGenerationReadOnlyViewTests
     {
         var generation = await LoadSampleGenerationAsync();
         var view = generation.ModelPreferenceContributors;
-        string firstId = view[0].Descriptor.Id;
+        var firstId = view[0].Descriptor.Id;
         var second = new StubModelPreferenceContributor("view_added_contributor");
         var third = new StubModelPreferenceContributor("view_added_contributor_2");
 
@@ -138,7 +138,7 @@ public sealed class ExtensionGenerationReadOnlyViewTests
 
     private static async Task<ExtensionGeneration> LoadSampleGenerationAsync()
     {
-        string stagingRoot = Path.Combine(
+        var stagingRoot = Path.Combine(
             Path.GetTempPath(),
             "threadsmith-m7-view-tests",
             Guid.NewGuid().ToString("N"));
@@ -156,9 +156,9 @@ public sealed class ExtensionGenerationReadOnlyViewTests
 
     private static string ResolveSampleOutputDirectory()
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "samples", "extensions", "MinimalToolExtension", "bin", configuration, "net10.0");
     }
 }

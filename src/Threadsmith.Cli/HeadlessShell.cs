@@ -107,7 +107,7 @@ public sealed class HeadlessShell
         CancellationToken cancellationToken = default)
     {
         var activeSession = await GetActiveSessionAsync(cancellationToken);
-        string scope = policy == PlanApprovalPolicy.TrustSession
+        var scope = policy == PlanApprovalPolicy.TrustSession
             ? "session"
             : "repository";
         return await _dispatcher.DispatchAsync(
@@ -160,7 +160,7 @@ public sealed class HeadlessShell
         CancellationToken cancellationToken = default)
     {
         var result = await ManageMcpAsync(request, cancellationToken);
-        string json = JsonSerializer.Serialize(result);
+        var json = JsonSerializer.Serialize(result);
         await _output.WriteLineAsync(json.AsMemory(), cancellationToken);
         return result.ExitCode;
     }
@@ -189,7 +189,7 @@ public sealed class HeadlessShell
             return false;
         }
 
-        string json = JsonSerializer.Serialize(inspection);
+        var json = JsonSerializer.Serialize(inspection);
         await _output.WriteLineAsync(json.AsMemory(), cancellationToken);
         return true;
     }
@@ -482,8 +482,8 @@ public sealed class HeadlessShell
                 await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
             }
 
-            bool pendingPlan = state?.Phase == RunPhase.AwaitingPlanApproval;
-            bool succeeded = !pendingPlan && await _dispatcher.DispatchAsync(
+            var pendingPlan = state?.Phase == RunPhase.AwaitingPlanApproval;
+            var succeeded = !pendingPlan && await _dispatcher.DispatchAsync(
                 new WaitForRunCommand(runId),
                 cancellationToken);
             if (state is null)
@@ -491,14 +491,14 @@ public sealed class HeadlessShell
                 return 1;
             }
 
-            foreach (string line in state.Activity)
+            foreach (var line in state.Activity)
             {
                 await _output.WriteAsync(line.AsMemory(), cancellationToken);
             }
 
             foreach (var tool in state.ToolActivity.Where(tool => tool.RunId == runId))
             {
-                string status = tool.IsCompleted
+                var status = tool.IsCompleted
                     ? tool.Succeeded ? "succeeded" : "failed"
                     : "running";
                 await _output.WriteLineAsync(
@@ -568,7 +568,7 @@ public sealed class HeadlessShell
                     $"Tests: {tests.Passed} passed, {tests.Failed} failed, {tests.Skipped} skipped"
                         .AsMemory(),
                     cancellationToken);
-                foreach (string reason in tests.Selection.Rationale)
+                foreach (var reason in tests.Selection.Rationale)
                 {
                     await _output.WriteLineAsync(
                         $"Selection: {reason}".AsMemory(),
@@ -584,11 +584,11 @@ public sealed class HeadlessShell
                     cancellationToken);
                 foreach (var lifecycle in mutation.Preview.LifecycleChanges)
                 {
-                    string destination = lifecycle.DestinationPath is null
+                    var destination = lifecycle.DestinationPath is null
                         ? string.Empty
                         : $" -> {lifecycle.DestinationPath}";
-                    string casing = lifecycle.IsCaseOnlyMove ? ", case-only" : string.Empty;
-                    string lifecycleText = $"Lifecycle {lifecycle.Type}: "
+                    var casing = lifecycle.IsCaseOnlyMove ? ", case-only" : string.Empty;
+                    var lifecycleText = $"Lifecycle {lifecycle.Type}: "
                         + $"{lifecycle.SourcePath}{destination} [{lifecycle.Risk}{casing}]";
                     await _output.WriteLineAsync(
                         lifecycleText.AsMemory(),
@@ -600,7 +600,7 @@ public sealed class HeadlessShell
                     cancellationToken);
             }
 
-            bool directAuthorizationRequired = state.ToolActivity.Any(tool =>
+            var directAuthorizationRequired = state.ToolActivity.Any(tool =>
                 tool.RunId == runId
                 && !tool.Succeeded
                 && tool.Error?.StartsWith("DirectAuthorizationRequired", StringComparison.Ordinal) == true);
@@ -783,7 +783,7 @@ public sealed class HeadlessShell
                 await _output.WriteLineAsync(
                     "TrustedRead is required to select a solution and capture a baseline.".AsMemory(),
                     cancellationToken);
-                foreach (string candidate in opened.SolutionCandidates)
+                foreach (var candidate in opened.SolutionCandidates)
                 {
                     await _output.WriteLineAsync($"Candidate: {candidate}".AsMemory(), cancellationToken);
                 }
@@ -791,15 +791,15 @@ public sealed class HeadlessShell
                 return 2;
             }
 
-            bool useRememberedSolution = solutionPath is null
+            var useRememberedSolution = solutionPath is null
                 && !string.IsNullOrWhiteSpace(opened.Configuration.SolutionPath);
-            string? effectiveSolutionPath = solutionPath ?? opened.Configuration.SolutionPath;
+            var effectiveSolutionPath = solutionPath ?? opened.Configuration.SolutionPath;
             if (effectiveSolutionPath is null && opened.SolutionCandidates.Count > 1)
             {
                 await _output.WriteLineAsync(
                     "Multiple solution candidates were found; specify --solution with one of:".AsMemory(),
                     cancellationToken);
-                foreach (string candidate in opened.SolutionCandidates)
+                foreach (var candidate in opened.SolutionCandidates)
                 {
                     await _output.WriteLineAsync(
                         $"Candidate: {candidate}".AsMemory(),
@@ -809,7 +809,7 @@ public sealed class HeadlessShell
                 return 2;
             }
 
-            string selectedPath = effectiveSolutionPath
+            var selectedPath = effectiveSolutionPath
                 ?? opened.SolutionCandidates.SingleOrDefault()
                 ?? throw new InvalidOperationException("No solution or project candidate was found.");
             if (useRememberedSolution)

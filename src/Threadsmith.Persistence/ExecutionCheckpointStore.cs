@@ -114,7 +114,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction =
+        await using var transaction =
             (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -157,8 +157,8 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        bool checkpointIsNull = await reader.IsDBNullAsync(1, cancellationToken);
-        bool outcomeIsNull = await reader.IsDBNullAsync(2, cancellationToken);
+        var checkpointIsNull = await reader.IsDBNullAsync(1, cancellationToken);
+        var outcomeIsNull = await reader.IsDBNullAsync(2, cancellationToken);
         return new StoredExecution(
             reader.GetInt32(0),
             checkpointIsNull ? string.Empty : reader.GetString(1),
@@ -231,13 +231,13 @@ public sealed class ExecutionArtifactPublisher : IExecutionArtifactPublisher
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reference);
-        string? content = await _artifacts.ReadAsync(reference.ContentHash, cancellationToken);
+        var content = await _artifacts.ReadAsync(reference.ContentHash, cancellationToken);
         if (content is null || System.Text.Encoding.UTF8.GetByteCount(content) != reference.Length)
         {
             return null;
         }
 
-        string actualHash = Convert.ToHexString(
+        var actualHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)))
             .ToLowerInvariant();
         return string.Equals(actualHash, reference.ContentHash, StringComparison.Ordinal)

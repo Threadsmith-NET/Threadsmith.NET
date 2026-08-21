@@ -331,7 +331,7 @@ public sealed class ReasoningPrivacyMigration : IDatabaseMigration
         ArgumentNullException.ThrowIfNull(connection);
         await using var tableCheck = connection.CreateCommand();
         tableCheck.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'domain_events';";
-        object? tableCount = await tableCheck.ExecuteScalarAsync(cancellationToken);
+        var tableCount = await tableCheck.ExecuteScalarAsync(cancellationToken);
         if (Convert.ToInt64(tableCount, System.Globalization.CultureInfo.InvariantCulture) == 0)
         {
             return;
@@ -397,7 +397,7 @@ public sealed class SessionLifecycleSchemaMigration : IDatabaseMigration
     {
         await using var tableCheck = connection.CreateCommand();
         tableCheck.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'domain_events';";
-        object? tableCount = await tableCheck.ExecuteScalarAsync(cancellationToken);
+        var tableCount = await tableCheck.ExecuteScalarAsync(cancellationToken);
         if (Convert.ToInt64(tableCount, System.Globalization.CultureInfo.InvariantCulture) == 0)
         {
             return;
@@ -447,10 +447,10 @@ public sealed class SessionLifecycleSchemaMigration : IDatabaseMigration
         LegacySession session,
         CancellationToken cancellationToken)
     {
-        string canonicalRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(session.RepositoryPath));
-        string identity = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+        var canonicalRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(session.RepositoryPath));
+        var identity = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
             OperatingSystem.IsWindows() ? canonicalRepository.ToUpperInvariant() : canonicalRepository)));
-        string displayName = Path.GetFileName(canonicalRepository);
+        var displayName = Path.GetFileName(canonicalRepository);
         displayName = string.IsNullOrWhiteSpace(displayName) ? canonicalRepository : displayName;
 
         await using var insert = connection.CreateCommand();

@@ -77,7 +77,7 @@ public sealed class Plan44FileLifecycleMutationTests
         Assert.False(File.Exists(repository.PathOf("src/Delete.cs")));
         Assert.False(File.Exists(repository.PathOf("src/Move.cs")));
         Assert.True(File.Exists(repository.PathOf("src/Moved.cs")));
-        byte[] created = await File.ReadAllBytesAsync(
+        var created = await File.ReadAllBytesAsync(
             repository.PathOf("src/Created.cs"),
             TestContext.Current.CancellationToken);
         Assert.True(created.AsSpan().StartsWith(Encoding.UTF8.GetPreamble()));
@@ -243,7 +243,7 @@ public sealed class Plan44FileLifecycleMutationTests
         var staged = await workspace.StageAsync(set, TestContext.Current.CancellationToken);
 
         var lifecycle = Assert.Single(staged.Preview.LifecycleChanges);
-        bool caseInsensitiveFileSystem = File.Exists(repository.PathOf("src/name.cs"));
+        var caseInsensitiveFileSystem = File.Exists(repository.PathOf("src/name.cs"));
         Assert.Equal(caseInsensitiveFileSystem, lifecycle.IsCaseOnlyMove);
         _ = await workspace.CommitAsync(
             set.MutationSetId,
@@ -490,12 +490,12 @@ public sealed class Plan44FileLifecycleMutationTests
 
         public static async Task<LifecycleRepository> CreateAsync(IReadOnlyDictionary<string, byte[]> files)
         {
-            string root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan44-{Guid.NewGuid():N}");
+            var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan44-{Guid.NewGuid():N}");
             Directory.CreateDirectory(root);
             var hashes = new List<WorkspaceFileHash>();
-            foreach ((string relativePath, byte[] bytes) in files)
+            foreach ((var relativePath, var bytes) in files)
             {
-                string path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(path) ?? root);
                 await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
                 hashes.Add(new WorkspaceFileHash(

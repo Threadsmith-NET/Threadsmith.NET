@@ -24,9 +24,9 @@ public sealed class Plan68AllocationMeasurementTests
         var typical = BuildTypicalDocument();
         var boundedLarge = BuildBoundedLargeDocument();
 
-        long smallBytes = MeasureFormat(small, 80);
-        long typicalBytes = MeasureFormat(typical, 80);
-        long boundedLargeBytes = MeasureFormat(boundedLarge, 60);
+        var smallBytes = MeasureFormat(small, 80);
+        var typicalBytes = MeasureFormat(typical, 80);
+        var boundedLargeBytes = MeasureFormat(boundedLarge, 60);
 
         Record("TuiMarkdownLayout.Format", [
             ("small", smallBytes),
@@ -41,14 +41,14 @@ public sealed class Plan68AllocationMeasurementTests
     public void Measure_SecretOutputSanitizer_Sanitize_Allocations()
     {
         var sanitizer = new SecretOutputSanitizer();
-        string small = "Operation completed in 12ms.";
-        string typical = "Loaded model gpt-4 with api_key=sk-AbCdEfGhIjKlMnOpQrStUv and token: Bearer abc123.\n"
+        var small = "Operation completed in 12ms.";
+        var typical = "Loaded model gpt-4 with api_key=sk-AbCdEfGhIjKlMnOpQrStUv and token: Bearer abc123.\n"
             + "Connection string: Server=db;Password=hunter2;Integrated Security=true.";
-        string boundedLarge = BuildBoundedLargeSanitizerInput();
+        var boundedLarge = BuildBoundedLargeSanitizerInput();
 
-        long smallBytes = MeasureSanitize(sanitizer, small);
-        long typicalBytes = MeasureSanitize(sanitizer, typical);
-        long boundedLargeBytes = MeasureSanitize(sanitizer, boundedLarge);
+        var smallBytes = MeasureSanitize(sanitizer, small);
+        var typicalBytes = MeasureSanitize(sanitizer, typical);
+        var boundedLargeBytes = MeasureSanitize(sanitizer, boundedLarge);
 
         Record("SecretOutputSanitizer.Sanitize", [
             ("small", smallBytes),
@@ -62,10 +62,10 @@ public sealed class Plan68AllocationMeasurementTests
     [Fact]
     public void Measure_SsePayloadPrep_Allocations()
     {
-        string[] lines = BuildSseLines(64, 240);
+        var lines = BuildSseLines(64, 240);
 
-        long baselineBytes = MeasureSseBaseline(lines);
-        long spanBytes = MeasureSseSpan(lines);
+        var baselineBytes = MeasureSseBaseline(lines);
+        var spanBytes = MeasureSseSpan(lines);
 
         Record("SsePayloadPrep", [
             ("baseline substring+trim (64 lines)", baselineBytes),
@@ -78,10 +78,10 @@ public sealed class Plan68AllocationMeasurementTests
     [Fact]
     public void Measure_SseFullChunk_Allocations()
     {
-        string[] lines = BuildSseLines(64, 240);
+        var lines = BuildSseLines(64, 240);
 
-        long baselineBytes = MeasureSseFullBaseline(lines);
-        long spanBytes = MeasureSseFullSpan(lines);
+        var baselineBytes = MeasureSseFullBaseline(lines);
+        var spanBytes = MeasureSseFullSpan(lines);
 
         Record("SseFullChunk (prep + JsonDocument.Parse)", [
             ("baseline substring+trim + parse (64 lines)", baselineBytes),
@@ -93,145 +93,145 @@ public sealed class Plan68AllocationMeasurementTests
     private static long MeasureFormat(TuiMarkdownDocument document, int width)
     {
         // Warm up JIT and caches.
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
             _ = TuiMarkdownLayout.Format(document, width);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 256;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
             _ = TuiMarkdownLayout.Format(document, width);
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
     private static long MeasureSanitize(SecretOutputSanitizer sanitizer, string input)
     {
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
             _ = sanitizer.Sanitize(input);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 256;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
             _ = sanitizer.Sanitize(input);
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
     private static long MeasureSseBaseline(string[] lines)
     {
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j][5..].Trim();
+                var payload = lines[j][5..].Trim();
                 _ = payload.Length;
             }
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 256;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j][5..].Trim();
+                var payload = lines[j][5..].Trim();
                 _ = payload.Length;
             }
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
     private static long MeasureSseSpan(string[] lines)
     {
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j].AsSpan(5).Trim().ToString();
+                var payload = lines[j].AsSpan(5).Trim().ToString();
                 _ = payload.Length;
             }
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 256;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j].AsSpan(5).Trim().ToString();
+                var payload = lines[j].AsSpan(5).Trim().ToString();
                 _ = payload.Length;
             }
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
     private static long MeasureSseFullBaseline(string[] lines)
     {
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j][5..].Trim();
-                using JsonDocument document = JsonDocument.Parse(payload);
+                var payload = lines[j][5..].Trim();
+                using var document = JsonDocument.Parse(payload);
                 _ = document.RootElement.GetProperty("id").GetString();
             }
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 128;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j][5..].Trim();
-                using JsonDocument document = JsonDocument.Parse(payload);
+                var payload = lines[j][5..].Trim();
+                using var document = JsonDocument.Parse(payload);
                 _ = document.RootElement.GetProperty("id").GetString();
             }
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
     private static long MeasureSseFullSpan(string[] lines)
     {
-        for (int i = 0; i < 64; i++)
+        for (var i = 0; i < 64; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j].AsSpan(5).Trim().ToString();
-                using JsonDocument document = JsonDocument.Parse(payload);
+                var payload = lines[j].AsSpan(5).Trim().ToString();
+                using var document = JsonDocument.Parse(payload);
                 _ = document.RootElement.GetProperty("id").GetString();
             }
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
         const int iterations = 128;
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
-            for (int j = 0; j < lines.Length; j++)
+            for (var j = 0; j < lines.Length; j++)
             {
-                string payload = lines[j].AsSpan(5).Trim().ToString();
-                using JsonDocument document = JsonDocument.Parse(payload);
+                var payload = lines[j].AsSpan(5).Trim().ToString();
+                using var document = JsonDocument.Parse(payload);
                 _ = document.RootElement.GetProperty("id").GetString();
             }
         }
 
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetAllocatedBytesForCurrentThread();
         return (after - before) / iterations;
     }
 
@@ -269,7 +269,7 @@ public sealed class Plan68AllocationMeasurementTests
             new TuiMarkdownSpan(" suffix with more normal words that wrap across several lines."),
         ]);
         var codeLines = new StringBuilder();
-        for (int i = 0; i < 200; i++)
+        for (var i = 0; i < 200; i++)
         {
             codeLines.Append("var value").Append(i.ToString(CultureInfo.InvariantCulture)).Append(" = ").Append(i).Append(";\n");
         }
@@ -280,7 +280,7 @@ public sealed class Plan68AllocationMeasurementTests
     private static string BuildBoundedLargeSanitizerInput()
     {
         var builder = new StringBuilder();
-        for (int i = 0; i < 40; i++)
+        for (var i = 0; i < 40; i++)
         {
             builder.Append("Line ").Append(i).Append(": api_key=sk-AbCdEfGhIjKlMnOpQrStUv ");
             builder.Append("token: Bearer abc123def456; password=hunter2; ");
@@ -294,7 +294,7 @@ public sealed class Plan68AllocationMeasurementTests
     {
         var lines = new string[count];
         string payloadBody = new('a', Math.Max(0, payloadLength - 20));
-        for (int i = 0; i < count; i++)
+        for (var i = 0; i < count; i++)
         {
             // Mimic OpenAI-compatible SSE: "data: { ... }\n" with leading spaces that require trimming.
             lines[i] = "data:   {\"id\":\"chunk-" + i.ToString(CultureInfo.InvariantCulture) + "\",\"payload\":\"" + payloadBody + "\"}";
@@ -307,7 +307,7 @@ public sealed class Plan68AllocationMeasurementTests
     {
         Console.WriteLine(new string('=', 70));
         Console.WriteLine(label);
-        foreach ((string name, long bytes) in measurements)
+        foreach ((var name, var bytes) in measurements)
         {
             Console.WriteLine($"  {name}: {bytes} bytes/op");
         }

@@ -465,7 +465,7 @@ public sealed class SessionApplication :
                 return false;
             }
 
-            string instructions = _sanitizer.Sanitize(command.RevisionInstructions);
+            var instructions = _sanitizer.Sanitize(command.RevisionInstructions);
             await _events.PublishAsync(
                 new PlanRevisionRequested(
                     command.SessionId,
@@ -703,7 +703,7 @@ public sealed class SessionApplication :
         }
         catch (Exception exception)
         {
-            string sanitizedMessage = _sanitizer.Sanitize(exception.Message);
+            var sanitizedMessage = _sanitizer.Sanitize(exception.Message);
             _logger.LogError(
                 "Run {RunId} failed for session {SessionId}: {Classification}: {Message}",
                 runId.Value,
@@ -740,7 +740,7 @@ public sealed class SessionApplication :
             var outcome = await orchestrator.WaitForOutcomeAsync(
                 runId,
                 registration.Cancellation.Token);
-            bool succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
+            var succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
             await registration.Machine.TransitionAsync(
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
@@ -878,7 +878,7 @@ public sealed class SessionApplication :
             return;
         }
 
-        int tokenBudget = context.Inspection.TokenBudget;
+        var tokenBudget = context.Inspection.TokenBudget;
         ModelWireEstimate Estimate() => ModelWireEstimator.Estimate(
             [.. context.Messages ?? [], .. continuationMessages],
             tools,
@@ -886,7 +886,7 @@ public sealed class SessionApplication :
             layout.StablePrefixMessageCount,
             context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
         var estimate = Estimate();
-        foreach (int index in continuationMessages
+        foreach (var index in continuationMessages
             .Select((message, index) => (message, index))
             .Where(item => item.message.Role == ModelMessageRole.Tool)
             .OrderByDescending(item => item.message.Content.Sum(part => part.Content.Length))
@@ -898,9 +898,9 @@ public sealed class SessionApplication :
             }
 
             var original = continuationMessages[index];
-            string content = string.Concat(original.Content.Select(part => part.Content));
-            int low = 0;
-            int high = Math.Max(0, content.Length - 1);
+            var content = string.Concat(original.Content.Select(part => part.Content));
+            var low = 0;
+            var high = Math.Max(0, content.Length - 1);
             var smallest = CreateReducedToolResultMessage(original, content, 0);
             continuationMessages[index] = smallest;
             estimate = Estimate();
@@ -912,7 +912,7 @@ public sealed class SessionApplication :
             var best = smallest;
             while (low <= high)
             {
-                int middle = low + ((high - low) / 2);
+                var middle = low + ((high - low) / 2);
                 var candidate = CreateReducedToolResultMessage(original, content, middle);
                 continuationMessages[index] = candidate;
                 estimate = Estimate();
@@ -943,7 +943,7 @@ public sealed class SessionApplication :
         string content,
         int previewCharacters)
     {
-        string reduced = previewCharacters == 0
+        var reduced = previewCharacters == 0
             ? "{\"isTruncated\":true}"
             : JsonSerializer.Serialize(new
             {
@@ -1007,14 +1007,14 @@ public sealed class SessionApplication :
                 definition.Name,
                 "find_symbol",
                 StringComparison.OrdinalIgnoreCase))
-            || !TryGetSearchQuery(tool.ArgumentsJson, out string? query)
+            || !TryGetSearchQuery(tool.ArgumentsJson, out var query)
             || !LooksLikeCSharpSymbolOrFileQuery(query))
         {
             return false;
         }
 
-        string boundedQuery = BoundSingleLine(query, 160);
-        string suggestedQuery = BoundSingleLine(StripCSharpExtension(query), 160);
+        var boundedQuery = BoundSingleLine(query, 160);
+        var suggestedQuery = BoundSingleLine(StripCSharpExtension(query), 160);
         content = "A semantic workspace is loaded and find_symbol is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
             + $"Call find_symbol with query '{suggestedQuery}' before text search. The rejected search query was '{boundedQuery}'. "
             + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";
@@ -1037,7 +1037,7 @@ public sealed class SessionApplication :
         query = null;
         try
         {
-            using JsonDocument document = JsonDocument.Parse(argumentsJson);
+            using var document = JsonDocument.Parse(argumentsJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("query", out var queryElement)
                 || queryElement.ValueKind != JsonValueKind.String)
@@ -1056,14 +1056,14 @@ public sealed class SessionApplication :
 
     private static bool LooksLikeCSharpSymbolOrFileQuery(string query)
     {
-        string trimmed = query.Trim();
+        var trimmed = query.Trim();
         if (trimmed.Contains(".cs", StringComparison.OrdinalIgnoreCase)
             || ContainsDeclarationKeyword(trimmed))
         {
             return true;
         }
 
-        foreach (string token in ExtractIdentifierTokens(trimmed))
+        foreach (var token in ExtractIdentifierTokens(trimmed))
         {
             if (token.Length >= 3
                 && token.Any(char.IsUpper)
@@ -1087,7 +1087,7 @@ public sealed class SessionApplication :
     private static IEnumerable<string> ExtractIdentifierTokens(string query)
     {
         var builder = new StringBuilder(query.Length);
-        foreach (char character in query)
+        foreach (var character in query)
         {
             if (char.IsLetterOrDigit(character) || character == '_')
             {
@@ -1110,7 +1110,7 @@ public sealed class SessionApplication :
 
     private static string StripCSharpExtension(string query)
     {
-        string trimmed = query.Trim();
+        var trimmed = query.Trim();
         return trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
             ? trimmed[..^3]
             : trimmed;
@@ -1118,7 +1118,7 @@ public sealed class SessionApplication :
 
     private static string BoundSingleLine(string value, int maximumCharacters)
     {
-        string normalized = value.ReplaceLineEndings(" ").Trim();
+        var normalized = value.ReplaceLineEndings(" ").Trim();
         return normalized.Length <= maximumCharacters
             ? normalized
             : normalized[..maximumCharacters];
@@ -1173,8 +1173,8 @@ public sealed class SessionApplication :
         RunPhase phase,
         CancellationToken cancellationToken)
     {
-        int maximumModelRounds = _limits.MaxModelRounds;
-        int maximumPlanningToolRounds = Math.Clamp(
+        var maximumModelRounds = _limits.MaxModelRounds;
+        var maximumPlanningToolRounds = Math.Clamp(
             _limits.MaxPlanningToolRounds,
             1,
             Math.Max(1, maximumModelRounds - 1));
@@ -1185,20 +1185,20 @@ public sealed class SessionApplication :
             registration.RepositoryIdentity = invocationContext?.RepositoryPath;
         }
 
-        bool workspaceAvailable = invocationContext?.WorkspaceId is not null;
+        var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         var invokedToolKeys = new HashSet<string>(StringComparer.Ordinal);
         var continuationMessages = new List<ModelMessage>();
         ContextAssemblyResult? frozenContext = null;
         const int maximumRetainedToolCalls = 256;
-        int maximumOutputCharacters = _limits.MaxStructuredOutputCharacters;
-        int retainedOutputCharacters = 0;
-        int retainedToolCalls = 0;
-        bool semanticToolAttempted = false;
-        int planProposalRepairAttempts = 0;
-        int maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
-        for (int modelRound = 1; modelRound <= maximumModelRounds; modelRound++)
+        var maximumOutputCharacters = _limits.MaxStructuredOutputCharacters;
+        var retainedOutputCharacters = 0;
+        var retainedToolCalls = 0;
+        var semanticToolAttempted = false;
+        var planProposalRepairAttempts = 0;
+        var maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
+        for (var modelRound = 1; modelRound <= maximumModelRounds; modelRound++)
         {
-            bool planningToolsWithheld = phase == RunPhase.EvidenceCollection
+            var planningToolsWithheld = phase == RunPhase.EvidenceCollection
                 && modelRound > maximumPlanningToolRounds;
             ToolDefinition[] conversationDefinitions = !planningToolsWithheld
                 && _toolPipeline is not null
@@ -1278,14 +1278,14 @@ public sealed class SessionApplication :
 
             var textOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
             ImplementationPlan? plan = null;
-            bool toolInvoked = false;
+            var toolInvoked = false;
             var usageRequestId = new ModelRequestUsageId(
                 runId,
                 "conversation",
                 modelRound - 1,
                 Guid.NewGuid());
             ModelUsage? reportedUsage = null;
-            bool modelSucceeded = false;
+            var modelSucceeded = false;
             IReadOnlyList<ModelMessage> requestMessages =
             [
                 .. context?.Messages ?? [],
@@ -1366,7 +1366,7 @@ public sealed class SessionApplication :
 
             try
             {
-                int toolCallOrdinal = 0;
+                var toolCallOrdinal = 0;
                 var pendingToolCalls = new List<ToolBatchRequest>();
                 await foreach (var chunk in _model.StreamAsync(modelRequest, cancellationToken))
                 {
@@ -1422,8 +1422,8 @@ public sealed class SessionApplication :
                                 "The model exceeded the host's maximum retained tool-call count.");
                         }
 
-                        bool suppressPipelineInvocation = false;
-                        bool isProposePlanTool = string.Equals(
+                        var suppressPipelineInvocation = false;
+                        var isProposePlanTool = string.Equals(
                             tool.ToolName,
                             ProposePlanToolName,
                             StringComparison.OrdinalIgnoreCase);
@@ -1446,7 +1446,7 @@ public sealed class SessionApplication :
                             {
                                 planProposalRepairAttempts++;
                                 toolCallOrdinal++;
-                                string toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
+                                var toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
                                     + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
                                 continuationMessages.Add(CreateToolCallMessage(
                                     toolCallId,
@@ -1482,7 +1482,7 @@ public sealed class SessionApplication :
                             && invocationContext is not null)
                         {
                             toolCallOrdinal++;
-                            string toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
+                            var toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
                                 + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
                             continuationMessages.Add(CreateToolCallMessage(
                                 toolCallId,
@@ -1501,13 +1501,13 @@ public sealed class SessionApplication :
                             }
                             else
                             {
-                                string toolKey = $"{tool.ToolName}|{tool.ArgumentsJson}";
+                                var toolKey = $"{tool.ToolName}|{tool.ArgumentsJson}";
                                 if (TryCreateSemanticFirstSearchCorrection(
                                     tool,
                                     workspaceAvailable,
                                     semanticToolAttempted,
                                     modelTools,
-                                    out string? semanticFirstContent))
+                                    out var semanticFirstContent))
                                 {
                                     if (_evidenceStore is not null)
                                     {
@@ -1542,7 +1542,7 @@ public sealed class SessionApplication :
                                 {
                                     if (_evidenceStore is not null)
                                     {
-                                        string repeatContent =
+                                        var repeatContent =
                                             $"Tool '{tool.ToolName}' was already called with these arguments. "
                                             + "Do not repeat it; use the earlier result or answer the user directly.";
                                         await _evidenceStore.AddAsync(
@@ -1619,7 +1619,7 @@ public sealed class SessionApplication :
                     foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
                     {
                         var result = batchResult.Result;
-                        string content = result.ResultJson ?? result.Error ?? "Tool completed.";
+                        var content = result.ResultJson ?? result.Error ?? "Tool completed.";
                         if (_evidenceStore is not null)
                         {
                             var source = result.Sources.FirstOrDefault();
@@ -1688,7 +1688,7 @@ public sealed class SessionApplication :
 
             if (plan is null && context is not null && phase != RunPhase.EvidenceCollection)
             {
-                string candidate = textOutput.ToString().Trim();
+                var candidate = textOutput.ToString().Trim();
                 if (candidate.StartsWith('{'))
                 {
                     plan = ModelOutputValidator.ParsePlan(candidate).Plan;
@@ -1731,7 +1731,7 @@ public sealed class SessionApplication :
 
             if (!toolInvoked)
             {
-                string finalResponse = textOutput.ToString();
+                var finalResponse = textOutput.ToString();
                 if (!string.IsNullOrWhiteSpace(finalResponse))
                 {
                     await ArchiveVisibleMessageAsync(
@@ -1767,8 +1767,8 @@ public sealed class SessionApplication :
             return null;
         }
 
-        string sanitized = _sanitizer.Sanitize(content);
-        string hash = Convert.ToHexStringLower(
+        var sanitized = _sanitizer.Sanitize(content);
+        var hash = Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(sanitized)));
         return await _conversationStore.ArchiveMessageAsync(
             new ConversationMessage
@@ -1816,8 +1816,8 @@ public sealed class SessionApplication :
         CancellationToken cancellationToken)
     {
         var currentPlan = initialPlan;
-        int maximumRepairs = Math.Max(0, _limits.MaxPlanRevisionRepairAttempts);
-        for (int attempt = 0; attempt <= maximumRepairs; attempt++)
+        var maximumRepairs = Math.Max(0, _limits.MaxPlanRevisionRepairAttempts);
+        for (var attempt = 0; attempt <= maximumRepairs; attempt++)
         {
             var evaluation = await CheckPlanSanityAsync(
                 registration,
@@ -1845,7 +1845,7 @@ public sealed class SessionApplication :
 
             if (sanity.HasRepairableBlockingIssues && attempt < maximumRepairs)
             {
-                string repair = _sanitizer.Sanitize(CreatePlanRepairInstructions(sanity));
+                var repair = _sanitizer.Sanitize(CreatePlanRepairInstructions(sanity));
                 await _events.PublishAsync(
                     new PlanRevisionRequested(
                         registration.SessionId,
@@ -1876,7 +1876,7 @@ public sealed class SessionApplication :
 
             if (!sanity.Passed)
             {
-                string reason = sanity.HasRepairableBlockingIssues
+                var reason = sanity.HasRepairableBlockingIssues
                     ? "The plan still has repairable sanity-check failures after the revision budget was exhausted."
                     : "The plan violates a non-repairable sanity-check guardrail.";
                 throw new MalformedModelOutputException(reason);
@@ -2026,7 +2026,7 @@ public sealed class SessionApplication :
         }
 
         registration.PendingPlan = plan;
-        bool autoApproved = decision.Kind == PlanApprovalDecisionKind.AutoApproved;
+        var autoApproved = decision.Kind == PlanApprovalDecisionKind.AutoApproved;
         registration.PendingApprovalId = autoApproved ? null : approvalId;
         await _events.PublishAsync(
             new PlanProposed(
@@ -2217,7 +2217,7 @@ public sealed class SessionApplication :
             planStructuralCharacters + plan.Summary.Length,
             maximumCharacters,
             ref retainedCharacters);
-        foreach (string risk in plan.Risks)
+        foreach (var risk in plan.Risks)
         {
             AddRetainedOutputCharacters(
                 itemStructuralCharacters + risk.Length,
@@ -2225,7 +2225,7 @@ public sealed class SessionApplication :
                 ref retainedCharacters);
         }
 
-        foreach (string question in plan.OutstandingQuestions)
+        foreach (var question in plan.OutstandingQuestions)
         {
             AddRetainedOutputCharacters(
                 itemStructuralCharacters + question.Length,
@@ -2242,7 +2242,7 @@ public sealed class SessionApplication :
                     + step.ExpectedOutcome.Length,
                 maximumCharacters,
                 ref retainedCharacters);
-            foreach (string path in step.GetAffectedPaths())
+            foreach (var path in step.GetAffectedPaths())
             {
                 AddRetainedOutputCharacters(
                     itemStructuralCharacters + path.Length,
@@ -2250,7 +2250,7 @@ public sealed class SessionApplication :
                     ref retainedCharacters);
             }
 
-            foreach (string validation in step.Validation)
+            foreach (var validation in step.Validation)
             {
                 AddRetainedOutputCharacters(
                     itemStructuralCharacters + validation.Length,

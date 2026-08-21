@@ -97,7 +97,7 @@ public sealed class McpOAuthFlow
                 $"MCP OAuth profile '{profile.Id}' must configure a fixed redirectPort when using clientMetadataDocumentUri.");
         }
 
-        string? clientSecretReference = oauth.ClientSecret;
+        var clientSecretReference = oauth.ClientSecret;
         if (clientSecretReference is not null && string.IsNullOrWhiteSpace(oauth.ClientId))
         {
             throw new InvalidOperationException(
@@ -115,9 +115,9 @@ public sealed class McpOAuthFlow
         // Client metadata is attempted first by the SDK and may fall back to DCR when the
         // authorization server does not support metadata-document client identifiers.
         var dynamicRegistrationEnabled = oauth.ClientMode != McpOAuthClientMode.PreRegistered;
-        string? clientId = oauth.ClientId;
+        var clientId = oauth.ClientId;
         string? clientSecret = null;
-        Uri? clientMetadataDocumentUri = oauth.ClientMetadataDocumentUri;
+        var clientMetadataDocumentUri = oauth.ClientMetadataDocumentUri;
         if (clientSecretReference is not null)
         {
             var request = new SecretResolutionRequest
@@ -240,15 +240,24 @@ public sealed class McpOAuthFlow
             cancellationToken);
     }
 
-    private static string Prefix(string profileId) => $"mcp:oauth:{profileId}:";
+    private static string Prefix(string profileId)
+    {
+        return $"mcp:oauth:{profileId}:";
+    }
 
-    private static string GrantPrefix(string prefix) => $"{prefix}grant:";
+    private static string GrantPrefix(string prefix)
+    {
+        return $"{prefix}grant:";
+    }
 
-    private static string PendingRegistrationPrefix(string prefix) => $"{prefix}pendingRegistration:";
+    private static string PendingRegistrationPrefix(string prefix)
+    {
+        return $"{prefix}pendingRegistration:";
+    }
 
     private static Uri CreateNoninteractiveRedirectUri(int requestedPort)
     {
-        string authority = requestedPort == 0
+        var authority = requestedPort == 0
             ? "localhost"
             : $"localhost:{requestedPort.ToString(CultureInfo.InvariantCulture)}";
         return new Uri($"http://{authority}/callback", UriKind.Absolute);
@@ -265,14 +274,14 @@ public sealed class McpOAuthFlow
         }
 
         var query = ParseQuery(callbackUri.Query);
-        if (query.TryGetValue("error", out string? error))
+        if (query.TryGetValue("error", out var error))
         {
             throw new InvalidOperationException($"The authorization server rejected the OAuth request: {error}.");
         }
 
-        query.TryGetValue("code", out string? code);
-        query.TryGetValue("state", out string? state);
-        query.TryGetValue("iss", out string? issuer);
+        query.TryGetValue("code", out var code);
+        query.TryGetValue("state", out var state);
+        query.TryGetValue("iss", out var issuer);
         if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
         {
             throw new InvalidOperationException("The OAuth callback did not contain the required code and state values.");
@@ -284,11 +293,11 @@ public sealed class McpOAuthFlow
     private static IReadOnlyDictionary<string, string> ParseQuery(string query)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string item in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var item in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
-            string[] pair = item.Split('=', 2);
-            string key = Uri.UnescapeDataString(pair[0].Replace('+', ' '));
-            string value = pair.Length == 2 ? Uri.UnescapeDataString(pair[1].Replace('+', ' ')) : string.Empty;
+            var pair = item.Split('=', 2);
+            var key = Uri.UnescapeDataString(pair[0].Replace('+', ' '));
+            var value = pair.Length == 2 ? Uri.UnescapeDataString(pair[1].Replace('+', ' ')) : string.Empty;
             values[key] = value;
         }
 
@@ -308,7 +317,7 @@ public sealed class McpOAuthFlow
 
         public async ValueTask<TokenContainer?> GetTokensAsync(CancellationToken cancellationToken)
         {
-            IReadOnlyDictionary<string, string> snapshot = await tokenStore.GetSnapshotAsync(
+            var snapshot = await tokenStore.GetSnapshotAsync(
                 _prefix,
                 cancellationToken);
             var current = LoadGrant(snapshot, GrantPrefix(_prefix));
@@ -396,8 +405,8 @@ public sealed class McpOAuthFlow
             IReadOnlyDictionary<string, string> snapshot,
             string prefix)
         {
-            string? accessToken = GetValue(snapshot, prefix + "accessToken");
-            string? obtainedAtValue = GetValue(snapshot, prefix + "obtainedAt");
+            var accessToken = GetValue(snapshot, prefix + "accessToken");
+            var obtainedAtValue = GetValue(snapshot, prefix + "obtainedAt");
             if (string.IsNullOrWhiteSpace(accessToken)
                 || !DateTimeOffset.TryParse(
                     obtainedAtValue,
@@ -408,7 +417,7 @@ public sealed class McpOAuthFlow
                 return null;
             }
 
-            string? expiresAtValue = GetValue(snapshot, prefix + "expiresAt");
+            var expiresAtValue = GetValue(snapshot, prefix + "expiresAt");
             int? expiresIn = DateTimeOffset.TryParse(
                 expiresAtValue,
                 CultureInfo.InvariantCulture,
@@ -493,7 +502,7 @@ public sealed class McpOAuthFlow
             string? expectedClientId,
             CancellationToken cancellationToken)
         {
-            IReadOnlyDictionary<string, string> snapshot = await tokenStore.GetSnapshotAsync(
+            var snapshot = await tokenStore.GetSnapshotAsync(
                 _prefix,
                 cancellationToken);
             var registration = LoadRegistration(snapshot, PendingRegistrationPrefix(_prefix));

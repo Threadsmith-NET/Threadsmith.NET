@@ -253,7 +253,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         var toolLimits = CreateToolLimits(configuration);
         var events = new DomainEventStream();
         var projections = new InMemoryProjectionStore(executionLimits);
-        int subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
+        var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
         var projectionSubscription = events.Subscribe(
             (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                 ? Task.CompletedTask
@@ -281,7 +281,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 events,
                 loggerFactory);
             var eventStore = persistence.EventStore;
-            string factsDirectory = Path.Combine(
+            var factsDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Threadsmith");
             Directory.CreateDirectory(factsDirectory);
@@ -316,7 +316,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 configuration.GetValue<int>("budget:calls", 1000),
                 TimeSpan.FromSeconds(configuration.GetValue("budget:wallClockSeconds", 3600)),
                 configuration.GetValue<decimal>("budget:cost", 0)));
-            string userSecretsPath = Path.Combine(
+            var userSecretsPath = Path.Combine(
                 Path.GetDirectoryName(paths.UserConfiguration)
                     ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
                 "secrets",
@@ -500,13 +500,13 @@ internal sealed class HostFoundation : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
-        bool hostEnabled = trustedConfiguration.GetValue("tools:parallel:enabled", true);
-        int hostMaximum = Math.Clamp(
+        var hostEnabled = trustedConfiguration.GetValue("tools:parallel:enabled", true);
+        var hostMaximum = Math.Clamp(
             trustedConfiguration.GetValue("tools:parallel:maximumConcurrency", 4),
             1,
             16);
-        bool effectiveEnabled = configuration.GetValue("tools:parallel:enabled", hostEnabled);
-        int effectiveMaximum = Math.Clamp(
+        var effectiveEnabled = configuration.GetValue("tools:parallel:enabled", hostEnabled);
+        var effectiveMaximum = Math.Clamp(
             configuration.GetValue("tools:parallel:maximumConcurrency", hostMaximum),
             1,
             16);
@@ -527,7 +527,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     internal static string[] ResolveAllowedExecutables(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        string defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
+        var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
         const string sectionPath = "tools:allowedExecutables";
         if (configuration is IConfigurationRoot root)
         {
@@ -542,8 +542,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 return
                 [
                     .. keys
-                        .OrderBy(key => int.TryParse(key, out int index) ? index : int.MaxValue)
-                        .Select(key => provider.TryGet($"{sectionPath}:{key}", out string? value) ? value : null)
+                        .OrderBy(key => int.TryParse(key, out var index) ? index : int.MaxValue)
+                        .Select(key => provider.TryGet($"{sectionPath}:{key}", out var value) ? value : null)
                         .Select(value => value?.Trim())
                         .OfType<string>()
                         .Where(value => value.Length > 0),
@@ -584,7 +584,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         IDomainEventStream events,
         ILoggerFactory loggerFactory)
     {
-        string databasePath = Path.GetFullPath(
+        var databasePath = Path.GetFullPath(
             configuration.GetValue<string>("persistence:path") ?? ".threadsmith/threadsmith.db",
             paths.RepositoryRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)
@@ -592,7 +592,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         var eventStore = new SqliteEventStore($"Data Source={databasePath}");
         await eventStore.InitializeAsync();
         await new MigrationRunner($"Data Source={databasePath}", DefaultMigrations.All).RunAsync();
-        string artifactDirectory = Path.GetFullPath(
+        var artifactDirectory = Path.GetFullPath(
             configuration.GetValue<string>("persistence:artifactDirectory") ?? ".threadsmith/artifacts",
             paths.RepositoryRoot);
         var artifactStore = new ArtifactStore(
@@ -611,7 +611,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 RepairArtifacts = configuration.GetValue("persistence:redactionAudit:repairArtifacts", true),
             },
             loggerFactory.CreateLogger<RedactionAudit>()).RunAsync();
-        string connectionString = $"Data Source={databasePath}";
+        var connectionString = $"Data Source={databasePath}";
         var skillStateStore = new SqliteSkillStateStore(connectionString);
         var conversationStore = new SqliteConversationStore(
             connectionString,
@@ -681,9 +681,9 @@ internal sealed class HostFoundation : IAsyncDisposable
     {
         foreach (var child in section.GetChildren())
         {
-            string id = child["id"] ?? throw new InvalidOperationException("A hook handler id is required.");
-            string version = child["version"] ?? throw new InvalidOperationException($"Hook handler '{id}' requires a version.");
-            string target = child["target"] ?? throw new InvalidOperationException($"Hook handler '{id}' requires a target.");
+            var id = child["id"] ?? throw new InvalidOperationException("A hook handler id is required.");
+            var version = child["version"] ?? throw new InvalidOperationException($"Hook handler '{id}' requires a version.");
+            var target = child["target"] ?? throw new InvalidOperationException($"Hook handler '{id}' requires a target.");
             var adapter = Enum.Parse<HookAdapterKind>(child["type"] ?? string.Empty, ignoreCase: true);
             HookPoint[] points = [.. child.GetSection("hookPoints").GetChildren().Select(value =>
                 Enum.Parse<HookPoint>(value.Value ?? string.Empty, ignoreCase: true))];
@@ -725,9 +725,9 @@ internal sealed class HostFoundation : IAsyncDisposable
         var grants = new List<HookManagedPolicyGrant>();
         foreach (var child in trustedConfiguration.GetSection("hooks:managedGrants").GetChildren())
         {
-            string id = child["handlerId"] ?? throw new InvalidOperationException("A managed hook grant handlerId is required.");
-            string version = child["version"] ?? throw new InvalidOperationException($"Managed hook grant '{id}' requires a version.");
-            string digest = child["configurationDigest"] ?? throw new InvalidOperationException($"Managed hook grant '{id}' requires a configurationDigest.");
+            var id = child["handlerId"] ?? throw new InvalidOperationException("A managed hook grant handlerId is required.");
+            var version = child["version"] ?? throw new InvalidOperationException($"Managed hook grant '{id}' requires a version.");
+            var digest = child["configurationDigest"] ?? throw new InvalidOperationException($"Managed hook grant '{id}' requires a configurationDigest.");
             grants.Add(new HookManagedPolicyGrant
             {
                 HandlerIdentity = new HookHandlerIdentity(new HookHandlerId(id), version, new HookConfigurationDigest(digest)),
@@ -759,11 +759,11 @@ internal sealed class HostFoundation : IAsyncDisposable
         }
 
         var sources = new List<NuGetAdvisorySourceOptions>(configured.Length);
-        for (int index = 0; index < configured.Length; index++)
+        for (var index = 0; index < configured.Length; index++)
         {
             var item = configured[index];
-            string name = item["name"] ?? $"source-{index + 1}";
-            string? value = item["uri"] ?? item.Value;
+            var name = item["name"] ?? $"source-{index + 1}";
+            var value = item["uri"] ?? item.Value;
             if (!Uri.TryCreate(value, UriKind.Absolute, out var source))
             {
                 throw new InvalidDataException("NuGet advisory sources must be absolute HTTPS URIs.");
@@ -793,23 +793,23 @@ internal sealed class HostFoundation : IAsyncDisposable
         ISecretResolver secretResolver,
         ToolLimits limits)
     {
-        string workerExecutableName = OperatingSystem.IsWindows()
+        var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
             : "Threadsmith.Scripting.Worker";
-        string workerExecutablePath = Path.Combine(AppContext.BaseDirectory, workerExecutableName);
-        string workerPath = File.Exists(workerExecutablePath)
+        var workerExecutablePath = Path.Combine(AppContext.BaseDirectory, workerExecutableName);
+        var workerPath = File.Exists(workerExecutablePath)
             ? workerExecutablePath
             : Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll");
-        string ripgrepExecutableName = OperatingSystem.IsWindows() ? "rg.exe" : "rg";
-        string bundledRipgrepPath = Path.Combine(AppContext.BaseDirectory, "tools", ripgrepExecutableName);
-        string ripgrepExecutable = File.Exists(bundledRipgrepPath)
+        var ripgrepExecutableName = OperatingSystem.IsWindows() ? "rg.exe" : "rg";
+        var bundledRipgrepPath = Path.Combine(AppContext.BaseDirectory, "tools", ripgrepExecutableName);
+        var ripgrepExecutable = File.Exists(bundledRipgrepPath)
             ? bundledRipgrepPath
             : ripgrepExecutableName;
         var scriptEngine = new CSharpScriptEngine(
             processManager,
             new ToolConfig(configuration),
             workerPath);
-        WebSearchOptions webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
+        var webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
         var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration);
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(webFetchOptions);
         var directFetchApprovalPrompt = new DirectFetchApprovalPromptRouter();
@@ -827,12 +827,12 @@ internal sealed class HostFoundation : IAsyncDisposable
             }),
             secretResolver,
             webSearchOptions);
-        string defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
-        string[] allowedExecutables = ResolveAllowedExecutables(configuration);
-        bool requireRunProcessApproval = trustedConfiguration.GetValue(
+        var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
+        var allowedExecutables = ResolveAllowedExecutables(configuration);
+        var requireRunProcessApproval = trustedConfiguration.GetValue(
             "tools:runProcess:requireApproval",
             true);
-        string shellExecutable = configuration["tools:runProcess:shellExecutable"]
+        var shellExecutable = configuration["tools:runProcess:shellExecutable"]
             ?? defaultShellExecutable;
         ITool[] tools =
         [
@@ -879,7 +879,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 webFetchOptions.TrustedCeiling,
                 directFetchApprovalPrompt),
         ];
-        string mcpApprovalPath = Path.Combine(
+        var mcpApprovalPath = Path.Combine(
             Path.GetDirectoryName(paths.UserConfiguration)
                 ?? throw new InvalidOperationException("User configuration must have a parent directory."),
             "mcp-tool-approvals.json");

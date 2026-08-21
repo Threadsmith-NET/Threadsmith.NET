@@ -172,7 +172,7 @@ internal sealed record TuiTheme
         }
 
         var copiedStyles = new Dictionary<TuiTextRole, TuiTextStyle>();
-        foreach ((TuiTextRole role, TuiTextStyle style) in styles)
+        foreach ((var role, var style) in styles)
         {
             ArgumentNullException.ThrowIfNull(style);
             style.Validate();
@@ -271,13 +271,13 @@ internal sealed class TuiThemeResolver
             return new TuiTextStyle();
         }
 
-        _theme.Styles.TryGetValue(TuiTextRole.Default, out TuiTextStyle? themeDefault);
-        _theme.Styles.TryGetValue(role, out TuiTextStyle? requested);
-        TuiTextStyle systemDefault = TuiTheme.System.Styles[TuiTextRole.Default];
-        TuiTextStyle systemRole = TuiTheme.System.Styles.TryGetValue(role, out TuiTextStyle? value)
+        _theme.Styles.TryGetValue(TuiTextRole.Default, out var themeDefault);
+        _theme.Styles.TryGetValue(role, out var requested);
+        var systemDefault = TuiTheme.System.Styles[TuiTextRole.Default];
+        var systemRole = TuiTheme.System.Styles.TryGetValue(role, out var value)
             ? value
             : systemDefault;
-        TuiTextDecoration decorations = requested?.Decorations
+        var decorations = requested?.Decorations
             ?? systemRole.Decorations
             ?? themeDefault?.Decorations
             ?? systemDefault.Decorations

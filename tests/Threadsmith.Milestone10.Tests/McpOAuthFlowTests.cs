@@ -248,7 +248,7 @@ public sealed class McpOAuthFlowTests
         var callbackTask = listener.WaitForCallbackAsync(redirectUri, TestContext.Current.CancellationToken);
         using var client = new TcpClient(AddressFamily.InterNetworkV6);
         await client.ConnectAsync(IPAddress.IPv6Loopback, redirectUri.Port, TestContext.Current.CancellationToken);
-        await using NetworkStream stream = client.GetStream();
+        await using var stream = client.GetStream();
         var request = Encoding.ASCII.GetBytes(
             "GET /callback?code=ipv6-code&state=expected HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         await stream.WriteAsync(request, TestContext.Current.CancellationToken);
@@ -487,7 +487,7 @@ public sealed class McpOAuthFlowTests
         var options = await flow.CreateOptionsAsync(UrlOnlyProfile(), TestContext.Current.CancellationToken);
 
         tokens.PauseNextSnapshot();
-        Task<TokenContainer?> readTask = options.TokenCache!
+        var readTask = options.TokenCache!
             .GetTokensAsync(TestContext.Current.CancellationToken)
             .AsTask();
         await tokens.SnapshotCaptured.Task.WaitAsync(TestContext.Current.CancellationToken);
@@ -566,13 +566,13 @@ public sealed class McpOAuthFlowTests
     public async Task Malformed_token_cache_does_not_prevent_startup_or_future_writes()
     {
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         await File.WriteAllTextAsync(cachePath, "{truncated", TestContext.Current.CancellationToken);
         try
         {
             var store = new McpOAuthSecretStore(new EmptySecretStore(), cachePath);
 
-            string? missing = await store.GetAsync(
+            var missing = await store.GetAsync(
                 "mcp:oauth:remote:accessToken",
                 TestContext.Current.CancellationToken);
             await store.SetAsync(
@@ -594,7 +594,7 @@ public sealed class McpOAuthFlowTests
     public async Task Compatibility_store_snapshot_restores_legacy_grant_fields()
     {
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         var fallback = new DictionarySecretStore(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["secrets:mcp:oauth:remote:accessToken"] = "access-secret",
@@ -632,7 +632,7 @@ public sealed class McpOAuthFlowTests
     public async Task Compatibility_store_snapshot_rejects_mixed_legacy_generations()
     {
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         try
         {
             var store = new McpOAuthSecretStore(new RotatingLegacySecretStore(), cachePath);
@@ -655,7 +655,7 @@ public sealed class McpOAuthFlowTests
     public async Task Removed_profile_prefix_blocks_compatibility_secret_fallback()
     {
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         var fallback = new DictionarySecretStore(
             "secrets:mcp:oauth:remote:accessToken",
             "fallback-secret");
@@ -690,7 +690,7 @@ public sealed class McpOAuthFlowTests
     public async Task Failed_token_cache_removal_preserves_in_memory_tokens()
     {
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         var store = new McpOAuthSecretStore(new EmptySecretStore(), cachePath);
         try
         {
@@ -738,7 +738,7 @@ public sealed class McpOAuthFlowTests
         }
 
         var directory = Directory.CreateTempSubdirectory("threadsmith-oauth-");
-        string cachePath = Path.Combine(directory.FullName, "tokens.json");
+        var cachePath = Path.Combine(directory.FullName, "tokens.json");
         try
         {
             var store = new McpOAuthSecretStore(new EmptySecretStore(), cachePath);
@@ -1167,7 +1167,7 @@ public sealed class McpOAuthFlowTests
             string secretReferencePrefix,
             CancellationToken cancellationToken = default)
         {
-            IReadOnlyDictionary<string, string> snapshot = await base.GetSnapshotAsync(
+            var snapshot = await base.GetSnapshotAsync(
                 secretReferencePrefix,
                 cancellationToken);
             if (Interlocked.Exchange(ref _pauseNextSnapshot, 0) == 1)
@@ -1241,7 +1241,7 @@ public sealed class McpOAuthFlowTests
         {
             ReadCount++;
             return Task.FromResult(
-                _values.TryGetValue(secretReference, out string? value) ? value : null);
+                _values.TryGetValue(secretReference, out var value) ? value : null);
         }
     }
 

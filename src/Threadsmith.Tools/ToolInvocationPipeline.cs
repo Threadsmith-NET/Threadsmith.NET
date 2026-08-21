@@ -189,7 +189,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(request.Context);
 
         var invocationId = ToolInvocationId.New();
-        bool suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
+        var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
         ToolRegistration? registration;
         try
@@ -248,7 +248,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
-        string? activityDetail = CreateActivityDetail(tool, input);
+        var activityDetail = CreateActivityDetail(tool, input);
         await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail);
 
         ToolPolicyDecision policyDecision;
@@ -343,7 +343,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         if (policyDecision.RequiredApproval != ApprovalLevel.None)
         {
             var approvalId = ApprovalId.New();
-            string action = $"Invoke tool '{tool.Definition.Id}'";
+            var action = $"Invoke tool '{tool.Definition.Id}'";
             await _events.PublishAsync(
                 new ApprovalRequested(
                     request.SessionId,
@@ -426,7 +426,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         timeoutCancellation.CancelAfter(tool.Definition.Timeout);
-        long executionStarted = _timeProvider.GetTimestamp();
+        var executionStarted = _timeProvider.GetTimestamp();
         try
         {
             using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
@@ -445,7 +445,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 },
                 timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
-            long? authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
+            var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
             await using var resultStream = new MemoryStream();
             await JsonSerializer.SerializeAsync(
@@ -466,7 +466,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     authoritativeElapsedMilliseconds);
             }
 
-            string resultJson = _sanitizer.Sanitize(
+            var resultJson = _sanitizer.Sanitize(
                 Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length));
             if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
             {
@@ -544,7 +544,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
         catch (ToolExecutionException exception)
         {
-            long? elapsedMilliseconds = exception.AuthoritativeElapsedMilliseconds
+            var elapsedMilliseconds = exception.AuthoritativeElapsedMilliseconds
                 ?? GetElapsedMilliseconds(executionStarted);
             return await CompleteFailureAsync(
                 request,
@@ -569,7 +569,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
         catch (Exception exception)
         {
-            string sanitizedError = _sanitizer.Sanitize(exception.Message);
+            var sanitizedError = _sanitizer.Sanitize(exception.Message);
             _logger.LogError(
                 "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}",
                 tool.Definition.Id,
@@ -607,12 +607,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             return null;
         }
 
-        string sanitized = _sanitizer.Sanitize(detail);
+        var sanitized = _sanitizer.Sanitize(detail);
         var normalized = new StringBuilder(Math.Min(sanitized.Length, MaximumActivityDetailCharacters + 2));
-        bool previousWasWhitespace = false;
+        var previousWasWhitespace = false;
         foreach (var rune in sanitized.EnumerateRunes())
         {
-            bool isWhitespace = Rune.IsWhiteSpace(rune) || Rune.IsControl(rune);
+            var isWhitespace = Rune.IsWhiteSpace(rune) || Rune.IsControl(rune);
             if (isWhitespace)
             {
                 if (!previousWasWhitespace && normalized.Length > 0)
@@ -634,7 +634,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
         }
 
-        string result = normalized.ToString().Trim();
+        var result = normalized.ToString().Trim();
         if (result.Length > MaximumActivityDetailCharacters)
         {
             const int maximumContentCharacters = MaximumActivityDetailCharacters - 3;
@@ -686,8 +686,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         long? elapsedMilliseconds = null,
         string? transientError = null)
     {
-        string sanitizedError = _sanitizer.Sanitize(error);
-        string returnedError = transientError is null
+        var sanitizedError = _sanitizer.Sanitize(error);
+        var returnedError = transientError is null
             ? sanitizedError
             : _sanitizer.Sanitize(transientError);
         source ??= ResolveSourceOrUnknown(request.ToolId);

@@ -84,7 +84,7 @@ internal static class ApplicationComposition
         var approvalPolicy = new MutationApprovalPolicyService(
             host.Configuration,
             host.Paths.RepositoryConfiguration);
-        string userPlanTrustPath = Path.Combine(
+        var userPlanTrustPath = Path.Combine(
             Path.GetDirectoryName(host.Paths.UserConfiguration)
                 ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
             "plan-policy-trust.json");
@@ -300,8 +300,8 @@ internal static class ApplicationComposition
             executionRouter.Attach(delegatingExecutionOrchestrator);
 
             // Skill discovery remains metadata-only until an explicit verify or invoke boundary.
-            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            string userSkillRoot = Path.Combine(userProfile, ".threadsmith", "skills");
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userSkillRoot = Path.Combine(userProfile, ".threadsmith", "skills");
             var skillSources = new List<SkillCatalogSource>
             {
                 new(
@@ -330,7 +330,7 @@ internal static class ApplicationComposition
                     IsRepositoryControlled: true));
             }
 
-            string? organizationCatalog = host.TrustedConfiguration["skills:organizationCatalogPath"];
+            var organizationCatalog = host.TrustedConfiguration["skills:organizationCatalogPath"];
             if (!string.IsNullOrWhiteSpace(organizationCatalog))
             {
                 skillSources.Add(new SkillCatalogSource(
@@ -584,7 +584,7 @@ internal static class ApplicationComposition
     /// <summary>Resolves configured validation stages or the compiled default set.</summary>
     private static IReadOnlyList<MutationValidationStage> GetValidationStages(IConfiguration configuration)
     {
-        string[] configured = configuration.GetSection("validation:stages").Get<string[]>() ?? [];
+        var configured = configuration.GetSection("validation:stages").Get<string[]>() ?? [];
         if (configured.Length == 0)
         {
             return
@@ -597,7 +597,7 @@ internal static class ApplicationComposition
         }
 
         var stages = new List<MutationValidationStage>();
-        foreach (string stage in configured)
+        foreach (var stage in configured)
         {
             if (string.Equals(stage, "semantic", StringComparison.OrdinalIgnoreCase))
             {
@@ -861,11 +861,11 @@ internal sealed class RepositoryScopedBindingCoordinator
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        string nextRepositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+        var nextRepositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            string previousRepositoryRoot = _currentRepositoryRoot;
+            var previousRepositoryRoot = _currentRepositoryRoot;
             try
             {
                 if (_activeModels is not null)

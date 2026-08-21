@@ -176,8 +176,8 @@ public sealed class MutationProposalApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         var current = command;
-        int maximumAttempts = Math.Max(1, _limits.MaxMutationProposalRepairAttempts);
-        for (int attempt = 0; attempt < maximumAttempts; attempt++)
+        var maximumAttempts = Math.Max(1, _limits.MaxMutationProposalRepairAttempts);
+        for (var attempt = 0; attempt < maximumAttempts; attempt++)
         {
             await _events.PublishAsync(
                 new MutationProposalStarted(
@@ -195,8 +195,8 @@ public sealed class MutationProposalApplication :
                 when (attempt + 1 < maximumAttempts
                     && IsRepairableMutationProposalFailure(exception))
             {
-                string message = _sanitizer.Sanitize(exception.Message);
-                string correctionEvidence = FormatMutationProposalCorrectionEvidence(message);
+                var message = _sanitizer.Sanitize(exception.Message);
+                var correctionEvidence = FormatMutationProposalCorrectionEvidence(message);
                 await _events.PublishAsync(
                     new MutationProposalRepairAttempted(
                         current.SessionId,
@@ -296,7 +296,7 @@ public sealed class MutationProposalApplication :
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
-        bool proposalToolObserved = false;
+        var proposalToolObserved = false;
         var usageRequestId = new ModelRequestUsageId(
             command.RunId,
             "mutation",
@@ -345,7 +345,7 @@ public sealed class MutationProposalApplication :
                 }
                 else if (chunk.Output is ToolRequestModelOutput toolRequest)
                 {
-                    long toolOutputCharacters = (long)toolRequest.ToolName.Length
+                    var toolOutputCharacters = (long)toolRequest.ToolName.Length
                         + toolRequest.ArgumentsJson.Length;
                     if (toolOutputCharacters > _limits.MaxStructuredOutputCharacters)
                     {
@@ -371,7 +371,7 @@ public sealed class MutationProposalApplication :
                     }
                     catch (JsonException exception)
                     {
-                        string path = string.IsNullOrWhiteSpace(exception.Path)
+                        var path = string.IsNullOrWhiteSpace(exception.Path)
                             ? "$"
                             : _sanitizer.Sanitize(exception.Path);
                         throw new MalformedModelOutputException(
@@ -628,7 +628,7 @@ public sealed class MutationProposalApplication :
                 OverlayFiles = overlay,
             },
             cancellationToken);
-        int blockingDiagnostics = result.Diagnostics.Count(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        var blockingDiagnostics = result.Diagnostics.Count(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         await _events.PublishAsync(
             new PreMutationAnalysisCompleted(
                 command.SessionId,
@@ -677,7 +677,7 @@ public sealed class MutationProposalApplication :
         var mutationByPath = new Dictionary<string, MutationId>(pathComparer);
         foreach (var mutation in proposed.Mutations)
         {
-            string sourcePath = NormalizeProposalPath(mutation.RelativePath);
+            var sourcePath = NormalizeProposalPath(mutation.RelativePath);
             if (!currentByPath.ContainsKey(sourcePath))
             {
                 currentByPath[sourcePath] = await workspace.ReadBaselineTextAsync(
@@ -710,10 +710,10 @@ public sealed class MutationProposalApplication :
                     mutationByPath[sourcePath] = mutation.MutationId;
                     break;
                 case MutationType.MoveFile:
-                    string destination = NormalizeProposalPath(
+                    var destination = NormalizeProposalPath(
                         mutation.DestinationRelativePath
                             ?? throw new MalformedModelOutputException("MoveFile requires a destination path."));
-                    string movedText = mutation.Content?.Text
+                    var movedText = mutation.Content?.Text
                         ?? currentByPath[sourcePath]
                         ?? throw new MalformedModelOutputException($"MoveFile source '{sourcePath}' was not present in the immutable baseline.");
                     currentByPath[sourcePath] = null;
@@ -748,11 +748,11 @@ public sealed class MutationProposalApplication :
     private static bool IsCaseSensitiveFileSystem(string repositoryPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        string? parent = Path.GetDirectoryName(fullPath);
-        string name = Path.GetFileName(fullPath);
-        int letterIndex = -1;
-        for (int index = 0; index < name.Length; index++)
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+        var parent = Path.GetDirectoryName(fullPath);
+        var name = Path.GetFileName(fullPath);
+        var letterIndex = -1;
+        for (var index = 0; index < name.Length; index++)
         {
             if (char.IsLetter(name[index]))
             {
@@ -766,13 +766,13 @@ public sealed class MutationProposalApplication :
             return !OperatingSystem.IsWindows();
         }
 
-        char[] toggledNameCharacters = name.ToCharArray();
-        char letter = toggledNameCharacters[letterIndex];
+        var toggledNameCharacters = name.ToCharArray();
+        var letter = toggledNameCharacters[letterIndex];
         toggledNameCharacters[letterIndex] = char.IsUpper(letter)
             ? char.ToLowerInvariant(letter)
             : char.ToUpperInvariant(letter);
         string toggledName = new(toggledNameCharacters);
-        bool distinctToggledEntryExists = Directory.EnumerateFileSystemEntries(parent)
+        var distinctToggledEntryExists = Directory.EnumerateFileSystemEntries(parent)
             .Select(Path.GetFileName)
             .Any(entry => string.Equals(entry, toggledName, StringComparison.Ordinal));
         return distinctToggledEntryExists
@@ -790,16 +790,16 @@ public sealed class MutationProposalApplication :
                 $"ReplaceText target '{relativePath}' was not present in the immutable baseline.");
         }
 
-        string expected = mutation.ExpectedText
+        var expected = mutation.ExpectedText
             ?? throw new MalformedModelOutputException(
                 $"ReplaceText target '{relativePath}' requires exact expectedText.");
-        bool exactRange = mutation.StartOffset >= 0
+        var exactRange = mutation.StartOffset >= 0
             && mutation.Length >= 0
             && mutation.StartOffset <= current.Length - mutation.Length
             && mutation.Length == expected.Length
             && current.AsSpan(mutation.StartOffset, mutation.Length).SequenceEqual(expected);
-        int startOffset = mutation.StartOffset;
-        int length = mutation.Length;
+        var startOffset = mutation.StartOffset;
+        var length = mutation.Length;
         if (!exactRange)
         {
             if (expected.Length == 0)
@@ -808,14 +808,14 @@ public sealed class MutationProposalApplication :
                     $"ReplaceText insertion in '{relativePath}' requires the exact offset.");
             }
 
-            int firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
+            var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
             if (firstMatch < 0)
             {
                 throw new MalformedModelOutputException(
                     $"ReplaceText expectedText was not found in '{relativePath}'.");
             }
 
-            int secondMatch = current.IndexOf(
+            var secondMatch = current.IndexOf(
                 expected,
                 firstMatch + 1,
                 StringComparison.Ordinal);
@@ -882,7 +882,7 @@ public sealed class MutationProposalApplication :
             }
         }
 
-        foreach (string omission in result.Omissions.Take(4))
+        foreach (var omission in result.Omissions.Take(4))
         {
             builder.AppendLine();
             builder.Append("Omission: ");
@@ -895,7 +895,7 @@ public sealed class MutationProposalApplication :
     private string SanitizeAndBound(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        string sanitized = _sanitizer.Sanitize(value).ReplaceLineEndings(" ");
+        var sanitized = _sanitizer.Sanitize(value).ReplaceLineEndings(" ");
         return sanitized.Length <= 512
             ? sanitized
             : sanitized[..512] + "…";
@@ -929,10 +929,10 @@ public sealed class MutationProposalApplication :
         }
 
         var semanticRequest = semanticRenameRequests[0];
-        string symbolId = semanticRequest.RelatedSymbolId
+        var symbolId = semanticRequest.RelatedSymbolId
             ?? throw new MalformedModelOutputException(
                 "RenameSymbol requires relatedSymbolId from semantic symbol evidence.");
-        string newName = semanticRequest.ReplacementText;
+        var newName = semanticRequest.ReplacementText;
         if (string.IsNullOrWhiteSpace(newName))
         {
             throw new MalformedModelOutputException(
@@ -980,14 +980,14 @@ public sealed class MutationProposalApplication :
             semanticResult,
             cancellationToken);
 
-        HashSet<string> semanticPaths = semanticResult.MutationSet.Mutations
+        var semanticPaths = semanticResult.MutationSet.Mutations
             .Select(mutation => mutation.RelativePath.Replace('\\', '/'))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         Mutation[] nonSemantic =
         [
             .. proposal.Mutations.Where(mutation => mutation.Type != MutationType.RenameSymbol),
         ];
-        string? overlappingTextMutation = nonSemantic
+        var overlappingTextMutation = nonSemantic
             .Where(mutation => mutation.Type != MutationType.MoveFile)
             .Select(mutation => mutation.RelativePath.Replace('\\', '/'))
             .FirstOrDefault(semanticPaths.Contains);
@@ -1037,9 +1037,9 @@ public sealed class MutationProposalApplication :
                 cancellationToken);
         }
 
-        foreach (string warning in semanticResult.Warnings)
+        foreach (var warning in semanticResult.Warnings)
         {
-            string sanitized = _sanitizer.Sanitize(warning);
+            var sanitized = _sanitizer.Sanitize(warning);
             if (string.IsNullOrWhiteSpace(sanitized))
             {
                 continue;
@@ -1071,8 +1071,8 @@ public sealed class MutationProposalApplication :
                 continue;
             }
 
-            string path = mutation.RelativePath.Replace('\\', '/');
-            if (!currentByPath.TryGetValue(path, out string? current))
+            var path = mutation.RelativePath.Replace('\\', '/');
+            if (!currentByPath.TryGetValue(path, out var current))
             {
                 current = await workspace.ReadBaselineTextAsync(path, cancellationToken);
             }
@@ -1083,10 +1083,10 @@ public sealed class MutationProposalApplication :
                     $"ReplaceText target '{path}' was not present in the immutable baseline.");
             }
 
-            string expected = mutation.ExpectedText
+            var expected = mutation.ExpectedText
                 ?? throw new MalformedModelOutputException(
                     $"ReplaceText target '{path}' requires exact expectedText.");
-            bool exactRange = mutation.StartOffset >= 0
+            var exactRange = mutation.StartOffset >= 0
                 && mutation.Length >= 0
                 && mutation.StartOffset <= current.Length - mutation.Length
                 && mutation.Length == expected.Length
@@ -1100,14 +1100,14 @@ public sealed class MutationProposalApplication :
                         $"ReplaceText insertion in '{path}' requires the exact offset.");
                 }
 
-                int firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
+                var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
                 if (firstMatch < 0)
                 {
                     throw new MalformedModelOutputException(
                         $"ReplaceText expectedText was not found in '{path}'.");
                 }
 
-                int secondMatch = current.IndexOf(
+                var secondMatch = current.IndexOf(
                     expected,
                     firstMatch + 1,
                     StringComparison.Ordinal);

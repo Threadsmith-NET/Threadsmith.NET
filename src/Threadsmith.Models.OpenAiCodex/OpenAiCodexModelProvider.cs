@@ -49,13 +49,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_profile.Timeout);
-        string accessToken = AccessToken;
-        bool replayedAfterAuthenticationRejection = false;
-        int attempt = 0;
+        var accessToken = AccessToken;
+        var replayedAfterAuthenticationRejection = false;
+        var attempt = 0;
         while (true)
         {
             attempt++;
-            using HttpRequestMessage message = CreateRequest(request, accessToken);
+            using var message = CreateRequest(request, accessToken);
             HttpResponseMessage response;
             try
             {
@@ -73,9 +73,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             {
                 if (response.IsSuccessStatusCode)
                 {
-                    await using Stream stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                    await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                     using StreamReader reader = new(stream);
-                    await foreach (ModelChunk chunk in ReadEventsAsync(reader, timeout.Token).ConfigureAwait(false))
+                    await foreach (var chunk in ReadEventsAsync(reader, timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
                     }
@@ -147,11 +147,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
         if (request.Tools.Count > 0)
         {
-            bool hasStrictTools = false;
+            var hasStrictTools = false;
             JsonArray tools = [];
-            foreach (ModelToolDefinition tool in ModelToolCanonicalizer.Canonicalize(request.Tools))
+            foreach (var tool in ModelToolCanonicalizer.Canonicalize(request.Tools))
             {
-                string? strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                var strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
                     tool.Name,
                     tool.ArgumentsJsonSchema);
                 hasStrictTools |= strictSchema is not null;
@@ -182,7 +182,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         message.Headers.TryAddWithoutValidation("originator", "threadsmith");
         message.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
-        string? accountId = OpenAiCodexTokenClaims.TryGetAccountId(accessToken);
+        var accountId = OpenAiCodexTokenClaims.TryGetAccountId(accessToken);
         if (accountId is not null)
         {
             message.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", accountId);
@@ -209,9 +209,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         JsonArray input = [];
-        foreach (ModelMessage message in request.Messages)
+        foreach (var message in request.Messages)
         {
-            string content = string.Concat(message.Content.Select(part => part.Content));
+            var content = string.Concat(message.Content.Select(part => part.Content));
             if (message.Role == ModelMessageRole.Assistant
                 && message.ToolCallId is not null
                 && message.ToolName is not null)
@@ -237,7 +237,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 continue;
             }
 
-            string role = message.Role switch
+            var role = message.Role switch
             {
                 ModelMessageRole.System => "system",
                 ModelMessageRole.Developer => "developer",
@@ -246,7 +246,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 _ => throw new InvalidOperationException(
                     $"Structured model message '{message.SectionId}' has invalid tool correlation."),
             };
-            string contentType = message.Role == ModelMessageRole.Assistant
+            var contentType = message.Role == ModelMessageRole.Assistant
                 ? "output_text"
                 : "input_text";
             input.Add(new JsonObject
@@ -266,7 +266,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         StreamReader reader,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        bool sawToolCall = false;
+        var sawToolCall = false;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -274,15 +274,15 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 continue;
             }
 
-            string payload = line.AsSpan(5).TrimStart().ToString();
+            var payload = line.AsSpan(5).TrimStart().ToString();
             if (payload.Length == 0 || string.Equals(payload, "[DONE]", StringComparison.Ordinal))
             {
                 continue;
             }
 
             using var document = JsonDocument.Parse(payload);
-            JsonElement root = document.RootElement;
-            string? type = GetString(root, "type");
+            var root = document.RootElement;
+            var type = GetString(root, "type");
             switch (type)
             {
                 case "response.output_text.delta":
@@ -301,7 +301,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
                     break;
                 case "response.output_item.done":
-                    if (root.TryGetProperty("item", out JsonElement item)
+                    if (root.TryGetProperty("item", out var item)
                         && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal)
                         && GetString(item, "name") is { Length: > 0 } name)
                     {
@@ -314,7 +314,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
                     break;
                 case "response.completed":
-                    ModelUsage? usage = TryReadUsage(root);
+                    var usage = TryReadUsage(root);
                     if (usage is not null)
                     {
                         yield return new ModelChunk { Usage = usage };
@@ -334,16 +334,16 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static ModelUsage? TryReadUsage(JsonElement root)
     {
-        if (!root.TryGetProperty("response", out JsonElement response)
-            || !response.TryGetProperty("usage", out JsonElement usage))
+        if (!root.TryGetProperty("response", out var response)
+            || !response.TryGetProperty("usage", out var usage))
         {
             return null;
         }
 
-        long input = GetInt64(usage, "input_tokens");
-        long output = GetInt64(usage, "output_tokens");
+        var input = GetInt64(usage, "input_tokens");
+        var output = GetInt64(usage, "output_tokens");
         long? cachedInput = null;
-        if (usage.TryGetProperty("input_tokens_details", out JsonElement details))
+        if (usage.TryGetProperty("input_tokens_details", out var details))
         {
             cachedInput = GetNullableInt64(details, "cached_tokens");
         }
@@ -353,7 +353,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             throw new ModelProviderException("The Codex stream returned negative cache token usage.");
         }
 
-        ModelCacheUsage? cache = cachedInput is null
+        var cache = cachedInput is null
             ? null
             : new ModelCacheUsage
             {
@@ -400,18 +400,18 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static string? GetString(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
     private static long GetInt64(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt64(out long result) ? result : 0;
+        return element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result) ? result : 0;
     }
 
     private static long? GetNullableInt64(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt64(out long result)
+        return element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result)
             ? result
             : null;
     }

@@ -71,8 +71,8 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         try
         {
             var state = new ParseState();
-            MarkdownDocument markdown = Markdown.Parse(source, Pipeline);
-            ImmutableArray<TuiMarkdownBlock> blocks = ParseBlocks(markdown, state, 0);
+            var markdown = Markdown.Parse(source, Pipeline);
+            var blocks = ParseBlocks(markdown, state, 0);
             var document = new TuiMarkdownDocument(blocks);
             TuiMarkdownValidator.Validate(document);
             return new TuiMarkdownParseResult(document, safeSource, null);
@@ -89,7 +89,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
     {
         state.CheckDepth(depth);
         var blocks = ImmutableArray.CreateBuilder<TuiMarkdownBlock>();
-        foreach (Block block in container)
+        foreach (var block in container)
         {
             state.AddNode();
             switch (block)
@@ -145,7 +145,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         }
 
         var items = ImmutableArray.CreateBuilder<TuiMarkdownListItem>(list.Count);
-        foreach (Block child in list)
+        foreach (var child in list)
         {
             state.AddNode();
             if (child is not ListItemBlock item)
@@ -178,7 +178,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         }
 
         var rows = ImmutableArray.CreateBuilder<TuiMarkdownTableRow>(table.Count);
-        foreach (Block child in table)
+        foreach (var child in table)
         {
             state.AddNode();
             if (child is not TableRow row || row.Count > MaximumTableColumns)
@@ -187,7 +187,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
             }
 
             var cells = ImmutableArray.CreateBuilder<ImmutableArray<TuiMarkdownSpan>>(row.Count);
-            foreach (Block cellBlock in row)
+            foreach (var cellBlock in row)
             {
                 state.AddNode();
                 if (cellBlock is not TableCell cell)
@@ -195,7 +195,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                     throw new InvalidOperationException("Table contained an unexpected cell.");
                 }
 
-                ImmutableArray<TuiMarkdownSpan> spans = ParseCell(cell, state, depth + 1);
+                var spans = ParseCell(cell, state, depth + 1);
                 if (spans.Sum(span => span.Text.Length) > MaximumCellCharacters)
                 {
                     throw new InvalidOperationException("Table cell exceeded its character limit.");
@@ -214,7 +214,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
     {
         state.CheckDepth(depth);
         var spans = ImmutableArray.CreateBuilder<TuiMarkdownSpan>();
-        foreach (Block block in cell)
+        foreach (var block in cell)
         {
             if (block is not ParagraphBlock paragraph)
             {
@@ -256,7 +256,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         ImmutableArray<TuiMarkdownSpan>.Builder spans)
     {
         state.CheckDepth(depth);
-        for (Inline? inline = container.FirstChild; inline is not null; inline = inline.NextSibling)
+        for (var inline = container.FirstChild; inline is not null; inline = inline.NextSibling)
         {
             state.AddNode();
             switch (inline)
@@ -289,7 +289,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                 case TaskList:
                     break;
                 case EmphasisInline emphasis:
-                    TuiMarkdownSpanStyle emphasisStyle = emphasis.DelimiterChar == '~'
+                    var emphasisStyle = emphasis.DelimiterChar == '~'
                         ? TuiMarkdownSpanStyle.Strikethrough
                         : emphasis.DelimiterCount >= 2
                             ? TuiMarkdownSpanStyle.Strong
@@ -322,7 +322,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         ImmutableArray<TuiMarkdownSpan>.Builder spans)
     {
         var rawTarget = link.GetDynamicUrl?.Invoke() ?? link.Url;
-        Uri? target = TryCreateSafeLink(rawTarget);
+        var target = TryCreateSafeLink(rawTarget);
         if (link.IsImage)
         {
             AddSpan(spans, state, new TuiMarkdownSpan("[image: ", inheritedStyle));
@@ -347,7 +347,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         if (string.IsNullOrWhiteSpace(value)
             || value.Length > MaximumLinkCharacters
             || value.Any(char.IsControl)
-            || !Uri.TryCreate(value, UriKind.Absolute, out Uri? uri)
+            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || uri.Scheme is not "http" and not "https"
             || string.IsNullOrEmpty(uri.Host)
             || !string.IsNullOrEmpty(uri.UserInfo)
@@ -411,7 +411,7 @@ internal static class TerminalControlEncoder
         var result = new StringBuilder(value.Length);
         for (var index = 0; index < value.Length;)
         {
-            if (!Rune.TryGetRuneAt(value, index, out Rune rune))
+            if (!Rune.TryGetRuneAt(value, index, out var rune))
             {
                 AppendEscape(result, value[index]);
                 index++;

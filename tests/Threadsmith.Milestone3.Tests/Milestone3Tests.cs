@@ -40,12 +40,12 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_LoadSearchInvalidateAndPromote_AreConfidenceAware()
     {
-        string root = Path.Combine(
+        var root = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
             "SmallDotNetSolution");
-        string solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
+        var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -155,14 +155,14 @@ public static class Milestone3Tests
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, directProject.Confidence);
         Assert.NotEmpty(await engine.FindSymbolsAsync("IService"));
 
-        string brokenRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-broken-{Guid.NewGuid():N}");
+        var brokenRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-broken-{Guid.NewGuid():N}");
         Directory.CreateDirectory(brokenRoot);
         try
         {
-            foreach (string sourcePath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            foreach (var sourcePath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                string relativePath = Path.GetRelativePath(root, sourcePath);
-                string destinationPath = Path.Combine(brokenRoot, relativePath);
+                var relativePath = Path.GetRelativePath(root, sourcePath);
+                var destinationPath = Path.Combine(brokenRoot, relativePath);
                 Directory.CreateDirectory(
                     Path.GetDirectoryName(destinationPath)
                         ?? throw new InvalidOperationException("Fixture destination has no parent."));
@@ -184,11 +184,11 @@ public static class Milestone3Tests
             Directory.Delete(brokenRoot, recursive: true);
         }
 
-        string invalidRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-{Guid.NewGuid():N}");
+        var invalidRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-{Guid.NewGuid():N}");
         Directory.CreateDirectory(invalidRoot);
         try
         {
-            string invalidSolution = Path.Combine(invalidRoot, "Invalid.sln");
+            var invalidSolution = Path.Combine(invalidRoot, "Invalid.sln");
             await File.WriteAllTextAsync(invalidSolution, "not a solution");
             var degraded = await engine.LoadAsync(new SemanticLoadRequest(
                 request.SessionId,
@@ -211,11 +211,11 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_DiagnosticsRefreshCreatedSourceDocuments()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-create-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-create-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(
                 Path.Combine(root, "Caller.cs"),
@@ -254,12 +254,12 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_DiagnosticsRefreshAffectedProjectDocumentsFromDisk()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-refresh-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-refresh-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
-            string callerPath = Path.Combine(root, "Caller.cs");
+            var projectPath = Path.Combine(root, "App.csproj");
+            var callerPath = Path.Combine(root, "Caller.cs");
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(
                 callerPath,
@@ -299,12 +299,12 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_ReturnsSyntaxDiagnosticsFromOverlay()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
-            string sourcePath = Path.Combine(root, "Example.cs");
+            var projectPath = Path.Combine(root, "App.csproj");
+            var sourcePath = Path.Combine(root, "Example.cs");
             const string original = "namespace Demo;\npublic sealed class Example\n{\n}\n";
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(sourcePath, original);
@@ -386,11 +386,11 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_DeleteReportsUnchangedAffectedDiagnostics()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-delete-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-delete-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n";
             const string service = "namespace Demo;\npublic sealed class Service { }\n";
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
@@ -445,11 +445,11 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_MoveDoesNotCompileDuplicateSource()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-move-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-move-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             const string service = "namespace Demo;\npublic sealed class Service { }\n";
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
@@ -509,13 +509,13 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_FiltersBaselineDiagnosticsAfterLineShift()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-lineshift-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-lineshift-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             const string original = "namespace Demo;\npublic sealed class Example\n{\n    public Missing Existing() => new();\n}\n";
-            string changed = original.Replace("public sealed", "// inserted\npublic sealed", StringComparison.Ordinal);
+            var changed = original.Replace("public sealed", "// inserted\npublic sealed", StringComparison.Ordinal);
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(Path.Combine(root, "Example.cs"), original);
             var sessionId = SessionId.New();
@@ -564,14 +564,14 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_FiltersBaselineCompilationDiagnostics()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-baseline-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-baseline-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public Missing Existing() => new();\n}\n";
             const string service = "namespace Demo;\npublic sealed class Service\n{\n    public int Value => 1;\n}\n";
-            string changedService = service.Replace("1", "2", StringComparison.Ordinal);
+            var changedService = service.Replace("1", "2", StringComparison.Ordinal);
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), caller);
             await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
@@ -621,14 +621,14 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_PreMutationAnalysis_ReportsDiagnosticsOutsideChangedFiles()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-affected-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-affected-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public int Read(Service service) => service.Value;\n}\n";
             const string service = "namespace Demo;\npublic sealed class Service\n{\n    public int Value => 1;\n}\n";
-            string changedService = service.Replace("Value", "Renamed", StringComparison.Ordinal);
+            var changedService = service.Replace("Value", "Renamed", StringComparison.Ordinal);
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), caller);
             await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
@@ -681,16 +681,16 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_DiagnosticsRefreshDeletedSourceDocuments()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-delete-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-delete-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "App.csproj");
+            var projectPath = Path.Combine(root, "App.csproj");
             await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
             await File.WriteAllTextAsync(
                 Path.Combine(root, "Caller.cs"),
                 "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n");
-            string servicePath = Path.Combine(root, "Service.cs");
+            var servicePath = Path.Combine(root, "Service.cs");
             await File.WriteAllTextAsync(
                 servicePath,
                 "namespace Demo;\npublic sealed class Service\n{\n}\n");
@@ -727,7 +727,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticLifecycle_QueuesLoadOutsideEventSubscription()
     {
-        string root = Path.Combine(
+        var root = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
@@ -790,9 +790,9 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticLifecycle_EmptySolution_CompletesAsUnavailable()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-empty-semantic-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-empty-semantic-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        string solutionPath = Path.Combine(root, "Empty.sln");
+        var solutionPath = Path.Combine(root, "Empty.sln");
         await File.WriteAllTextAsync(solutionPath, "Microsoft Visual Studio Solution File, Format Version 12.00");
         try
         {
@@ -845,12 +845,12 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticRegistry_IsolatesWorkspaceState()
     {
-        string root = Path.Combine(
+        var root = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
             "SmallDotNetSolution");
-        string solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
+        var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
         var compiledWorkspace = WorkspaceId.New();
         var textWorkspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
@@ -885,7 +885,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_TextOnly_EnforcesToolAvailabilityAndFallbackCarriage()
     {
-        string root = Path.Combine(
+        var root = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
@@ -934,18 +934,18 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_TextFallback_IsConfinedAndBounded()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            string projectPath = Path.Combine(root, "Fallback.csproj");
+            var projectPath = Path.Combine(root, "Fallback.csproj");
             await File.WriteAllTextAsync(
                 projectPath,
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             await File.WriteAllLinesAsync(
                 Path.Combine(root, "Visible.cs"),
                 Enumerable.Repeat("TargetSymbol();", 600));
-            string prohibited = Path.Combine(root, "secret");
+            var prohibited = Path.Combine(root, "secret");
             Directory.CreateDirectory(prohibited);
             await File.WriteAllTextAsync(Path.Combine(prohibited, "Hidden.cs"), "TargetSymbol();");
             await File.WriteAllTextAsync(
@@ -1131,7 +1131,7 @@ public static class Milestone3Tests
         });
 
         Assert.NotNull(requestBody);
-        using JsonDocument document = JsonDocument.Parse(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
         var tool = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray());
         Assert.Equal("function", tool.GetProperty("type").GetString());
         var function = tool.GetProperty("function");
@@ -1191,7 +1191,7 @@ public static class Milestone3Tests
         });
 
         Assert.NotNull(requestBody);
-        using JsonDocument document = JsonDocument.Parse(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
         Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         JsonElement[] tools = [.. document.RootElement.GetProperty("tools").EnumerateArray()];
         Assert.Equal(2, tools.Length);
@@ -1255,7 +1255,7 @@ public static class Milestone3Tests
         });
 
         Assert.NotNull(requestBody);
-        using JsonDocument document = JsonDocument.Parse(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
         var function = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray())
             .GetProperty("function");
         Assert.False(function.TryGetProperty("strict", out _));
@@ -1266,7 +1266,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_SensitiveRequest_RequiresAllowedProfile()
     {
-        int sends = 0;
+        var sends = 0;
         var handler = new RecordingHandler((_, _) =>
         {
             sends++;
@@ -1301,7 +1301,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_ResolvedProfileMismatch_FailsBeforeNetworkDispatch()
     {
-        int sends = 0;
+        var sends = 0;
         var handler = new RecordingHandler((_, _) =>
         {
             sends++;
@@ -1431,7 +1431,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_RecordedStream_NormalizesHostOwnedChunks()
     {
-        string fixture = await File.ReadAllTextAsync(
+        var fixture = await File.ReadAllTextAsync(
             Path.Combine(AppContext.BaseDirectory, "fixtures", "model", "openai-stream.sse"));
         string? authorization = null;
         string? requestBody = null;
@@ -1470,7 +1470,7 @@ public static class Milestone3Tests
     {
         string firstArguments = new('a', 10_000);
         string secondArguments = new('b', 10_000);
-        string stream = string.Concat(
+        var stream = string.Concat(
             "data: ",
             JsonSerializer.Serialize(new
             {
@@ -1543,7 +1543,7 @@ public static class Milestone3Tests
     public static async Task OpenAiAdapter_ResponseBeyondTokenEstimate_RemainsValid()
     {
         string content = new(' ', 20_000);
-        string stream = string.Concat(
+        var stream = string.Concat(
             "data: ",
             JsonSerializer.Serialize(new
             {
@@ -1736,7 +1736,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_ClassifiesRetryableAndPermanentHttpFailures()
     {
-        int attempts = 0;
+        var attempts = 0;
         var handler = new RecordingHandler((_, _) =>
         {
             attempts++;
@@ -1765,7 +1765,7 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_NameResolutionFailure_IsRetriedAndClassifiedTransient()
     {
-        int attempts = 0;
+        var attempts = 0;
         var handler = new RecordingHandler((_, _) =>
         {
             attempts++;
@@ -2453,7 +2453,7 @@ public static class Milestone3Tests
             ["model:profiles:0:sensitiveDataPolicy"] = "Prohibited",
             ["model:profiles:0:reasoningEffort"] = reasoningEffort,
         };
-        for (int index = 0; index < supportedLevels.Length; index++)
+        for (var index = 0; index < supportedLevels.Length; index++)
         {
             values[$"model:profiles:0:reasoning:supportedLevels:{index}"] = supportedLevels[index].ToString();
         }

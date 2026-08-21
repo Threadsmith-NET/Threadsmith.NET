@@ -1,0 +1,16 @@
+   {
+     "client_id": "https://cdn.jsdelivr.net/gh/Threadsmith-NET/Threadsmith.NET@main/docs/oauth/threadsmith-mcp-client.json",
+     "client_name": "Threadsmith.NET",
+     "client_uri": "https://github.com/Threadsmith-NET/Threadsmith.NET",
+     "redirect_uris": [
+       "http://localhost:8484/callback"
+     ],
+     "grant_types": [
+       "authorization_code",
+       "refresh_token"
+     ],
+     "response_types": [
+       "code"
+     ],
+     "token_endpoint_auth_method": "none"
+   }

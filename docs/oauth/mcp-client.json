@@ -1,5 +1,5 @@
    {
-     "client_id": "https://threadsmith-net.github.io/Threadsmith.NET/oauth/mcp-client.json",
+     "client_id": "https://raw.githubusercontent.com/Threadsmith-NET/Threadsmith.NET/main/docs/oauth/mcp-client.json",
      "client_name": "Threadsmith.NET",
      "client_uri": "https://github.com/Threadsmith-NET/Threadsmith.NET",
      "redirect_uris": [

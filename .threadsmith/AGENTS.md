@@ -82,7 +82,7 @@ Configure how Threadsmith.NET behaves when operating on this repository. Config 
 ## Verification
 
 - `dotnet test tests/Threadsmith.Architecture.Tests/ --filter "FullyQualifiedName~RepoConfigTests"` — config tests pass.
-- `dotnet test tests/Threadsmith.Milestone4.Tests/` — append confinement, order, sanitization, bounds, versioning, and boundary refresh pass.
+- `dotnet test tests/Threadsmith.Planning.Tests/` — append confinement, order, sanitization, bounds, versioning, and boundary refresh pass.
 
 ## Child DOX Index
 

@@ -207,7 +207,7 @@ Public cross-subsystem contracts contain no terminal, provider SDK, MCP SDK, ext
 - `Threadsmith.App` — configuration, trusted policy, adapter, and coordinator composition.
 - `Threadsmith.Tui` / `Threadsmith.Cli` — shared hook management and audit commands.
 - `.threadsmith/config.example` — handler declarations and safe limits; no approval, trust, blocking grant, or secret value.
-- Dedicated `Threadsmith.Milestone13.Tests`, fixtures, architecture gates, operations/security docs, acceptance/manual scenarios, and DOX updates.
+- Dedicated `Threadsmith.LifecycleHooks.Tests`, fixtures, architecture gates, operations/security docs, acceptance/manual scenarios, and DOX updates.
 
 Any new project-level handler schema or fixture asset must be copied to output when newer.
 

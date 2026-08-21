@@ -245,7 +245,7 @@ Threadsmith/
 │   ├── Threadsmith.Mcp/                   # host-owned MCP boundary
 │   ├── Threadsmith.Skills/                # governed declarative catalog and workflows
 │   └── Threadsmith.Extensions.*/          # extension contracts and runtime
-├── tests/                                 # architecture and milestone verification
+├── tests/                                 # architecture and scope-focused verification
 ├── docs/                                  # user, architecture, operations, and planning docs
 └── .threadsmith/config.example             # annotated repository configuration schema
 ```

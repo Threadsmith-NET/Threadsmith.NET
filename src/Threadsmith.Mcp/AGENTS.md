@@ -32,10 +32,10 @@ Own MCP profile loading, SDK-isolated transports, capability translation, lifecy
 ## Verification
 
 - `dotnet build src\Threadsmith.sln --no-restore`
-- `tests\Threadsmith.Milestone8.Tests\bin\Debug\net10.0\Threadsmith.Milestone8.Tests.exe`
-- `tests\Threadsmith.Milestone9.Tests\bin\Debug\net10.0\Threadsmith.Milestone9.Tests.exe`
-- `tests\Threadsmith.Milestone10.Tests\bin\Debug\net10.0\Threadsmith.Milestone10.Tests.exe`
-- `tests\Threadsmith.Milestone23.Tests\bin\Debug\net10.0\Threadsmith.Milestone23.Tests.exe`
+- `tests\Threadsmith.PersistenceMcpHardening.Tests\bin\Debug\net10.0\Threadsmith.PersistenceMcpHardening.Tests.exe`
+- `tests\Threadsmith.McpTransports.Tests\bin\Debug\net10.0\Threadsmith.McpTransports.Tests.exe`
+- `tests\Threadsmith.McpOAuth.Tests\bin\Debug\net10.0\Threadsmith.McpOAuth.Tests.exe`
+- `tests\Threadsmith.McpLifecycle.Tests\bin\Debug\net10.0\Threadsmith.McpLifecycle.Tests.exe`
 - `tests\Threadsmith.Architecture.Tests\bin\Debug\net10.0\Threadsmith.Architecture.Tests.exe`
 
 ## Child DOX Index

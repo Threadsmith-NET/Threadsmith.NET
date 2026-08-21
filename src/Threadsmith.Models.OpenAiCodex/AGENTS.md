@@ -31,7 +31,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 
 ## Verification
 
-- `Threadsmith.Milestone18.Tests` owns catalog, policy, OAuth, request, stream, and composition coverage.
+- `Threadsmith.CodexProvider.Tests` owns catalog, policy, OAuth, request, stream, and composition coverage.
 - `Threadsmith.Architecture.Tests` enforces dependency direction and provider isolation.
 
 ## Child DOX Index

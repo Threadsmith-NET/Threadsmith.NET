@@ -59,9 +59,9 @@ Own the safe repository lifecycle and the only host path for applying approved f
 
 ## Verification
 
-- `dotnet test tests/Threadsmith.Milestone2.Tests/` — trust gating, linked-path confinement, solution/TFM inventory, glob-aware baselines, persistence, projections, and CLI/TUI workflow tests pass.
-- `dotnet test tests/Threadsmith.Milestone5.Tests/` — staging invisibility, exact preview, per-change preview settings, approval selection, conflict blocking, rollback protection, root confinement, and worktree isolation pass.
-- `dotnet test tests/Threadsmith.Milestone14.Tests/` — lifecycle previews, filesystem-effect fault compensation, five-state reconciliation, filesystem casing, affected-project propagation, and worker endpoint ownership/overlap pass.
+- `dotnet test tests/Threadsmith.RepositoryLifecycle.Tests/` — trust gating, linked-path confinement, solution/TFM inventory, glob-aware baselines, persistence, projections, and CLI/TUI workflow tests pass.
+- `dotnet test tests/Threadsmith.Mutations.Tests/` — staging invisibility, exact preview, per-change preview settings, approval selection, conflict blocking, rollback protection, root confinement, and worktree isolation pass.
+- `dotnet test tests/Threadsmith.NativeTools.Tests/` — lifecycle previews, filesystem-effect fault compensation, five-state reconciliation, filesystem casing, affected-project propagation, and worker endpoint ownership/overlap pass.
 - `dotnet test tests/Threadsmith.Architecture.Tests/` — dependency direction remains valid.
 
 ## Child DOX Index

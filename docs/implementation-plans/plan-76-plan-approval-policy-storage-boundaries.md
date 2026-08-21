@@ -227,7 +227,7 @@ Expected changes:
 - `src/Threadsmith.Workspaces/PlanApprovalPolicyPersistence.cs`: cross-store ordering and compensation.
 - `src/Threadsmith.App/ApplicationComposition.cs`: explicit production construction while preserving service lifetime and command registration.
 - `src/Threadsmith.Workspaces/Threadsmith.Workspaces.csproj`: friend-test access only if focused internal-type tests require it.
-- `tests/Threadsmith.Milestone5.Tests/Milestone5Tests.cs` or focused split fixtures: storage, compensation, rebinding, and service compatibility coverage.
+- `tests/Threadsmith.Mutations.Tests/Milestone5Tests.cs` or focused split fixtures: storage, compensation, rebinding, and service compatibility coverage.
 - Applicable `AGENTS.md`, architecture/configuration documentation, and `docs/implementation-plans/manual-test-plan.md` during implementation closeout.
 
 Do not add a new project for this extraction.
@@ -371,7 +371,7 @@ During implementation closeout:
 
 ## 17. Resolved Decisions
 
-- Deterministic compensation tests use narrow Workspaces-internal store interfaces plus friend access for `Threadsmith.App` and `Threadsmith.Milestone5.Tests`; production still uses concrete stores.
+- Deterministic compensation tests use narrow Workspaces-internal store interfaces plus friend access for `Threadsmith.App` and `Threadsmith.Mutations.Tests`; production still uses concrete stores.
 - User trust lookup remains bounded synchronous for constructor-time configuration compatibility; writes remain asynchronous and cancellable except for required non-cancellable revocation cleanup.
 - The user trust store rejects files larger than 1 MiB and more than 4096 repository grants.
 - Repository binding creation lives in the focused `PlanApprovalRepositoryBinding` value because both service rebinding and composition need the same normalized root/path/identity snapshot.

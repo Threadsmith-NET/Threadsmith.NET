@@ -147,7 +147,7 @@ Provider-specific configuration, wire DTOs, tokens, response IDs, endpoint rules
 - `src/Threadsmith.Context/` — request-reserve-aware budgeting and inspection.
 - `src/Threadsmith.Tui/` and headless command surfaces — authorization state/remediation and model availability.
 - `src/Threadsmith.Persistence/` or existing secrets project — owner-only token-cache integration, without provider types.
-- `tests/Threadsmith.Milestone3.Tests/`, `tests/Threadsmith.Milestone7_4.Tests/`, `tests/Threadsmith.Milestone17.Tests/`, and architecture tests — provider, context, selection, OAuth, and boundary coverage.
+- `tests/Threadsmith.ModelTooling.Tests/`, `tests/Threadsmith.ConversationContext.Tests/`, `tests/Threadsmith.Skills.Tests/`, and architecture tests — provider, context, selection, OAuth, and boundary coverage.
 - Repository-owned sanitized discovery/request/stream fixtures, copied to test output with `PreserveNewest`.
 - User provider catalog, user guide, provider operations guide, acceptance/manual tests, milestone/index/status, ADR, and DOX.
 

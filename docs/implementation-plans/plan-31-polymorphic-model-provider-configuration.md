@@ -217,7 +217,7 @@ Existing `IModelProvider`, `ModelStreamRequest`, `ModelChunk`, `ModelProfileId`,
 
 - `src/Threadsmith.Models/` — base polymorphic contracts, registry, merge/loader, effective bindings, and provider-neutral dispatch.
 - `src/Threadsmith.App/` — resolve user/repository catalog paths, register compiled providers, construct immutable registry/catalog.
-- `tests/Threadsmith.Milestone3.Tests/` or a new milestone-focused test project — contract, merge, registry, security, and composition coverage.
+- `tests/Threadsmith.ModelTooling.Tests/` or a new milestone-focused test project — contract, merge, registry, security, and composition coverage.
 - `tests/Threadsmith.Architecture.Tests/` — SDK and dependency-boundary assertions for provider projects.
 - `src/Threadsmith.sln`, `src/AGENTS.md`, provider child DOX, test DOX, configuration examples, user guide, manual test plan, and architecture documentation during implementation.
 

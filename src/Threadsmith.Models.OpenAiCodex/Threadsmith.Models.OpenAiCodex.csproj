@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Threadsmith.Milestone18.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.CodexProvider.Tests" />
   </ItemGroup>
 
 </Project>

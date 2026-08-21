@@ -4,7 +4,7 @@ Owner: implementer. Depends on task1–task3.
 
 ## Tests to add
 
-### tests/Threadsmith.Milestone3.Tests (provider)
+### tests/Threadsmith.ModelTooling.Tests (provider)
 - `OpenAiAdapter_ReasoningDelta_StreamsReasoningChunk`: feed a scripted SSE response containing
   `{"choices":[{"delta":{"reasoning":"think"}}]}` then `{"choices":[{"delta":{"content":"hi"}}]}` then a
   `finish_reason:"stop"`; assert the provider yields a chunk with `Reasoning == "think"` and a later
@@ -25,7 +25,7 @@ Owner: implementer. Depends on task1–task3.
   parsed; supported includes None and Medium.
 - `Loader_NoReasoningConfig_DefaultsToNoneOnly`: absent ⇒ `SupportedReasoningLevels == [None]`.
 
-### Session reasoning reset (tests/Threadsmith.Milestone4.Tests or a new unit test)
+### Session reasoning reset (tests/Threadsmith.Planning.Tests or a new unit test)
 - `SessionModelPreferences_ResetOnSwitch`: initialize Medium against A; `ResolveFor(B)` returns and stores
   None against B; switching back to A remains None rather than restoring Medium.
 

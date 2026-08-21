@@ -80,7 +80,7 @@ Expected: structured checks identify safe configuration/auth/translation/ping ou
 
 ## MTP-239 — MCP maintained transport and terminal matrix
 
-1. Run `Threadsmith.Milestone8.Tests`, `Threadsmith.Milestone9.Tests`, `Threadsmith.Milestone10.Tests`, `Threadsmith.Milestone23.Tests`, architecture tests, and the full solution build.
+1. Run `Threadsmith.PersistenceMcpHardening.Tests`, `Threadsmith.McpTransports.Tests`, `Threadsmith.McpOAuth.Tests`, `Threadsmith.McpLifecycle.Tests`, architecture tests, and the full solution build.
 2. Repeat `/mcp` selection, connect, capability, untrusted-content, confirmation, cancellation, and shutdown flows in Windows Terminal plus one Linux/macOS terminal while preserving native paste, selection, and `Ctrl+C` behavior.
 3. Opt in to a trusted live SSE/streamable-HTTP/OAuth endpoint and verify connect, capability inspection, explicit resource/prompt operation where supported, logout/re-auth, advertised revocation, reconnect, and shutdown.
 
@@ -1000,7 +1000,7 @@ Expected:
 
 ### MTP-072 - Baseline and introduced compiler diagnostics (positive)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*DiagnosticClassifier*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*DiagnosticClassifier*"`.
 2. Review the structured diagnostic projection test.
 
 Expected:
@@ -1051,7 +1051,7 @@ Expected:
 
 ### MTP-077 - Explainable affected-test selection (positive and negative)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestDiscoverer*" --filter-method "*TestSelector*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestDiscoverer*" --filter-method "*TestSelector*"`.
 2. Review the selected-project rationale in the structured result.
 
 Expected:
@@ -1063,7 +1063,7 @@ Expected:
 
 ### MTP-078 - Normalized filtered test execution and acceptance (positive and negative)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestValidationPipeline*" --filter-method "*TestResultNormalizer*" --filter-method "*SelectedTestFailure*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestValidationPipeline*" --filter-method "*TestResultNormalizer*" --filter-method "*SelectedTestFailure*"`.
 2. Review the `TestRunCompleted` structured event and test projection assertions.
 
 Expected:
@@ -1075,7 +1075,7 @@ Expected:
 
 ### MTP-079 - Test cancellation (positive cancellation)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestRunner_CancelledRun*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestRunner_CancelledRun*"`.
 2. Run the process-tree cancellation test for the underlying process manager.
 
 Expected:
@@ -1214,7 +1214,7 @@ Expected: valid adapter-only profile data loads but does not connect without a c
 
 ### MTP-133 — diagnostic bundle canary gate
 
-Run `dotnet test --project tests/Threadsmith.Milestone8.Tests/Threadsmith.Milestone8.Tests.csproj`, then inspect the canary and oversized-bundle test results.
+Run `dotnet test --project tests/Threadsmith.PersistenceMcpHardening.Tests/Threadsmith.PersistenceMcpHardening.Tests.csproj`, then inspect the canary and oversized-bundle test results.
 
 Expected: every ZIP entry is sanitized, the canary is absent, and an oversized archive is deleted. Manual bundle generation is blocked because no CLI/TUI export command exists yet.
 
@@ -1226,8 +1226,8 @@ Run scenarios A and H on Windows Terminal and one common Linux terminal, recordi
 
 ### MTP-140 — real stdio connect, invoke, and forced shutdown
 
-1. Build `tests/Threadsmith.Milestone9.Tests/Threadsmith.Milestone9.Tests.csproj`.
-2. Run `tests\\Threadsmith.Milestone9.Tests\\bin\\Debug\\net10.0\\Threadsmith.Milestone9.Tests.exe` without live HTTP variables.
+1. Build `tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj`.
+2. Run `tests\\Threadsmith.McpTransports.Tests\\bin\\Debug\\net10.0\\Threadsmith.McpTransports.Tests.exe` without live HTTP variables.
 3. Inspect the stdio echo and hung-shutdown results.
 
 Expected: the in-repo server performs a real SDK handshake, imports `echo`, returns the supplied message through `McpImportedTool`, disconnects cleanly, and the controlled hung server process is absent after the bounded drain/kill timeout. HTTP live verification is skipped with setup guidance.

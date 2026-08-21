@@ -109,7 +109,7 @@ All contracts are host-owned and terminal/configuration-library neutral.
 - `Threadsmith.Workspaces/RepositoryLifecycle.cs` — handlers and atomic preference lifecycle.
 - `Threadsmith.Tui/TuiShell.cs`, `ConversationalShell.cs` — orchestration, prompt, and notification.
 - `Threadsmith.Cli/HeadlessShell.cs` — remembered headless selection and notification.
-- `Threadsmith.Milestone2.Tests/RepositoryLifecycleTests.cs` — observable lifecycle/surface tests.
+- `Threadsmith.RepositoryLifecycle.Tests/RepositoryLifecycleTests.cs` — observable lifecycle/surface tests.
 - User documentation, config catalog, manual plan, milestone status, and owning DOX.
 
 ## 9 Ordered Tasks

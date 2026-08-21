@@ -44,7 +44,7 @@ Own confidence-aware build/test validation, normalized evidence, mutation correl
 
 ## Verification
 
-- `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj` — build classification/correlation plus test discovery, selection rationale, normalization, trust, cancellation, combined gates, correction bounds, and diagnostics/test projections pass.
+- `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj` — build classification/correlation plus test discovery, selection rationale, normalization, trust, cancellation, combined gates, correction bounds, and diagnostics/test projections pass.
 - `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj` — dependency direction remains valid.
 
 ## Child DOX Index

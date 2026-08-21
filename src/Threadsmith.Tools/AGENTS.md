@@ -51,7 +51,7 @@ Own typed tool contracts, thread-safe built-in and dynamic extension registratio
 
 ## Verification
 
-- `tests\Threadsmith.Milestone3.Tests\bin\Debug\net10.0\Threadsmith.Milestone3.Tests.exe` — includes the centralized tool-runtime policy suite; the MTP wrapper does not accept the legacy `dotnet test --filter` command.
+- `tests\Threadsmith.ModelTooling.Tests\bin\Debug\net10.0\Threadsmith.ModelTooling.Tests.exe` — includes the centralized tool-runtime policy suite; the MTP wrapper does not accept the legacy `dotnet test --filter` command.
 - `dotnet test tests/Threadsmith.Architecture.Tests/`
 
 ## Child DOX Index

@@ -1,4 +1,4 @@
-﻿# Implementation Plan 09: Context Governor and Structured Planning
+# Implementation Plan 09: Context Governor and Structured Planning
 
 **Milestone:** M4 — Governed Planning and Context
 **Strategy source:** §14 (Context Governance), §10.2 (model output contracts — plan schema), §11.6 (prompt assets), §5.2 (structured state over transcript), §29 (strategy decision 19, implemented by `docs/architecture/adr-12-phase-specific-governed-context.md`)
@@ -28,7 +28,7 @@ Parent: Tool runtime → Context governance + Planning + Approvals (§28). This 
 - No mutation (plan-10). No build/tests (plan-12/13). No subagents (post-initial).
 
 ## 5. Current State
-Implemented, including the validated M4 review remediation. Threadsmith.Context owns attributable evidence, dependency-specific boundary-applied invalidation, phase-specific bounded assembly, repository/path-cached prompt append loading and versioning, context inspection, telemetry, and constrained per-request model resolution. Core and execution own schema-1 structured plans and distinct approve/reject/revise outcomes; CLI and TUI project the same review state. Threadsmith.Milestone4.Tests verifies the milestone contract.
+Implemented, including the validated M4 review remediation. Threadsmith.Context owns attributable evidence, dependency-specific boundary-applied invalidation, phase-specific bounded assembly, repository/path-cached prompt append loading and versioning, context inspection, telemetry, and constrained per-request model resolution. Core and execution own schema-1 structured plans and distinct approve/reject/revise outcomes; CLI and TUI project the same review state. Threadsmith.Planning.Tests verifies the milestone contract.
 
 ## 6. Proposed Design
 - `EvidenceStore` keyed by `EvidenceId`; each `Evidence` carries provenance (§5.5) + the `SemanticConfidence` of its source (plan-06).

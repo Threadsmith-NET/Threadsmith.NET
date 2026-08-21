@@ -10,7 +10,7 @@ Own the conversation-first inline terminal projection and command adapter for in
 - Closed bounded immutable semantic Markdown documents, answer-block collection, terminal-control neutralization, responsive host-owned layout, safe source fallback, capability-gated redirected raw-source items, and serialized output batches.
 - TUI-owned semantic text roles and ordered mixed-role segments, immutable theme/style/link data, terminal-native system defaults, four compiled themes, layered configured-theme catalog loading, active theme selection, atomic user-default persistence, and safe PrettyPrompt/Spectre.Console adapter resolution.
 - Native-scrollback transcript rendering, unbulleted one-character-indented shared Codex-style lifecycle blocks, batched live events, a responsive composer-adjacent session status row, inline repository workflow, validation evidence, and sequential review prompts.
-- Terminal-neutral interaction seams used by `Threadsmith.Milestone1.Tests` and `Threadsmith.Milestone2.Tests`.
+- Terminal-neutral interaction seams used by `Threadsmith.CoreRuntime.Tests` and `Threadsmith.RepositoryLifecycle.Tests`.
 
 ## Local Contracts
 
@@ -52,12 +52,12 @@ Own the conversation-first inline terminal projection and command adapter for in
 
 ## Verification
 
-- `dotnet test tests/Threadsmith.Milestone1.Tests/` verifies inline lifecycle, append-only raw state, semantic Markdown parsing/layout/fallback/source mode, exact 100,000-character multiline submission, local rejection of unknown commands, bounded event batching, cancellation, and CLI parity.
-- `dotnet test tests/Threadsmith.Milestone2.Tests/` verifies initial build trust and persisted-read-to-build upgrade workflows.
-- `dotnet test tests/Threadsmith.Milestone4.Tests/` verifies plan/context rendering and plan decision commands.
-- `dotnet test tests/Threadsmith.Milestone5.Tests/` verifies diff projection and mutation command surfaces.
-- `tests\Threadsmith.Milestone7_4.Tests\bin\Debug\net10.0\Threadsmith.Milestone7_4.Tests.exe` verifies `/context` command contracts, latest-run inspection retention, and TUI/headless parity.
-- `dotnet test tests/Threadsmith.Milestone6.Tests/` verifies diagnostics and explained test-result projections.
+- `dotnet test tests/Threadsmith.CoreRuntime.Tests/` verifies inline lifecycle, append-only raw state, semantic Markdown parsing/layout/fallback/source mode, exact 100,000-character multiline submission, local rejection of unknown commands, bounded event batching, cancellation, and CLI parity.
+- `dotnet test tests/Threadsmith.RepositoryLifecycle.Tests/` verifies initial build trust and persisted-read-to-build upgrade workflows.
+- `dotnet test tests/Threadsmith.Planning.Tests/` verifies plan/context rendering and plan decision commands.
+- `dotnet test tests/Threadsmith.Mutations.Tests/` verifies diff projection and mutation command surfaces.
+- `tests\Threadsmith.ConversationContext.Tests\bin\Debug\net10.0\Threadsmith.ConversationContext.Tests.exe` verifies `/context` command contracts, latest-run inspection retention, and TUI/headless parity.
+- `dotnet test tests/Threadsmith.Validation.Tests/` verifies diagnostics and explained test-result projections.
 - `docs/implementation-plans/manual-test-plan.md` owns real-terminal selection, clipboard, paste-latency, resize, and review-flow regression checks.
 
 ## Child DOX Index

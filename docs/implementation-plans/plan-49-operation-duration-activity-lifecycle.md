@@ -210,9 +210,9 @@ Expected changes, finalized after code inspection:
 - `src/Threadsmith.Tui/` — display options, formatter, dynamic status rendering, event-to-activity state machine, transient `THINKING`, and duration-bearing tool/MCP markers.
 - `src/Threadsmith.App/` — configuration binding/composition and `TimeProvider` wiring where not already available.
 - `.threadsmith/config.example` — documented `tui:showOperationDurations` default and repository example.
-- `tests/Threadsmith.Milestone1.Tests/` — activity lifecycle, formatting, timer cadence, terminal ordering, and configuration coverage.
-- `tests/Threadsmith.Milestone3.Tests/` — tool timing/source/cancellation/failure coverage.
-- `tests/Threadsmith.Milestone8.Tests/` and/or `tests/Threadsmith.Milestone9.Tests/` — MCP remote-duration/source/retry/cancellation coverage.
+- `tests/Threadsmith.CoreRuntime.Tests/` — activity lifecycle, formatting, timer cadence, terminal ordering, and configuration coverage.
+- `tests/Threadsmith.ModelTooling.Tests/` — tool timing/source/cancellation/failure coverage.
+- `tests/Threadsmith.PersistenceMcpHardening.Tests/` and/or `tests/Threadsmith.McpTransports.Tests/` — MCP remote-duration/source/retry/cancellation coverage.
 - `tests/Threadsmith.Architecture.Tests/` — boundary checks if new public contracts or references are added.
 - `docs/user-guide.md`, relevant operations docs, configuration catalog/example, acceptance/manual tests, milestone status, and DOX.
 

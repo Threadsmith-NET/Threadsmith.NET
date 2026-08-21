@@ -31,7 +31,7 @@ Isolate OpenAI-compatible configuration, HTTP/SSE wire behavior, request constru
 
 ## Verification
 
-- `dotnet test --project tests/Threadsmith.Milestone3.Tests/Threadsmith.Milestone3.Tests.csproj` — provider and legacy behavior passes without external network access.
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj` — provider and legacy behavior passes without external network access.
 - `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj` — one-way provider dependency and package isolation pass.
 
 ## Child DOX Index

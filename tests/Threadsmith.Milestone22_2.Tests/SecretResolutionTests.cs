@@ -587,10 +587,24 @@ public sealed class SecretResolutionTests
 
         internal void SecureUserStore()
         {
-            if (!OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows())
             {
-                File.SetUnixFileMode(UserStorePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                using var identity = WindowsIdentity.GetCurrent();
+                var currentUser = identity.User;
+                Assert.NotNull(currentUser);
+
+                var security = new FileSecurity();
+                security.SetOwner(currentUser);
+                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+                security.AddAccessRule(new FileSystemAccessRule(
+                    currentUser,
+                    FileSystemRights.FullControl,
+                    AccessControlType.Allow));
+                new FileInfo(UserStorePath).SetAccessControl(security);
+                return;
             }
+
+            File.SetUnixFileMode(UserStorePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
         [SupportedOSPlatform("windows")]

@@ -50,7 +50,7 @@ public sealed class Plan42NativeValidationToolTests
         const string secret = "private-token";
         using var repository = new TemporaryRepository();
         repository.Write("App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-        bool secretReachedBoundary = false;
+        var secretReachedBoundary = false;
         var process = new RecordingProcessManager
         {
             ResultFactory = request =>
@@ -104,7 +104,7 @@ public sealed class Plan42NativeValidationToolTests
                 $"{repository.Path}\\Program.cs(2,3): warning CS0168: unused [{repository.Path}\\App.csproj]"),
         };
         var service = new NativeValidationToolService(process);
-        RunId runId = RunId.New();
+        var runId = RunId.New();
 
         var build = await service.BuildAsync(
             repository.Path,
@@ -164,7 +164,7 @@ public sealed class Plan42NativeValidationToolTests
             false,
             TimeSpan.FromMilliseconds(1)));
         var service = new NativeValidationToolService(process);
-        RunId runId = RunId.New();
+        var runId = RunId.New();
 
         var discovery = await service.DiscoverTestsAsync(
             repository.Path,
@@ -217,7 +217,7 @@ public sealed class Plan42NativeValidationToolTests
             TimeSpan.FromMilliseconds(1)));
         process.Results.Enqueue(SuccessfulRequestResult("Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1"));
         var service = new NativeValidationToolService(process);
-        RunId runId = RunId.New();
+        var runId = RunId.New();
 
         var discovery = await service.DiscoverTestsAsync(
             repository.Path,
@@ -259,8 +259,8 @@ public sealed class Plan42NativeValidationToolTests
                 $"{request.WorkingDirectory}\\Program.cs(2,3): warning CS0168: unused [{request.WorkingDirectory}\\Tests.csproj]"),
         };
         var service = new NativeValidationToolService(process);
-        RunId firstRunId = RunId.New();
-        RunId secondRunId = RunId.New();
+        var firstRunId = RunId.New();
+        var secondRunId = RunId.New();
 
         await service.BuildAsync(
             firstRepository.Path,
@@ -444,7 +444,7 @@ public sealed class Plan42NativeValidationToolTests
 
         public void Write(string relativePath, string content)
         {
-            string fullPath = System.IO.Path.Combine(Path, relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            var fullPath = System.IO.Path.Combine(Path, relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(fullPath) ?? Path);
             File.WriteAllText(fullPath, content);
         }

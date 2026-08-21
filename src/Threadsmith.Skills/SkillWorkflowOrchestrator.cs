@@ -69,7 +69,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         var budget = SkillCompatibilityEvaluator.CapBudget(
             candidate.Metadata.Budget,
             request.HostBudget);
-        string input = await ValidateInputAsync(candidate, request.InputJson, cancellationToken);
+        var input = await ValidateInputAsync(candidate, request.InputJson, cancellationToken);
         var plan = new SkillInvocationPlan
         {
             Request = request with { InputJson = input },
@@ -162,7 +162,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             ?? throw new InvalidDataException("Waiting skill checkpoint has no pending host action.");
         var definition = candidate.Metadata.Workflow.Steps.Single(item =>
             string.Equals(item.StepId, waiting.StepId, StringComparison.Ordinal));
-        string validated = await ValidateAgainstAssetAsync(
+        var validated = await ValidateAgainstAssetAsync(
             candidate,
             definition.OutputSchemaAsset,
             hostResultJson,
@@ -258,7 +258,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await SaveAsync(running, VersionOf(checkpoint), source.Token);
             latest = running;
             var current = running;
-            int totalDeclaredIterations = candidate.Metadata.Workflow.Steps.Sum(item => item.MaximumIterations);
+            var totalDeclaredIterations = candidate.Metadata.Workflow.Steps.Sum(item => item.MaximumIterations);
             while (current.Steps.Count < totalDeclaredIterations)
             {
                 source.Token.ThrowIfCancellationRequested();
@@ -268,17 +268,17 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 }
 
                 var step = FindNextStep(candidate.Metadata.Workflow, current.Steps);
-                int iteration = current.Steps.Count(item => string.Equals(
+                var iteration = current.Steps.Count(item => string.Equals(
                     item.StepId,
                     step.StepId,
                     StringComparison.Ordinal)) + 1;
-                int remainingContentTokens = plan.EffectiveBudget.ContentTokens
+                var remainingContentTokens = plan.EffectiveBudget.ContentTokens
                     - current.Steps.Sum(item => item.ContentTokens);
-                int remainingModelTurns = plan.EffectiveBudget.ModelTurns
+                var remainingModelTurns = plan.EffectiveBudget.ModelTurns
                     - current.Steps.Sum(item => item.ModelTurns);
-                int remainingToolCalls = plan.EffectiveBudget.ToolCalls
+                var remainingToolCalls = plan.EffectiveBudget.ToolCalls
                     - current.Steps.Sum(item => item.ToolCalls);
-                string input = ResolveStepInput(step, current);
+                var input = ResolveStepInput(step, current);
                 var result = await ExecuteStepAsync(
                     candidate,
                     plan,
@@ -404,7 +404,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
             }
 
-            string validated = await ValidateAgainstAssetAsync(
+            var validated = await ValidateAgainstAssetAsync(
                 candidate,
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
@@ -462,7 +462,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             throw new InvalidOperationException("Skill resume workspace no longer matches the checkpoint.");
         }
 
-        string selector = FormatSelector(checkpoint.Scope, checkpoint.Package);
+        var selector = FormatSelector(checkpoint.Scope, checkpoint.Package);
         var candidate = await ResolveVerifiedAsync(
             selector,
             checkpoint.SessionId,
@@ -634,8 +634,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
 
         var asset = candidate.Metadata.Assets.Single(item =>
             string.Equals(item.Path, schemaAssetPath, StringComparison.OrdinalIgnoreCase));
-        string path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        var path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
         if (bytes.LongLength != asset.Bytes
             || !string.Equals(
                 Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
@@ -645,7 +645,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             throw new InvalidDataException("Skill schema changed after package verification.");
         }
 
-        string schemaJson = new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        var schemaJson = new System.Text.UTF8Encoding(false, true).GetString(bytes);
         var schema = _schemas.Compile(schemaJson);
         return _schemas.Validate(schema, valueJson);
     }
@@ -749,7 +749,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 ?? throw new InvalidDataException("Skill dependency has no validated output.");
         }
 
-        string json = "[" + string.Join(
+        var json = "[" + string.Join(
             ',',
             dependencies.Select(item => item.OutputJson
                 ?? throw new InvalidDataException("Skill dependency has no validated output."))) + "]";

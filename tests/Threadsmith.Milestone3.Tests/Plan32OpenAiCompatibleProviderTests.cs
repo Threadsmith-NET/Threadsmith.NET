@@ -148,7 +148,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 Providers = [configured],
             },
             new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        int secretResolutions = 0;
+        var secretResolutions = 0;
         var provider = new ConfiguredModelProvider(
             client,
             catalog,
@@ -232,7 +232,7 @@ public static class Plan32OpenAiCompatibleProviderTests
             })
             .Build();
 
-        ModelHttpTransportOptions options = ModelHttpTransportOptions.Load(configuration);
+        var options = ModelHttpTransportOptions.Load(configuration);
 
         Assert.Equal(TimeSpan.FromMinutes(10), options.PooledConnectionLifetime);
         Assert.Equal(TimeSpan.FromSeconds(90), options.PooledConnectionIdleTimeout);
@@ -259,8 +259,8 @@ public static class Plan32OpenAiCompatibleProviderTests
     [Fact]
     public static void ReasoningParityFixture_Version1_IsCompleteAndUnique()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", "model", "plan46-pi-reasoning-v1.json");
-        using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(path));
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "model", "plan46-pi-reasoning-v1.json");
+        using var fixture = JsonDocument.Parse(File.ReadAllText(path));
         Assert.Equal("plan46-pi-reasoning-v1", fixture.RootElement.GetProperty("fixtureSetId").GetString());
         string[] ids = [.. fixture.RootElement.GetProperty("profiles")
             .EnumerateArray()
@@ -276,13 +276,13 @@ public static class Plan32OpenAiCompatibleProviderTests
     [Fact]
     public static async Task ReasoningParityFixture_AllProfilesAndLevels_ProjectExactly()
     {
-        string fixturePath = Path.Combine(
+        var fixturePath = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "model",
             "plan46-pi-reasoning-v1.json");
-        using JsonDocument fixture = JsonDocument.Parse(await File.ReadAllTextAsync(fixturePath));
-        Dictionary<string, JsonElement> fixtureProfiles = fixture.RootElement.GetProperty("profiles")
+        using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(fixturePath));
+        var fixtureProfiles = fixture.RootElement.GetProperty("profiles")
             .EnumerateArray()
             .ToDictionary(
                 profile => profile.GetProperty("id").GetString() ?? string.Empty,
@@ -303,12 +303,12 @@ public static class Plan32OpenAiCompatibleProviderTests
             foreach (var level in parityCase.Levels)
             {
                 string? requestJson = null;
-                int requests = 0;
+                var requests = 0;
                 var handler = new RecordingHandler(request =>
                 {
                     requests++;
                     requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
-                    string reasoning = parityCase.ResponseMode switch
+                    var reasoning = parityCase.ResponseMode switch
                     {
                         OpenAiReasoningResponseMode.ReasoningContent
                             => "\"reasoning_content\":\"hi\",\"reasoning\":\"wrong\"",
@@ -316,13 +316,13 @@ public static class Plan32OpenAiCompatibleProviderTests
                             => "\"reasoning_content\":\"wrong\",\"reasoning\":\"hi\"",
                         _ => "\"reasoning_content\":\"wrong\",\"reasoning\":\"wrong\"",
                     };
-                    string reasoningEnd = parityCase.ResponseMode switch
+                    var reasoningEnd = parityCase.ResponseMode switch
                     {
                         OpenAiReasoningResponseMode.ReasoningContent => "\"reasoning_content\":\"dden\"",
                         OpenAiReasoningResponseMode.Reasoning => "\"reasoning\":\"dden\"",
                         _ => "\"reasoning_content\":\"wrong\"",
                     };
-                    string stream = $"data: {{\"choices\":[{{\"delta\":{{{reasoning},\"content\":\"vis\"}}}}]}}\n\n"
+                    var stream = $"data: {{\"choices\":[{{\"delta\":{{{reasoning},\"content\":\"vis\"}}}}]}}\n\n"
                         + $"data: {{\"choices\":[{{\"delta\":{{{reasoningEnd},\"content\":\"ible\",\"tool_calls\":[{{\"index\":0,\"id\":\"call-1\",\"function\":{{\"name\":\"inspect_\",\"arguments\":\"{{\\\"path\\\":\\\"README.\"}}}}]}}}}]}}\n\n"
                         + "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"file\",\"arguments\":\"md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"
                         + "data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n"
@@ -366,7 +366,7 @@ public static class Plan32OpenAiCompatibleProviderTests
 
                 Assert.Equal(1, requests);
                 Assert.NotNull(requestJson);
-                using JsonDocument request = JsonDocument.Parse(requestJson);
+                using var request = JsonDocument.Parse(requestJson);
                 AssertReasoningFragment(parityCase, level, request.RootElement);
                 AssertParityRequestBody(parityCase, request.RootElement);
                 Assert.Equal(
@@ -396,7 +396,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 .FirstOrDefault(level => !parityCase.Levels.Contains(level));
             if (!parityCase.Levels.Contains(unsupported))
             {
-                int requests = 0;
+                var requests = 0;
                 var handler = new RecordingHandler(_ =>
                 {
                     requests++;
@@ -568,7 +568,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         }
 
         Assert.NotNull(requestJson);
-        using JsonDocument body = JsonDocument.Parse(requestJson);
+        using var body = JsonDocument.Parse(requestJson);
         var messages = body.RootElement.GetProperty("messages").EnumerateArray();
         JsonElement[] projected = [.. messages];
         Assert.Equal(
@@ -591,7 +591,7 @@ public static class Plan32OpenAiCompatibleProviderTests
     [Fact]
     public static async Task ReasoningCompatibility_UnsupportedLevel_FailsBeforeNetworkIo()
     {
-        int requests = 0;
+        var requests = 0;
         var handler = new RecordingHandler(_ =>
         {
             requests++;
@@ -702,7 +702,7 @@ public static class Plan32OpenAiCompatibleProviderTests
 
     private static string ToFixtureMode(OpenAiReasoningControlMode mode)
     {
-        string value = mode.ToString();
+        var value = mode.ToString();
         return char.ToLowerInvariant(value[0]) + value[1..];
     }
 
@@ -889,7 +889,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 break;
             case OpenAiReasoningControlMode.ChatTemplate:
                 var template = request.GetProperty("chat_template_kwargs");
-                bool enabled = level != ReasoningLevel.None;
+                var enabled = level != ReasoningLevel.None;
                 if (compatibility.ChatTemplateKind == OpenAiChatTemplateKind.ThinkingWithEffort)
                 {
                     Assert.Equal(enabled, template.GetProperty("thinking").GetBoolean());

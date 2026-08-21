@@ -68,32 +68,38 @@ Static bearer tokens and API keys are supported through `headers` plus `secretSc
 Milestone 10 supports authorization-code + PKCE for SSE and streamable-HTTP profiles. The official MCP SDK performs protected-resource and authorization-server discovery, state and RFC 9207 issuer validation, token exchange, bearer attachment, and transparent refresh. Threadsmith owns browser/callback UX and durable secret caching.
 
 ```json
-{
-  "id": "remote-sso",
-  "name": "Remote MCP with SSO",
-  "transport": "http",
-  "command": "https://mcp.example.com/mcp",
-  "trust": "TrustedRead",
-  "secretScope": [ "secrets:MCP_OAUTH_CLIENT_SECRET" ],
-  "oauth": {
-    "enabled": true,
-    "scopes": [ "tools.read", "offline_access" ],
-    "clientId": "threadsmith",
-    "clientSecret": "secrets:MCP_OAUTH_CLIENT_SECRET",
-    "redirectPort": 8400
-  },
-  "allowedCapabilities": [ "tools" ],
-  "autoConnect": true
-}
+  "mcp": {
+    "profiles": [
+      {
+        "id": "remote-sso",
+        "name": "Remote MCP with SSO",
+        "transport": "http",
+        "command": "https://mcp.example.com/mcp",
+        "trust": "TrustedRead",
+        "secretScope": [ "secrets:MCP_OAUTH_CLIENT_SECRET" ],
+        "oauth": {
+          "enabled": true,
+          "scopes": [ "tools.read", "offline_access" ],
+          "clientId": "threadsmith",
+          "clientSecret": "secrets:MCP_OAUTH_CLIENT_SECRET",
+          "clientMetadataDocumentUri": null,
+          "redirectPort": 8400
+        },
+        "allowedCapabilities": [ "tools" ],
+        "autoConnect": true
+      }
+    ]
 ```
 
-`clientId` must be pre-registered; dynamic client registration is not enabled. `clientSecret` is optional for public PKCE clients, but when supplied it must be a logical `secrets:` reference present in `secretScope`. OAuth cannot be used by stdio profiles or combined with a configured `Authorization` header. `redirectPort: 0` selects an ephemeral loopback port; a fixed pre-registered redirect should use its configured port. Authorization-server metadata must be advertised by the MCP endpoint; `oauth.discoveryUrl` overrides are rejected because the pinned SDK does not expose an arbitrary discovery-document override.
+`clientId` may be pre-registered. Alternatively, `clientMetadataDocumentUri` may point to a public HTTPS OAuth Client ID Metadata Document whose `client_id` value exactly matches that URI; Threadsmith passes that URI to the SDK so authorization servers advertising `client_id_metadata_document_supported` can use it as the client identifier (CIMD) before Dynamic Client Registration (DCR) fallback. Configure either `clientId` or `clientMetadataDocumentUri`, not both. A metadata-document profile must use a fixed `redirectPort` whose `http://localhost:<port>/callback` URI exactly matches the document's `redirect_uris` entry. The repository publishes the document at `docs/oauth/threadsmith-mcp-client.json`, served through jsDelivr as `https://cdn.jsdelivr.net/gh/Threadsmith-NET/Threadsmith.NET@main/docs/oauth/threadsmith-mcp-client.json`; the document's `client_id` must exactly match that public URL.
 
-Interactive mode opens the system browser and binds an HTTP callback listener to `localhost` only. Headless mode prints the authorization URL and accepts the complete pasted callback URL. Providers such as Microsoft Entra ID/Azure AD, Okta, and other standards-compliant OAuth authorization servers are supported when the MCP server advertises compatible metadata and the client registration permits the loopback redirect.
+When both `clientId` and `clientMetadataDocumentUri` are omitted, an explicit connect or authentication operation configures the SDK for OAuth dynamic client registration using a bounded public native-client registration (`Threadsmith.NET`) and the selected localhost redirect URI. A configured `clientSecret` requires `clientId` and must be a logical `secrets:` reference present in `secretScope`; client secrets returned by dynamic registration are stored only in the user-owned OAuth cache. Automatic startup and repository-rebind attempts never register remote clients: URL-only profiles must already have a coherent cached client and token grant. OAuth cannot be used by stdio profiles or combined with a configured `Authorization` header. `redirectPort: 0` selects an ephemeral native loopback port; cached dynamic-registration client credentials are reused only when their redirect URI exactly matches the current callback URI, so a later explicit re-authentication may need local logout to force a fresh registration. Authorization-server metadata must be advertised by the MCP endpoint; `oauth.discoveryUrl` overrides are rejected because the pinned SDK does not expose an arbitrary discovery-document override. Threadsmith uses the broadly deployed MCP `2025-06-18` protocol and sends a product `User-Agent` instead of inheriting a newer SDK package-default discovery handshake. When an HTTPS authorization-server URL serves a metadata proxy document that declares a different HTTPS canonical issuer, Threadsmith validates one bounded document hop, substitutes the canonical issuer for SDK validation, and preserves the proxy document's advertised endpoints; insecure, malformed, oversized, or further-delegated metadata fails closed without server-specific configuration.
 
-Tokens are stored outside the repository in the user-owned `~/.threadsmith/mcp-oauth-tokens.json` cache under `mcp:oauth:<profileId>:accessToken`, `refreshToken`, `expiresAt`, and related metadata. Cache files are created with owner-only permissions on Unix; malformed or unreadable optional cache content is ignored and replaced by a later successful token write. Never copy this file into a repository or diagnostic bundle. Access-token expiry triggers SDK-managed refresh; an unusable refresh token restarts interactive authorization. Tokens, secrets, authorization codes, and callback query values are not logged or projected.
+Interactive mode opens the system browser and reserves the same `localhost` callback port on both IPv4 and IPv6 loopback before browser launch. Headless mode prints the authorization URL and accepts the complete pasted callback URL. Providers such as Microsoft Entra ID/Azure AD, Okta, and other standards-compliant OAuth authorization servers are supported when the MCP server advertises compatible metadata and the client registration permits the loopback redirect or dynamic registration.
 
-MCP lifecycle management retains one identity per profile. Dynamic client registration and stdio OAuth are not implemented. Use `/mcp logout`, `/mcp revoke`, or `/mcp switch-account`; do not edit the live cache while Threadsmith is running.
+Tokens and dynamic client-registration fields are stored outside the repository in the user-owned `~/.threadsmith/mcp-oauth-tokens.json` cache as one atomically replaced grant under `mcp:oauth:<profileId>:grant:*`. A staged registration becomes active only with its matching successful token grant; replacement prunes superseded tokens, registrations, and client secrets in the same durable mutation, and each consumer reads one immutable grant snapshot. Cache files are created with owner-only permissions on Unix; malformed or unreadable optional cache content is ignored and replaced by a later successful write. URL-only restoration remains bound to the SDK-validated authorization server and the cached dynamic-registration redirect URI must exactly match the current callback URI. Never copy this file into a repository or diagnostic bundle. Access-token expiry triggers SDK-managed refresh; an unusable refresh token restarts interactive authorization. Tokens, dynamic registration secrets, authorization codes, and callback query values are not logged or projected.
+
+MCP lifecycle management retains one identity and one dynamic registration per profile. Stdio OAuth is not implemented. Use `/mcp logout`, `/mcp revoke`, or `/mcp switch-account`; do not edit the live cache while Threadsmith is running.
 
 ## Lifecycle commands
 
@@ -114,7 +120,7 @@ MCP lifecycle management retains one identity per profile. Dynamic client regist
 
 Missing IDs use numbered selectors. Connect/disconnect/reconnect serialize per profile. Reconnect always drains the retiring generation and performs fresh profile, secret, transport, authentication, discovery, and registry evaluation. Disconnect atomically closes invocation admission before removing registry entries, waits for admitted requests, then retunes SDK stdio shutdown to the remaining drain/kill deadline; a required forced termination remains visible as `Killed` rather than being reported as a clean disconnect. Live connection handles are never restored by resume, clone, or restart.
 
-Tools, resources, resource templates, and prompts are discovered only when both the server and profile allow them. Tool IDs stay profile-qualified; tool availability remains owned by Plan 27 but additionally requires an exact repository-bound, schema-digest-bound approval in the owner-protected user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` or `tools:defaultEnabledOverrides` values can narrow availability but cannot grant this approval. Imported tools default disabled. Advertised list-change notifications debounce into one complete replacement within the 256-capability connection bound; tool publication changes atomically, schema changes advance the manager generation, and pre-resolved tools from a replaced generation are denied. Resources and prompts are not model tools: exact explicit operations return bounded, sanitized text marked `UNTRUSTED MCP`, including aggregate truncation disclosure when server items are omitted; binary content is withheld as safe metadata.
+Tools, resources, resource templates, and prompts are discovered only when both the server and profile allow them. Tool IDs stay profile-qualified; tool availability remains owned by Plan 27 but additionally requires an exact repository-bound, schema-digest-bound approval in the owner-protected user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` or `tools:defaultEnabledOverrides` values can narrow availability but cannot grant this approval. The approval file is created privately before publication; unsafe, malformed, unreadable, or oversized optional content fails closed to no approvals without preventing Threadsmith startup, and a later explicit enable repairs it with a private atomic replacement. Imported tools default disabled. Advertised list-change notifications debounce into one complete replacement within the 256-capability connection bound; tool publication changes atomically, schema changes advance the manager generation, and pre-resolved tools from a replaced generation are denied. Resources and prompts are not model tools: exact explicit operations return bounded, sanitized text marked `UNTRUSTED MCP`, including aggregate truncation disclosure when server items are omitted; binary content is withheld as safe metadata.
 
 `/mcp diagnose` checks eligibility, endpoint/executable shape, secret-reference count, coarse OAuth state, capability translation, and—only while connected—a protocol ping. Servers whose negotiated protocol has no ping report that check honestly; Threadsmith never invokes an arbitrary tool as a health probe. Startup/discovery and recent explicit resource/prompt/ping measurements use monotonic labels and bounded aggregates.
 
@@ -122,7 +128,7 @@ Tools, resources, resource templates, and prompts are discovered only when both 
 
 - `auth` explicitly connects and starts OAuth only for an OAuth-enabled HTTP/SSE profile. Automatic startup/repository-rebind attempts may reuse or refresh cached identity but suppress the authorization callback, so list, inspect, diagnose, and other implicit startup paths never launch a browser or wait for pasted input.
 - `logout` drains/disconnects and atomically removes only `mcp:oauth:<profileId>:*`. It does not claim or attempt remote revocation.
-- `revoke` drains/disconnects, retrieves request-timeout-bounded advertised authorization-server metadata without following redirects, and submits RFC 7009 revocation only to a same-origin HTTPS endpoint. Missing or cross-origin endpoints report unsupported. Network failures and timeouts are unconfirmed remote outcomes: they preserve local identity unless the user explicitly chooses local-only cleanup, in which case the exact profile cache is cleared.
+- `revoke` drains/disconnects, retrieves request-timeout-bounded advertised authorization-server metadata without following redirects, and submits RFC 7009 revocation only to a same-origin HTTPS endpoint. The grant-bound `none`, `client_secret_post`, or `client_secret_basic` method is honored; for a configured confidential client, its current client id and resolved secret reference override cached credential values so rotation takes effect. Missing or cross-origin endpoints report unsupported. Network failures and timeouts are unconfirmed remote outcomes: they preserve local identity unless the user explicitly chooses local-only cleanup, in which case the exact profile cache is cleared.
 - `switch-account` replaces the single identity. Interactive mode asks whether to log out locally or revoke first, then starts fresh authentication. It never stores two accounts.
 - Static-token profiles reject OAuth identity actions and never delete or rotate the external secret.
 

@@ -69,7 +69,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             cancellationToken.ThrowIfCancellationRequested();
             var text = new StringBuilder();
             ToolRequestModelOutput? toolRequest = null;
-            await foreach (ModelChunk chunk in _models.StreamAsync(
+            await foreach (var chunk in _models.StreamAsync(
                 new ModelStreamRequest
                 {
                     RunId = plan.Request.RunId,
@@ -141,8 +141,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
             }
 
-            ToolInvocationContext context = await _toolContext(plan.Request, cancellationToken);
-            ToolInvocationResult result = await _toolPipeline.InvokeAsync(
+            var context = await _toolContext(plan.Request, cancellationToken);
+            var result = await _toolPipeline.InvokeAsync(
                 new ToolInvocationRequest
                 {
                     SessionId = plan.Request.SessionId,
@@ -181,7 +181,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
     {
         return toolIds.Select(toolId =>
         {
-            ToolDefinition definition = _tools.Get(toolId).Definition;
+            var definition = _tools.Get(toolId).Definition;
             return new ModelToolDefinition
             {
                 Name = definition.Id,
@@ -206,7 +206,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         builder.AppendLine($"Package: {plan.Package.SkillId.Value}@{plan.Package.Version} digest {plan.Package.Digest.Value}");
         builder.AppendLine(
             $"Step: {step.StepId} ({step.Kind}), iteration {iteration}/{step.MaximumIterations}");
-        foreach (SkillContextSegment segment in content)
+        foreach (var segment in content)
         {
             builder.AppendLine($"<skill_asset path=\"{segment.AssetPath}\" sha256=\"{segment.Sha256}\">");
             builder.AppendLine(segment.Content);

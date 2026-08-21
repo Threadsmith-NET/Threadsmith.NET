@@ -130,8 +130,8 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             }
 
             generatedAt = info.LastWriteTimeUtc;
-            await using FileStream stream = File.OpenRead(assetsPath);
-            using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            await using var stream = File.OpenRead(assetsPath);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             dependencies.AddRange(ParseDependencies(document.RootElement, request.IncludeTransitive));
         }
 
@@ -145,12 +145,12 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             }
             else
             {
-                using NuGetQueryContext queryContext = await CreateNuGetQueryContextAsync(cancellationToken);
+                using var queryContext = await CreateNuGetQueryContextAsync(cancellationToken);
                 var collected = new List<PackageAdvisory>();
                 var advisoryOutputTruncated = false;
                 foreach (var category in new[] { "--vulnerable", "--deprecated", "--outdated" })
                 {
-                    ProcessExecutionResult process = await RunWithEnvironmentAsync(
+                    var process = await RunWithEnvironmentAsync(
                         root,
                         runId,
                         CreatePackageArguments(project, queryContext.ConfigurationPath, category),
@@ -270,7 +270,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         [
             "format", target, "--no-restore", "--verify-no-changes", "--verbosity", "minimal",
         ];
-        ProcessExecutionResult process = await RunAsync(
+        var process = await RunAsync(
             root,
             runId,
             arguments,
@@ -322,7 +322,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        IEnumerable<DiagnosticQueryItem> items = _diagnosticRuns.Values
+        var items = _diagnosticRuns.Values
             .Where(run => RepositoryPathsEqual(run.RepositoryPath, root))
             .OrderBy(run => run.CreatedAt)
             .ThenBy(run => run.InvocationId, StringComparer.Ordinal)
@@ -398,11 +398,11 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
         var root = NormalizeRoot(repositoryPath);
         var projectPath = ResolveTarget(root, request.ProjectPath, requireProject: true);
-        TestProject project = ReadTestProject(root, projectPath);
+        var project = ReadTestProject(root, projectPath);
         var traitFilter = request.TraitName is not null && request.TraitValue is not null
             ? $"{request.TraitName}={EscapeTestFilterValue(request.TraitValue)}"
             : null;
-        IReadOnlyList<TestCase> cases = await _testDiscoverer.DiscoverCasesAsync(
+        var cases = await _testDiscoverer.DiscoverCasesAsync(
             runId,
             root,
             [project],
@@ -426,7 +426,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
         DiscoveredTest[] all = [.. ApplyTestFilters(discovered, request)];
         DiscoveredTest[] bounded = [.. all.Take(request.MaximumTests)];
-        foreach (DiscoveredTest test in bounded)
+        foreach (var test in bounded)
         {
             _discoveredTests[test.Id.Value] = new StoredDiscoveredTest(root, test);
         }
@@ -452,7 +452,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         }
 
         var root = NormalizeRoot(repositoryPath);
-        if (!_discoveredTests.TryGetValue(testId.Value, out StoredDiscoveredTest? stored)
+        if (!_discoveredTests.TryGetValue(testId.Value, out var stored)
             || !stored.RepositoryPath.Equals(
                 root,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
@@ -480,14 +480,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         ValidateTimeout(request.TimeoutSeconds);
         var root = NormalizeRoot(repositoryPath);
         _ = ResolveTestProjectPath(root, request.TestId);
-        if (!_discoveredTests.TryGetValue(request.TestId.Value, out StoredDiscoveredTest? stored))
+        if (!_discoveredTests.TryGetValue(request.TestId.Value, out var stored))
         {
             throw new InvalidOperationException("The test identity expired before execution; discover tests again.");
         }
 
-        DiscoveredTest test = stored.Test;
+        var test = stored.Test;
         var projectPath = ResolveTarget(root, test.ProjectPath, requireProject: true);
-        TestProject project = ReadTestProject(root, projectPath);
+        var project = ReadTestProject(root, projectPath);
         string effectiveFilter;
         var arguments = new List<string>();
         if (project.Framework == TestFramework.MicrosoftTestingPlatform)
@@ -505,14 +505,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             arguments.AddRange(["--filter", effectiveFilter]);
         }
 
-        ProcessExecutionResult process = await RunAsync(
+        var process = await RunAsync(
             root,
             runId,
             arguments,
             TimeSpan.FromSeconds(request.TimeoutSeconds),
             cancellationToken);
         var selection = new TestSelection { Projects = [project] };
-        TestResult normalized = TestResultNormalizer.Normalize(project, process, selection.RelatedMutationIds);
+        var normalized = TestResultNormalizer.Normalize(project, process, selection.RelatedMutationIds);
         return new TargetedTestResult(
             test,
             effectiveFilter,
@@ -549,7 +549,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         AddConfigurationAndFramework(arguments, request.Configuration, request.TargetFramework);
         arguments.Add("-property:GenerateFullPaths=true");
 
-        ProcessExecutionResult process = await RunAsync(
+        var process = await RunAsync(
             root,
             runId,
             arguments,
@@ -611,7 +611,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 cancellationToken);
             var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (NuGetAdvisorySourceOptions source in _sources.Where(source => source.SecretReference is not null))
+            foreach (var source in _sources.Where(source => source.SecretReference is not null))
             {
                 var secretReference = source.SecretReference ?? string.Empty;
                 var resolutionRequest = new SecretResolutionRequest
@@ -623,7 +623,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                     Purpose = "authenticate a trusted private NuGet advisory source",
                     MinimumTrust = SecretProviderTrust.UserOwned,
                 };
-                SecretResolutionResult resolution = await (_secretResolver
+                var resolution = await (_secretResolver
                     ?? throw new InvalidOperationException("NuGet credential resolver is unavailable."))
                     .ResolveAsync(resolutionRequest, cancellationToken);
                 var secret = resolution.RequireValue(resolutionRequest);
@@ -702,14 +702,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
     private static IReadOnlyList<NuGetDependencyNode> ParseDependencies(JsonElement root, bool includeTransitive)
     {
         var direct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (root.TryGetProperty("project", out JsonElement project)
-            && project.TryGetProperty("frameworks", out JsonElement frameworks))
+        if (root.TryGetProperty("project", out var project)
+            && project.TryGetProperty("frameworks", out var frameworks))
         {
-            foreach (JsonProperty framework in frameworks.EnumerateObject())
+            foreach (var framework in frameworks.EnumerateObject())
             {
-                if (framework.Value.TryGetProperty("dependencies", out JsonElement values))
+                if (framework.Value.TryGetProperty("dependencies", out var values))
                 {
-                    foreach (JsonProperty dependency in values.EnumerateObject())
+                    foreach (var dependency in values.EnumerateObject())
                     {
                         direct.Add($"{framework.Name}|{dependency.Name}");
                     }
@@ -718,14 +718,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         }
 
         var result = new List<NuGetDependencyNode>();
-        if (!root.TryGetProperty("targets", out JsonElement targets))
+        if (!root.TryGetProperty("targets", out var targets))
         {
             return result;
         }
 
-        foreach (JsonProperty target in targets.EnumerateObject())
+        foreach (var target in targets.EnumerateObject())
         {
-            foreach (JsonProperty library in target.Value.EnumerateObject())
+            foreach (var library in target.Value.EnumerateObject())
             {
                 var separator = library.Name.LastIndexOf('/');
                 if (separator <= 0)
@@ -747,7 +747,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                     continue;
                 }
 
-                string[] children = library.Value.TryGetProperty("dependencies", out JsonElement childDependencies)
+                string[] children = library.Value.TryGetProperty("dependencies", out var childDependencies)
                     ? [.. childDependencies.EnumerateObject()
                         .Select(item => item.Name)
                         .Where(item => item.Length <= 256)
@@ -763,7 +763,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
     private static IReadOnlyList<PackageAdvisory> ParseAdvisories(string json, int maximum)
     {
-        using JsonDocument document = JsonDocument.Parse(json);
+        using var document = JsonDocument.Parse(json);
         var advisories = new List<PackageAdvisory>();
         CollectAdvisories(document.RootElement, advisories, maximum);
         return advisories;
@@ -780,9 +780,9 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         {
             var id = ReadString(element, "id") ?? ReadString(element, "name") ?? string.Empty;
             var version = ReadString(element, "resolvedVersion") ?? ReadString(element, "resolved") ?? string.Empty;
-            if (id.Length > 0 && element.TryGetProperty("vulnerabilities", out JsonElement vulnerabilities))
+            if (id.Length > 0 && element.TryGetProperty("vulnerabilities", out var vulnerabilities))
             {
-                foreach (JsonElement vulnerability in vulnerabilities.EnumerateArray())
+                foreach (var vulnerability in vulnerabilities.EnumerateArray())
                 {
                     results.Add(new PackageAdvisory(
                         id,
@@ -798,7 +798,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 }
             }
 
-            if (id.Length > 0 && element.TryGetProperty("deprecationReasons", out JsonElement deprecationReasons))
+            if (id.Length > 0 && element.TryGetProperty("deprecationReasons", out var deprecationReasons))
             {
                 var severity = deprecationReasons.ValueKind == JsonValueKind.Array
                     ? string.Join(", ", deprecationReasons.EnumerateArray().Select(reason => reason.GetString()))
@@ -826,14 +826,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                     "configured-source"));
             }
 
-            foreach (JsonProperty property in element.EnumerateObject())
+            foreach (var property in element.EnumerateObject())
             {
                 CollectAdvisories(property.Value, results, maximum);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            foreach (JsonElement child in element.EnumerateArray())
+            foreach (var child in element.EnumerateArray())
             {
                 CollectAdvisories(child, results, maximum);
             }
@@ -842,7 +842,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
     private static string? ReadString(JsonElement element, string name)
     {
-        var result = element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+        var result = element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
         return result is { Length: <= 2048 } ? result : null;
@@ -886,7 +886,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         ArgumentException.ThrowIfNullOrWhiteSpace(requestedPath);
         var target = Path.GetFullPath(requestedPath.Replace('/', Path.DirectorySeparatorChar), root);
         var relative = Path.GetRelativePath(root, target);
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         if (relative.Equals("..", comparison)
@@ -975,7 +975,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             DtdProcessing = DtdProcessing.Prohibit,
             XmlResolver = null,
         });
-        XDocument document = XDocument.Load(reader, LoadOptions.None);
+        var document = XDocument.Load(reader, LoadOptions.None);
         string[] packages = [.. document.Descendants()
             .Where(element => element.Name.LocalName == "PackageReference")
             .Select(element => (string?)element.Attribute("Include") ?? string.Empty)];

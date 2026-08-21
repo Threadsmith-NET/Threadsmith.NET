@@ -126,7 +126,7 @@ internal interface IConsoleSurface
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(segments);
-        foreach (TuiTextSegment segment in segments)
+        foreach (var segment in segments)
         {
             segment.Validate();
             await WriteAsync(segment.Text, segment.Role, cancellationToken);
@@ -142,7 +142,7 @@ internal interface IConsoleSurface
     {
         ArgumentNullException.ThrowIfNull(items);
         cancellationToken.ThrowIfCancellationRequested();
-        foreach (TuiOutputItem item in items)
+        foreach (var item in items)
         {
             await WriteSegmentsAsync(
                 PrettyPromptConsoleSurface.ProjectInteractiveOutputItem(item, 120),
@@ -187,7 +187,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
             Environment.GetEnvironmentVariable("NO_COLOR"),
             Environment.GetEnvironmentVariable("TERM"));
         _suppressStyles = suppressionReason is not null;
-        ConfiguredTheme activeTheme = initialTheme ?? BuiltInThemes.Create()[0];
+        var activeTheme = initialTheme ?? BuiltInThemes.Create()[0];
         _themeResolver = new TuiThemeResolver(activeTheme.Theme, _suppressStyles);
         Debug.WriteLine(
             $"Threadsmith TUI theme '{activeTheme.Theme.Id}' selected; "
@@ -265,8 +265,8 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         await _consoleGate.WaitAsync(cancellationToken);
         try
         {
-            IPrompt prompt = _prompt ??= CreatePrompt(_promptText);
-            PromptResult result = await prompt.ReadLineAsync().WaitAsync(cancellationToken);
+            var prompt = _prompt ??= CreatePrompt(_promptText);
+            var result = await prompt.ReadLineAsync().WaitAsync(cancellationToken);
             var toggledThinking = result is KeyPressCallbackResult
                 && string.Equals(result.Text, ToggleThinkingInput, StringComparison.Ordinal);
             return new ConsoleInput(
@@ -327,7 +327,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         await _consoleGate.WaitAsync(cancellationToken);
         try
         {
-            TuiTextRole statusRole = string.Equals(text, "THINKING", StringComparison.Ordinal)
+            var statusRole = string.Equals(text, "THINKING", StringComparison.Ordinal)
                 ? TuiTextRole.ThinkingIndicator
                 : TuiTextRole.Status;
             var statusStyle = ToMarkupStyle(_themeResolver.Resolve(statusRole));
@@ -354,7 +354,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         await _consoleGate.WaitAsync(cancellationToken);
         try
         {
-            TuiTextRole statusRole = activity.Label.StartsWith("THINKING", StringComparison.Ordinal)
+            var statusRole = activity.Label.StartsWith("THINKING", StringComparison.Ordinal)
                 ? TuiTextRole.ThinkingIndicator
                 : TuiTextRole.Status;
             var statusStyle = ToMarkupStyle(_themeResolver.Resolve(statusRole));
@@ -413,9 +413,9 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         }
 
         var writes = new List<ConsoleSurfaceWrite>();
-        foreach (TuiOutputItem item in items)
+        foreach (var item in items)
         {
-            TuiOutputItem projected = ProjectOutputItem(item, _isOutputRedirected);
+            var projected = ProjectOutputItem(item, _isOutputRedirected);
             if (projected is TuiRawSourceOutput rawSourceOutput)
             {
                 writes.Add(new RawConsoleSurfaceWrite(rawSourceOutput.RawSource));
@@ -426,7 +426,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
                 (ConsoleSurfaceWrite)new SegmentConsoleSurfaceWrite(segment)));
         }
 
-        foreach (SegmentConsoleSurfaceWrite write in writes.OfType<SegmentConsoleSurfaceWrite>())
+        foreach (var write in writes.OfType<SegmentConsoleSurfaceWrite>())
         {
             write.Segment.Validate();
         }
@@ -434,7 +434,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         await _consoleGate.WaitAsync(cancellationToken);
         try
         {
-            foreach (ConsoleSurfaceWrite write in writes)
+            foreach (var write in writes)
             {
                 switch (write)
                 {
@@ -586,7 +586,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         var lastText = activity.Format();
         while (!operation.IsCompleted)
         {
-            Task refresh = Task.Delay(
+            var refresh = Task.Delay(
                 TimeSpan.FromMilliseconds(250),
                 activity.TimeProvider,
                 cancellationToken);
@@ -627,7 +627,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
             parts.Add($"on {ToSpectreColorToken(style.Background)}");
         }
 
-        foreach ((TuiTextDecoration decoration, var name) in new[]
+        foreach ((var decoration, var name) in new[]
         {
             (TuiTextDecoration.Bold, "bold"),
             (TuiTextDecoration.Dim, "dim"),
@@ -670,7 +670,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
 
     private IPrompt CreatePrompt(string prompt)
     {
-        TuiTextStyle promptStyle = _themeResolver.Resolve(TuiTextRole.ComposerPrompt);
+        var promptStyle = _themeResolver.Resolve(TuiTextRole.ComposerPrompt);
         var configuration = new PromptConfiguration(
             prompt: new FormattedString(prompt, ToPrettyPromptFormat(promptStyle)),
             proportionOfWindowHeightForCompletionPane: _completionPaneHeightFraction);
@@ -686,11 +686,11 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
     private static ConsoleFormat ToPrettyPromptFormat(TuiTextStyle style)
     {
         AnsiColor? foreground = style.Foreground is not null
-            && TryParsePrettyPromptColor(style.Foreground, out AnsiColor foregroundValue)
+            && TryParsePrettyPromptColor(style.Foreground, out var foregroundValue)
             ? foregroundValue
             : null;
         AnsiColor? background = style.Background is not null
-            && TryParsePrettyPromptColor(style.Background, out AnsiColor backgroundValue)
+            && TryParsePrettyPromptColor(style.Background, out var backgroundValue)
             ? backgroundValue
             : null;
         return new ConsoleFormat(
@@ -858,7 +858,7 @@ public sealed class ConversationalShell
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
-        (ConfiguredThemeCatalog catalog, var defaultThemeId) = TuiThemeConfigurationLoader.Load(configuration);
+        (var catalog, var defaultThemeId) = TuiThemeConfigurationLoader.Load(configuration);
         _themePreferences = new SessionThemePreferences(catalog, defaultThemeId);
         _themeWarnings = catalog.Warnings;
         _displayOptions = TuiDisplayOptions.Load(configuration);
@@ -992,7 +992,7 @@ public sealed class ConversationalShell
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelStatus);
         var controller = new TuiController(_presenter);
-        SessionId sessionId = _sessionLifecycleAvailable
+        var sessionId = _sessionLifecycleAvailable
             ? (await controller.CreateNewSessionAsync(cancellationToken)).ActiveSession.SessionId
             : await controller.OpenAsync("Interactive", cancellationToken);
         var dispatcher = new UiEventDispatcher();
@@ -1002,16 +1002,16 @@ public sealed class ConversationalShell
             SingleWriter = true,
         });
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using IDisposable? directFetchApprovalLease = _directFetchApprovalPrompt?.Attach(
+        using var directFetchApprovalLease = _directFetchApprovalPrompt?.Attach(
             PromptForDirectFetchApprovalAsync,
             dispatcher.QueueAsync);
         var transcript = new ConversationTranscript(
             string.Empty,
             _displayOptions.ShowOperationDurations);
-        await using IDomainEventSubscription subscription = _events.Subscribe(dispatcher.QueueAsync);
+        await using var subscription = _events.Subscribe(dispatcher.QueueAsync);
         var semanticCompletion = new TaskCompletionSource<SemanticLoadCompleted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        await using IDomainEventSubscription semanticCompletionSubscription = _events.Subscribe((domainEvent, _) =>
+        await using var semanticCompletionSubscription = _events.Subscribe((domainEvent, _) =>
         {
             if (domainEvent is SemanticLoadCompleted completion
                 && completion.SessionId == sessionId)
@@ -1087,7 +1087,7 @@ public sealed class ConversationalShell
             }
         }
 
-        ShellSnapshot snapshot = await controller.RenderAsync(lifetime.Token);
+        var snapshot = await controller.RenderAsync(lifetime.Token);
         var repositoryStatus = activeRepository?.Repository?.RepositoryPath
             ?? snapshot.RepositoryPath
             ?? "Not open";
@@ -1099,12 +1099,12 @@ public sealed class ConversationalShell
             ?? "Not selected";
         var hasSelectedSolution = activeRepository?.Solution is not null
             || snapshot.SolutionPath is not null;
-        SemanticConfidenceLevel semanticConfidence = snapshot.SemanticConfidence;
+        var semanticConfidence = snapshot.SemanticConfidence;
         if (startupSemanticCompletion is not null
             && Enum.TryParse<SemanticConfidenceLevel>(
                 startupSemanticCompletion.Confidence,
                 ignoreCase: false,
-                out SemanticConfidenceLevel completedConfidence))
+                out var completedConfidence))
         {
             semanticConfidence = completedConfidence;
         }
@@ -1118,7 +1118,7 @@ public sealed class ConversationalShell
             : !initialSemanticWasResolved && hasSelectedSolution
             ? "Loading..."
             : semanticConfidence.ToString();
-        StringBuilder startupStatus = new StringBuilder()
+        var startupStatus = new StringBuilder()
             .AppendLine()
             .AppendLine("Current status")
             .AppendLine($"  Model: {modelStatus}")
@@ -1145,7 +1145,7 @@ public sealed class ConversationalShell
             await SetRepositoryPromptAsync(startupRepository.RepositoryPath, lifetime.Token);
         }
 
-        DateTimeOffset startupCompletedAt = DateTimeOffset.UtcNow;
+        var startupCompletedAt = DateTimeOffset.UtcNow;
         TaskCompletionSource? activityCompletion = null;
         TaskCompletionSource? renderedRunCompletion = null;
         Task? activityDisplayTask = null;
@@ -1158,15 +1158,15 @@ public sealed class ConversationalShell
         ContextInspectionProjection? latestContextInspection = null;
         var modelAnswerCollector = new TuiModelAnswerCollector(_displayOptions.RenderMarkdown);
 
-        Task drainTask = dispatcher.DrainAsync(
+        var drainTask = dispatcher.DrainAsync(
             async (batch, token) =>
             {
                 var output = new List<TuiOutputItem>();
                 var pendingDecisions = new List<InteractiveDecision>();
                 var runCompletedInBatch = false;
-                TuiActivity? nextActivity = currentActivity;
-                SemanticActivityKey? nextSemanticActivityKey = currentSemanticActivityKey;
-                foreach (IDomainEvent? domainEvent in batch.Where(item => item.SessionId == sessionId))
+                var nextActivity = currentActivity;
+                var nextSemanticActivityKey = currentSemanticActivityKey;
+                foreach (var domainEvent in batch.Where(item => item.SessionId == sessionId))
                 {
                     var occurredDuringStartup = domainEvent.OccurredAt <= startupCompletedAt;
                     if (occurredDuringStartup
@@ -1247,7 +1247,7 @@ public sealed class ConversationalShell
                     var emittedModelOutput = false;
                     if (domainEvent is ModelOutputObserved)
                     {
-                        TuiOutputItem? modelOutput = modelAnswerCollector.Append(transcriptDelta);
+                        var modelOutput = modelAnswerCollector.Append(transcriptDelta);
                         if (modelOutput is not null)
                         {
                             output.Add(modelOutput);
@@ -1256,7 +1256,7 @@ public sealed class ConversationalShell
                     }
                     else
                     {
-                        TuiOutputItem? pendingAnswer = modelAnswerCollector.Flush(token);
+                        var pendingAnswer = modelAnswerCollector.Flush(token);
                         if (pendingAnswer is not null)
                         {
                             output.Add(pendingAnswer);
@@ -1292,8 +1292,8 @@ public sealed class ConversationalShell
                             if (TryGetLatestSemanticActivity(
                                 semanticActivitiesByKey,
                                 semanticActivityOrder,
-                                out SemanticActivityKey latestSemanticKey,
-                                out TuiActivity? latestSemanticActivity))
+                                out var latestSemanticKey,
+                                out var latestSemanticActivity))
                             {
                                 nextActivity = latestSemanticActivity;
                                 nextSemanticActivityKey = latestSemanticKey;
@@ -1356,7 +1356,7 @@ public sealed class ConversationalShell
                         && (output.Count > 0 || currentActivity != nextActivity))
                     {
                         activityCompletion.TrySetResult();
-                        Task? completedActivityDisplayTask = activityDisplayTask;
+                        var completedActivityDisplayTask = activityDisplayTask;
                         activityCompletion = null;
                         activityDisplayTask = null;
                         currentActivity = null;
@@ -1395,7 +1395,7 @@ public sealed class ConversationalShell
                     renderedRunCompletion?.TrySetResult();
                 }
 
-                foreach (InteractiveDecision decision in pendingDecisions)
+                foreach (var decision in pendingDecisions)
                 {
                     decisions.Writer.TryWrite(decision);
                 }
@@ -1406,7 +1406,7 @@ public sealed class ConversationalShell
         {
             while (!lifetime.IsCancellationRequested)
             {
-                while (decisions.Reader.TryRead(out InteractiveDecision? pendingDecision))
+                while (decisions.Reader.TryRead(out var pendingDecision))
                 {
                     _ = await HandleDecisionAsync(controller, pendingDecision, lifetime.Token);
                 }
@@ -1423,20 +1423,20 @@ public sealed class ConversationalShell
                             && snapshot.RepositoryPath is null
                             ? "Not open"
                             : TuiSessionStatusFactory.GetRepositoryDisplayName(activePath);
-                        ModelProfileId? currentProfileId = _sessionPreferences?.CurrentProfileId
+                        var currentProfileId = _sessionPreferences?.CurrentProfileId
                             ?? _startupProfileId;
-                        ModelProfile? currentProfile = currentProfileId is { } profileId
+                        var currentProfile = currentProfileId is { } profileId
                             && _modelCatalog is not null
                             ? _modelCatalog.Profiles.FirstOrDefault(profile => profile.Id == profileId)
                             : null;
-                        SessionUsageSnapshot usage = _sessionUsage?.GetSnapshot(sessionId)
+                        var usage = _sessionUsage?.GetSnapshot(sessionId)
                             ?? new SessionUsageSnapshot(0, 0, false, HasObservation: false);
                         var branch = await ResolveCurrentBranchAsync(
                             _gitQueries,
                             activePath,
                             repositoryName != "Not open",
                             lifetime.Token);
-                        TuiSessionStatus status = TuiSessionStatusFactory.Create(
+                        var status = TuiSessionStatusFactory.Create(
                             Directory.GetCurrentDirectory(),
                             repositoryName,
                             modelStatus,
@@ -1549,7 +1549,7 @@ public sealed class ConversationalShell
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/new", StringComparison.OrdinalIgnoreCase))
                 {
-                    SessionTransitionResult result = await controller.CreateNewSessionAsync(lifetime.Token);
+                    var result = await controller.CreateNewSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
@@ -1565,7 +1565,7 @@ public sealed class ConversationalShell
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/clone", StringComparison.OrdinalIgnoreCase))
                 {
-                    SessionTransitionResult result = await controller.CloneSessionAsync(lifetime.Token);
+                    var result = await controller.CloneSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
@@ -1587,7 +1587,7 @@ public sealed class ConversationalShell
                     SessionId target;
                     if (argument.Length == 0)
                     {
-                        IReadOnlyList<SessionCatalogEntry> sessions = await controller.ListResumableSessionsAsync(
+                        var sessions = await controller.ListResumableSessionsAsync(
                             cancellationToken: lifetime.Token);
                         if (sessions.Count == 0)
                         {
@@ -1605,7 +1605,7 @@ public sealed class ConversationalShell
                             lifetime.Token);
                         target = sessions[selected].SessionId;
                     }
-                    else if (Guid.TryParse(argument, out Guid parsedSessionId))
+                    else if (Guid.TryParse(argument, out var parsedSessionId))
                     {
                         target = new SessionId(parsedSessionId);
                     }
@@ -1618,7 +1618,7 @@ public sealed class ConversationalShell
                         continue;
                     }
 
-                    SessionTransitionResult result = await controller.ResumeSessionAsync(target, lifetime.Token);
+                    var result = await controller.ResumeSessionAsync(target, lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
@@ -1653,12 +1653,12 @@ public sealed class ConversationalShell
                         continue;
                     }
 
-                    ModelProviderAuthenticationAction action = arguments.Length == 3
+                    var action = arguments.Length == 3
                         ? Enum.Parse<ModelProviderAuthenticationAction>(arguments[2], ignoreCase: true)
                         : ModelProviderAuthenticationAction.Login;
-                    ModelProviderAuthenticationResult result = await _presenter
+                    var result = await _presenter
                         .ManageModelProviderAuthenticationAsync("openai-codex", action, lifetime.Token);
-                    TuiTextRole resultRole = result.IsAuthenticated
+                    var resultRole = result.IsAuthenticated
                         || action == ModelProviderAuthenticationAction.Logout
                             ? TuiTextRole.Status
                             : TuiTextRole.Error;
@@ -1723,7 +1723,7 @@ public sealed class ConversationalShell
                 if (commandText.StartsWith("/skills", StringComparison.OrdinalIgnoreCase)
                     && (commandText.Length == 7 || char.IsWhiteSpace(commandText[7])))
                 {
-                    RepositoryTrustLevel skillTrust = activeRepository?.Repository?.Trust.Level
+                    var skillTrust = activeRepository?.Repository?.Trust.Level
                         ?? RepositoryTrustLevel.UntrustedInspection;
                     await HandleSkillsCommandAsync(
                         controller,
@@ -1781,7 +1781,7 @@ public sealed class ConversationalShell
                             "Repository path:\n",
                             TuiTextRole.Status,
                             lifetime.Token);
-                        ConsoleInput pathInput = await _surface.ReadAsync(lifetime.Token);
+                        var pathInput = await _surface.ReadAsync(lifetime.Token);
                         openPath = pathInput.IsSubmitted ? pathInput.Text.Trim() : string.Empty;
                     }
 
@@ -1796,7 +1796,7 @@ public sealed class ConversationalShell
 
                     try
                     {
-                        RepositoryOpenWorkflowResult result = await OpenRepositoryAsync(
+                        var result = await OpenRepositoryAsync(
                             controller,
                             openPath,
                             requestedTrust: null,
@@ -1850,7 +1850,7 @@ public sealed class ConversationalShell
                     var trustText = commandText.Length == 6
                         ? string.Empty
                         : commandText[6..].Trim();
-                    RepositoryTrustLevel? trust = string.IsNullOrWhiteSpace(trustText)
+                    var trust = string.IsNullOrWhiteSpace(trustText)
                         ? await ReadTrustAsync(lifetime.Token)
                         : ParseInteractiveTrust(trustText);
                     if (trust is null)
@@ -1864,17 +1864,17 @@ public sealed class ConversationalShell
 
                     try
                     {
-                        RepositoryTrustLevel previousTrust = openRepository.Trust.Level;
-                        RepositoryOpenWorkflowResult result = await OpenRepositoryAsync(
+                        var previousTrust = openRepository.Trust.Level;
+                        var result = await OpenRepositoryAsync(
                             controller,
                             openRepository.RepositoryPath,
                             trust,
                             activeRepository.Solution?.SolutionPath,
                             configurationDirectoryExistedBeforeRuntimeStorage: null,
                             lifetime.Token);
-                        RepositoryOpenResult updatedRepository = result.Repository ?? openRepository;
+                        var updatedRepository = result.Repository ?? openRepository;
                         activeRepository = result.Repository is null ? activeRepository : result;
-                        RepositoryTrustLevel effectiveTrust = updatedRepository.Trust.Level;
+                        var effectiveTrust = updatedRepository.Trust.Level;
                         var status = effectiveTrust == previousTrust && trust < previousTrust
                             ? $"Trust remains {effectiveTrust}; persisted trust cannot be downgraded."
                             : $"Repository trust is now {effectiveTrust}.";
@@ -1920,7 +1920,7 @@ public sealed class ConversationalShell
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     reasoningExpanded = false;
                     _ = await controller.SubmitAsync(submittedText, operation.Token);
-                    Task<bool> waitTask = controller.WaitForActiveRunAsync(operation.Token);
+                    var waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
                     while (!waitTask.IsCompleted || awaitingMutationReview)
                     {
@@ -1929,12 +1929,12 @@ public sealed class ConversationalShell
                             _ = await waitTask;
                         }
 
-                        Task<bool> decisionAvailableTask = decisions.Reader
+                        var decisionAvailableTask = decisions.Reader
                             .WaitToReadAsync(operation.Token)
                             .AsTask();
                         if (!awaitingMutationReview)
                         {
-                            Task completed = await Task.WhenAny(
+                            var completed = await Task.WhenAny(
                                 waitTask,
                                 decisionAvailableTask,
                                 drainTask);
@@ -1950,7 +1950,7 @@ public sealed class ConversationalShell
                         }
                         else
                         {
-                            Task completed = await Task.WhenAny(decisionAvailableTask, drainTask);
+                            var completed = await Task.WhenAny(decisionAvailableTask, drainTask);
                             if (completed == drainTask)
                             {
                                 await drainTask;
@@ -1962,9 +1962,9 @@ public sealed class ConversationalShell
                             break;
                         }
 
-                        while (decisions.Reader.TryRead(out InteractiveDecision? decision))
+                        while (decisions.Reader.TryRead(out var decision))
                         {
-                            InteractiveDecisionResult decisionResult = await HandleDecisionAsync(
+                            var decisionResult = await HandleDecisionAsync(
                                 controller,
                                 decision,
                                 operation.Token);
@@ -1973,8 +1973,8 @@ public sealed class ConversationalShell
                     }
 
                     _ = await waitTask;
-                    Task renderingTask = renderedRunCompletion.Task.WaitAsync(operation.Token);
-                    Task completedTask = await Task.WhenAny(renderingTask, drainTask);
+                    var renderingTask = renderedRunCompletion.Task.WaitAsync(operation.Token);
+                    var completedTask = await Task.WhenAny(renderingTask, drainTask);
                     if (completedTask == drainTask)
                     {
                         await drainTask;
@@ -2009,7 +2009,7 @@ public sealed class ConversationalShell
 
             activityCompletion?.TrySetResult();
             renderedRunCompletion?.TrySetResult();
-            Task finalActivityDisplayTask = activityDisplayTask ?? Task.CompletedTask;
+            var finalActivityDisplayTask = activityDisplayTask ?? Task.CompletedTask;
             dispatcher.Complete();
             decisions.Writer.TryComplete();
             try
@@ -2024,7 +2024,7 @@ public sealed class ConversationalShell
             {
                 try
                 {
-                    TuiOutputItem? finalAnswer = FlushFinalAnswerForShutdown(modelAnswerCollector);
+                    var finalAnswer = FlushFinalAnswerForShutdown(modelAnswerCollector);
                     if (finalAnswer is not null)
                     {
                         await _surface.WriteOutputAsync([finalAnswer], CancellationToken.None);
@@ -2313,8 +2313,8 @@ public sealed class ConversationalShell
             return false;
         }
 
-        ActiveModelSelectionSnapshot current = await _presenter.GetActiveModelSelectionAsync(cancellationToken);
-        IReadOnlyList<SelectableModelEntry> models = await _presenter.ListActiveModelsAsync(cancellationToken);
+        var current = await _presenter.GetActiveModelSelectionAsync(cancellationToken);
+        var models = await _presenter.ListActiveModelsAsync(cancellationToken);
         string[] choices = [.. models.Select(entry =>
         {
             var marker = entry.Profile.Id == current.Profile.Id ? "*" : " ";
@@ -2339,10 +2339,10 @@ public sealed class ConversationalShell
             return false;
         }
 
-        ActiveModelSelectionResult result = await _presenter.SelectActiveModelAsync(
+        var result = await _presenter.SelectActiveModelAsync(
             models[selected].Profile.Id,
             cancellationToken);
-        ActiveModelSelectionSnapshot selection = result.Selection;
+        var selection = result.Selection;
         await _surface.WriteAsync(
             $"Model set to {selection.Profile.Name} ({selection.ProviderId}); "
             + $"context {selection.Profile.ContextWindow:N0}; reasoning "
@@ -2386,7 +2386,7 @@ public sealed class ConversationalShell
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            IReadOnlyList<ToolStateEntry> states = _toolStateManager.GetAllStates();
+            var states = _toolStateManager.GetAllStates();
             string[] choices =
             [
                 .. states.Select(FormatToolChoice),
@@ -2401,7 +2401,7 @@ public sealed class ConversationalShell
                 return;
             }
 
-            ToolStateEntry state = states[selected];
+            var state = states[selected];
             if (state.Essential)
             {
                 await _surface.WriteAsync(
@@ -2540,7 +2540,7 @@ public sealed class ConversationalShell
     {
         for (var index = activityOrder.Count - 1; index >= 0; index--)
         {
-            SemanticActivityKey candidate = activityOrder[index];
+            var candidate = activityOrder[index];
             if (activitiesByKey.TryGetValue(candidate, out activity))
             {
                 key = candidate;
@@ -2560,7 +2560,7 @@ public sealed class ConversationalShell
     {
         for (var index = activityOrder.Count - 1; index >= 0; index--)
         {
-            SemanticActivityKey key = activityOrder[index];
+            var key = activityOrder[index];
             if (key.RunId == runId)
             {
                 activityOrder.RemoveAt(index);
@@ -2701,7 +2701,7 @@ public sealed class ConversationalShell
             or McpManagementAction.Revoke
             or McpManagementAction.SwitchAccount)
         {
-            McpManagementResult profileResult = await controller.ManageMcpAsync(
+            var profileResult = await controller.ManageMcpAsync(
                 new McpManagementRequest
                 {
                     Action = McpManagementAction.Inspect,
@@ -2786,7 +2786,7 @@ public sealed class ConversationalShell
             $"MCP: {action.Value} {profileId ?? "all"}\n",
             TuiTextRole.Status,
             cancellationToken);
-        McpManagementResult result = await controller.ManageMcpAsync(
+        var result = await controller.ManageMcpAsync(
             new McpManagementRequest
             {
                 Action = action.Value,
@@ -2831,7 +2831,7 @@ public sealed class ConversationalShell
         TuiController controller,
         CancellationToken cancellationToken)
     {
-        McpManagementResult result = await controller.ManageMcpAsync(
+        var result = await controller.ManageMcpAsync(
             new McpManagementRequest { Action = McpManagementAction.List },
             cancellationToken);
         if (result.Profiles.Count == 0)
@@ -2855,7 +2855,7 @@ public sealed class ConversationalShell
         bool resourcesOnly,
         CancellationToken cancellationToken)
     {
-        McpManagementResult result = await controller.ManageMcpAsync(
+        var result = await controller.ManageMcpAsync(
             new McpManagementRequest
             {
                 Action = McpManagementAction.ListCapabilities,
@@ -2962,7 +2962,7 @@ public sealed class ConversationalShell
             output.AppendLine($"Operation duration: {duration} ms");
         }
 
-        foreach (McpProfileSummary profile in result.Profiles)
+        foreach (var profile in result.Profiles)
         {
             output.AppendLine(
                 $"[{profile.State}] {profile.DisplayName} ({profile.ProfileId}) — {profile.Transport}; "
@@ -2972,13 +2972,13 @@ public sealed class ConversationalShell
 
         if (result.Profile is { } detail)
         {
-            McpProfileSummary profile = detail.Summary;
+            var profile = detail.Summary;
             output.AppendLine($"Profile: {profile.DisplayName} ({profile.ProfileId})");
             output.AppendLine($"State: {profile.State}; eligible: {profile.Eligible}; source: {profile.ConfigurationSource}");
             output.AppendLine($"Endpoint: {profile.EndpointIdentity}; auth: {profile.AuthenticationState}");
             output.AppendLine(
                 $"Timeouts ms: startup {detail.StartupTimeoutMilliseconds}; request {detail.RequestTimeoutMilliseconds}; drain {detail.DrainKillTimeoutMilliseconds}");
-            foreach (McpLatencySummary latency in detail.Latencies)
+            foreach (var latency in detail.Latencies)
             {
                 output.AppendLine(
                     $"Latency {latency.Measurement}: count {latency.SampleCount}; min {latency.MinimumMilliseconds?.ToString() ?? "--"}; "
@@ -2986,7 +2986,7 @@ public sealed class ConversationalShell
             }
         }
 
-        foreach (McpCapabilityDescriptor capability in result.Capabilities)
+        foreach (var capability in result.Capabilities)
         {
             output.AppendLine(
                 $"[{capability.Kind}] {capability.Name} ({capability.CapabilityId}) — digest {capability.Digest}"
@@ -3001,7 +3001,7 @@ public sealed class ConversationalShell
                 output.AppendLine($"  Resource: {capability.ResourceIdentity}; MIME: {capability.MimeType ?? "unknown"}");
             }
 
-            foreach (McpPromptArgumentDescriptor argument in capability.Arguments)
+            foreach (var argument in capability.Arguments)
             {
                 output.AppendLine($"  Argument {argument.Name}{(argument.Required ? " (required)" : string.Empty)}: {argument.Description}");
             }
@@ -3012,7 +3012,7 @@ public sealed class ConversationalShell
             }
         }
 
-        foreach (McpExternalContent item in result.Content)
+        foreach (var item in result.Content)
         {
             output.AppendLine($"[UNTRUSTED MCP {item.Label}; {item.MimeType ?? "text"}{(item.IsTruncated ? "; truncated" : string.Empty)}]");
             output.AppendLine(item.Text);
@@ -3023,7 +3023,7 @@ public sealed class ConversationalShell
             output.AppendLine("[UNTRUSTED MCP content truncated by host bounds]");
         }
 
-        foreach (McpDiagnosticCheck check in result.Diagnostics)
+        foreach (var check in result.Diagnostics)
         {
             output.AppendLine(
                 $"[{(check.Succeeded ? "pass" : "fail")}] {check.Name}: {check.Detail}"
@@ -3047,7 +3047,7 @@ public sealed class ConversationalShell
         {
             if (action == "list")
             {
-                IReadOnlyList<HookHandlerDescriptor> handlers = await controller.ListHooksAsync(cancellationToken);
+                var handlers = await controller.ListHooksAsync(cancellationToken);
                 var output = handlers.Count == 0
                     ? "No lifecycle hooks are configured.\n"
                     : string.Join(
@@ -3063,7 +3063,7 @@ public sealed class ConversationalShell
             if (action == "audit")
             {
                 HookHandlerId? handlerId = string.IsNullOrWhiteSpace(id) ? null : new HookHandlerId(id);
-                IReadOnlyList<HookAuditRecord> records = await controller.QueryHookAuditAsync(
+                var records = await controller.QueryHookAuditAsync(
                     repositoryIdentity,
                     handlerId,
                     cancellationToken: cancellationToken);
@@ -3089,7 +3089,7 @@ public sealed class ConversationalShell
             }
 
             var selectedId = new HookHandlerId(id);
-            HookHandlerDescriptor? descriptor = await controller.InspectHookAsync(selectedId, cancellationToken);
+            var descriptor = await controller.InspectHookAsync(selectedId, cancellationToken);
             if (descriptor is null)
             {
                 await _surface.WriteAsync($"Hook '{id}' was not found.\n", TuiTextRole.Error, cancellationToken);
@@ -3117,7 +3117,7 @@ public sealed class ConversationalShell
                         cancellationToken);
                     break;
                 case "test":
-                    HookBoundaryDecision result = await controller.TestHookAsync(
+                    var result = await controller.TestHookAsync(
                         selectedId,
                         repositoryIdentity,
                         cancellationToken);
@@ -3190,7 +3190,7 @@ public sealed class ConversationalShell
         var argument = commandText.Length == 8 ? "mode" : commandText[8..].Trim();
         if (string.Equals(argument, "mode", StringComparison.OrdinalIgnoreCase))
         {
-            ConversationStateSnapshot state = await _presenter.GetConversationStateAsync(
+            var state = await _presenter.GetConversationStateAsync(
                 sessionId,
                 cancellationToken);
             await _surface.WriteAsync(
@@ -3203,7 +3203,7 @@ public sealed class ConversationalShell
         if (argument.StartsWith("mode ", StringComparison.OrdinalIgnoreCase))
         {
             var value = argument[5..].Trim();
-            if (!TryParseConversationMode(value, out ConversationContextMode mode))
+            if (!TryParseConversationMode(value, out var mode))
             {
                 await _surface.WriteAsync(
                     "Usage: /context mode [conversation-aware|governed-memory|stateless]\n",
@@ -3233,7 +3233,7 @@ public sealed class ConversationalShell
                 return;
             }
 
-            ContextInspectionProjection? inspection = await _presenter.GetContextInspectionAsync(
+            var inspection = await _presenter.GetContextInspectionAsync(
                 runId,
                 cancellationToken);
             if (inspection is null)
@@ -3303,7 +3303,7 @@ public sealed class ConversationalShell
             switch (operation.ToLowerInvariant())
             {
                 case "list":
-                    IReadOnlyList<SkillCatalogCandidate> candidates = await controller.ListSkillsAsync(
+                    var candidates = await controller.ListSkillsAsync(
                         new SkillCatalogQuery
                         {
                             Text = string.IsNullOrWhiteSpace(remainder) ? null : remainder,
@@ -3327,7 +3327,7 @@ public sealed class ConversationalShell
                     return;
 
                 case "refresh":
-                    SkillCatalogSnapshot refreshed = await controller.RefreshSkillsAsync(cancellationToken);
+                    var refreshed = await controller.RefreshSkillsAsync(cancellationToken);
                     var claudeCount = refreshed.Candidates.Count(candidate =>
                         candidate.Provenance.Source.StartsWith("claude:", StringComparison.Ordinal));
                     await _surface.WriteAsync(
@@ -3343,7 +3343,7 @@ public sealed class ConversationalShell
                     var inspectSelector = RequireSkillArgument(remainder);
                     if (inspectSelector.StartsWith("claude:", StringComparison.OrdinalIgnoreCase))
                     {
-                        ClaudeSkillCandidate claude = ResolveClaudeSkill(inspectSelector);
+                        var claude = ResolveClaudeSkill(inspectSelector);
                         await _surface.WriteAsync(
                             FormatClaudeSkillCandidate(claude),
                             TuiTextRole.Status,
@@ -3351,10 +3351,10 @@ public sealed class ConversationalShell
                         return;
                     }
 
-                    SkillCatalogCandidate inspected = await controller.GetSkillAsync(
+                    var inspected = await controller.GetSkillAsync(
                         inspectSelector,
                         cancellationToken);
-                    SkillCompatibilityResult compatibility = await controller.GetSkillCompatibilityAsync(
+                    var compatibility = await controller.GetSkillCompatibilityAsync(
                         inspectSelector,
                         CreateSkillCompatibilityRequest(sessionId, trust, inspectSelector),
                         cancellationToken);
@@ -3366,7 +3366,7 @@ public sealed class ConversationalShell
 
                 case "install":
                     (var archivePath, var source) = ParseSkillInstall(remainder);
-                    SkillCatalogCandidate installed = await controller.InstallSkillAsync(
+                    var installed = await controller.InstallSkillAsync(
                         archivePath,
                         source,
                         cancellationToken);
@@ -3387,10 +3387,10 @@ public sealed class ConversationalShell
                     return;
 
                 case "verify":
-                    SkillCatalogCandidate verified = await controller.VerifySkillAsync(
+                    var verified = await controller.VerifySkillAsync(
                         RequireSkillArgument(remainder),
                         cancellationToken);
-                    TuiTextRole verificationRole = verified.Verification == SkillVerificationState.Invalid
+                    var verificationRole = verified.Verification == SkillVerificationState.Invalid
                         ? TuiTextRole.Warning
                         : TuiTextRole.Status;
                     await _surface.WriteAsync(
@@ -3401,7 +3401,7 @@ public sealed class ConversationalShell
 
                 case "enable":
                 case "disable":
-                    SkillCatalogCandidate changed = await controller.SetSkillEnabledAsync(
+                    var changed = await controller.SetSkillEnabledAsync(
                         RequireSkillArgument(remainder),
                         operation.Equals("enable", StringComparison.OrdinalIgnoreCase),
                         cancellationToken);
@@ -3412,7 +3412,7 @@ public sealed class ConversationalShell
                     return;
 
                 case "pin":
-                    SkillPackageIdentity pinned = await controller.PinSkillAsync(
+                    var pinned = await controller.PinSkillAsync(
                         RequireSkillArgument(remainder),
                         cancellationToken);
                     await _surface.WriteAsync(
@@ -3424,7 +3424,7 @@ public sealed class ConversationalShell
 
                 case "use":
                     (var selector, var input) = ParseSkillUse(remainder);
-                    SkillInvocationResult invoked = await controller.InvokeSkillAsync(
+                    var invoked = await controller.InvokeSkillAsync(
                         new SkillInvocationRequest
                         {
                             InvocationId = SkillInvocationId.New(),
@@ -3437,7 +3437,7 @@ public sealed class ConversationalShell
                             HostBudget = new SkillBudget(),
                         },
                         cancellationToken);
-                    TuiTextRole invocationRole = invoked.Status == SkillInvocationStatus.Failed
+                    var invocationRole = invoked.Status == SkillInvocationStatus.Failed
                         ? TuiTextRole.Warning
                         : TuiTextRole.Status;
                     await _surface.WriteAsync(
@@ -3447,8 +3447,8 @@ public sealed class ConversationalShell
                     return;
 
                 case "continue":
-                    (SkillInvocationId continueId, var hostResult) = ParseSkillContinuation(remainder);
-                    SkillInvocationResult continued = await controller.ContinueSkillAsync(
+                    (var continueId, var hostResult) = ParseSkillContinuation(remainder);
+                    var continued = await controller.ContinueSkillAsync(
                         continueId,
                         hostResult,
                         cancellationToken);
@@ -3459,12 +3459,12 @@ public sealed class ConversationalShell
                     return;
 
                 case "resume":
-                    if (!Guid.TryParse(remainder, out Guid resumeId))
+                    if (!Guid.TryParse(remainder, out var resumeId))
                     {
                         throw new ArgumentException("Skill resume requires an invocation GUID.");
                     }
 
-                    SkillInvocationResult resumed = await controller.ResumeSkillAsync(
+                    var resumed = await controller.ResumeSkillAsync(
                         new SkillInvocationId(resumeId),
                         cancellationToken);
                     await _surface.WriteAsync(
@@ -3474,12 +3474,12 @@ public sealed class ConversationalShell
                     return;
 
                 case "status":
-                    if (!Guid.TryParse(remainder, out Guid statusId))
+                    if (!Guid.TryParse(remainder, out var statusId))
                     {
                         throw new ArgumentException("Skill status requires an invocation GUID.");
                     }
 
-                    SkillWorkflowCheckpoint? checkpoint = await controller.GetSkillInvocationAsync(
+                    var checkpoint = await controller.GetSkillInvocationAsync(
                         new SkillInvocationId(statusId),
                         cancellationToken);
                     await _surface.WriteAsync(
@@ -3493,7 +3493,7 @@ public sealed class ConversationalShell
                     return;
 
                 case "cancel":
-                    if (!Guid.TryParse(remainder, out Guid cancelId))
+                    if (!Guid.TryParse(remainder, out var cancelId))
                     {
                         throw new ArgumentException("Skill cancellation requires an invocation GUID.");
                     }
@@ -3607,7 +3607,7 @@ public sealed class ConversationalShell
         var separator = arguments.IndexOf(' ');
         if (separator < 1
             || separator == arguments.Length - 1
-            || !Guid.TryParse(arguments[..separator], out Guid invocationId))
+            || !Guid.TryParse(arguments[..separator], out var invocationId))
         {
             throw new ArgumentException(
                 "Skill continuation requires an invocation GUID and host-result JSON.");
@@ -3676,7 +3676,7 @@ public sealed class ConversationalShell
     {
         var arguments = commandText[7..]
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (arguments.Length == 0 || !Guid.TryParse(arguments[0], out Guid delegationValue))
+        if (arguments.Length == 0 || !Guid.TryParse(arguments[0], out var delegationValue))
         {
             await _surface.WriteAsync(
                 "Usage: /agents <delegation-id> [cancel|cancel-child <assignment-id>]\n",
@@ -3698,7 +3698,7 @@ public sealed class ConversationalShell
 
         if (arguments.Length == 3
             && string.Equals(arguments[1], "cancel-child", StringComparison.OrdinalIgnoreCase)
-            && Guid.TryParse(arguments[2], out Guid assignmentValue))
+            && Guid.TryParse(arguments[2], out var assignmentValue))
         {
             var cancelled = await controller.CancelAgentAssignmentAsync(
                 delegationId,
@@ -3711,7 +3711,7 @@ public sealed class ConversationalShell
             return;
         }
 
-        DelegationCheckpoint? checkpoint = await controller.GetDelegationAsync(
+        var checkpoint = await controller.GetDelegationAsync(
             delegationId,
             cancellationToken);
         if (checkpoint is null)
@@ -3808,7 +3808,7 @@ public sealed class ConversationalShell
         }
         else
         {
-            MutationApprovalPolicy[] policies = Enum.GetValues<MutationApprovalPolicy>();
+            var policies = Enum.GetValues<MutationApprovalPolicy>();
             string[] choices =
             [
                 .. policies.Select(policy => FormatPolicyChoice(
@@ -3832,7 +3832,7 @@ public sealed class ConversationalShell
             selectedPolicy = policies[selected];
         }
 
-        MutationApprovalPolicy policy = selectedPolicy.Value;
+        var policy = selectedPolicy.Value;
         await _mutationApprovalPolicy.SetPolicyAsync(policy, cancellationToken);
         var warning = policy is MutationApprovalPolicy.TrustPlan
             or MutationApprovalPolicy.TrustSession
@@ -3879,7 +3879,7 @@ public sealed class ConversationalShell
         var argument = commandText.Length == 12 ? string.Empty : commandText[12..].Trim();
         if (string.Equals(argument, "current", StringComparison.OrdinalIgnoreCase))
         {
-            PlanApprovalPolicy currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
+            var currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
             await _surface.WriteAsync(
                 $"Current plan policy: {currentPolicy}.{Environment.NewLine}",
                 TuiTextRole.Status,
@@ -3917,8 +3917,8 @@ public sealed class ConversationalShell
         }
         else
         {
-            PlanApprovalPolicy currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
-            PlanApprovalPolicy[] policies = Enum.GetValues<PlanApprovalPolicy>();
+            var currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
+            var policies = Enum.GetValues<PlanApprovalPolicy>();
             string[] choices =
             [
                 .. policies.Select(policy => FormatPlanPolicyChoice(
@@ -3939,7 +3939,7 @@ public sealed class ConversationalShell
             selectedPolicy = policies[selected];
         }
 
-        PlanApprovalPolicy policy = selectedPolicy.Value;
+        var policy = selectedPolicy.Value;
         await controller.SetPlanApprovalPolicyAsync(policy, cancellationToken);
         var warning = policy is PlanApprovalPolicy.TrustSession
             or PlanApprovalPolicy.AlwaysTrustRepo
@@ -3977,7 +3977,7 @@ public sealed class ConversationalShell
         var argument = commandText.Length == 6 ? string.Empty : commandText[6..].Trim();
         if (string.Equals(argument, "current", StringComparison.OrdinalIgnoreCase))
         {
-            ConfiguredTheme current = _themePreferences.ActiveTheme;
+            var current = _themePreferences.ActiveTheme;
             await _surface.WriteAsync(
                 $"Current theme: {current.Theme.Id} ({current.Name}).{Environment.NewLine}",
                 TuiTextRole.Status,
@@ -3988,8 +3988,8 @@ public sealed class ConversationalShell
         var selectedId = argument;
         if (string.IsNullOrWhiteSpace(selectedId))
         {
-            ConfiguredTheme active = _themePreferences.ActiveTheme;
-            IReadOnlyList<ConfiguredTheme> themes = _themePreferences.Catalog.Themes;
+            var active = _themePreferences.ActiveTheme;
+            var themes = _themePreferences.Catalog.Themes;
             string[] choices =
             [
                 .. themes.Select(theme => $"{theme.Name} ({theme.Theme.Id}){(ReferenceEquals(theme, active) ? " [active]" : string.Empty)}"),
@@ -4011,7 +4011,7 @@ public sealed class ConversationalShell
         var safeId = selectedId.Length <= 40
             && selectedId.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
         if (!safeId
-            || !_themePreferences.Catalog.TryGet(selectedId, out ConfiguredTheme? selectedTheme)
+            || !_themePreferences.Catalog.TryGet(selectedId, out var selectedTheme)
             || selectedTheme is null)
         {
             var displayId = safeId ? $": {selectedId}" : " id";
@@ -4142,7 +4142,7 @@ public sealed class ConversationalShell
             return;
         }
 
-        IReadOnlyList<ExtensionSummary> summaries = await _extensionManager.DiscoverAsync(cancellationToken);
+        var summaries = await _extensionManager.DiscoverAsync(cancellationToken);
         if (summaries.Count == 0)
         {
             await _surface.WriteAsync(
@@ -4170,7 +4170,7 @@ public sealed class ConversationalShell
                 return;
             }
 
-            ExtensionSummary summary = summaries[selected];
+            var summary = summaries[selected];
             await ChooseExtensionActionAsync(controller, summary, cancellationToken);
         }
     }
@@ -4207,7 +4207,7 @@ public sealed class ConversationalShell
             }
             else
             {
-                ExtensionSummary? loaded = await _extensionManager!.LoadAsync(summary.ExtensionId, sessionId, cancellationToken);
+                var loaded = await _extensionManager!.LoadAsync(summary.ExtensionId, sessionId, cancellationToken);
                 await _surface.WriteAsync(
                     loaded is not null
                         ? $"{summary.Name} loaded ({loaded!.State}, {loaded.ToolCount} tool(s)).\n"
@@ -4242,7 +4242,7 @@ public sealed class ConversationalShell
     {
         try
         {
-            RepositoryInitializationStatus initialization =
+            var initialization =
                 await controller.GetRepositoryInitializationStatusAsync(
                     repositoryPath,
                     cancellationToken);
@@ -4259,7 +4259,7 @@ public sealed class ConversationalShell
                     cancellationToken);
                 if (initialize == 0)
                 {
-                    RepositoryInitializationResult initialized =
+                    var initialized =
                         await controller.InitializeRepositoryAsync(repositoryPath, cancellationToken);
                     await _surface.WriteAsync(
                         initialized.Created
@@ -4270,7 +4270,7 @@ public sealed class ConversationalShell
                 }
             }
 
-            RepositoryOpenWorkflowResult result = await controller.OpenRepositoryWorkflowAsync(
+            var result = await controller.OpenRepositoryWorkflowAsync(
                 repositoryPath,
                 ReadTrustAsync,
                 (candidates, token) => ReadSolutionAsync(repositoryPath, candidates, token),
@@ -4329,7 +4329,7 @@ public sealed class ConversationalShell
                 "Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n",
                 TuiTextRole.Status,
                 cancellationToken);
-            ConsoleInput input = await _surface.ReadAsync(cancellationToken);
+            var input = await _surface.ReadAsync(cancellationToken);
             switch (input.IsSubmitted ? input.Text.Trim() : "4")
             {
                 case "1":
@@ -4342,7 +4342,7 @@ public sealed class ConversationalShell
                         "Rejection reason:\n",
                         TuiTextRole.Status,
                         cancellationToken);
-                    ConsoleInput reason = await _surface.ReadAsync(cancellationToken);
+                    var reason = await _surface.ReadAsync(cancellationToken);
                     _ = reason.IsSubmitted && !string.IsNullOrWhiteSpace(reason.Text)
                         ? await controller.RejectActivePlanAsync(reason.Text, cancellationToken)
                         : await controller.RejectActivePlanAsync(
@@ -4354,7 +4354,7 @@ public sealed class ConversationalShell
                         "Revision instructions:\n",
                         TuiTextRole.Status,
                         cancellationToken);
-                    ConsoleInput revision = await _surface.ReadAsync(cancellationToken);
+                    var revision = await _surface.ReadAsync(cancellationToken);
                     if (revision.IsSubmitted && !string.IsNullOrWhiteSpace(revision.Text))
                     {
                         _ = await controller.ReviseActivePlanAsync(
@@ -4371,11 +4371,11 @@ public sealed class ConversationalShell
             }
         }
 
-        MutationSetId mutationSetId = decision.MutationSetId
+        var mutationSetId = decision.MutationSetId
             ?? throw new InvalidOperationException("The mutation review has no mutation set.");
-        ApprovalId approvalId = decision.ApprovalId
+        var approvalId = decision.ApprovalId
             ?? throw new InvalidOperationException("The mutation review has no approval id.");
-        StagedMutationSet staged = await controller.LoadMutationReviewAsync(
+        var staged = await controller.LoadMutationReviewAsync(
             mutationSetId,
             cancellationToken);
         if (staged.ApprovalId != approvalId
@@ -4395,9 +4395,9 @@ public sealed class ConversationalShell
                     ApprovalId = approvalId,
                 },
                 cancellationToken);
-            RunId validationRunId = controller.BackgroundValidationRunId
+            var validationRunId = controller.BackgroundValidationRunId
                 ?? throw new InvalidOperationException("The applied mutation has no validation run.");
-            ExecutionContinuation? continuation = await StartPostApplyValidationAsync(
+            var continuation = await StartPostApplyValidationAsync(
                 controller,
                 validationRunId,
                 cancellationToken);
@@ -4410,7 +4410,7 @@ public sealed class ConversationalShell
             "Mutation review: 1 apply approved set, 2 discard\n",
             TuiTextRole.Status,
             cancellationToken);
-        ConsoleInput mutationInput = await _surface.ReadAsync(cancellationToken);
+        var mutationInput = await _surface.ReadAsync(cancellationToken);
         if (mutationInput.IsSubmitted && mutationInput.Text.Trim() == "1")
         {
             _ = await controller.CommitMutationSetAsync(
@@ -4421,9 +4421,9 @@ public sealed class ConversationalShell
                     ApprovalId = approvalId,
                 },
                 cancellationToken);
-            RunId validationRunId = controller.BackgroundValidationRunId
+            var validationRunId = controller.BackgroundValidationRunId
                 ?? throw new InvalidOperationException("The applied mutation has no validation run.");
-            ExecutionContinuation? continuation = await StartPostApplyValidationAsync(
+            var continuation = await StartPostApplyValidationAsync(
                 controller,
                 validationRunId,
                 cancellationToken);
@@ -4461,14 +4461,14 @@ public sealed class ConversationalShell
     {
         try
         {
-            ExecutionContinuation continuation = await controller.ResumeAppliedMutationValidationAsync(
+            var continuation = await controller.ResumeAppliedMutationValidationAsync(
                 runId,
                 cancellationToken);
             var suffix = _displayOptions.ShowOperationDurations
                 && OperationDurationFormatter.FormatElapsed(_timeProvider, startedTimestamp) is { } elapsed
                     ? $" ({elapsed})"
                     : string.Empty;
-            (var message, TuiTextRole role) = FormatPostApplyValidationResult(
+            (var message, var role) = FormatPostApplyValidationResult(
                 continuation.Phase,
                 suffix);
             await _surface.WriteAsync(message, role, CancellationToken.None);
@@ -4507,13 +4507,13 @@ public sealed class ConversationalShell
             return;
         }
 
-        ActiveModelSelectionSnapshot? activeSelection = !_activeModelSelectionAvailable
+        var activeSelection = !_activeModelSelectionAvailable
             ? null
             : await _presenter.GetActiveModelSelectionAsync(cancellationToken);
-        ModelProfileId? activeProfileId = activeSelection?.Profile.Id
+        var activeProfileId = activeSelection?.Profile.Id
             ?? _sessionPreferences.CurrentProfileId
             ?? _startupProfileId;
-        ModelProfile? activeProfile = activeSelection?.Profile
+        var activeProfile = activeSelection?.Profile
             ?? (activeProfileId is null ? null : _modelCatalog.Get(activeProfileId.Value));
 
         if (activeProfile is null || activeProfileId is null)
@@ -4528,7 +4528,7 @@ public sealed class ConversationalShell
         var levels = activeProfile.SupportedReasoningLevels
             .Select(level => level.ToString().ToLowerInvariant());
         var supportedList = string.Join(", ", levels);
-        EffectiveReasoningCapability capability = activeProfile.ReasoningCapability;
+        var capability = activeProfile.ReasoningCapability;
 
         if (commandText.Length == 10)
         {
@@ -4561,7 +4561,7 @@ public sealed class ConversationalShell
         }
 
         var arg = commandText[10..].Trim();
-        if (!Enum.TryParse<ReasoningLevel>(arg, ignoreCase: true, out ReasoningLevel level))
+        if (!Enum.TryParse<ReasoningLevel>(arg, ignoreCase: true, out var level))
         {
             await _surface.WriteAsync(
                 $"Unknown reasoning level '{arg}'. Supported: {supportedList}.\n",
@@ -4580,7 +4580,7 @@ public sealed class ConversationalShell
             return;
         }
 
-        ActiveModelSelectionResult? result = !_activeModelSelectionAvailable
+        var result = !_activeModelSelectionAvailable
             ? null
             : await _presenter.SetActiveReasoningAsync(level, cancellationToken);
         if (result is null)

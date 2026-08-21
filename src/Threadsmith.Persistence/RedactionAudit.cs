@@ -90,12 +90,12 @@ public sealed class RedactionAudit
 
         var scannedEvents = 0;
         var findings = 0;
-        IReadOnlyList<SessionId> sessions = await _eventStore.ListSessionsAsync(cancellationToken);
-        foreach (SessionId session in sessions)
+        var sessions = await _eventStore.ListSessionsAsync(cancellationToken);
+        foreach (var session in sessions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            IReadOnlyList<PersistedEventRow> rows = await _eventStore.ReadRowsAsync(session, cancellationToken);
-            foreach (PersistedEventRow row in rows.Take(_options.MaxEventsPerSession))
+            var rows = await _eventStore.ReadRowsAsync(session, cancellationToken);
+            foreach (var row in rows.Take(_options.MaxEventsPerSession))
             {
                 scannedEvents++;
                 if (ContainsUnredactedSecret(row.PayloadJson))
@@ -111,8 +111,8 @@ public sealed class RedactionAudit
 
         var scannedArtifacts = 0;
         var repaired = 0;
-        IReadOnlyList<ArtifactMetadata> artifacts = await _artifactStore.ListAsync(sessionId: null, cancellationToken);
-        foreach (ArtifactMetadata artifact in artifacts)
+        var artifacts = await _artifactStore.ListAsync(sessionId: null, cancellationToken);
+        foreach (var artifact in artifacts)
         {
             cancellationToken.ThrowIfCancellationRequested();
             scannedArtifacts++;

@@ -200,9 +200,9 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Advanced semantic inspection requires an opened workspace.");
-        TOutput result = await QueryAsync(workspaceId, input, cancellationToken);
+        var result = await QueryAsync(workspaceId, input, cancellationToken);
         result = Confine(result, context.Invocation);
         return new(
             result,

@@ -95,7 +95,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCancellation.CancelAfter(_profile.Timeout);
         HttpResponseMessage? response = null;
-        for (int attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
+        for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
         {
             using var message = new HttpRequestMessage(HttpMethod.Post, _profile.Endpoint);
             if (!string.IsNullOrWhiteSpace(_apiKey))
@@ -103,12 +103,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
             }
 
-            foreach ((string name, string value) in _headers)
+            foreach ((var name, var value) in _headers)
             {
                 message.Headers.TryAddWithoutValidation(name, value);
             }
 
-            bool hasStrictTools = false;
+            var hasStrictTools = false;
             var tools = new List<OpenAiTool>(canonicalTools.Count);
             foreach (var definition in canonicalTools)
             {
@@ -135,7 +135,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             $"Tool '{definition.Name}' argument schema must be a JSON object.");
                     }
 
-                    string? strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                    var strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
                         definition.Name,
                         definition.ArgumentsJsonSchema);
                     using var providerSchema = strictSchema is null
@@ -213,7 +213,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var statusCode = response.StatusCode;
             response.Dispose();
             response = null;
-            bool isTransient = statusCode is HttpStatusCode.TooManyRequests
+            var isTransient = statusCode is HttpStatusCode.TooManyRequests
                 or HttpStatusCode.ServiceUnavailable
                 || (int)statusCode == 529;
             if (!isTransient || attempt == _profile.RetryPolicy.MaxAttempts)
@@ -253,9 +253,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         using (var reader = new StreamReader(stream, Encoding.UTF8))
         {
             var toolCalls = new Dictionary<int, ToolCallAccumulator>();
-            int completionCharacters = 0;
-            int streamedOutputCharacters = 0;
-            bool usageReported = false;
+            var completionCharacters = 0;
+            var streamedOutputCharacters = 0;
+            var usageReported = false;
             while (true)
             {
                 string? line;
@@ -278,7 +278,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     continue;
                 }
 
-                string payload = line.AsSpan(5).Trim().ToString();
+                var payload = line.AsSpan(5).Trim().ToString();
                 if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
                 {
                     break;
@@ -306,10 +306,10 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     }
 
                     usageReported = true;
-                    long conservativeInputTokens = Math.Max(
+                    var conservativeInputTokens = Math.Max(
                         reportedUsage.PromptTokens,
                         request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length));
-                    long conservativeOutputTokens = Math.Max(
+                    var conservativeOutputTokens = Math.Max(
                         reportedUsage.CompletionTokens,
                         EstimateTokenCount(completionCharacters));
                     yield return new ModelChunk
@@ -326,7 +326,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                 foreach (var choice in envelope.Choices)
                 {
-                    string? reasoning = ResolveReasoningDelta(choice.Delta);
+                    var reasoning = ResolveReasoningDelta(choice.Delta);
                     if (reasoning is { Length: > 0 })
                     {
                         AddCompletionCharacters(
@@ -408,9 +408,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
             if (!usageReported)
             {
-                long inputTokens = request.WireEstimate?.WireInputTokens
+                var inputTokens = request.WireEstimate?.WireInputTokens
                     ?? EstimateTokenCount(request.Input.Length);
-                long outputTokens = EstimateTokenCount(completionCharacters);
+                var outputTokens = EstimateTokenCount(completionCharacters);
                 yield return new ModelChunk
                 {
                     Usage = new ModelUsage(
@@ -433,7 +433,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         var messages = new List<OpenAiMessage>(request.Messages.Count);
         foreach (var message in request.Messages)
         {
-            string content = string.Concat(message.Content.Select(part => part.Content));
+            var content = string.Concat(message.Content.Select(part => part.Content));
             switch (message.Role)
             {
                 case ModelMessageRole.System:
@@ -503,15 +503,15 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private static ModelCacheUsage CreateCacheUsage(OpenAiUsage usage)
     {
-        long? cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
+        var cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
             ?? usage.CacheReadInputTokens;
-        long? cacheWriteTokens = usage.CacheCreationInputTokens;
+        var cacheWriteTokens = usage.CacheCreationInputTokens;
         if (cacheReadTokens is < 0 || cacheWriteTokens is < 0)
         {
             throw new MalformedModelOutputException("The provider returned negative cache token usage.");
         }
 
-        bool reported = cacheReadTokens is not null || cacheWriteTokens is not null;
+        var reported = cacheReadTokens is not null || cacheWriteTokens is not null;
         return new ModelCacheUsage
         {
             Availability = reported
@@ -567,7 +567,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         if (!_profile.SupportsReasoningLevel(request.ReasoningLevel))
         {
-            string supported = string.Join(", ", _profile.SupportedReasoningLevels);
+            var supported = string.Join(", ", _profile.SupportedReasoningLevels);
             throw new ModelProviderException(
                 $"Reasoning level '{request.ReasoningLevel}' is unsupported by model profile "
                 + $"'{_profile.Name}'. Supported levels: {supported}.");
@@ -586,7 +586,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 body["reasoning_effort"] = compatibility.LevelMap[request.ReasoningLevel];
                 break;
             case OpenAiReasoningControlMode.ChatTemplate:
-                bool enabled = request.ReasoningLevel != ReasoningLevel.None;
+                var enabled = request.ReasoningLevel != ReasoningLevel.None;
                 body["chat_template_kwargs"] = compatibility.ChatTemplateKind switch
                 {
                     OpenAiChatTemplateKind.EnableThinkingWithPreservation => new JsonObject
@@ -658,7 +658,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         var chunks = new List<ModelChunk>();
         foreach (var call in toolCalls.OrderBy(item => item.Key).Select(item => item.Value))
         {
-            string arguments = NormalizeToolArguments(call.Name, call.Arguments, availableTools);
+            var arguments = NormalizeToolArguments(call.Name, call.Arguments, availableTools);
             var output = new ToolRequestModelOutput(call.Name, arguments);
             ModelOutputValidator.Validate(output);
             chunks.Add(new ModelChunk { Output = output });
@@ -680,7 +680,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         try
         {
-            using JsonDocument document = JsonDocument.Parse(arguments);
+            using var document = JsonDocument.Parse(arguments);
             return arguments;
         }
         catch (JsonException)
@@ -702,7 +702,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         try
         {
-            using JsonDocument schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
+            using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
             var root = schema.RootElement;
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("type", out var type)

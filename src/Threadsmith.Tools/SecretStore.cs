@@ -70,7 +70,7 @@ public sealed class LegacySecretStoreResolver : ISecretResolver
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        string? value = await _store.GetAsync(request.Reference.CanonicalName, cancellationToken).ConfigureAwait(false);
+        var value = await _store.GetAsync(request.Reference.CanonicalName, cancellationToken).ConfigureAwait(false);
         return value is null
             ? new SecretResolutionResult
             {

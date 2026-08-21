@@ -30,7 +30,7 @@ public sealed class ParallelAgentTests
             MaximumActiveImplementers = 1,
             ShutdownTimeout = TimeSpan.FromSeconds(2),
         });
-        int processId = Environment.ProcessId;
+        var processId = Environment.ProcessId;
 
         // Act
         var outcomes = await scheduler.RunAsync(plan, runner);
@@ -406,8 +406,8 @@ public sealed class ParallelAgentTests
     public async Task Persistence_Migration4_RoundTripsDelegationCheckpoint()
     {
         // Arrange
-        string path = Path.Combine(Path.GetTempPath(), $"threadsmith-agents-{Guid.NewGuid():N}.db");
-        string connectionString = $"Data Source={path};Pooling=False";
+        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-agents-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={path};Pooling=False";
         try
         {
             await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
@@ -492,7 +492,7 @@ public sealed class ParallelAgentTests
     public async Task WorktreeCoordinator_CreatesFreezesAndRemovesRealDetachedWorktree()
     {
         // Arrange
-        string repository = Path.Combine(Path.GetTempPath(), $"threadsmith-parent-{Guid.NewGuid():N}");
+        var repository = Path.Combine(Path.GetTempPath(), $"threadsmith-parent-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repository);
         try
         {
@@ -500,7 +500,7 @@ public sealed class ParallelAgentTests
             await File.WriteAllTextAsync(Path.Combine(repository, "A.txt"), "baseline\n");
             await RunGitAsync(repository, "add", "A.txt");
             await RunGitAsync(repository, "-c", "user.name=Threadsmith", "-c", "user.email=test@example.invalid", "commit", "-m", "baseline");
-            string revision = (await RunGitAsync(repository, "rev-parse", "HEAD")).Trim();
+            var revision = (await RunGitAsync(repository, "rev-parse", "HEAD")).Trim();
             var assignment = CreateAssignment(AgentRole.Implementer, "A.txt");
             var plan = CreatePlan(assignment) with { ImplementationAuthorized = true };
             var coordinator = new WorkerWorktreeCoordinator(new GitWorktreeManager());
@@ -522,7 +522,7 @@ public sealed class ParallelAgentTests
         {
             if (Directory.Exists(repository))
             {
-                foreach (string file in Directory.EnumerateFiles(repository, "*", SearchOption.AllDirectories))
+                foreach (var file in Directory.EnumerateFiles(repository, "*", SearchOption.AllDirectories))
                 {
                     File.SetAttributes(file, FileAttributes.Normal);
                 }
@@ -591,8 +591,8 @@ public sealed class ParallelAgentTests
 
     private static AgentAssignment CreateAssignment(AgentRole role, string path)
     {
-        bool implementer = role == AgentRole.Implementer;
-        bool reviewer = role is AgentRole.SecurityReviewer
+        var implementer = role == AgentRole.Implementer;
+        var reviewer = role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
             or AgentRole.ArchitectureReviewer;
@@ -712,14 +712,14 @@ public sealed class ParallelAgentTests
                 CreateNoWindow = true,
             },
         };
-        foreach (string argument in arguments)
+        foreach (var argument in arguments)
         {
             process.StartInfo.ArgumentList.Add(argument);
         }
 
         process.Start();
-        string output = await process.StandardOutput.ReadToEndAsync();
-        string error = await process.StandardError.ReadToEndAsync();
+        var output = await process.StandardOutput.ReadToEndAsync();
+        var error = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         Assert.True(process.ExitCode == 0, error);
         return output;
@@ -763,7 +763,7 @@ public sealed class ParallelAgentTests
             AgentAssignment assignment,
             CancellationToken cancellationToken = default)
         {
-            int active = Interlocked.Increment(ref _active);
+            var active = Interlocked.Increment(ref _active);
             int observed;
             do
             {

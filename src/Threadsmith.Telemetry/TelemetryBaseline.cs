@@ -80,7 +80,7 @@ public sealed class DomainEventTelemetry
         ArgumentNullException.ThrowIfNull(domainEvent);
         cancellationToken.ThrowIfCancellationRequested();
         var eventName = DomainEventJson.GetDiscriminator(domainEvent);
-        using Activity? activity = ThreadsmithActivity.Source.StartActivity("domain-event");
+        using var activity = ThreadsmithActivity.Source.StartActivity("domain-event");
         activity?.SetTag("threadsmith.event.name", eventName);
         activity?.SetTag("threadsmith.event.schema_version", domainEvent.SchemaVersion);
         activity?.SetTag("threadsmith.session.id", domainEvent.SessionId.Value.ToString("D"));

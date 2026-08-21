@@ -67,7 +67,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
             relativeScope = string.Empty;
         }
 
-        List<string> directories = BuildDirectoryChain(root, scope);
+        var directories = BuildDirectoryChain(root, scope);
         var sources = new List<RepositoryInstructionSource>();
         long totalBytes = 0;
         foreach (var directory in directories)
@@ -133,7 +133,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
             }
         }
 
-        foreach (PromptAppendSegment append in promptAppends.OrderBy(item => item.Position))
+        foreach (var append in promptAppends.OrderBy(item => item.Position))
         {
             sources.Add(new RepositoryInstructionSource(
                 RepositoryInstructionSourceKind.PromptAppend,
@@ -144,7 +144,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
                 sources.Count));
         }
 
-        IEnumerable<string> identityParts = new[]
+        var identityParts = new[]
         {
             "repository-instructions:v1",
             root,
@@ -166,7 +166,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
         lock (_gate)
         {
             _invalidatedRepositories.Remove(root);
-            if (_cache.TryGetValue(cacheKey, out RepositoryInstructionBundle? cached)
+            if (_cache.TryGetValue(cacheKey, out var cached)
                 && string.Equals(cached.Digest, bundle.Digest, StringComparison.Ordinal))
             {
                 return cached;
@@ -241,7 +241,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
                 ?? throw new InvalidOperationException("The repository instruction scope has no directory.");
         }
 
-        StringComparison comparison = PathComparison;
+        var comparison = PathComparison;
         if (!candidate.Equals(root, comparison)
             && !candidate.StartsWith(root + Path.DirectorySeparatorChar, comparison))
         {

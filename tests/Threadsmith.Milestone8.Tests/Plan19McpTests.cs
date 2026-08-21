@@ -91,7 +91,7 @@ public static class McpAdapterTests
         Assert.Equal("mcp_echo", tool.Definition.Id);
 
         // The imported tool must execute through the host-owned pipeline's typed ExecuteAsync path.
-        object input = tool.DeserializeInput("{\"message\":\"hi\"}");
+        var input = tool.DeserializeInput("{\"message\":\"hi\"}");
         var envelope = await tool.ExecuteAsync(
             input,
             new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), NewContext()),
@@ -506,6 +506,6 @@ internal sealed class StaticSecretStore : ISecretStore
     public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(secretReference);
-        return Task.FromResult(Secrets.TryGetValue(secretReference, out string? value) ? value : null);
+        return Task.FromResult(Secrets.TryGetValue(secretReference, out var value) ? value : null);
     }
 }

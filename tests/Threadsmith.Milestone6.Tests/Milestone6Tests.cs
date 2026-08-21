@@ -126,10 +126,10 @@ public sealed class Milestone6Tests
     [Fact]
     public void AffectedProjectCalculator_ChangedLibrary_IncludesDependentProjects()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-affected-{Guid.NewGuid():N}");
-        string corePath = Path.Combine(root, "src", "Core", "Core.csproj");
-        string appPath = Path.Combine(root, "src", "App", "App.csproj");
-        string testPath = Path.Combine(root, "tests", "Core.Tests", "Core.Tests.csproj");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-affected-{Guid.NewGuid():N}");
+        var corePath = Path.Combine(root, "src", "Core", "Core.csproj");
+        var appPath = Path.Combine(root, "src", "App", "App.csproj");
+        var testPath = Path.Combine(root, "tests", "Core.Tests", "Core.Tests.csproj");
         SemanticProjectInfo[] projects =
         [
             new SemanticProjectInfo(
@@ -170,10 +170,10 @@ public sealed class Milestone6Tests
     [Fact]
     public void DiagnosticNormalizer_CompilerLine_ProducesStableDto()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-normalizer-{Guid.NewGuid():N}");
-        string file = Path.Combine(root, "Services", "ExampleService.cs");
-        string project = Path.Combine(root, "Example.Core.csproj");
-        string output = $"{file}(47,23,47,29): error CS1503: Cannot convert argument [{project}]";
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-normalizer-{Guid.NewGuid():N}");
+        var file = Path.Combine(root, "Services", "ExampleService.cs");
+        var project = Path.Combine(root, "Example.Core.csproj");
+        var output = $"{file}(47,23,47,29): error CS1503: Cannot convert argument [{project}]";
 
         var first = DiagnosticNormalizer.Normalize(
             output,
@@ -721,9 +721,9 @@ public sealed class Milestone6Tests
             events,
             new DiagnosticNormalizer(),
             NullLogger<BuildExecutor>.Instance);
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-tests-{Guid.NewGuid():N}");
-        string sourceProject = Path.Combine(root, "src", "Example", "Example.csproj");
-        string testProject = Path.Combine(root, "tests", "Example.Tests", "Example.Tests.csproj");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-tests-{Guid.NewGuid():N}");
+        var sourceProject = Path.Combine(root, "src", "Example", "Example.csproj");
+        var testProject = Path.Combine(root, "tests", "Example.Tests", "Example.Tests.csproj");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(sourceProject) ?? root);
@@ -840,8 +840,8 @@ public sealed class Milestone6Tests
             new DiagnosticNormalizer(),
             NullLogger<BuildExecutor>.Instance);
         var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
-        string directProject = Path.Combine(baseline.RepositoryPath, "Example.csproj");
-        string dependentProject = Path.Combine(baseline.RepositoryPath, "Example.App.csproj");
+        var directProject = Path.Combine(baseline.RepositoryPath, "Example.csproj");
+        var dependentProject = Path.Combine(baseline.RepositoryPath, "Example.App.csproj");
         var request = new BuildValidationRequest
         {
             SessionId = new SessionId(Guid.NewGuid()),
@@ -1005,9 +1005,9 @@ public sealed class Milestone6Tests
                 ],
             };
             var capture = await new BaselineBuildCapture(executor).CaptureAsync(request);
-            string projectPath = baseline.SelectedSolutionPath
+            var projectPath = baseline.SelectedSolutionPath
                 ?? throw new InvalidOperationException("The build fixture must select its project.");
-            string project = await File.ReadAllTextAsync(projectPath);
+            var project = await File.ReadAllTextAsync(projectPath);
             await File.WriteAllTextAsync(
                 projectPath,
                 project.Replace(
@@ -1067,18 +1067,18 @@ public sealed class Milestone6Tests
         try
         {
             using var cancellation = new CancellationTokenSource();
-            Stopwatch stopwatch = Stopwatch.StartNew();
-            string childPidPath = Path.Combine(baseline.RepositoryPath, "child.pid");
-            int childPid = 0;
-            Task cancellationCoordinator = Task.Run(async () =>
+            var stopwatch = Stopwatch.StartNew();
+            var childPidPath = Path.Combine(baseline.RepositoryPath, "child.pid");
+            var childPid = 0;
+            var cancellationCoordinator = Task.Run(async () =>
             {
-                for (int attempt = 0; attempt < 200 && !File.Exists(childPidPath); attempt++)
+                for (var attempt = 0; attempt < 200 && !File.Exists(childPidPath); attempt++)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(25));
                 }
 
                 Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
-                string childPidText = await File.ReadAllTextAsync(childPidPath);
+                var childPidText = await File.ReadAllTextAsync(childPidPath);
                 Assert.True(int.TryParse(
                     childPidText,
                     NumberStyles.None,
@@ -1098,12 +1098,12 @@ public sealed class Milestone6Tests
                 cancellation.Token));
             await cancellationCoordinator;
 
-            bool childExited = false;
-            for (int attempt = 0; attempt < 200 && !childExited; attempt++)
+            var childExited = false;
+            for (var attempt = 0; attempt < 200 && !childExited; attempt++)
             {
                 try
                 {
-                    using Process child = Process.GetProcessById(childPid);
+                    using var child = Process.GetProcessById(childPid);
                     childExited = child.HasExited;
                 }
                 catch (ArgumentException)
@@ -1134,7 +1134,7 @@ public sealed class Milestone6Tests
         {
             Classification = DiagnosticClassification.Introduced,
         };
-        int callbackCount = 0;
+        var callbackCount = 0;
 
         var result = await CorrectionLoop.RunAsync(
             "Changed();",
@@ -1209,7 +1209,7 @@ public sealed class Milestone6Tests
     public void TestDiscoverer_MicrosoftTestingPlatformProject_NormalizesFrameworkAndReferences()
     {
         var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
-        string projectPath = Path.Combine(
+        var projectPath = Path.Combine(
             baseline.RepositoryPath,
             "tests",
             "Threadsmith.Milestone6.Tests",
@@ -1237,9 +1237,9 @@ public sealed class Milestone6Tests
     [Fact]
     public async Task TestDiscoverer_UnsupportedTestProject_SkipsProject()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-unsupported-tests-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-unsupported-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        string projectPath = Path.Combine(root, "Unsupported.Tests.csproj");
+        var projectPath = Path.Combine(root, "Unsupported.Tests.csproj");
         await File.WriteAllTextAsync(
             projectPath,
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
@@ -1267,11 +1267,11 @@ public sealed class Milestone6Tests
     [Fact]
     public async Task TestDiscoverer_LinkedProject_RejectsTraversal()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-linked-tests-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-linked-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         await using (var link = await TemporaryDirectoryLink.CreateAsync(root))
         {
-            string projectPath = Path.Combine(link.TargetPath, "Linked.Tests.csproj");
+            var projectPath = Path.Combine(link.TargetPath, "Linked.Tests.csproj");
             await File.WriteAllTextAsync(
                 projectPath,
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><PackageReference Include=\"xunit.v3.mtp-v2\" /></ItemGroup></Project>");
@@ -1296,8 +1296,8 @@ public sealed class Milestone6Tests
     [Fact]
     public void TestSelector_AffectedProject_SelectsReferencingTestsWithRationale()
     {
-        string root = CreateBaseline(RepositoryTrustLevel.TrustedBuild).RepositoryPath;
-        string core = Path.Combine(root, "src", "Threadsmith.Core", "Threadsmith.Core.csproj");
+        var root = CreateBaseline(RepositoryTrustLevel.TrustedBuild).RepositoryPath;
+        var core = Path.Combine(root, "src", "Threadsmith.Core", "Threadsmith.Core.csproj");
         var testProject = new TestProject
         {
             Name = "Threadsmith.Milestone6.Tests",
@@ -1370,8 +1370,8 @@ public sealed class Milestone6Tests
             return Task.CompletedTask;
         });
         var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
-        string core = Path.Combine(baseline.RepositoryPath, "src", "Threadsmith.Core", "Threadsmith.Core.csproj");
-        string tests = Path.Combine(
+        var core = Path.Combine(baseline.RepositoryPath, "src", "Threadsmith.Core", "Threadsmith.Core.csproj");
+        var tests = Path.Combine(
             baseline.RepositoryPath,
             "tests",
             "Threadsmith.Milestone6.Tests",
@@ -1511,7 +1511,7 @@ public sealed class Milestone6Tests
         var processes = new BlockingProcessManager();
         var runner = new TestRunner(processes, events);
         var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
-        string projectPath = Path.Combine(
+        var projectPath = Path.Combine(
             baseline.RepositoryPath,
             "tests",
             "Threadsmith.Milestone6.Tests",
@@ -1641,7 +1641,7 @@ public sealed class Milestone6Tests
             FilePath = "Tests.csproj",
             Framework = TestFramework.XUnit,
         };
-        bool failed = outcome == TestOutcome.Failed;
+        var failed = outcome == TestOutcome.Failed;
         return new TestValidationResult
         {
             Selection = new TestSelection { Projects = [project] },
@@ -1799,7 +1799,7 @@ public sealed class Milestone6Tests
 
     private static WorkspaceBaseline CreateBaseline(RepositoryTrustLevel trustLevel)
     {
-        string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         return new WorkspaceBaseline(
             new WorkspaceId(Guid.NewGuid()),
             root,
@@ -1811,9 +1811,9 @@ public sealed class Milestone6Tests
 
     private static async Task<WorkspaceBaseline> CreateBuildableBaselineAsync(bool includeDelay)
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-build-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-build-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        string delayProperties = includeDelay
+        var delayProperties = includeDelay
             ? """
                   <PropertyGroup>
                     <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "$PID | Set-Content -NoNewline '&quot;$(MSBuildProjectDirectory)\child.pid&quot;'; Start-Sleep -Seconds 30"</DelayCommand>
@@ -1824,7 +1824,7 @@ public sealed class Milestone6Tests
                   </Target>
               """
             : string.Empty;
-        string projectPath = Path.Combine(root, "ValidationTarget.csproj");
+        var projectPath = Path.Combine(root, "ValidationTarget.csproj");
         await File.WriteAllTextAsync(
             projectPath,
             $"""
@@ -1846,8 +1846,8 @@ public sealed class Milestone6Tests
             RedirectStandardError = true,
             ArgumentList = { "restore", projectPath, "--nologo" },
         }) ?? throw new InvalidOperationException("Could not start fixture restore.");
-        string output = await restore.StandardOutput.ReadToEndAsync();
-        string error = await restore.StandardError.ReadToEndAsync();
+        var output = await restore.StandardOutput.ReadToEndAsync();
+        var error = await restore.StandardError.ReadToEndAsync();
         await restore.WaitForExitAsync();
         if (restore.ExitCode != 0)
         {
@@ -1880,8 +1880,8 @@ public sealed class Milestone6Tests
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-            string linkPath = Path.Combine(repositoryPath, $"linked-{Guid.NewGuid():N}");
-            string targetPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m6-external-{Guid.NewGuid():N}");
+            var linkPath = Path.Combine(repositoryPath, $"linked-{Guid.NewGuid():N}");
+            var targetPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m6-external-{Guid.NewGuid():N}");
             Directory.CreateDirectory(targetPath);
             try
             {
@@ -1914,8 +1914,8 @@ public sealed class Milestone6Tests
                     var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
                     var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
                     await process.WaitForExitAsync(cancellationToken);
-                    string output = await outputTask;
-                    string error = await errorTask;
+                    var output = await outputTask;
+                    var error = await errorTask;
                     if (process.ExitCode != 0)
                     {
                         throw new IOException(

@@ -69,7 +69,7 @@ public static class Plan34ConversationMemoryTests
         var sessionId = await application.HandleAsync(new CreateSessionCommand("memory-test"));
 
         var runId = await application.HandleAsync(new SubmitRequestCommand(sessionId, "Explain the repository."));
-        bool succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
+        var succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
         var state = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.True(succeeded);
@@ -121,7 +121,7 @@ public static class Plan34ConversationMemoryTests
         // Act
         var runId = await application.HandleAsync(
             new SubmitRequestCommand(sessionId, "Read https://example.com/docs."));
-        bool succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
+        var succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
         var state = await fixture.Store.GetSnapshotAsync(sessionId);
 
         // Assert

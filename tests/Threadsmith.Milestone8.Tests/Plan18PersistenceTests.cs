@@ -54,8 +54,8 @@ public static class MigrationSafetyTests
         try
         {
             var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
-            int v1 = await runner.RunAsync();
-            int v2 = await runner.RunAsync();
+            var v1 = await runner.RunAsync();
+            var v2 = await runner.RunAsync();
             Assert.Equal(v1, v2);
             Assert.Equal(8, v2);
         }
@@ -95,8 +95,8 @@ public static class VersionToleranceTests
             OmissionCount: 1,
             SemanticConfidenceLevel.PartialCompilation);
 
-        string discriminator = DomainEventJson.GetDiscriminator(domainEvent);
-        string payload = DomainEventJson.Serialize(domainEvent);
+        var discriminator = DomainEventJson.GetDiscriminator(domainEvent);
+        var payload = DomainEventJson.Serialize(domainEvent);
         var roundTripped = DomainEventJson.Deserialize(discriminator, schemaVersion: 1, payload);
 
         Assert.Equal("preMutationAnalysisCompleted", discriminator);
@@ -118,7 +118,7 @@ public static class VersionToleranceTests
             var sessionId = SessionId.New();
             // Persist a real event but record it at an older schema version to exercise the migrator.
             var legacyEvent = new SessionCreated(sessionId, DateTimeOffset.Parse("2026-01-01T00:00:00Z"), "legacy");
-            string payload = DomainEventJson.Serialize(legacyEvent);
+            var payload = DomainEventJson.Serialize(legacyEvent);
             await InsertRowAsync(fixture.ConnectionString, sessionId, "sessionCreated", 0, payload);
 
             var registry = new DomainEventMigrationRegistry(
@@ -155,7 +155,7 @@ public static class VersionToleranceTests
             await store.InitializeAsync();
             var sessionId = SessionId.New();
             var futureEvent = new SessionCreated(sessionId, DateTimeOffset.UtcNow, "future");
-            string payload = DomainEventJson.Serialize(futureEvent);
+            var payload = DomainEventJson.Serialize(futureEvent);
             await InsertRowAsync(fixture.ConnectionString, sessionId, "sessionCreated", 99, payload);
 
             var registry = new DomainEventMigrationRegistry(Array.Empty<IDomainEventMigrator>(), currentVersion: 1);
@@ -225,7 +225,7 @@ public static class ArtifactStoreTests
             var list = await store.ListAsync(session, CancellationToken.None);
             Assert.Single(list);
 
-            string? read = await store.ReadAsync(m1.ContentHash, CancellationToken.None);
+            var read = await store.ReadAsync(m1.ContentHash, CancellationToken.None);
             Assert.Equal("hello world", read);
         }
         finally
@@ -253,7 +253,7 @@ public static class ArtifactStoreTests
                 session,
                 CancellationToken.None);
 
-            string? read = await store.ReadAsync(m.ContentHash, CancellationToken.None);
+            var read = await store.ReadAsync(m.ContentHash, CancellationToken.None);
             Assert.NotNull(read);
             Assert.DoesNotContain("sk-abcdefghijklmnopqrstuvwxyz1234567890", read);
             Assert.Contains("[REDACTED]", read);
@@ -502,7 +502,7 @@ internal sealed class DatabaseFixture : IAsyncDisposable
 
     public static async Task<DatabaseFixture> CreateAsync()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"m8-{Guid.NewGuid():N}.db");
+        var path = Path.Combine(Path.GetTempPath(), $"m8-{Guid.NewGuid():N}.db");
         await using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
         await connection.OpenAsync();
         return new DatabaseFixture(path);
@@ -530,7 +530,7 @@ internal sealed class DirectoryFixture : IDisposable
 
     public static DirectoryFixture Create()
     {
-        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"m8-dir-{Guid.NewGuid():N}");
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"m8-dir-{Guid.NewGuid():N}");
         System.IO.Directory.CreateDirectory(path);
         return new DirectoryFixture(path);
     }

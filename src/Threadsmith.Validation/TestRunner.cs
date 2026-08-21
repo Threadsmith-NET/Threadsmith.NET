@@ -49,7 +49,7 @@ public sealed partial class TestResultNormalizer
             }
         }
 
-        Match vstest = VstestSummaryRegex().Match(output);
+        var vstest = VstestSummaryRegex().Match(output);
         if (vstest.Success)
         {
             failed = int.Parse(vstest.Groups["failed"].Value, CultureInfo.InvariantCulture);
@@ -58,7 +58,7 @@ public sealed partial class TestResultNormalizer
         }
 
         var processSucceeded = !process.TimedOut && process.ExitCode == 0;
-        TestOutcome outcome = !processSucceeded || failed > 0
+        var outcome = !processSucceeded || failed > 0
             ? TestOutcome.Failed
             : skipped > 0
                 ? TestOutcome.Skipped
@@ -147,11 +147,11 @@ public sealed class TestRunner
         }
 
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(baseline.RepositoryPath));
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         var results = new List<TestResult>();
-        foreach (TestProject project in selection.Projects)
+        foreach (var project in selection.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var target = Path.GetFullPath(project.FilePath);
@@ -177,7 +177,7 @@ public sealed class TestRunner
                 relativeTarget,
                 "Test target");
 
-            ProcessExecutionResult process = await _processManager.RunAsync(
+            var process = await _processManager.RunAsync(
                 new ProcessExecutionRequest
                 {
                     ToolInvocationId = new ToolInvocationId(Guid.NewGuid()),
@@ -285,11 +285,11 @@ public sealed class TestValidationPipeline
                 "Test discovery and execution require TrustedBuild because repository test adapters can run code.");
         }
 
-        IReadOnlyList<TestProject> projects = TestDiscoverer.DiscoverProjects(
+        var projects = TestDiscoverer.DiscoverProjects(
             request.Baseline.RepositoryPath,
             request.ProjectInventory,
             request.Baseline.ProhibitedPaths);
-        TestSelection selection = TestSelector.Select(projects, request.Projects, mutationSet);
+        var selection = TestSelector.Select(projects, request.Projects, mutationSet);
         if (selection.Projects.Count == 0)
         {
             var empty = new TestValidationResult
@@ -312,7 +312,7 @@ public sealed class TestValidationPipeline
             return empty;
         }
 
-        IReadOnlyList<TestCase> cases = await _discoverer.DiscoverCasesAsync(
+        var cases = await _discoverer.DiscoverCasesAsync(
             request.RunId,
             request.Baseline.RepositoryPath,
             selection.Projects,

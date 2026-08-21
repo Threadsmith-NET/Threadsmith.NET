@@ -46,7 +46,7 @@ internal static class TuiEventSegments
                     outcomeRole);
                 if (tests.StructuredResult is { } validation)
                 {
-                    foreach (string reason in validation.Selection.Rationale)
+                    foreach (var reason in validation.Selection.Rationale)
                     {
                         Add(segments, $"Selection: {reason}{Environment.NewLine}", TuiTextRole.Muted);
                     }
@@ -68,7 +68,7 @@ internal static class TuiEventSegments
         ArgumentNullException.ThrowIfNull(segments);
         ArgumentNullException.ThrowIfNull(text);
 
-        bool summaryLineSeen = false;
+        var summaryLineSeen = false;
         AppendLines(
             segments,
             text,
@@ -167,13 +167,13 @@ internal static class TuiEventSegments
         Func<string, TuiTextRole> selectRole,
         Action? afterLine = null)
     {
-        int start = 0;
+        var start = 0;
         while (start < text.Length)
         {
-            int newline = text.IndexOf('\n', start);
-            int end = newline < 0 ? text.Length : newline + 1;
-            string line = text[start..end];
-            string roleText = line.TrimStart('\r', '\n');
+            var newline = text.IndexOf('\n', start);
+            var end = newline < 0 ? text.Length : newline + 1;
+            var line = text[start..end];
+            var roleText = line.TrimStart('\r', '\n');
             Add(segments, line, selectRole(roleText));
             afterLine?.Invoke();
             start = end;

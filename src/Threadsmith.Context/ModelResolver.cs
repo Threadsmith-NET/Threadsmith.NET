@@ -118,7 +118,7 @@ public sealed class ModelResolver : IModelResolver
             .Take(1)
             .Select(hint =>
             {
-                string reason = string.IsNullOrWhiteSpace(hint.Rationale)
+                var reason = string.IsNullOrWhiteSpace(hint.Rationale)
                     ? "Applied as a compatible advisory preference."
                     : hint.Rationale;
                 return new ModelHintResolution(hint.Source, hint.PreferredProfileId, reason);

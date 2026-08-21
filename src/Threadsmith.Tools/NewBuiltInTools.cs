@@ -139,9 +139,9 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentNullException.ThrowIfNull(context);
-        int timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", 5000);
-        int maximumOutputBytes = _toolConfig.Get("csharp_script", "max_output_bytes", 65536);
-        string allowedAssemblies = _toolConfig.Get(
+        var timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", 5000);
+        var maximumOutputBytes = _toolConfig.Get("csharp_script", "max_output_bytes", 65536);
+        var allowedAssemblies = _toolConfig.Get(
             "csharp_script",
             "allowed_assemblies",
             "System.Linq,System.Collections,System.Collections.Generic");
@@ -175,12 +175,12 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
             AllowedAssemblies = allowedAssemblies
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
         };
-        string requestJson = JsonSerializer.Serialize(workerRequest);
-        bool launchAppHost = !string.Equals(
+        var requestJson = JsonSerializer.Serialize(workerRequest);
+        var launchAppHost = !string.Equals(
             Path.GetExtension(_workerPath),
             ".dll",
             StringComparison.OrdinalIgnoreCase);
-        string entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
+        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
             ?? throw new InvalidOperationException("The host entry assembly path is unavailable.");
         IReadOnlyList<string> arguments = launchAppHost
             ? []
@@ -220,7 +220,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 
         if (result.ExitCode != 0 || result.StandardOutputTruncated)
         {
-            string error = string.IsNullOrWhiteSpace(result.StandardError)
+            var error = string.IsNullOrWhiteSpace(result.StandardError)
                 ? $"The C# scripting worker exited with code {result.ExitCode}."
                 : result.StandardError;
             return new CSharpScriptOutput(

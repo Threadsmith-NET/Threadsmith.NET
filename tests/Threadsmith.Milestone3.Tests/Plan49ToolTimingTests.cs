@@ -60,7 +60,7 @@ public static class Plan49ToolTimingTests
 
         _ = await pipeline.InvokeAsync(CreateRequest(tool.Definition.Id));
 
-        string detail = Assert.IsType<string>(started?.ActivityDetail);
+        var detail = Assert.IsType<string>(started?.ActivityDetail);
         Assert.InRange(detail.Length, 1, 240);
         Assert.EndsWith("...", detail, StringComparison.Ordinal);
         Assert.DoesNotContain('\r', detail);
@@ -135,15 +135,15 @@ public static class Plan49ToolTimingTests
     public static void BuiltInTools_ValidatedInput_ProvidesActivityDetail()
     {
         ITool readTool = new ReadFileTool();
-        object readInput = readTool.DeserializeInput("{\"path\":\"src/Program.cs\"}");
+        var readInput = readTool.DeserializeInput("{\"path\":\"src/Program.cs\"}");
         ITool processTool = new RunProcessTool(new UnusedProcessManager());
-        object processInput = processTool.DeserializeInput("{\"command\":\"dotnet test src/Threadsmith.sln\"}");
+        var processInput = processTool.DeserializeInput("{\"command\":\"dotnet test src/Threadsmith.sln\"}");
         ITool symbolTool = new FindSymbolTool(new UnusedSemanticEngineResolver());
-        object symbolInput = symbolTool.DeserializeInput("{\"query\":\"SectorEntityStandardizer\"}");
+        var symbolInput = symbolTool.DeserializeInput("{\"query\":\"SectorEntityStandardizer\"}");
         ITool referencesTool = new FindReferencesTool(new UnusedSemanticEngineResolver());
-        object referencesInput = referencesTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
+        var referencesInput = referencesTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
         ITool implementationsTool = new FindImplementationsTool(new UnusedSemanticEngineResolver());
-        object implementationsInput = implementationsTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
+        var implementationsInput = implementationsTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
 
         Assert.Equal("lines 1-200, src/Program.cs", readTool.GetActivityDetail(readInput));
         Assert.Equal("dotnet test src/Threadsmith.sln", processTool.GetActivityDetail(processInput));
@@ -162,7 +162,7 @@ public static class Plan49ToolTimingTests
         string expected)
     {
         ITool readTool = new ReadFileTool();
-        object input = readTool.DeserializeInput(JsonSerializer.Serialize(new ReadFileInput
+        var input = readTool.DeserializeInput(JsonSerializer.Serialize(new ReadFileInput
         {
             Path = "docs/implementation-plans/milestones.md",
             StartLine = startLine,
@@ -186,7 +186,7 @@ public static class Plan49ToolTimingTests
             return Task.CompletedTask;
         });
         var pipeline = CreatePipeline(events, readTool, timeProvider);
-        string path = $"docs/{new string('x', 260)}.md";
+        var path = $"docs/{new string('x', 260)}.md";
         var input = new ReadFileInput
         {
             Path = path,
@@ -198,7 +198,7 @@ public static class Plan49ToolTimingTests
             readTool.Definition.Id,
             JsonSerializer.Serialize(input)));
 
-        string detail = Assert.IsType<string>(started?.ActivityDetail);
+        var detail = Assert.IsType<string>(started?.ActivityDetail);
         Assert.StartsWith("lines 201-400, docs/", detail, StringComparison.Ordinal);
         Assert.EndsWith("...", detail, StringComparison.Ordinal);
         Assert.InRange(detail.Length, 1, 240);
@@ -215,7 +215,7 @@ public static class Plan49ToolTimingTests
         string expected)
     {
         ITool processTool = new RunProcessTool(new UnusedProcessManager());
-        object input = processTool.DeserializeInput(JsonSerializer.Serialize(new { command }));
+        var input = processTool.DeserializeInput(JsonSerializer.Serialize(new { command }));
 
         Assert.Equal(expected, processTool.GetActivityDetail(input));
     }

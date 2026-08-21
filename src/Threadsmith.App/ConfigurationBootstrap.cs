@@ -41,7 +41,7 @@ internal static class ConfigurationBootstrap
     {
         ArgumentNullException.ThrowIfNull(exception);
         var messages = new List<string>();
-        for (Exception? current = exception; current is not null; current = current.InnerException)
+        for (var current = exception; current is not null; current = current.InnerException)
         {
             var message = current.Message.Trim();
             if (!string.IsNullOrWhiteSpace(message)
@@ -62,7 +62,7 @@ internal static class ConfigurationBootstrap
 
         // The byte cap comes only from trusted machine/user/environment layers. Repository configuration
         // cannot widen the bound that protects itself, its session override, or its separate secret store.
-        IConfigurationRoot trustedConfiguration = new ConfigurationBuilder()
+        var trustedConfiguration = new ConfigurationBuilder()
             .AddJsonFile(paths.MachineConfiguration, optional: true)
             .AddJsonFile(paths.UserConfiguration, optional: true)
             .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))

@@ -28,7 +28,7 @@ public sealed class ExtensionReviewRemediationTests
         var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        ExtensionGeneration generation = await host.LoadAsync(new ExtensionLoadRequest
+        var generation = await host.LoadAsync(new ExtensionLoadRequest
         {
             ExtensionDirectory = ResolveFixtureOutputDirectory("ConstructionCountExtension"),
             EffectiveTrust = RepositoryTrustLevel.TrustedRead,
@@ -41,7 +41,7 @@ public sealed class ExtensionReviewRemediationTests
         // The tool runs in the extension's collectible ALC and reports the count that the ALC's copy of
         // the static counter recorded. A throwaway descriptor-reading prototype (the F2 bug) would have
         // run the constructor twice before the tool executes, reporting 2.
-        ExtensionToolResult result = await generation.Tools[0].ExecuteAsync("{}", MakeToolContext(), CancellationToken.None);
+        var result = await generation.Tools[0].ExecuteAsync("{}", MakeToolContext(), CancellationToken.None);
         Assert.NotNull(result.ResultJson);
         Assert.Contains("\"count\":1", result.ResultJson, StringComparison.Ordinal);
     }
@@ -50,7 +50,7 @@ public sealed class ExtensionReviewRemediationTests
     [Fact]
     public async Task CapabilityProxy_maps_host_policy_approval_faithfully()
     {
-        ExtensionGeneration generation = await LoadConstructionCountGenerationAsync();
+        var generation = await LoadConstructionCountGenerationAsync();
         var leaseAuthority = new InvocationLeaseAuthority(NullLogger.Instance);
 
         var hostPolicyProxy = new CapabilityProxy(
@@ -83,7 +83,7 @@ public sealed class ExtensionReviewRemediationTests
     public async Task Repeated_leases_on_the_same_thread_are_all_tracked()
     {
         var leaseAuthority = new InvocationLeaseAuthority(NullLogger.Instance);
-        ExtensionGenerationId generationId = ExtensionGenerationId.New();
+        var generationId = ExtensionGenerationId.New();
         var budget = new ExtensionInvocationBudget(generationId, maxInvocationsPerTurn: 16);
         var leases = new List<IInvocationLease>();
         for (var i = 0; i < 8; i++)
@@ -102,7 +102,7 @@ public sealed class ExtensionReviewRemediationTests
         var inFlightWhileHeld = await leaseAuthority.WaitForDrainAsync(generationId, alreadyCancelled.Token);
         Assert.Equal(8, inFlightWhileHeld);
 
-        foreach (IInvocationLease lease in leases)
+        foreach (var lease in leases)
         {
             lease.Dispose();
         }
@@ -145,7 +145,7 @@ public sealed class ExtensionReviewRemediationTests
             {
                 // LoadAsync-by-id refreshes discovery internally; under the old unsynchronized map a
                 // concurrent Discover could clear/repopulate mid-read and throw or return null.
-                ExtensionSummary? summary = await ((IExtensionManager)host).LoadAsync(
+                var summary = await ((IExtensionManager)host).LoadAsync(
                     "threadsmith.tests.construction-count",
                     SessionId.New());
                 Assert.NotNull(summary);
@@ -160,7 +160,7 @@ public sealed class ExtensionReviewRemediationTests
         await Task.WhenAll(tasks);
         // After the storm, a fresh discover reports the extension as discovered (not loaded, since each
         // load was paired with an unload).
-        IReadOnlyList<ExtensionSummary> summaries = await host.DiscoverAsync();
+        var summaries = await host.DiscoverAsync();
         Assert.Contains(summaries, s => s.ExtensionId == "threadsmith.tests.construction-count");
     }
 

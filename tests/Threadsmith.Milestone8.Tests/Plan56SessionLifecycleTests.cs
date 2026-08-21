@@ -27,8 +27,8 @@ public static class Plan56SessionLifecycleTests
             var eventStore = new SqliteEventStore(connectionString);
             await eventStore.InitializeAsync();
             _ = await new MigrationRunner(connectionString, DefaultMigrations.All.Take(8)).RunAsync();
-            SessionId sessionId = SessionId.New();
-            DateTimeOffset now = DateTimeOffset.Parse(
+            var sessionId = SessionId.New();
+            var now = DateTimeOffset.Parse(
                 "2026-01-01T00:00:00Z",
                 System.Globalization.CultureInfo.InvariantCulture);
             await eventStore.AppendAsync(new SessionCreated(sessionId, now, "Legacy session"));
@@ -36,7 +36,7 @@ public static class Plan56SessionLifecycleTests
             await using (var connection = new SqliteConnection(connectionString))
             {
                 await connection.OpenAsync();
-                await using SqliteCommand command = connection.CreateCommand();
+                await using var command = connection.CreateCommand();
                 command.CommandText = """
                     INSERT INTO conversation_sessions(session_id, mode, updated_at) VALUES($session, $mode, $updated);
                     INSERT INTO conversation_messages(
@@ -54,7 +54,7 @@ public static class Plan56SessionLifecycleTests
 
             _ = await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
             var store = new SqliteSessionLifecycleStore(connectionString);
-            SessionCatalogEntry? restored = await store.GetAsync(sessionId);
+            var restored = await store.GetAsync(sessionId);
             Assert.NotNull(restored);
             Assert.Equal("legacy preview", restored.Preview);
             Assert.Equal(1, restored.MessageCount);
@@ -72,16 +72,16 @@ public static class Plan56SessionLifecycleTests
     {
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var store = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        DateTimeOffset now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
-        SessionCatalogEntry older = CreateEntry(SessionId.New(), "repo-a", now);
-        SessionCatalogEntry newer = CreateEntry(SessionId.New(), "repo-a", now.AddMinutes(1));
-        SessionCatalogEntry other = CreateEntry(SessionId.New(), "repo-b", now.AddMinutes(2));
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var older = CreateEntry(SessionId.New(), "repo-a", now);
+        var newer = CreateEntry(SessionId.New(), "repo-a", now.AddMinutes(1));
+        var other = CreateEntry(SessionId.New(), "repo-b", now.AddMinutes(2));
 
         await store.CreateAsync(older, EmptyUsage());
         await store.CreateAsync(newer, EmptyUsage());
         await store.CreateAsync(other, EmptyUsage());
 
-        IReadOnlyList<SessionCatalogEntry> listed = await store.ListAsync("repo-a", 10);
+        var listed = await store.ListAsync("repo-a", 10);
         Assert.Equal([newer.SessionId, older.SessionId], listed.Select(item => item.SessionId));
         Assert.Equal(other, await store.GetAsync(other.SessionId));
     }
@@ -92,11 +92,11 @@ public static class Plan56SessionLifecycleTests
     {
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        SessionId sourceId = SessionId.New();
-        DateTimeOffset now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
-        SessionCatalogEntry source = CreateEntry(sourceId, "repo-a", now);
+        var sourceId = SessionId.New();
+        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var source = CreateEntry(sourceId, "repo-a", now);
         await catalog.CreateAsync(source, new SessionDurableUsage(10, 5, false, false, true));
-        ConversationMessage sourceMessage = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        var sourceMessage = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
         {
             Id = ConversationMessageId.New(),
             SessionId = sourceId,
@@ -109,8 +109,8 @@ public static class Plan56SessionLifecycleTests
             OccurredAt = now,
         });
         source = await catalog.CheckpointAsync(source, new SessionDurableUsage(10, 5, false, false, true));
-        SessionId cloneId = SessionId.New();
-        SessionCatalogEntry cloneRequest = source with
+        var cloneId = SessionId.New();
+        var cloneRequest = source with
         {
             SessionId = cloneId,
             CreatedAt = now.AddMinutes(1),
@@ -120,13 +120,13 @@ public static class Plan56SessionLifecycleTests
             MessageCount = 0,
         };
 
-        SessionCatalogEntry clone = await catalog.CloneAsync(
+        var clone = await catalog.CloneAsync(
             sourceId,
             cloneRequest,
             new SessionDurableUsage(0, 0, false, false, false, 10, 5));
-        ConversationStateSnapshot cloneState = await fixture.Conversations.GetSnapshotAsync(cloneId);
+        var cloneState = await fixture.Conversations.GetSnapshotAsync(cloneId);
         Assert.Equal(sourceId, clone.CloneSourceSessionId);
-        ConversationMessage clonedMessage = Assert.Single(cloneState.Messages);
+        var clonedMessage = Assert.Single(cloneState.Messages);
         Assert.NotEqual(sourceMessage.Id, clonedMessage.Id);
         Assert.NotEqual(sourceMessage.RunId, clonedMessage.RunId);
         Assert.Equal(sourceMessage.Content, clonedMessage.Content);
@@ -143,10 +143,10 @@ public static class Plan56SessionLifecycleTests
             EstimatedTokens = 1,
             OccurredAt = now.AddMinutes(2),
         });
-        ConversationStateSnapshot sourceAfter = await fixture.Conversations.GetSnapshotAsync(sourceId);
+        var sourceAfter = await fixture.Conversations.GetSnapshotAsync(sourceId);
         Assert.Single(sourceAfter.Messages);
         Assert.Equal("sanitized visible request", sourceAfter.Messages[0].Content);
-        SessionDurableUsage cloneUsage = await catalog.GetUsageAsync(cloneId);
+        var cloneUsage = await catalog.GetUsageAsync(cloneId);
         Assert.Equal(0, cloneUsage.InputTokens);
         Assert.Equal(0, cloneUsage.OutputTokens);
         Assert.Equal(10, cloneUsage.InheritedInputTokens);
@@ -159,8 +159,8 @@ public static class Plan56SessionLifecycleTests
     {
         await using var events = new DomainEventStream();
         var evidenceStore = new EvidenceStore(events, new SecretOutputSanitizer());
-        SessionId sourceId = SessionId.New();
-        SessionId destinationId = SessionId.New();
+        var sourceId = SessionId.New();
+        var destinationId = SessionId.New();
         var evidence = new Evidence
         {
             EvidenceId = EvidenceId.New(),
@@ -177,7 +177,7 @@ public static class Plan56SessionLifecycleTests
 
         evidenceStore.CopySession(sourceId, destinationId);
 
-        Evidence copied = Assert.Single(evidenceStore.Snapshot(destinationId));
+        var copied = Assert.Single(evidenceStore.Snapshot(destinationId));
         Assert.Equal(evidence.EvidenceId, copied.EvidenceId);
         Assert.Equal(destinationId, copied.SessionId);
         Assert.Equal(evidence.Content, copied.Content);
@@ -191,7 +191,7 @@ public static class Plan56SessionLifecycleTests
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
         await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        SessionTransitionResult source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
         harness.Usage.Observe(
             source.ActiveSession.SessionId,
             new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()),
@@ -208,7 +208,7 @@ public static class Plan56SessionLifecycleTests
             EstimatedTokens = 5,
         });
 
-        SessionTransitionResult clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
+        var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
 
         Assert.Equal(0, clone.InputTokens);
         Assert.Equal(0, clone.OutputTokens);
@@ -226,9 +226,9 @@ public static class Plan56SessionLifecycleTests
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
         await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        SessionTransitionResult source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
         var observed = new List<IDomainEvent>();
-        await using IDomainEventSubscription subscription = harness.Events.Subscribe((domainEvent, _) =>
+        await using var subscription = harness.Events.Subscribe((domainEvent, _) =>
         {
             observed.Add(domainEvent);
             return Task.CompletedTask;
@@ -240,7 +240,7 @@ public static class Plan56SessionLifecycleTests
             WorkspaceId.New(),
             RepositoryTrustLevel.TrustedRead));
 
-        SessionTransitionResult clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
+        var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
 
         Assert.Contains(observed, item => item is SessionCreated created && created.SessionId == clone.ActiveSession.SessionId);
         Assert.Contains(observed, item => item is RepositoryOpened opened
@@ -255,12 +255,12 @@ public static class Plan56SessionLifecycleTests
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
         await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        SessionTransitionResult source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
 
         await harness.Lifecycle.BindRepositoryAsync("repo-b");
 
-        SessionCatalogEntry active = await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand());
-        IReadOnlyList<SessionCatalogEntry> listed = await harness.Lifecycle.HandleAsync(
+        var active = await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand());
+        var listed = await harness.Lifecycle.HandleAsync(
             new ListResumableSessionsCommand());
         Assert.NotEqual(source.ActiveSession.RepositoryIdentity, active.RepositoryIdentity);
         Assert.Equal("repo-b", active.RepositoryDisplayName);
@@ -274,8 +274,8 @@ public static class Plan56SessionLifecycleTests
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
         await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        SessionTransitionResult created = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
-        SessionId sessionId = created.ActiveSession.SessionId;
+        var created = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var sessionId = created.ActiveSession.SessionId;
         _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
         {
             Id = ConversationMessageId.New(),
@@ -295,9 +295,9 @@ public static class Plan56SessionLifecycleTests
 
         await harness.Lifecycle.CheckpointCompletedTurnAsync(sessionId);
 
-        SessionCatalogEntry? persisted = await catalog.GetAsync(sessionId);
+        var persisted = await catalog.GetAsync(sessionId);
         Assert.NotNull(persisted);
-        SessionDurableUsage usage = await catalog.GetUsageAsync(sessionId);
+        var usage = await catalog.GetUsageAsync(sessionId);
         Assert.Equal(1, persisted.MessageCount);
         Assert.Equal("fresh selector preview", persisted.Preview);
         Assert.Equal(21, usage.InputTokens);
@@ -324,8 +324,8 @@ public static class Plan56SessionLifecycleTests
             faultingStore,
             fixture.Conversations,
             activeModels);
-        SessionTransitionResult source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
-        SessionId targetSessionId = SessionId.New();
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var targetSessionId = SessionId.New();
         await catalog.CreateAsync(
             source.ActiveSession with
             {
@@ -348,7 +348,7 @@ public static class Plan56SessionLifecycleTests
             new ResumeSessionCommand(targetSessionId)));
 
         Assert.Equal(sourceProfileId, activeModels.Current.Profile.Id);
-        SessionCatalogEntry? persistedSource = await catalog.GetAsync(source.ActiveSession.SessionId);
+        var persistedSource = await catalog.GetAsync(source.ActiveSession.SessionId);
         Assert.NotNull(persistedSource);
         Assert.Equal(sourceProfileId, persistedSource.ModelSelection?.ProfileId);
         Assert.Equal(SessionLifecycleState.Active, persistedSource.State);
@@ -360,9 +360,9 @@ public static class Plan56SessionLifecycleTests
     {
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        SessionCatalogEntry source = CreateEntry(SessionId.New(), "repo-a", now);
-        SessionCatalogEntry destination = CreateEntry(SessionId.New(), "repo-a", now) with
+        var now = DateTimeOffset.UtcNow;
+        var source = CreateEntry(SessionId.New(), "repo-a", now);
+        var destination = CreateEntry(SessionId.New(), "repo-a", now) with
         {
             CloneSourceSessionId = source.SessionId,
         };
@@ -373,7 +373,7 @@ public static class Plan56SessionLifecycleTests
             source.SessionId,
             destination,
             EmptyUsage()));
-        ConversationStateSnapshot destinationState = await fixture.Conversations.GetSnapshotAsync(destination.SessionId);
+        var destinationState = await fixture.Conversations.GetSnapshotAsync(destination.SessionId);
         Assert.Empty(destinationState.Messages);
     }
 

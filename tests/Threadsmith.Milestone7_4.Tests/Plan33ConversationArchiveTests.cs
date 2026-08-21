@@ -18,7 +18,7 @@ public static class Plan33ConversationArchiveTests
         var memoryId = ConversationMemoryId.New();
 
         var json = JsonSerializer.Serialize(new IdentifierPair(messageId, memoryId));
-        IdentifierPair? restored = JsonSerializer.Deserialize<IdentifierPair>(json);
+        var restored = JsonSerializer.Deserialize<IdentifierPair>(json);
 
         Assert.NotNull(restored);
         Assert.Equal(messageId, restored.MessageId);
@@ -29,7 +29,7 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Concurrent_capture_has_contiguous_unique_sequence()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
         var runId = RunId.New();
         Task<ConversationMessage>[] captures =
@@ -42,8 +42,8 @@ public static class Plan33ConversationArchiveTests
                     $"message-{index:D2}"))),
         ];
 
-        ConversationMessage[] archived = await Task.WhenAll(captures);
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var archived = await Task.WhenAll(captures);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Equal(Enumerable.Range(1, 20).Select(value => (long)value), archived.Select(item => item.Sequence).Order());
         Assert.Equal(Enumerable.Range(1, 20).Select(value => (long)value), snapshot.Messages.Select(item => item.Sequence));
@@ -53,7 +53,7 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Archive_contains_only_sanitized_visible_message_content()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
         await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
@@ -61,9 +61,9 @@ public static class Plan33ConversationArchiveTests
             ConversationRole.Assistant,
             "visible token=top-secret\u0001"));
 
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
-        ConversationMessage message = Assert.Single(snapshot.Messages);
+        var message = Assert.Single(snapshot.Messages);
         Assert.Equal("visible token=[REDACTED]", message.Content);
         Assert.DoesNotContain("top-secret", message.Content, StringComparison.Ordinal);
         Assert.DoesNotContain('\u0001', message.Content ?? string.Empty);
@@ -75,13 +75,13 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Large_message_uses_artifact_and_restores_verified_body()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync(artifactThreshold: 32);
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 32);
         var sessionId = SessionId.New();
         string body = new('x', 256);
 
-        ConversationMessage archived = await fixture.Store.ArchiveMessageAsync(
+        var archived = await fixture.Store.ArchiveMessageAsync(
             CreateMessage(sessionId, RunId.New(), ConversationRole.User, body));
-        ConversationStateSnapshot restored = await fixture.Store.GetSnapshotAsync(sessionId);
+        var restored = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Null(archived.Content);
         Assert.NotNull(archived.ArtifactId);
@@ -92,12 +92,12 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Structured_memory_and_provenance_round_trip()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ConversationMessage message = await fixture.Store.ArchiveMessageAsync(
+        var message = await fixture.Store.ArchiveMessageAsync(
             CreateMessage(sessionId, runId, ConversationRole.User, "retain this"));
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UtcNow;
         ConversationMemoryItem[] items =
         [
             .. Enum.GetValues<ConversationMemoryKind>()
@@ -126,7 +126,7 @@ public static class Plan33ConversationArchiveTests
         };
 
         await fixture.Store.ReplaceSummaryAsync(sessionId, items, snapshot);
-        ConversationStateSnapshot restored = await fixture.Store.GetSnapshotAsync(sessionId);
+        var restored = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Equal(Enum.GetValues<ConversationMemoryKind>().Length, restored.MemoryItems.Count);
         Assert.All(restored.MemoryItems, item =>
@@ -142,7 +142,7 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Mode_change_preserves_underlying_archive()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
         await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
@@ -151,7 +151,7 @@ public static class Plan33ConversationArchiveTests
             "preserved"));
 
         await fixture.Store.SetModeAsync(sessionId, ConversationContextMode.Stateless);
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Equal(ConversationContextMode.Stateless, snapshot.Mode);
         Assert.Single(snapshot.Messages);
@@ -161,11 +161,11 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Unknown_memory_schema_produces_warning_and_no_fabricated_item()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
         await fixture.InsertFutureMemoryAsync(sessionId, schemaVersion: 99);
 
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Empty(snapshot.MemoryItems);
         Assert.Contains(snapshot.Warnings, warning => warning == "UnsupportedConversationMemorySchema:99");
@@ -175,9 +175,9 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Retention_removes_body_without_orphaning_metadata()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync();
+        await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
-        ConversationMessage archived = await fixture.Store.ArchiveMessageAsync(CreateMessage(
+        var archived = await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
             RunId.New(),
             ConversationRole.User,
@@ -185,10 +185,10 @@ public static class Plan33ConversationArchiveTests
         { OccurredAt = DateTimeOffset.UtcNow.AddDays(-10) });
 
         var removed = await fixture.Store.RemoveMessageBodiesOlderThanAsync(DateTimeOffset.UtcNow.AddDays(-1));
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.Equal(1, removed);
-        ConversationMessage retained = Assert.Single(snapshot.Messages);
+        var retained = Assert.Single(snapshot.Messages);
         Assert.Equal(archived.Id, retained.Id);
         Assert.Equal(archived.ContentHash, retained.ContentHash);
         Assert.Null(retained.Content);
@@ -198,9 +198,9 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Retention_detaches_artifact_backed_body()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
         var sessionId = SessionId.New();
-        ConversationMessage archived = await fixture.Store.ArchiveMessageAsync(CreateMessage(
+        var archived = await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
             RunId.New(),
             ConversationRole.User,
@@ -208,11 +208,11 @@ public static class Plan33ConversationArchiveTests
         { OccurredAt = DateTimeOffset.UtcNow.AddDays(-10) });
 
         var removed = await fixture.Store.RemoveMessageBodiesOlderThanAsync(DateTimeOffset.UtcNow.AddDays(-1));
-        ConversationStateSnapshot snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
 
         Assert.NotNull(archived.ArtifactId);
         Assert.Equal(1, removed);
-        ConversationMessage retained = Assert.Single(snapshot.Messages);
+        var retained = Assert.Single(snapshot.Messages);
         Assert.Null(retained.Content);
         Assert.Null(retained.ArtifactId);
         Assert.Null(await fixture.Artifacts.ReadAsync(archived.ContentHash));
@@ -222,16 +222,16 @@ public static class Plan33ConversationArchiveTests
     [Fact]
     public static async Task Retention_preserves_artifact_referenced_by_newer_message()
     {
-        await using ConversationFixture fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
         var sessionId = SessionId.New();
         string body = new('x', 128);
-        ConversationMessage oldMessage = await fixture.Store.ArchiveMessageAsync(CreateMessage(
+        var oldMessage = await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
             RunId.New(),
             ConversationRole.User,
             body) with
         { OccurredAt = DateTimeOffset.UtcNow.AddDays(-10) });
-        ConversationMessage newMessage = await fixture.Store.ArchiveMessageAsync(CreateMessage(
+        var newMessage = await fixture.Store.ArchiveMessageAsync(CreateMessage(
             sessionId,
             RunId.New(),
             ConversationRole.Assistant,
@@ -339,7 +339,7 @@ internal sealed class ConversationFixture : IAsyncDisposable
     {
         await using var connection = new SqliteConnection(ConnectionString);
         await connection.OpenAsync();
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO conversation_memory(
                 memory_id, session_id, kind, content, repository_revision,

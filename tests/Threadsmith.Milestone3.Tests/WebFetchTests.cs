@@ -79,7 +79,7 @@ public sealed class WebFetchTests
     public void Normalize_QueryAndFragment_OnlyFragmentRemovedAndProvenanceHidesQuery()
     {
         // Act
-        Uri exact = WebFetchUrlPolicy.Normalize("https://example.com/docs?q=secret#part", 2048);
+        var exact = WebFetchUrlPolicy.Normalize("https://example.com/docs?q=secret#part", 2048);
         var provenance = WebFetchUrlPolicy.Sanitize(exact);
 
         // Assert
@@ -142,7 +142,7 @@ public sealed class WebFetchTests
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
         var registry = new ToolRegistry([tool], activationPolicy: authority);
-        ToolExecutionContext producingContext = CreateContext(fixture.Path);
+        var producingContext = CreateContext(fixture.Path);
         var reference = authority.IssueSearchResult(
             fixture.Path,
             new Uri("https://example.com/docs?q=hidden"),
@@ -158,8 +158,8 @@ public sealed class WebFetchTests
             .Any(definition => definition.Id == "web_fetch");
         var unrelatedRunActive = registry.GetDefinitions(producingContext.SessionId, RunId.New())
             .Any(definition => definition.Id == "web_fetch");
-        ToolExecutionContext context = CreateContext(other);
-        WebFetchException exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
+        var context = CreateContext(other);
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
             new WebFetchRequest { SearchResultId = reference },
             context));
 
@@ -181,7 +181,7 @@ public sealed class WebFetchTests
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         var reference = authority.IssueSearchResult(
             fixture.Path,
             new Uri("https://excluded.example/docs"),
@@ -194,10 +194,10 @@ public sealed class WebFetchTests
         var request = new WebFetchRequest { SearchResultId = reference };
 
         // Act
-        IReadOnlyList<string> claims = ((ITool)tool).GetNetworkHosts(request);
-        ToolPolicyDecision policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
+        var claims = ((ITool)tool).GetNetworkHosts(request);
+        var policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
         _ = await tool.ExecuteAsync(request, context);
-        WebFetchException replay = await Assert.ThrowsAsync<WebFetchException>(
+        var replay = await Assert.ThrowsAsync<WebFetchException>(
             () => tool.ExecuteAsync(request, context));
 
         // Assert
@@ -214,10 +214,10 @@ public sealed class WebFetchTests
         // Arrange
         using var fixture = new TemporaryDirectory();
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
 
         // Act
-        WebFetchException exception = Assert.Throws<WebFetchException>(() => authority.IssueSearchResult(
+        var exception = Assert.Throws<WebFetchException>(() => authority.IssueSearchResult(
             fixture.Path,
             new Uri("https://example.com:8443/docs"),
             context.SessionId,
@@ -241,13 +241,13 @@ public sealed class WebFetchTests
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://example.com/docs?q=hidden");
         var request = new WebFetchRequest { Url = "https://example.com/docs?q=hidden" };
 
         // Act
-        ToolExecution<WebFetchResponse> result = await tool.ExecuteAsync(request, context);
-        ToolExecutionException replay = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(request, context));
+        var result = await tool.ExecuteAsync(request, context);
+        var replay = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(request, context));
 
         // Assert
         Assert.Equal("https://example.com/docs", result.Value.Provenance.FinalUrl);
@@ -265,7 +265,7 @@ public sealed class WebFetchTests
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         authority.GrantDirectUrlChain(
             fixture.Path,
             context.SessionId,
@@ -273,8 +273,8 @@ public sealed class WebFetchTests
 
         // Act
         var request = new WebFetchRequest { Url = "https://example.com/start" };
-        IReadOnlyList<string> policyHosts = ((ITool)tool).GetNetworkHosts(request);
-        ToolPolicyDecision policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
+        var policyHosts = ((ITool)tool).GetNetworkHosts(request);
+        var policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
         _ = await tool.ExecuteAsync(request, context);
 
         // Assert
@@ -295,13 +295,13 @@ public sealed class WebFetchTests
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://example.com/start");
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://redirect.example/independent");
 
         // Act
         _ = await tool.ExecuteAsync(new WebFetchRequest { Url = "https://example.com/start" }, context);
-        IReadOnlySet<string> firstInvocationDigests = fetcher.LastAuthorizedDirectUrlDigests;
+        var firstInvocationDigests = fetcher.LastAuthorizedDirectUrlDigests;
         _ = await tool.ExecuteAsync(new WebFetchRequest { Url = "https://redirect.example/independent" }, context);
 
         // Assert
@@ -320,7 +320,7 @@ public sealed class WebFetchTests
         var fetcher = new WebContentFetcher(new DeadlineExpiringTransport(), options);
 
         // Act
-        WebFetchException exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal)));
@@ -345,7 +345,7 @@ public sealed class WebFetchTests
             new WebFetchOptions());
 
         // Act
-        WebFetchResponse response = await fetcher.FetchAsync(
+        var response = await fetcher.FetchAsync(
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal));
@@ -369,7 +369,7 @@ public sealed class WebFetchTests
             new WebFetchOptions());
 
         // Act
-        WebFetchException exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal)));
@@ -420,7 +420,7 @@ public sealed class WebFetchTests
 
         // Act
         await stateManager.BindRepositoryAsync(repository);
-        ArgumentOutOfRangeException exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
             authority.GrantDirectUrlChain(
                 repository,
                 sessionId,
@@ -508,7 +508,7 @@ public sealed class WebFetchTests
 
         // Act
         await state.BindRepositoryAsync(narrowRepository);
-        TimeSpan narrowTimeout = state.Current.Timeout;
+        var narrowTimeout = state.Current.Timeout;
         await state.BindRepositoryAsync(broadRepository);
 
         // Assert
@@ -574,13 +574,13 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext context = CreateContext(fixture.Path, sessionId, runId);
+        var context = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         var message = "Read https://example.com/docs, [guide](https://example.com/docs) "
             + "and https://second.example/path). Ignore http://unsafe.example and https://user:secret@example.com/.";
 
         // Act
-        IReadOnlyList<UserUrlReference> candidates = authority.IssueCurrentUserMessageUrls(
+        var candidates = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
             runId,
@@ -601,11 +601,11 @@ public sealed class WebFetchTests
     {
         // Arrange
         using var fixture = new TemporaryDirectory();
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
 
         // Act
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             context.SessionId,
             context.RunId,
@@ -623,11 +623,11 @@ public sealed class WebFetchTests
     {
         // Arrange
         using var fixture = new TemporaryDirectory();
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
 
         // Act
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             context.SessionId,
             context.RunId,
@@ -647,12 +647,12 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext context = CreateContext(fixture.Path, sessionId, runId);
+        var context = CreateContext(fixture.Path, sessionId, runId);
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, options);
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
             runId,
@@ -662,10 +662,10 @@ public sealed class WebFetchTests
 
         // Act
         var active = authority.IsActive("web_fetch", sessionId, runId);
-        ToolExecution<WebFetchResponse> response = await tool.ExecuteAsync(
+        var response = await tool.ExecuteAsync(
             new WebFetchRequest { UserUrlId = references[0].Id },
             context);
-        WebFetchException replay = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
+        var replay = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
             new WebFetchRequest { UserUrlId = references[0].Id },
             context));
 
@@ -686,9 +686,9 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var firstRun = RunId.New();
-        ToolExecutionContext firstContext = CreateContext(fixture.Path, sessionId, firstRun);
+        var firstContext = CreateContext(fixture.Path, sessionId, firstRun);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
-        IReadOnlyList<UserUrlReference> first = authority.IssueCurrentUserMessageUrls(
+        var first = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
             firstRun,
@@ -721,7 +721,7 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext context = CreateContext(fixture.Path, sessionId, runId);
+        var context = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         _ = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
@@ -735,7 +735,7 @@ public sealed class WebFetchTests
         const string proposedUrl = "https://proposed.example/reset/SECRET?q=protected";
 
         // Act
-        ToolExecutionException exception = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(
+        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(
             new WebFetchRequest { Url = proposedUrl },
             context));
 
@@ -760,7 +760,7 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext context = CreateContext(fixture.Path, sessionId, runId);
+        var context = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         _ = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
@@ -777,8 +777,8 @@ public sealed class WebFetchTests
         var request = new WebFetchRequest { Url = "https://proposed.example/reset/SECRET?token=protected" };
 
         // Act
-        ToolExecution<WebFetchResponse> response = await tool.ExecuteAsync(request, context);
-        ToolExecutionException replay = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(
+        var response = await tool.ExecuteAsync(request, context);
+        var replay = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(
             request,
             context));
 
@@ -803,14 +803,14 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext context = CreateContext(fixture.Path, sessionId, runId);
+        var context = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions { MaximumUrlCharacters = 128 });
         var valid = string.Join(' ', Enumerable.Range(1, 12).Select(index => $"https://host{index}.example/docs"));
         var invalid = " http://plain.example https://user:secret@credential.example "
             + "https://port.example:8443/docs https://long.example/" + new string('x', 256);
 
         // Act
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
             runId,
@@ -829,7 +829,7 @@ public sealed class WebFetchTests
     {
         // Arrange
         using var fixture = new TemporaryDirectory();
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         const string scannedPrefix = "https://boundary.example/docs";
         var message = new string(
@@ -839,7 +839,7 @@ public sealed class WebFetchTests
             + "/continued?token=protected";
 
         // Act
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             context.SessionId,
             context.RunId,
@@ -857,7 +857,7 @@ public sealed class WebFetchTests
     {
         // Arrange
         using var fixture = new TemporaryDirectory();
-        ToolExecutionContext context = CreateContext(fixture.Path);
+        var context = CreateContext(fixture.Path);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         const string candidate = "https://boundary.example/docs";
         string prefix = new(
@@ -865,14 +865,14 @@ public sealed class WebFetchTests
             CurrentUserUrlRecognizer.MaximumScannedCharacters - candidate.Length);
 
         // Act
-        IReadOnlyList<UserUrlReference> messageEnd = authority.IssueCurrentUserMessageUrls(
+        var messageEnd = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             context.SessionId,
             context.RunId,
             ConversationMessageId.New(),
             prefix + candidate,
             context.Invocation);
-        IReadOnlyList<UserUrlReference> delimiter = authority.IssueCurrentUserMessageUrls(
+        var delimiter = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             context.SessionId,
             context.RunId,
@@ -893,11 +893,11 @@ public sealed class WebFetchTests
         using var fixture = new TemporaryDirectory();
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        ToolExecutionContext issuedContext = CreateContext(fixture.Path, sessionId, runId);
+        var issuedContext = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, new WebFetchOptions());
-        IReadOnlyList<UserUrlReference> references = authority.IssueCurrentUserMessageUrls(
+        var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
             runId,
@@ -913,7 +913,7 @@ public sealed class WebFetchTests
         };
 
         // Act
-        WebFetchException exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
             new WebFetchRequest { UserUrlId = references[0].Id },
             changedContext));
 
@@ -933,7 +933,7 @@ public sealed class WebFetchTests
         var order = new List<Guid>();
         var active = 0;
         var maximumActive = 0;
-        using IDisposable attachment = router.Attach(async (request, cancellationToken) =>
+        using var attachment = router.Attach(async (request, cancellationToken) =>
         {
             var current = Interlocked.Increment(ref active);
             maximumActive = Math.Max(maximumActive, current);
@@ -947,17 +947,17 @@ public sealed class WebFetchTests
             Interlocked.Decrement(ref active);
             return DirectFetchApprovalOutcome.Denied;
         });
-        DirectFetchApprovalRequest firstRequest = CreateApprovalRequest();
-        DirectFetchApprovalRequest secondRequest = CreateApprovalRequest();
+        var firstRequest = CreateApprovalRequest();
+        var secondRequest = CreateApprovalRequest();
 
         // Act
-        Task<DirectFetchApprovalOutcome> first = router.RequestApprovalAsync(firstRequest);
+        var first = router.RequestApprovalAsync(firstRequest);
         await firstStarted.Task;
-        Task<DirectFetchApprovalOutcome> second = router.RequestApprovalAsync(secondRequest);
+        var second = router.RequestApprovalAsync(secondRequest);
         await Task.Delay(25);
         var callsBeforeRelease = order.Count;
         releaseFirst.TrySetResult();
-        DirectFetchApprovalOutcome[] outcomes = await Task.WhenAll(first, second);
+        var outcomes = await Task.WhenAll(first, second);
 
         // Assert
         Assert.Equal(1, callsBeforeRelease);
@@ -973,17 +973,17 @@ public sealed class WebFetchTests
         // Arrange
         using var router = new DirectFetchApprovalPromptRouter();
         var notifications = new List<IDomainEvent>();
-        using IDisposable attachment = router.Attach(
+        using var attachment = router.Attach(
             (_, _) => Task.FromResult(DirectFetchApprovalOutcome.Approved),
             (notification, _) =>
             {
                 notifications.Add(notification);
                 return Task.CompletedTask;
             });
-        DirectFetchApprovalRequest request = CreateApprovalRequest();
+        var request = CreateApprovalRequest();
 
         // Act
-        DirectFetchApprovalOutcome outcome = await router.RequestApprovalAsync(request);
+        var outcome = await router.RequestApprovalAsync(request);
 
         // Assert
         Assert.Equal(DirectFetchApprovalOutcome.Approved, outcome);
@@ -992,7 +992,7 @@ public sealed class WebFetchTests
             notification => Assert.IsType<DirectFetchApprovalPromptStarted>(notification),
             notification =>
             {
-                DirectFetchApprovalPromptCompleted completed =
+                var completed =
                     Assert.IsType<DirectFetchApprovalPromptCompleted>(notification);
                 Assert.Equal(DirectFetchApprovalOutcome.Approved, completed.Outcome);
             });
@@ -1085,7 +1085,7 @@ public sealed class WebFetchTests
             cancellationToken.ThrowIfCancellationRequested();
             CallCount++;
             LastRequest = request;
-            DirectFetchApprovalOutcome outcome = _outcomes.Count > 0
+            var outcome = _outcomes.Count > 0
                 ? _outcomes.Dequeue()
                 : DirectFetchApprovalOutcome.Unavailable;
             return Task.FromResult(outcome);

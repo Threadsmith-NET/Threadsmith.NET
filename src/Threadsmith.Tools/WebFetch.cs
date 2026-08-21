@@ -327,10 +327,10 @@ public sealed class WebFetchOptionsState
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
             ".threadsmith",
             "config.json");
-        IConfigurationRoot repositoryConfiguration = new ConfigurationBuilder()
+        var repositoryConfiguration = new ConfigurationBuilder()
             .AddJsonFile(configurationPath, optional: true)
             .Build();
-        WebFetchOptions next = WebFetchOptions.FromConfiguration(
+        var next = WebFetchOptions.FromConfiguration(
             repositoryConfiguration,
             _trustedConfiguration);
         Volatile.Write(ref _current, next);
@@ -385,7 +385,7 @@ public static class WebFetchUrlPolicy
             throw new WebFetchException(WebFetchFailureKind.InvalidRequest, "The fetch URL violates host bounds.");
         }
 
-        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri)
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || uri.Scheme != Uri.UriSchemeHttps
             || !string.IsNullOrEmpty(uri.UserInfo)
             || uri.Port != 443
@@ -532,7 +532,7 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
         ArgumentNullException.ThrowIfNull(authorizedDirectUrlDigests);
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
-        Uri current = uri;
+        var current = uri;
         var redirects = new List<(Uri From, Uri To)>();
         for (var hop = 0; ; hop++)
         {
@@ -546,11 +546,11 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
                 throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "The direct fetch target was not explicitly authorized.");
             }
 
-            using HttpClient client = await CreatePinnedClientAsync(current, cancellationToken);
+            using var client = await CreatePinnedClientAsync(current, cancellationToken);
             using var request = new HttpRequestMessage(HttpMethod.Get, current);
             request.Headers.UserAgent.ParseAdd("Threadsmith.NET/1.0");
             request.Headers.Accept.ParseAdd("text/html, text/plain, text/markdown, application/xhtml+xml, application/json");
-            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if ((int)response.StatusCode is >= 300 and < 400)
             {
                 if (hop >= options.MaximumRedirects || response.Headers.Location is null)
@@ -558,7 +558,7 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
                     throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "The redirect chain was missing, malformed, or exceeded its bound.");
                 }
 
-                Uri target = WebFetchUrlPolicy.Normalize(new Uri(current, response.Headers.Location).AbsoluteUri, options.MaximumUrlCharacters);
+                var target = WebFetchUrlPolicy.Normalize(new Uri(current, response.Headers.Location).AbsoluteUri, options.MaximumUrlCharacters);
                 if (sourceKind == WebFetchSourceKind.SearchResult && !WebFetchUrlPolicy.SameOrigin(current, target))
                 {
                     throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "Cross-origin search-result redirects are denied.");
@@ -600,9 +600,9 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
 
     private static async Task<HttpClient> CreatePinnedClientAsync(Uri uri, CancellationToken cancellationToken)
     {
-        IPAddress[] addresses = await Dns.GetHostAddressesAsync(uri.IdnHost, cancellationToken);
+        var addresses = await Dns.GetHostAddressesAsync(uri.IdnHost, cancellationToken);
         PublicIpAddressPolicy.EnsureAllPublic(addresses);
-        IPAddress selected = addresses.OrderBy(address => address.AddressFamily).ThenBy(address => address.ToString(), StringComparer.Ordinal).First();
+        var selected = addresses.OrderBy(address => address.AddressFamily).ThenBy(address => address.ToString(), StringComparer.Ordinal).First();
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
@@ -637,7 +637,7 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
             throw new WebFetchException(WebFetchFailureKind.LimitExceeded, "The compressed response exceeded its bound.");
         }
 
-        await using Stream stream = await content.ReadAsStreamAsync(cancellationToken);
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
         return await ReadStreamBoundedAsync(stream, maximumBytes, cancellationToken);
     }
 
@@ -826,7 +826,7 @@ public static class WebReadableTextExtractor
                 throw new WebFetchException(WebFetchFailureKind.LimitExceeded, "An HTML token exceeded the parser bound.");
             }
 
-            ReadOnlySpan<char> token = source.AsSpan(tagStart + 1, tagEnd - tagStart - 1);
+            var token = source.AsSpan(tagStart + 1, tagEnd - tagStart - 1);
             var closing = token.TrimStart().StartsWith("/", StringComparison.Ordinal);
             var declaration = token.TrimStart().StartsWith("!", StringComparison.Ordinal)
                 || token.TrimStart().StartsWith("?", StringComparison.Ordinal);
@@ -966,7 +966,7 @@ public static class WebReadableTextExtractor
 
         while (elements.Count > 0)
         {
-            HtmlElementState element = elements.Pop();
+            var element = elements.Pop();
             if (element.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
                 return;
@@ -1047,7 +1047,7 @@ public sealed class WebContentFetcher : IWebContentFetcher
         IReadOnlySet<string> authorizedDirectUrlDigests,
         CancellationToken cancellationToken = default)
     {
-        WebFetchOptions options = _options.Current;
+        var options = _options.Current;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(options.Timeout);
         WebFetchTransportResponse transport;
@@ -1064,7 +1064,7 @@ public sealed class WebContentFetcher : IWebContentFetcher
         {
             deadline.Token.ThrowIfCancellationRequested();
             ValidateContentSignature(transport.Body, transport.CharacterSet);
-            Encoding encoding = ResolveEncoding(transport.CharacterSet);
+            var encoding = ResolveEncoding(transport.CharacterSet);
             string source;
             try
             {

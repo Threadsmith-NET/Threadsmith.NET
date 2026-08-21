@@ -36,8 +36,8 @@ public static class Milestone5Tests
             DateTimeOffset.UtcNow,
             "M5"));
         await using var workspace = await TransactionalWorkspace.CreateAsync(repository.Baseline, events);
-        string original = await File.ReadAllTextAsync(repository.PathOf("src/Example.cs"));
-        int offset = original.IndexOf("old", StringComparison.Ordinal);
+        var original = await File.ReadAllTextAsync(repository.PathOf("src/Example.cs"));
+        var offset = original.IndexOf("old", StringComparison.Ordinal);
         var mutation = CreateReplacement(repository, "src/Example.cs", offset, "old", "new");
         var set = CreateMutationSet(repository, [mutation]);
 
@@ -47,7 +47,7 @@ public static class Milestone5Tests
         Assert.Contains("-class Example { string Value = \"old\"; }", staged.Preview.UnifiedDiff);
         Assert.Contains("+class Example { string Value = \"new\"; }", staged.Preview.UnifiedDiff);
         Assert.Equal(original, await workspace.ReadBaselineTextAsync("src/Example.cs"));
-        string? stagedText = await workspace.ReadStagedTextAsync(
+        var stagedText = await workspace.ReadStagedTextAsync(
             set.MutationSetId,
             "src/Example.cs");
         Assert.Contains("new", stagedText ?? string.Empty);
@@ -222,10 +222,10 @@ public static class Milestone5Tests
         Assert.Contains("Mutation set", rendered.Workspace);
         Assert.Contains("--- a/src/Example.cs", rendered.Workspace);
         Assert.Contains("+++ b/src/Example.cs", rendered.Workspace);
-        string[] renderedLines = rendered.Workspace
+        var renderedLines = rendered.Workspace
             .Replace(Environment.NewLine, "\n", StringComparison.Ordinal)
             .Split('\n');
-        int hunkIndex = Array.FindIndex(
+        var hunkIndex = Array.FindIndex(
             renderedLines,
             line => line.StartsWith("@@", StringComparison.Ordinal));
         Assert.True(hunkIndex >= 0);
@@ -383,11 +383,11 @@ public static class Milestone5Tests
         Assert.Contains("Each mutation item requires type and relativePath", modelTool.Description, StringComparison.Ordinal);
         Assert.Contains("use baselineSha256", modelTool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use plan file-intent or legacy names kind, path, baselineHash", modelTool.Description, StringComparison.Ordinal);
-        string? strictMutationSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+        var strictMutationSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
             modelTool.Name,
             modelTool.ArgumentsJsonSchema);
         Assert.NotNull(strictMutationSchema);
-        using (JsonDocument strictDocument = JsonDocument.Parse(strictMutationSchema))
+        using (var strictDocument = JsonDocument.Parse(strictMutationSchema))
         {
             var strictRoot = strictDocument.RootElement;
             Assert.False(strictRoot.GetProperty("additionalProperties").GetBoolean());
@@ -465,7 +465,7 @@ public static class Milestone5Tests
                 Risk = MutationRisk.Low,
             },
         };
-        string arguments = JsonSerializer.Serialize(
+        var arguments = JsonSerializer.Serialize(
             envelope,
             new JsonSerializerOptions
             {
@@ -582,7 +582,7 @@ public static class Milestone5Tests
                 Risk = MutationRisk.Medium,
             },
         };
-        string arguments = JsonSerializer.Serialize(
+        var arguments = JsonSerializer.Serialize(
             envelope,
             new JsonSerializerOptions
             {
@@ -716,8 +716,8 @@ public static class Milestone5Tests
         });
         var runId = RunId.New();
         var stepId = StepId.New();
-        string badArguments = CreateArguments("T:Demo.MissingRetriever");
-        string goodArguments = CreateArguments("T:Demo.IRetriever");
+        var badArguments = CreateArguments("T:Demo.MissingRetriever");
+        var goodArguments = CreateArguments("T:Demo.IRetriever");
         var model = new QueueModelProvider(
             new ModelChunk
             {
@@ -827,9 +827,9 @@ public static class Milestone5Tests
         var runId = RunId.New();
         var stepId = StepId.New();
         var baselineFile = Assert.Single(repository.Baseline.Files);
-        int offset = source.IndexOf("}\n", StringComparison.Ordinal);
-        string badArguments = CreateArguments("public void Broken( { }\n");
-        string goodArguments = CreateArguments("public void Fixed() { }\n");
+        var offset = source.IndexOf("}\n", StringComparison.Ordinal);
+        var badArguments = CreateArguments("public void Broken( { }\n");
+        var goodArguments = CreateArguments("public void Fixed() { }\n");
         var model = new QueueModelProvider(
             new ModelChunk
             {
@@ -956,7 +956,7 @@ public static class Milestone5Tests
             ["src/Example.cs"] = source,
         });
         var stepId = StepId.New();
-        string arguments = CreateArguments(stepId);
+        var arguments = CreateArguments(stepId);
         var model = new QueueModelProvider(new ModelChunk
         {
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
@@ -1057,11 +1057,11 @@ public static class Milestone5Tests
         const string upperSource = "namespace Demo;\npublic sealed class Foo\n{\n}\n";
         const string lowerSource = "namespace Demo;\npublic sealed class foo\n{\n}\n";
         var stepId = StepId.New();
-        string repositoryRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-overlay-{Guid.NewGuid():N}");
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-overlay-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryRoot);
         try
         {
-            string caseSensitiveProbePath = Path.Combine(repositoryRoot, "CaseSensitiveProbe");
+            var caseSensitiveProbePath = Path.Combine(repositoryRoot, "CaseSensitiveProbe");
             var workspaceId = WorkspaceId.New();
             var sessionId = SessionId.New();
             var baseline = CreateBaseline(
@@ -1081,9 +1081,9 @@ public static class Milestone5Tests
                     ["src/foo.cs"] = lowerSource,
                 });
             var workspaces = new FakeTransactionalWorkspaceResolver(workspace);
-            int upperOffset = upperSource.IndexOf("}\n", StringComparison.Ordinal);
-            int lowerOffset = lowerSource.IndexOf("}\n", StringComparison.Ordinal);
-            string arguments = CreateArguments(
+            var upperOffset = upperSource.IndexOf("}\n", StringComparison.Ordinal);
+            var lowerOffset = lowerSource.IndexOf("}\n", StringComparison.Ordinal);
+            var arguments = CreateArguments(
                 stepId,
                 baseline.Files.Single(file => file.RelativePath == "src/Foo.cs").Sha256,
                 baseline.Files.Single(file => file.RelativePath == "src/foo.cs").Sha256,
@@ -1231,9 +1231,9 @@ public static class Milestone5Tests
             ["src/Example.cs"] = source,
         });
         var baselineFile = Assert.Single(repository.Baseline.Files);
-        int offset = source.IndexOf("}\n", StringComparison.Ordinal);
+        var offset = source.IndexOf("}\n", StringComparison.Ordinal);
         var stepId = StepId.New();
-        string arguments = CreateArguments(stepId, baselineFile.Sha256, offset, "public void Fixed() { }\n");
+        var arguments = CreateArguments(stepId, baselineFile.Sha256, offset, "public void Fixed() { }\n");
         var model = new QueueModelProvider(new ModelChunk
         {
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
@@ -1430,7 +1430,7 @@ public static class Milestone5Tests
                 Risk = MutationRisk.Low,
             },
         };
-        string arguments = JsonSerializer.Serialize(
+        var arguments = JsonSerializer.Serialize(
             envelope,
             new JsonSerializerOptions
             {
@@ -1504,8 +1504,8 @@ public static class Milestone5Tests
         var runId = RunId.New();
         var stepId = StepId.New();
         var baselineFile = Assert.Single(repository.Baseline.Files);
-        string badArguments = CreateArguments("nameof(IEntityStandardizer).Sector", "\"Test\"");
-        string goodArguments = CreateArguments("StandardizerName", "\"Test\"");
+        var badArguments = CreateArguments("nameof(IEntityStandardizer).Sector", "\"Test\"");
+        var goodArguments = CreateArguments("StandardizerName", "\"Test\"");
         var model = new QueueModelProvider(
             new ModelChunk
             {
@@ -1652,7 +1652,7 @@ public static class Milestone5Tests
               "validationExpectations": ["Solution builds."]
             }
             """;
-        string goodArguments = CreateArguments();
+        var goodArguments = CreateArguments();
         var model = new QueueModelProvider(
             new ModelChunk
             {
@@ -1771,7 +1771,7 @@ public static class Milestone5Tests
         var runId = RunId.New();
         var mutation = CreateReplacement(repository, "src/Example.cs", 0, "old", "new");
         var proposal = CreateMutationSet(repository, [mutation]) with { RunId = runId };
-        string json = JsonSerializer.Serialize(
+        var json = JsonSerializer.Serialize(
             new MutationSetModelOutput(proposal),
             new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } });
         var model = new ChunkModelProvider(
@@ -2067,7 +2067,7 @@ public static class Milestone5Tests
     [Fact]
     public static async Task SemanticMutations_RenameAndSyntaxReplacement_EmitTransactionalPatches()
     {
-        string fixture = Path.Combine(
+        var fixture = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
@@ -2114,9 +2114,9 @@ public static class Milestone5Tests
         Assert.False(renameStage.Conflicts.HasConflicts);
         Assert.Contains("IRenamedService", renameStage.Preview.UnifiedDiff);
 
-        string sourcePath = "Contracts/Services.cs";
-        string source = await File.ReadAllTextAsync(repository.PathOf(sourcePath));
-        int literalOffset = source.IndexOf("\"value\"", StringComparison.Ordinal);
+        var sourcePath = "Contracts/Services.cs";
+        var source = await File.ReadAllTextAsync(repository.PathOf(sourcePath));
+        var literalOffset = source.IndexOf("\"value\"", StringComparison.Ordinal);
         var replacement = await semanticMutations.ReplaceSyntaxNodeAsync(
             new SyntaxReplacementMutationRequest
             {
@@ -2141,7 +2141,7 @@ public static class Milestone5Tests
     [Fact]
     public static async Task SemanticMutations_TextOnlyWorkspace_IsRejectedWithActionableMessage()
     {
-        string fixture = Path.Combine(
+        var fixture = Path.Combine(
             AppContext.BaseDirectory,
             "fixtures",
             "semantic",
@@ -2262,8 +2262,8 @@ public static class Milestone5Tests
     [Fact]
     public static async Task MutationApprovalPolicy_AlwaysTrustRepo_PersistsAndRevokesAtomically()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2273,7 +2273,7 @@ public static class Milestone5Tests
 
             await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo);
 
-            using (JsonDocument persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
+            using (var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
             {
                 Assert.True(persisted.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
                 Assert.Equal(
@@ -2285,7 +2285,7 @@ public static class Milestone5Tests
             var restored = new MutationApprovalPolicyService(reloaded, configPath);
             Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, restored.CurrentPolicy);
             await restored.SetPolicyAsync(MutationApprovalPolicy.ReviewAll);
-            using JsonDocument revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             Assert.False(revoked.RootElement.TryGetProperty("mutation", out _));
             Assert.True(revoked.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
         }
@@ -2302,13 +2302,13 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_RepositoryConfigAlone_CannotGrantPersistentTrust()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-forge-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-forge-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            string identity = CreatePlanPolicyRepositoryIdentity(root);
+            var identity = CreatePlanPolicyRepositoryIdentity(root);
             await File.WriteAllTextAsync(
                 configPath,
                 $"{{\"planning\":{{\"approvalPolicy\":\"alwaysTrustRepo\",\"approvalRepositoryIdentity\":\"{identity}\"}}}}");
@@ -2333,9 +2333,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_UserGrantAlone_CannotGrantPersistentTrust()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-user-alone-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-user-alone-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2361,9 +2361,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_MismatchedRepositoryIdentity_CannotGrantPersistentTrust()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-mismatch-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-mismatch-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2391,8 +2391,8 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_RepositoryTrustSession_FallsBackToTrustedPolicy()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-session-forge-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-session-forge-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2453,9 +2453,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_AlwaysTrustRepo_RestoresFromUserOwnedGrant()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2488,9 +2488,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_ReviewRisky_PersistsAsRepositoryDefault()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-review-risky-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-review-risky-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2519,9 +2519,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_AutoApproveAllValid_PersistsAsRepositoryDefault()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-auto-all-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-auto-all-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2550,20 +2550,20 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalRepositoryPolicyStore_PreservesUnrelatedJsonAndIdentityMarker()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-store-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-store-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
             await File.WriteAllTextAsync(
                 configPath,
                 "{\"unrelated\":{\"kept\":true},\"planning\":{\"note\":\"keep\",\"approvalRepositoryIdentity\":\"stale\"}}");
-            PlanApprovalRepositoryBinding binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
+            var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
             var store = new RepositoryPlanApprovalPolicyStore();
 
             await store.WritePolicyAsync(binding, PlanApprovalPolicy.AlwaysTrustRepo);
 
-            using (JsonDocument trusted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
+            using (var trusted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
             {
                 var planning = trusted.RootElement.GetProperty("planning");
                 Assert.True(trusted.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
@@ -2574,7 +2574,7 @@ public static class Milestone5Tests
 
             await store.WritePolicyAsync(binding, PlanApprovalPolicy.ReviewRisky);
 
-            using JsonDocument downgraded = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            using var downgraded = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             var downgradedPlanning = downgraded.RootElement.GetProperty("planning");
             Assert.Equal("reviewRisky", downgradedPlanning.GetProperty("approvalPolicy").GetString());
             Assert.Equal("keep", downgradedPlanning.GetProperty("note").GetString());
@@ -2593,8 +2593,8 @@ public static class Milestone5Tests
     [Fact]
     public static async Task UserPlanTrustGrantStore_ExactGrantRevocationPreservesUnrelatedData()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-store-{Guid.NewGuid():N}");
-        string trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-store-{Guid.NewGuid():N}");
+        var trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         string identity = new('a', 64);
         string otherIdentity = new('b', 64);
         try
@@ -2609,7 +2609,7 @@ public static class Milestone5Tests
 
             Assert.True(store.IsGranted(identity));
             Assert.False(store.IsGranted(identity.ToUpperInvariant()));
-            using (JsonDocument granted = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath)))
+            using (var granted = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath)))
             {
                 Assert.Equal("dark", granted.RootElement.GetProperty("theme").GetString());
                 var repositories = granted.RootElement.GetProperty("trustedRepositories");
@@ -2620,7 +2620,7 @@ public static class Milestone5Tests
             await store.RevokeAsync(identity);
             await store.RevokeAsync(otherIdentity);
 
-            using JsonDocument revoked = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath));
+            using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath));
             Assert.Equal("dark", revoked.RootElement.GetProperty("theme").GetString());
             Assert.False(revoked.RootElement.TryGetProperty("trustedRepositories", out _));
         }
@@ -2637,8 +2637,8 @@ public static class Milestone5Tests
     [Fact]
     public static async Task UserPlanTrustGrantStore_MalformedTrustDataFailsClosed()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-malformed-{Guid.NewGuid():N}");
-        string trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-malformed-{Guid.NewGuid():N}");
+        var trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(trustPath) ?? root);
@@ -2661,11 +2661,11 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicyPersistence_RepositoryFailureRevokesNewTrustGrant()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-fail-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-fail-{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(root);
-            PlanApprovalRepositoryBinding binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
+            var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
             var operations = new List<string>();
             var repositoryStore = new RecordingPlanApprovalRepositoryStore(operations)
             {
@@ -2694,11 +2694,11 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicyPersistence_DowngradeRevokesBeforeRepositoryWrite()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-downgrade-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-downgrade-{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(root);
-            PlanApprovalRepositoryBinding binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
+            var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
             var operations = new List<string>();
             var repositoryStore = new RecordingPlanApprovalRepositoryStore(operations);
             var trustStore = new RecordingPlanTrustGrantStore(operations);
@@ -2724,9 +2724,9 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_TrustSession_DoesNotRewriteRepositoryPolicy()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-session-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-session-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2758,10 +2758,10 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_Reset_RevokesDormantPersistentTrust()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-dormant-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        string identity = CreatePlanPolicyRepositoryIdentity(root);
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-dormant-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var identity = CreatePlanPolicyRepositoryIdentity(root);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2803,10 +2803,10 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_RevocationMarkerFailure_RemovesGrantBeforeMarker()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-revoke-fail-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        string identity = CreatePlanPolicyRepositoryIdentity(root);
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-revoke-fail-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var identity = CreatePlanPolicyRepositoryIdentity(root);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2842,10 +2842,10 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_AlwaysTrustRepoRepositoryWriteFailure_RollsBackUserGrant()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-fail-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        string identity = CreatePlanPolicyRepositoryIdentity(root);
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-fail-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
+        var identity = CreatePlanPolicyRepositoryIdentity(root);
         try
         {
             Directory.CreateDirectory(configPath);
@@ -2872,11 +2872,11 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_BindRepository_RetainsUserLayerWhenRepositoryOmitsPolicy()
     {
-        string firstRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-first-{Guid.NewGuid():N}");
-        string secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
-        string firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
-        string secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
+        var firstRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-first-{Guid.NewGuid():N}");
+        var secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
+        var firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
+        var secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(firstConfigPath) ?? firstRoot);
@@ -2913,11 +2913,11 @@ public static class Milestone5Tests
     [Fact]
     public static async Task PlanApprovalPolicy_BindRepository_RetainsNonRepositoryLayers()
     {
-        string firstRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-first-{Guid.NewGuid():N}");
-        string secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
-        string firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
-        string secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
-        string userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
+        var firstRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-first-{Guid.NewGuid():N}");
+        var secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
+        var firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
+        var secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
+        var userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(firstConfigPath) ?? firstRoot);
@@ -2966,7 +2966,7 @@ public static class Milestone5Tests
             return Task.CompletedTask;
         });
         var service = new PlanApprovalPolicyService(events: events);
-        SessionId sessionId = SessionId.New();
+        var sessionId = SessionId.New();
 
         var policy = await service.HandleAsync(new SetPlanApprovalPolicyCommand(
             PlanApprovalPolicy.ReviewRisky,
@@ -2984,8 +2984,8 @@ public static class Milestone5Tests
     [Fact]
     public static async Task MutationApprovalPolicy_Revocation_HandlesDifferentlyCasedKeys()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-case-{Guid.NewGuid():N}");
-        string configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-case-{Guid.NewGuid():N}");
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
@@ -2998,7 +2998,7 @@ public static class Milestone5Tests
             Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
             await service.SetPolicyAsync(MutationApprovalPolicy.ReviewAll);
 
-            using JsonDocument revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             var mutation = revoked.RootElement.GetProperty("Mutation");
             Assert.False(mutation.TryGetProperty("ApprovalPolicy", out _));
             Assert.Equal(42, mutation.GetProperty("LargeDiffThreshold").GetInt32());
@@ -3189,8 +3189,8 @@ public static class Milestone5Tests
 
     private static string CreatePlanPolicyRepositoryIdentity(string repositoryRoot)
     {
-        string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
-        string identityInput = OperatingSystem.IsWindows()
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+        var identityInput = OperatingSystem.IsWindows()
             ? normalized.ToUpperInvariant()
             : normalized;
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identityInput)));
@@ -3203,7 +3203,7 @@ public static class Milestone5Tests
             return false;
         }
 
-        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(userTrustPath));
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(userTrustPath));
         return document.RootElement.TryGetProperty("trustedRepositories", out var repositories)
             && repositories.TryGetProperty(repositoryIdentity, out var grant)
             && grant.ValueKind == JsonValueKind.True;
@@ -3268,7 +3268,7 @@ public static class Milestone5Tests
                 CreateNoWindow = true,
             },
         };
-        foreach (string argument in arguments)
+        foreach (var argument in arguments)
         {
             process.StartInfo.ArgumentList.Add(argument);
         }
@@ -3277,8 +3277,8 @@ public static class Milestone5Tests
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
-        string output = await outputTask;
-        string error = await errorTask;
+        var output = await outputTask;
+        var error = await errorTask;
         Assert.True(process.ExitCode == 0, error);
         return output;
     }
@@ -3306,11 +3306,11 @@ public static class Milestone5Tests
             foreach (var file in request.Baseline.Files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string fullPath = Path.Combine(
+                var fullPath = Path.Combine(
                     request.Baseline.RepositoryPath,
                     file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                string oldText = await File.ReadAllTextAsync(fullPath, cancellationToken);
-                string newText = oldText.Replace("IRetriever", request.NewName, StringComparison.Ordinal);
+                var oldText = await File.ReadAllTextAsync(fullPath, cancellationToken);
+                var newText = oldText.Replace("IRetriever", request.NewName, StringComparison.Ordinal);
                 if (string.Equals(oldText, newText, StringComparison.Ordinal))
                 {
                     continue;
@@ -3384,10 +3384,10 @@ public static class Milestone5Tests
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(source);
             var files = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (string sourcePath in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            foreach (var sourcePath in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
             {
-                string relativePath = Path.GetRelativePath(source, sourcePath).Replace('\\', '/');
-                string[] segments = relativePath.Split('/');
+                var relativePath = Path.GetRelativePath(source, sourcePath).Replace('\\', '/');
+                var segments = relativePath.Split('/');
                 if (segments.Contains("bin", StringComparer.OrdinalIgnoreCase)
                     || segments.Contains("obj", StringComparer.OrdinalIgnoreCase))
                 {
@@ -3406,11 +3406,11 @@ public static class Milestone5Tests
             RepositoryTrustLevel trustLevel = RepositoryTrustLevel.TrustedMutation)
         {
             ArgumentNullException.ThrowIfNull(files);
-            string root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-{Guid.NewGuid():N}");
+            var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-{Guid.NewGuid():N}");
             Directory.CreateDirectory(root);
             foreach (var file in files)
             {
-                string path = Path.Combine(root, file.Key.Replace('/', Path.DirectorySeparatorChar));
+                var path = Path.Combine(root, file.Key.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(
                     Path.GetDirectoryName(path)
                         ?? throw new InvalidOperationException("A test file has no parent directory."));
@@ -3418,9 +3418,9 @@ public static class Milestone5Tests
             }
 
             var hashes = new List<WorkspaceFileHash>();
-            foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                byte[] bytes = await File.ReadAllBytesAsync(path);
+                var bytes = await File.ReadAllBytesAsync(path);
                 hashes.Add(new WorkspaceFileHash(
                     Path.GetRelativePath(root, path).Replace('\\', '/'),
                     Convert.ToHexStringLower(SHA256.HashData(bytes)),
@@ -3446,15 +3446,15 @@ public static class Milestone5Tests
 
         public ValueTask DisposeAsync()
         {
-            string tempRoot = Path.GetFullPath(Path.GetTempPath());
-            string normalized = Path.GetFullPath(Root);
+            var tempRoot = Path.GetFullPath(Path.GetTempPath());
+            var normalized = Path.GetFullPath(Root);
             if (!normalized.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase)
                 || !Path.GetFileName(normalized).StartsWith("threadsmith-m5-", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Refusing to remove a test directory outside its owned root.");
             }
 
-            foreach (string path in Directory.EnumerateFileSystemEntries(
+            foreach (var path in Directory.EnumerateFileSystemEntries(
                 normalized,
                 "*",
                 SearchOption.AllDirectories))

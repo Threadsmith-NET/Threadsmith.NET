@@ -30,7 +30,7 @@ public static class MutationRiskCalculator
         var outsideRepository = false;
         var configChanges = false;
         var dependencyChanges = false;
-        foreach ((Mutation mutation, var relativePath) in mutationSet.Mutations.SelectMany(mutation =>
+        foreach ((var mutation, var relativePath) in mutationSet.Mutations.SelectMany(mutation =>
             (mutation.DestinationRelativePath is null
                 ? [mutation.RelativePath]
                 : new[] { mutation.RelativePath, mutation.DestinationRelativePath })
@@ -149,7 +149,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             }
 
             EnsureNoReparsePoints(normalizedRoot, configurationPath);
-            IConfigurationRoot configuration = new ConfigurationBuilder()
+            var configuration = new ConfigurationBuilder()
                 .AddJsonFile(configurationPath, optional: true)
                 .Build();
             ApplyConfiguration(configuration);
@@ -297,7 +297,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             configurationPath,
             async token =>
             {
-                JsonObject root = File.Exists(configurationPath)
+                var root = File.Exists(configurationPath)
                     ? JsonNode.Parse(
                         await File.ReadAllTextAsync(configurationPath, token),
                         new JsonNodeOptions { PropertyNameCaseInsensitive = true },
@@ -305,7 +305,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                         ?? throw new InvalidOperationException(
                             "Repository configuration must contain a JSON object.")
                     : [];
-                JsonObject mutation = root["mutation"] as JsonObject ?? [];
+                var mutation = root["mutation"] as JsonObject ?? [];
                 root["mutation"] = mutation;
                 if (policy == MutationApprovalPolicy.AlwaysTrustRepo)
                 {

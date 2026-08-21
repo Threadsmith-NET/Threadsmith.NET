@@ -1417,18 +1417,29 @@ public sealed class TuiController
         }
 
         var cancelled = await _presenter.CancelAsync(sessionId.Value, runId.Value, cancellationToken);
-        if (cancelled)
+        if (!cancelled)
         {
-            lock (_gate)
+            return false;
+        }
+
+        try
+        {
+            _ = await _presenter.WaitAsync(runId.Value, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled run reports its terminal state through the wait boundary by throwing.
+        }
+
+        lock (_gate)
+        {
+            if (_activeRunId == runId)
             {
-                if (_activeRunId == runId)
-                {
-                    _activeRunId = null;
-                }
+                _activeRunId = null;
             }
         }
 
-        return cancelled;
+        return true;
     }
 
     /// <summary>Approves the active run's pending plan.</summary>

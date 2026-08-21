@@ -35,12 +35,12 @@ public sealed class CorrectionLoop
         }
 
         var currentCode = changedCode;
-        IReadOnlyList<Diagnostic> diagnostics = initialDiagnostics;
+        var diagnostics = initialDiagnostics;
         var attempts = 0;
         while (attempts < maximumAttempts)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Diagnostic? introducedError = diagnostics.FirstOrDefault(diagnostic =>
+            var introducedError = diagnostics.FirstOrDefault(diagnostic =>
                 diagnostic.Severity == DiagnosticSeverity.Error
                 && (diagnostic.Classification == DiagnosticClassification.Introduced
                     || (diagnostic.Classification == DiagnosticClassification.ConfidenceDegraded
@@ -52,7 +52,7 @@ public sealed class CorrectionLoop
             }
 
             attempts++;
-            CorrectionAttemptResult result = await attemptCorrectionAsync(
+            var result = await attemptCorrectionAsync(
                 new CorrectionContext(currentCode, introducedError, contract, attempts),
                 cancellationToken);
             ArgumentNullException.ThrowIfNull(result);

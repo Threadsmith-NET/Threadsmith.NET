@@ -61,8 +61,8 @@ public static class ToolStateManagerTests
             Assert.True(state.IsEnabled("optional"));
             await state.DisableAsync("optional");
 
-            using JsonDocument first = JsonDocument.Parse(await File.ReadAllTextAsync(firstConfig));
-            using JsonDocument second = JsonDocument.Parse(await File.ReadAllTextAsync(secondConfig));
+            using var first = JsonDocument.Parse(await File.ReadAllTextAsync(firstConfig));
+            using var second = JsonDocument.Parse(await File.ReadAllTextAsync(secondConfig));
             Assert.Equal(
                 "optional",
                 Assert.Single(first.RootElement.GetProperty("tools").GetProperty("disabled").EnumerateArray()).GetString());
@@ -132,7 +132,7 @@ public static class ToolStateManagerTests
             await state.DisableAsync("optional");
             await state.DisableAsync("essential");
 
-            using JsonDocument persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             Assert.True(persisted.RootElement.GetProperty("unrelated").GetProperty("value").GetBoolean());
             Assert.Equal(
                 "optional",
@@ -188,7 +188,7 @@ public static class ToolStateManagerTests
 
             await state.DisableAsync("optional");
 
-            using JsonDocument persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             Assert.True(persisted.RootElement.GetProperty("unrelated").GetBoolean());
             Assert.Empty(persisted.RootElement.GetProperty("tools").GetProperty("enabled").EnumerateArray());
             Assert.Equal(

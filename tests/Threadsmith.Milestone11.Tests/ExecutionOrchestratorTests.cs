@@ -401,7 +401,7 @@ public sealed class ExecutionOrchestratorTests
         var outcome = await fixture.Orchestrator.WaitForOutcomeAsync(
             fixture.StartRequest.RunId,
             TestContext.Current.CancellationToken);
-        string? finalDiff = outcome.FinalDiff is null
+        var finalDiff = outcome.FinalDiff is null
             ? null
             : await fixture.Artifacts.ReadAsync(outcome.FinalDiff);
 
@@ -547,7 +547,7 @@ public sealed class ExecutionOrchestratorTests
         // Act
         var outcome = await fixture.Orchestrator.ContinueAsync(
             CreateContinuation(fixture, fixture.CorrectionStaged));
-        string? finalDiff = outcome.FinalDiff is null
+        var finalDiff = outcome.FinalDiff is null
             ? null
             : await fixture.Artifacts.ReadAsync(outcome.FinalDiff);
 
@@ -647,7 +647,7 @@ public sealed class ExecutionOrchestratorTests
 
         // Act
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change example"));
-        bool succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(runId));
+        var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(runId));
 
         // Assert
         Assert.True(succeeded);
@@ -707,14 +707,14 @@ public sealed class ExecutionOrchestratorTests
     public async Task CurrentMigrations_RetainExecutionRunsTable()
     {
         // Arrange
-        string databasePath = Path.Combine(Path.GetTempPath(), $"threadsmith-m11-{Guid.NewGuid():N}.db");
-        string connectionString = $"Data Source={databasePath};Pooling=False";
+        var databasePath = Path.Combine(Path.GetTempPath(), $"threadsmith-m11-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={databasePath};Pooling=False";
         try
         {
             var runner = new MigrationRunner(connectionString, DefaultMigrations.All);
 
             // Act
-            int version = await runner.RunAsync();
+            var version = await runner.RunAsync();
 
             // Assert
             Assert.Equal(8, version);
@@ -722,7 +722,7 @@ public sealed class ExecutionOrchestratorTests
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='execution_runs';";
-            long count = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            var count = (long)(await command.ExecuteScalarAsync() ?? 0L);
             Assert.Equal(1, count);
         }
         finally
@@ -738,14 +738,14 @@ public sealed class ExecutionOrchestratorTests
         bool includeBuildValidation = false,
         bool blockFirstProposal = false)
     {
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
-        WorkspaceId workspaceId = WorkspaceId.New();
-        StepId stepId = StepId.New();
-        StepId secondStepId = StepId.New();
-        MutationSetId mutationSetId = MutationSetId.New();
-        MutationId mutationId = MutationId.New();
-        ApprovalId approvalId = ApprovalId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        var workspaceId = WorkspaceId.New();
+        var stepId = StepId.New();
+        var secondStepId = StepId.New();
+        var mutationSetId = MutationSetId.New();
+        var mutationId = MutationId.New();
+        var approvalId = ApprovalId.New();
         var capturedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
         var baseline = new WorkspaceBaseline(
             workspaceId,
@@ -813,7 +813,7 @@ public sealed class ExecutionOrchestratorTests
                 Length = 3,
             },
         };
-        MutationId lifecycleMutationId = MutationId.New();
+        var lifecycleMutationId = MutationId.New();
         if (includeRejectedLifecycleMutation)
         {
             mutations.Add(new Mutation
@@ -865,8 +865,8 @@ public sealed class ExecutionOrchestratorTests
         {
             PlanStepIds = [stepId],
         };
-        MutationSetId correctionSetId = MutationSetId.New();
-        MutationId correctionMutationId = MutationId.New();
+        var correctionSetId = MutationSetId.New();
+        var correctionMutationId = MutationId.New();
         var correctionMutationSet = mutationSet with
         {
             MutationSetId = correctionSetId,
@@ -1550,7 +1550,7 @@ public sealed class ExecutionOrchestratorTests
             string content,
             CancellationToken cancellationToken = default)
         {
-            string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                 Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
             _content[hash] = content;
             return Task.FromResult(new ExecutionArtifactReference(
@@ -1563,7 +1563,7 @@ public sealed class ExecutionOrchestratorTests
             ExecutionArtifactReference reference,
             CancellationToken cancellationToken = default)
         {
-            _content.TryGetValue(reference.ContentHash, out string? content);
+            _content.TryGetValue(reference.ContentHash, out var content);
             return Task.FromResult(content);
         }
     }

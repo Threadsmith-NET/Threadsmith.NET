@@ -131,13 +131,13 @@ internal sealed class McpToolApprovalStore
         bool permissionsSafe;
         if (OperatingSystem.IsWindows())
         {
-            FileSecurity security = file.GetAccessControl(
+            var security = file.GetAccessControl(
                 AccessControlSections.Access | AccessControlSections.Owner);
             permissionsSafe = HasSafeWindowsPermissions(security);
         }
         else
         {
-            UnixFileMode mode = File.GetUnixFileMode(path);
+            var mode = File.GetUnixFileMode(path);
             const UnixFileMode unsafeModes = UnixFileMode.GroupRead | UnixFileMode.GroupWrite
                 | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherWrite
                 | UnixFileMode.OtherExecute;
@@ -154,7 +154,7 @@ internal sealed class McpToolApprovalStore
             throw new InvalidOperationException("The MCP tool approval store exceeds its host-owned size bound.");
         }
 
-        JsonObject root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+        var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
             ?? throw new InvalidOperationException("The MCP tool approval store must contain a JSON object.");
         if (root["schemaVersion"]?.GetValue<int>() != CurrentSchemaVersion
             || root["approvals"] is not JsonArray approvalNodes
@@ -164,7 +164,7 @@ internal sealed class McpToolApprovalStore
         }
 
         var approvals = new HashSet<string>(StringComparer.Ordinal);
-        foreach (JsonNode? node in approvalNodes)
+        foreach (var node in approvalNodes)
         {
             var approval = node?.GetValue<string>()
                 ?? throw new InvalidOperationException("The MCP tool approval store contains an invalid entry.");
@@ -180,8 +180,8 @@ internal sealed class McpToolApprovalStore
     [SupportedOSPlatform("windows")]
     private static bool HasSafeWindowsPermissions(FileSecurity security)
     {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-        SecurityIdentifier? currentUser = identity.User;
+        using var identity = WindowsIdentity.GetCurrent();
+        var currentUser = identity.User;
         if (currentUser is null
             || security.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner
             || !owner.Equals(currentUser))
@@ -197,7 +197,7 @@ internal sealed class McpToolApprovalStore
             return false;
         }
 
-        AuthorizationRuleCollection rules = security.GetAccessRules(
+        var rules = security.GetAccessRules(
             includeExplicit: true,
             includeInherited: true,
             typeof(SecurityIdentifier));
@@ -249,11 +249,11 @@ internal sealed class McpToolApprovalStore
                         .Order(StringComparer.Ordinal)
                         .Select(value => (JsonNode?)JsonValue.Create(value))]),
                 };
-                byte[] content = Encoding.UTF8.GetBytes(root.ToJsonString() + Environment.NewLine);
+                var content = Encoding.UTF8.GetBytes(root.ToJsonString() + Environment.NewLine);
                 var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
                 try
                 {
-                    await using (FileStream stream = CreatePrivateFile(temporaryPath))
+                    await using (var stream = CreatePrivateFile(temporaryPath))
                     {
                         await stream.WriteAsync(content, token);
                         await stream.FlushAsync(token);
@@ -262,7 +262,7 @@ internal sealed class McpToolApprovalStore
                     File.Move(temporaryPath, path, overwrite: true);
                     if (OperatingSystem.IsWindows())
                     {
-                        FileSecurity security = new FileInfo(path).GetAccessControl(
+                        var security = new FileInfo(path).GetAccessControl(
                             AccessControlSections.Access | AccessControlSections.Owner);
                         if (!HasSafeWindowsPermissions(security))
                         {
@@ -308,8 +308,8 @@ internal sealed class McpToolApprovalStore
     [SupportedOSPlatform("windows")]
     private static FileSecurity CreatePrivateWindowsSecurity()
     {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-        SecurityIdentifier currentUser = identity.User
+        using var identity = WindowsIdentity.GetCurrent();
+        var currentUser = identity.User
             ?? throw new InvalidOperationException("The current Windows user has no security identifier.");
         var security = new FileSecurity();
         security.SetOwner(currentUser);

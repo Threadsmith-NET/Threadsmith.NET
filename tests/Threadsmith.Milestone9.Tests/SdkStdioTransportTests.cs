@@ -45,7 +45,7 @@ public sealed class SdkStdioTransportTests
     [Fact]
     public async Task Real_stdio_server_connects_imports_invokes_and_disconnects()
     {
-        string serverAssembly = GetServerAssemblyPath();
+        var serverAssembly = GetServerAssemblyPath();
         Assert.True(File.Exists(serverAssembly), $"MCP test server fixture is unavailable at '{serverAssembly}'.");
         var adapter = CreateAdapter();
         var profile = CreateProfile([serverAssembly]);
@@ -57,7 +57,7 @@ public sealed class SdkStdioTransportTests
         Assert.True(Assert.Single(adapter.GetConnections()).ProcessPresent);
         var tool = Assert.Single(connection.Tools);
         Assert.Equal("stdio-test:echo", tool.Definition.Id);
-        object input = tool.DeserializeInput("{\"message\":\"hello-mcp\"}");
+        var input = tool.DeserializeInput("{\"message\":\"hello-mcp\"}");
         var envelope = await tool.ExecuteAsync(
             input,
             new ToolExecutionContext(
@@ -78,8 +78,8 @@ public sealed class SdkStdioTransportTests
     [Fact]
     public async Task Hung_stdio_server_process_is_killed_within_drain_timeout()
     {
-        string serverAssembly = GetServerAssemblyPath();
-        string pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
+        var serverAssembly = GetServerAssemblyPath();
+        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
         var adapter = CreateAdapter();
         var profile = CreateProfile(
             [serverAssembly, "--hang-on-shutdown", "--pid-file", pidFile],
@@ -89,7 +89,7 @@ public sealed class SdkStdioTransportTests
             var connection = await adapter.ConnectAsync(profile);
             Assert.True(connection.Succeeded, connection.Status.Error);
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
-            int processId = int.Parse(await File.ReadAllTextAsync(pidFile));
+            var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
             var stopwatch = Stopwatch.StartNew();
 
             await adapter.DisconnectAsync(profile.Id);
@@ -109,8 +109,8 @@ public sealed class SdkStdioTransportTests
     [Fact]
     public async Task StopAsync_RemainingDeadlineOverridesOriginalSdkShutdownTimeout()
     {
-        string serverAssembly = GetServerAssemblyPath();
-        string pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
+        var serverAssembly = GetServerAssemblyPath();
+        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
         var transport = new SdkStdioTransport(
             new SecretOutputSanitizer(),
             NullLoggerFactory.Instance);
@@ -121,7 +121,7 @@ public sealed class SdkStdioTransportTests
         {
             _ = await transport.StartAsync(profile, new Dictionary<string, string>());
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
-            int processId = int.Parse(await File.ReadAllTextAsync(pidFile));
+            var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
             var stopwatch = Stopwatch.StartNew();
 
@@ -144,8 +144,8 @@ public sealed class SdkStdioTransportTests
     [Fact]
     public async Task Failed_stdio_handshake_terminates_spawned_process()
     {
-        string serverAssembly = GetServerAssemblyPath();
-        string pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
+        var serverAssembly = GetServerAssemblyPath();
+        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
         var transport = new SdkStdioTransport(
             new SecretOutputSanitizer(),
             NullLoggerFactory.Instance);
@@ -159,7 +159,7 @@ public sealed class SdkStdioTransportTests
         {
             await Assert.ThrowsAnyAsync<Exception>(() => transport.StartAsync(profile, new Dictionary<string, string>()));
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
-            int processId = int.Parse(await File.ReadAllTextAsync(pidFile));
+            var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
 
             Assert.True(WaitForExit(processId, TimeSpan.FromSeconds(3)), $"MCP fixture process {processId} remained alive.");
         }
@@ -246,7 +246,7 @@ public sealed class SdkStdioTransportTests
     {
         try
         {
-            using Process process = Process.GetProcessById(processId);
+            using var process = Process.GetProcessById(processId);
             return process.WaitForExit((int)timeout.TotalMilliseconds);
         }
         catch (ArgumentException)

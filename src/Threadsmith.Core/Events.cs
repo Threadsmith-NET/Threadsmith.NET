@@ -732,7 +732,7 @@ public static class DomainEventJson
     public static string GetDiscriminator(IDomainEvent domainEvent)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
-        return EventNames.TryGetValue(domainEvent.GetType(), out string? name)
+        return EventNames.TryGetValue(domainEvent.GetType(), out var name)
             ? name
             : throw new NotSupportedException($"Unregistered domain event type {domainEvent.GetType().FullName}.");
     }

@@ -35,12 +35,12 @@ public sealed class TestCorrectionLoop
         }
 
         var currentCode = changedCode;
-        TestValidationResult validation = initialValidation;
+        var validation = initialValidation;
         var attempts = 0;
         while (attempts < maximumAttempts)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            TestResult? failure = validation.Results.FirstOrDefault(result =>
+            var failure = validation.Results.FirstOrDefault(result =>
                 result.Outcome == TestOutcome.Failed);
             if (failure is null && validation.Completed)
             {
@@ -55,7 +55,7 @@ public sealed class TestCorrectionLoop
             }
 
             attempts++;
-            TestCorrectionAttemptResult result = await attemptCorrectionAsync(
+            var result = await attemptCorrectionAsync(
                 new TestCorrectionContext(currentCode, failure, contract, attempts),
                 cancellationToken);
             ArgumentNullException.ThrowIfNull(result);

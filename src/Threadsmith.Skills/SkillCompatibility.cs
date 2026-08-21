@@ -72,7 +72,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.Definitions
             .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
         var availableRequired = new List<string>();
-        foreach (string toolId in requirements.RequiredTools)
+        foreach (var toolId in requirements.RequiredTools)
         {
             if (!definitions.TryGetValue(toolId, out var definition))
             {
@@ -80,7 +80,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
                 continue;
             }
 
-            if (requirements.ToolContractVersions.TryGetValue(toolId, out string? minimumVersion)
+            if (requirements.ToolContractVersions.TryGetValue(toolId, out var minimumVersion)
                 && SemanticVersionComparer.Instance.Compare(definition.Version, minimumVersion) < 0)
             {
                 denials.Add($"tool-contract-incompatible:{toolId}");
@@ -105,7 +105,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
                     request.Sensitivity))
                 .OrderBy(profile => profile.Name, StringComparer.Ordinal),
         ];
-        bool requiresModel = candidate.Metadata.Workflow.Steps.Any(step =>
+        var requiresModel = candidate.Metadata.Workflow.Steps.Any(step =>
             step.Kind is SkillWorkflowStepKind.InvokeProcedure
                 or SkillWorkflowStepKind.CollectEvidence
                 or SkillWorkflowStepKind.Summarize);

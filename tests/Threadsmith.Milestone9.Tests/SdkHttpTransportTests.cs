@@ -89,7 +89,7 @@ public sealed class SdkHttpTransportTests
     [Fact]
     public async Task OAuth_enabled_profile_routes_to_transport()
     {
-        bool factoryCalled = false;
+        var factoryCalled = false;
         var adapter = new McpAdapter(
             _ =>
             {
@@ -127,7 +127,7 @@ public sealed class SdkHttpTransportTests
             profile,
             capability,
             new SecretOutputSanitizer());
-        object input = tool.DeserializeInput("{}");
+        var input = tool.DeserializeInput("{}");
         var policy = new DefaultPolicyEngine();
 
         Assert.Equal(ToolCategory.CodeExecution, tool.Definition.Category);
@@ -240,9 +240,9 @@ public sealed class SdkHttpTransportTests
     [Fact]
     public async Task Live_http_endpoint_connects_imports_invokes_and_disconnects()
     {
-        string? endpoint = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ENDPOINT");
-        string? toolName = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_TOOL");
-        string arguments = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ARGUMENTS") ?? "{}";
+        var endpoint = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ENDPOINT");
+        var toolName = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_TOOL");
+        var arguments = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ARGUMENTS") ?? "{}";
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(toolName))
         {
             Assert.Skip("Set THREADSMITH_MCP_HTTP_ENDPOINT and THREADSMITH_MCP_HTTP_TOOL for live HTTP MCP verification.");
@@ -269,7 +269,7 @@ public sealed class SdkHttpTransportTests
         var tool = Assert.Single(
             connection.Tools,
             candidate => string.Equals(candidate.Capability.ServerName, toolName, StringComparison.Ordinal));
-        object input = tool.DeserializeInput(arguments);
+        var input = tool.DeserializeInput(arguments);
         var result = await tool.ExecuteAsync(
             input,
             new ToolExecutionContext(
@@ -316,7 +316,7 @@ public sealed class SdkHttpTransportTests
 
         public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(Values.TryGetValue(secretReference, out string? value) ? value : null);
+            return Task.FromResult(Values.TryGetValue(secretReference, out var value) ? value : null);
         }
     }
 

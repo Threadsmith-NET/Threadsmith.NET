@@ -49,7 +49,7 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
         var repositoryRoot = GetCanonicalRepositoryRoot(request.RepositoryPath);
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         lock (_gate)
@@ -208,7 +208,7 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var repositoryRoot = GetCanonicalRepositoryRoot(repositoryPath);
         var fullPath = Path.GetFullPath(path, repositoryRoot);
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         if (!fullPath.Equals(repositoryRoot, comparison)

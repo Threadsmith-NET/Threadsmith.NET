@@ -166,7 +166,7 @@ public sealed class SessionLifecycleApplication :
 
             var previousIdentity = _repositoryIdentity;
             var previousDisplayName = _repositoryDisplayName;
-            SessionCatalogEntry? source = _active;
+            var source = _active;
             try
             {
                 if (source is not null)
@@ -239,8 +239,8 @@ public sealed class SessionLifecycleApplication :
                     "Session transition requires a complete safe boundary. Cancel or finish active work first.");
             }
 
-            SessionCatalogEntry? source = _active;
-            SessionModelSelectionRecord? sourceSelection = CaptureModelSelection();
+            var source = _active;
+            var sourceSelection = CaptureModelSelection();
             if (kind == SessionTransitionKind.Resume
                 && source is { } current
                 && current.SessionId == requestedSessionId)
@@ -306,8 +306,8 @@ public sealed class SessionLifecycleApplication :
         SessionCatalogEntry? source,
         CancellationToken cancellationToken)
     {
-        DateTimeOffset now = _timeProvider.GetUtcNow();
-        SessionId sessionId = await _sessions.CreateRegisteredSessionAsync("Interactive", cancellationToken);
+        var now = _timeProvider.GetUtcNow();
+        var sessionId = await _sessions.CreateRegisteredSessionAsync("Interactive", cancellationToken);
         var entry = new SessionCatalogEntry
         {
             SessionId = sessionId,
@@ -338,7 +338,7 @@ public sealed class SessionLifecycleApplication :
         SessionCatalogEntry? source,
         CancellationToken cancellationToken)
     {
-        SessionCatalogEntry entry = await _lifecycleStore.GetAsync(sessionId, cancellationToken)
+        var entry = await _lifecycleStore.GetAsync(sessionId, cancellationToken)
             ?? throw new KeyNotFoundException($"Session {sessionId.Value:D} was not found.");
         if (!string.Equals(entry.RepositoryIdentity, _repositoryIdentity, StringComparison.Ordinal))
         {
@@ -352,9 +352,9 @@ public sealed class SessionLifecycleApplication :
         }
 
         var candidate = new InMemoryProjectionStore();
-        SessionRestorationResult restoration = await _restorer.RestoreAsync(sessionId, candidate, cancellationToken);
+        var restoration = await _restorer.RestoreAsync(sessionId, candidate, cancellationToken);
         var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
-        SessionProjection? restoredProjection = await candidate.GetAsync<SessionProjection>(key, cancellationToken);
+        var restoredProjection = await candidate.GetAsync<SessionProjection>(key, cancellationToken);
         var warnings = new List<string>();
         if (!string.IsNullOrWhiteSpace(restoration.Warnings))
         {
@@ -377,7 +377,7 @@ public sealed class SessionLifecycleApplication :
             _sessions.RegisterRestoredSession(sessionId);
         }
 
-        SessionDurableUsage usage = await _lifecycleStore.GetUsageAsync(sessionId, cancellationToken);
+        var usage = await _lifecycleStore.GetUsageAsync(sessionId, cancellationToken);
         _usage.Restore(sessionId, usage);
         entry = entry with
         {
@@ -410,9 +410,9 @@ public sealed class SessionLifecycleApplication :
         SessionCatalogEntry source,
         CancellationToken cancellationToken)
     {
-        SessionDurableUsage sourceUsage = _usage.GetDurableSnapshot(source.SessionId);
-        DateTimeOffset now = _timeProvider.GetUtcNow();
-        SessionId destinationId = SessionId.New();
+        var sourceUsage = _usage.GetDurableSnapshot(source.SessionId);
+        var now = _timeProvider.GetUtcNow();
+        var destinationId = SessionId.New();
         var destination = source with
         {
             SessionId = destinationId,
@@ -452,7 +452,7 @@ public sealed class SessionLifecycleApplication :
         CancellationToken cancellationToken,
         bool preserveModelSelection = false)
     {
-        SessionCatalogEntry checkpoint = entry with
+        var checkpoint = entry with
         {
             State = state,
             UpdatedAt = _timeProvider.GetUtcNow(),
@@ -473,7 +473,7 @@ public sealed class SessionLifecycleApplication :
             return null;
         }
 
-        ActiveModelSelectionSnapshot selection = _activeModels.Current;
+        var selection = _activeModels.Current;
         return new SessionModelSelectionRecord
         {
             ProviderId = selection.ProviderId,
@@ -489,10 +489,10 @@ public sealed class SessionLifecycleApplication :
         bool createBaseProjection,
         CancellationToken cancellationToken)
     {
-        SessionProjection? source = sourceSessionId is { } sourceId
+        var source = sourceSessionId is { } sourceId
             ? _projections.GetSession(sourceId)
             : null;
-        DateTimeOffset now = _timeProvider.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
         if (createBaseProjection)
         {
             await _events.PublishAsync(

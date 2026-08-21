@@ -24,7 +24,7 @@ public static class Plan46ReasoningPrivacyTests
             await store.InitializeAsync();
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
-            await using SqliteCommand seed = connection.CreateCommand();
+            await using var seed = connection.CreateCommand();
             seed.CommandText = """
                 INSERT INTO domain_events(session_id, event_name, schema_version, payload)
                 VALUES($session, 'modelReasoningObserved', 1, $reasoning),
@@ -37,9 +37,9 @@ public static class Plan46ReasoningPrivacyTests
 
             await new ReasoningPrivacyMigration().ApplyAsync(connection);
 
-            await using SqliteCommand inspect = connection.CreateCommand();
+            await using var inspect = connection.CreateCommand();
             inspect.CommandText = "SELECT event_name, payload FROM domain_events ORDER BY sequence;";
-            await using SqliteDataReader reader = await inspect.ExecuteReaderAsync();
+            await using var reader = await inspect.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
             Assert.Equal("sessionCreated", reader.GetString(0));
             Assert.DoesNotContain("reasoning-canary", reader.GetString(1), StringComparison.Ordinal);

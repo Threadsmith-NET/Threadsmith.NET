@@ -34,7 +34,7 @@ public static class AgentToolPolicy
             : [.. parent.AllowedToolIds.Intersect(
                 frozenAssignment.Policy.AllowedToolIds,
                 StringComparer.OrdinalIgnoreCase)];
-        bool denyAllTools = parent.DenyAllTools
+        var denyAllTools = parent.DenyAllTools
             || frozenAssignment.Policy.AllowedToolIds.Count == 0
             || parentAllowed.Length == 0;
         string[] denied =
@@ -43,7 +43,7 @@ public static class AgentToolPolicy
                 .Concat(frozenAssignment.Policy.DeniedToolIds)
                 .Distinct(StringComparer.OrdinalIgnoreCase),
         ];
-        string[] approvedRoots = IntersectApprovedRoots(
+        var approvedRoots = IntersectApprovedRoots(
             parent.ApprovedRoots,
             frozenAssignment.Scope.Files.Concat(frozenAssignment.Scope.Directories),
             repositoryPath);
@@ -78,7 +78,7 @@ public static class AgentToolPolicy
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
         string[] normalizedParents = [.. parentRoots.Select(root => NormalizeRoot(root, repositoryRoot))];
         string[] normalizedChildren =
         [
@@ -102,7 +102,7 @@ public static class AgentToolPolicy
     private static string NormalizeRoot(string root, string repositoryRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
-        string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;

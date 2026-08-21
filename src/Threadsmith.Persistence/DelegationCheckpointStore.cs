@@ -32,9 +32,9 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
         var json = JsonSerializer.Serialize(checkpoint, JsonOptions);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction =
+        await using var transaction =
             (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO delegation_runs(
@@ -69,14 +69,14 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT schema_version, checkpoint_json
             FROM delegation_runs
             WHERE delegation_id = $delegation;
             """;
         command.Parameters.AddWithValue("$delegation", delegationId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
             return null;
@@ -89,7 +89,7 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
                 $"Delegation checkpoint schema {version} is inspectable but cannot execute.");
         }
 
-        DelegationCheckpoint checkpoint = JsonSerializer.Deserialize<DelegationCheckpoint>(
+        var checkpoint = JsonSerializer.Deserialize<DelegationCheckpoint>(
             reader.GetString(1),
             JsonOptions) ?? throw new InvalidDataException("Stored delegation checkpoint is invalid.");
         Validate(checkpoint);

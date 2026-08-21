@@ -20,9 +20,9 @@ public static class McpProfileConfigurationLoader
 
         foreach (var child in section.GetChildren())
         {
-            string? id = child["id"];
-            string? name = child["name"];
-            string? command = child["command"];
+            var id = child["id"];
+            var name = child["name"];
+            var command = child["command"];
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(command))
             {
                 throw new InvalidOperationException(
@@ -72,7 +72,7 @@ public static class McpProfileConfigurationLoader
                 continue;
             }
 
-            string providerName = provider.GetType().Name;
+            var providerName = provider.GetType().Name;
             if (providerName.Contains("Environment", StringComparison.Ordinal))
             {
                 return "trusted-environment";
@@ -147,7 +147,7 @@ public static class McpProfileConfigurationLoader
         }
 
         var kinds = new List<McpCapabilityKind>();
-        foreach (string name in names)
+        foreach (var name in names)
         {
             McpCapabilityKind? kind = name.ToLowerInvariant() switch
             {
@@ -172,7 +172,7 @@ public static class McpProfileConfigurationLoader
     private static TEnum ParseEnum<TEnum>(IConfigurationSection section, string key, TEnum defaultValue)
         where TEnum : struct, Enum
     {
-        string? value = section[key];
+        var value = section[key];
         if (string.IsNullOrWhiteSpace(value))
         {
             return defaultValue;
@@ -194,14 +194,14 @@ public static class McpProfileConfigurationLoader
             return null;
         }
 
-        int redirectPort = section.GetValue("redirectPort", 0);
+        var redirectPort = section.GetValue("redirectPort", 0);
         if (redirectPort is < 0 or > 65535)
         {
             throw new InvalidOperationException(
                 $"MCP OAuth redirectPort in profile '{profile["id"]}' must be zero or a valid TCP port.");
         }
 
-        string? discoveryUrl = section["discoveryUrl"];
+        var discoveryUrl = section["discoveryUrl"];
         if (discoveryUrl is not null)
         {
             throw new InvalidOperationException(
@@ -209,7 +209,7 @@ public static class McpProfileConfigurationLoader
                 + "the authorization server must be advertised by the MCP endpoint.");
         }
 
-        string? clientMetadataDocumentUriText = section["clientMetadataDocumentUri"];
+        var clientMetadataDocumentUriText = section["clientMetadataDocumentUri"];
         Uri? clientMetadataDocumentUri = null;
         if (!string.IsNullOrWhiteSpace(clientMetadataDocumentUriText)
             && !McpOAuthClientMetadataDocumentUri.TryCreate(clientMetadataDocumentUriText, out clientMetadataDocumentUri))
@@ -219,15 +219,15 @@ public static class McpProfileConfigurationLoader
                 + McpOAuthClientMetadataDocumentUri.Requirements + ".");
         }
 
-        string? clientId = NormalizeOptional(section["clientId"]);
-        string? clientSecret = NormalizeOptional(section["clientSecret"]);
+        var clientId = NormalizeOptional(section["clientId"]);
+        var clientSecret = NormalizeOptional(section["clientSecret"]);
         if (clientSecret is not null && !clientSecret.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 $"MCP OAuth clientSecret in profile '{profile["id"]}' must be a logical secrets: reference.");
         }
 
-        string[] secretScope = profile.GetSection("secretScope").Get<string[]>() ?? [];
+        var secretScope = profile.GetSection("secretScope").Get<string[]>() ?? [];
         if (clientSecret is not null && !secretScope.Contains(clientSecret, StringComparer.Ordinal))
         {
             throw new InvalidOperationException(

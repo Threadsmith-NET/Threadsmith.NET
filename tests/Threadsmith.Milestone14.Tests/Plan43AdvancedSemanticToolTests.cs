@@ -215,11 +215,11 @@ public sealed class Plan43AdvancedSemanticToolTests
     [Fact]
     public async Task AdvancedTools_ProhibitedResults_AreFilteredBeforeReturn()
     {
-        string repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan43-policy-{Guid.NewGuid():N}");
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan43-policy-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(repositoryPath, "src"));
         Directory.CreateDirectory(Path.Combine(repositoryPath, "secret"));
-        string allowedPath = Path.Combine(repositoryPath, "src", "Allowed.g.cs");
-        string prohibitedPath = Path.Combine(repositoryPath, "secret", "Token.g.cs");
+        var allowedPath = Path.Combine(repositoryPath, "src", "Allowed.g.cs");
+        var prohibitedPath = Path.Combine(repositoryPath, "secret", "Token.g.cs");
         await File.WriteAllTextAsync(allowedPath, "allowed", TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(prohibitedPath, "secret", TestContext.Current.CancellationToken);
         try
@@ -369,7 +369,7 @@ public sealed class Plan43AdvancedSemanticToolTests
 
         public static async Task<AdvancedSemanticFixture> CreateAsync()
         {
-            string repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan43-{Guid.NewGuid():N}");
+            var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan43-{Guid.NewGuid():N}");
             Directory.CreateDirectory(repositoryPath);
             Write(repositoryPath, "Repo.slnx", """
                 <Solution>
@@ -413,7 +413,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             Write(repositoryPath, "tests/Higher.Tests/Tests.cs", "namespace Example.HigherTests; public sealed class HigherTest;");
             var events = new DomainEventStream();
             var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
-            WorkspaceId workspaceId = WorkspaceId.New();
+            var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(
                     SessionId.New(),
@@ -435,7 +435,7 @@ public sealed class Plan43AdvancedSemanticToolTests
 
         private static void Write(string root, string relativePath, string content)
         {
-            string fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            var fullPath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? root);
             File.WriteAllText(fullPath, content);
         }

@@ -194,7 +194,7 @@ public sealed class McpManagerTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(1024, result.Message.Length);
-        string logged = Assert.Single(logger.Messages);
+        var logged = Assert.Single(logger.Messages);
         Assert.Contains(new string('x', 1024), logged, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('x', 1025), logged, StringComparison.Ordinal);
     }
@@ -293,7 +293,7 @@ public sealed class McpManagerTests
         });
         var staleTool = adapter.GetTool("server:echo")
             ?? throw new InvalidOperationException("The initial imported tool was not published.");
-        object staleInput = staleTool.DeserializeInput("{}");
+        var staleInput = staleTool.DeserializeInput("{}");
         var executionContext = new ToolExecutionContext(
             ToolInvocationId.New(),
             SessionId.New(),
@@ -411,7 +411,7 @@ public sealed class McpManagerTests
         };
         var connection = await adapter.ConnectAsync(profile);
         var tool = Assert.Single(connection.Tools);
-        object input = tool.DeserializeInput("{\"message\":\"wait\"}");
+        var input = tool.DeserializeInput("{\"message\":\"wait\"}");
         var context = new ToolExecutionContext(
             ToolInvocationId.New(),
             SessionId.New(),
@@ -449,7 +449,7 @@ public sealed class McpManagerTests
             NullLogger<McpAdapter>.Instance);
         var connection = await adapter.ConnectAsync(Profile("server"));
         var resolvedBeforeDisconnect = Assert.Single(connection.Tools);
-        object input = resolvedBeforeDisconnect.DeserializeInput("{\"message\":\"late\"}");
+        var input = resolvedBeforeDisconnect.DeserializeInput("{\"message\":\"late\"}");
         var context = new ToolExecutionContext(
             ToolInvocationId.New(),
             SessionId.New(),
@@ -845,7 +845,7 @@ public sealed class McpManagerTests
             ["mcp:oauth:server:accessToken"] = "access-canary",
             ["mcp:oauth:server:authorizationServer"] = "https://auth.example/tenant",
         });
-        int requests = 0;
+        var requests = 0;
         using var httpClient = new HttpClient(new DelegateHttpHandler((_, _) =>
         {
             requests++;
@@ -946,7 +946,7 @@ public sealed class McpManagerTests
     [Fact]
     public async Task RealStdioTransport_DiscoversReadsAndRendersBoundedCapabilities()
     {
-        string serverAssembly = GetServerAssemblyPath();
+        var serverAssembly = GetServerAssemblyPath();
         Assert.True(File.Exists(serverAssembly), $"MCP test server fixture is unavailable at '{serverAssembly}'.");
         await using var transport = new SdkStdioTransport(
             new IdentitySanitizer(),
@@ -994,9 +994,9 @@ public sealed class McpManagerTests
     [Fact]
     public static void ToolStateManager_RepositoryPreEnableWithoutUserApproval_RemainsDisabled()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(root, ".threadsmith", "config.json");
-        string approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(root, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
         try
         {
             var definition = McpToolDefinition("mcp-1-known");
@@ -1028,9 +1028,9 @@ public sealed class McpManagerTests
     [Fact]
     public async Task ToolStateManager_SchemaChangeInvalidatesPersistedEnablement()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(root, ".threadsmith", "config.json");
-        string approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(root, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
         try
         {
             var first = McpToolDefinition("mcp-1-first");
@@ -1041,7 +1041,7 @@ public sealed class McpManagerTests
                 mcpApprovalPath: approvalPath);
             await firstManager.EnableAsync(first.Id);
             Assert.True(firstManager.IsEnabled(first.Id));
-            string persisted = await File.ReadAllTextAsync(configurationPath);
+            var persisted = await File.ReadAllTextAsync(configurationPath);
             Assert.Contains("server:echo@mcp-1-first", persisted, StringComparison.Ordinal);
 
             IConfiguration staleConfiguration = new ConfigurationBuilder()
@@ -1079,9 +1079,9 @@ public sealed class McpManagerTests
     [Fact]
     public async Task ToolStateManager_MalformedApprovalStoreDoesNotBlockStartupOrRecovery()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(root, ".threadsmith", "config.json");
-        string approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(root, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(approvalPath)
@@ -1124,12 +1124,12 @@ public sealed class McpManagerTests
     [Fact]
     public async Task ToolStateManager_McpApproval_IsRepositoryBound()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
-        string firstRoot = Path.Combine(root, "first");
-        string secondRoot = Path.Combine(root, "second");
-        string firstConfiguration = Path.Combine(firstRoot, ".threadsmith", "config.json");
-        string secondConfiguration = Path.Combine(secondRoot, ".threadsmith", "config.json");
-        string approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
+        var firstRoot = Path.Combine(root, "first");
+        var secondRoot = Path.Combine(root, "second");
+        var firstConfiguration = Path.Combine(firstRoot, ".threadsmith", "config.json");
+        var secondConfiguration = Path.Combine(secondRoot, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
         try
         {
             var definition = McpToolDefinition("mcp-1-known");
@@ -1167,7 +1167,7 @@ public sealed class McpManagerTests
         using var output = new StringWriter();
         var shell = new HeadlessShell(dispatcher, new EmptyProjectionStore(), output);
 
-        int exitCode = await shell.WriteMcpResultAsync(new McpManagementRequest
+        var exitCode = await shell.WriteMcpResultAsync(new McpManagementRequest
         {
             Action = McpManagementAction.List,
         });
@@ -1458,7 +1458,7 @@ public sealed class McpManagerTests
                 throw connectionException;
             }
 
-            int active = Interlocked.Increment(ref _activeConnects);
+            var active = Interlocked.Increment(ref _activeConnects);
             MaximumConcurrentConnects = Math.Max(MaximumConcurrentConnects, active);
             try
             {
@@ -1573,7 +1573,7 @@ public sealed class McpManagerTests
 
         public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
         {
-            Values.TryGetValue(secretReference, out string? value);
+            Values.TryGetValue(secretReference, out var value);
             return Task.FromResult(value);
         }
 
@@ -1627,7 +1627,7 @@ public sealed class McpManagerTests
             string secretReferencePrefix,
             CancellationToken cancellationToken = default)
         {
-            foreach (string key in Values.Keys
+            foreach (var key in Values.Keys
                 .Where(key => key.StartsWith(secretReferencePrefix, StringComparison.Ordinal))
                 .ToArray())
             {

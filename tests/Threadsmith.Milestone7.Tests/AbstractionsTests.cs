@@ -37,7 +37,7 @@ public static class AbstractionsTests
     public static void AbstractionsReferencesNoForbiddenPackages(string forbiddenPrefix)
     {
         var referenced = _abstractions.GetReferencedAssemblies();
-        bool found = referenced.Any(name =>
+        var found = referenced.Any(name =>
             name.Name?.StartsWith(forbiddenPrefix, StringComparison.Ordinal) == true);
         Assert.False(found, $"Abstractions references a forbidden package '{forbiddenPrefix}'.");
     }
@@ -90,8 +90,8 @@ public static class AbstractionsTests
                 return;
             }
 
-            string? assembly = type.Assembly.GetName().Name;
-            bool allowed = assembly == _abstractions.GetName().Name
+            var assembly = type.Assembly.GetName().Name;
+            var allowed = assembly == _abstractions.GetName().Name
                 || assembly?.StartsWith("System", StringComparison.Ordinal) == true
                 || assembly == "mscorlib"
                 || assembly == "netstandard";
@@ -103,9 +103,9 @@ public static class AbstractionsTests
     [Fact]
     public static void SampleExtensionOutputExcludesAbstractionsDll()
     {
-        string sampleOutput = ResolveSampleExtensionOutputDirectory();
-        string abstractionsDll = Path.Combine(sampleOutput, "Threadsmith.Extensions.Abstractions.dll");
-        string sampleDll = Path.Combine(sampleOutput, "Threadsmith.SampleExtensions.MinimalTool.dll");
+        var sampleOutput = ResolveSampleExtensionOutputDirectory();
+        var abstractionsDll = Path.Combine(sampleOutput, "Threadsmith.Extensions.Abstractions.dll");
+        var sampleDll = Path.Combine(sampleOutput, "Threadsmith.SampleExtensions.MinimalTool.dll");
         Assert.True(File.Exists(sampleDll), $"Sample extension DLL was not built at {sampleDll}.");
         Assert.False(
             File.Exists(abstractionsDll),
@@ -127,7 +127,7 @@ public static class AbstractionsTests
             Capabilities = ["tool-provider", "validator"],
             Permissions = ["repository-read", "process-execute"],
         };
-        string json = JsonSerializer.Serialize(manifest);
+        var json = JsonSerializer.Serialize(manifest);
         var roundTripped = JsonSerializer.Deserialize<ExtensionManifest>(json)!;
         Assert.Equal(manifest.Id, roundTripped.Id);
         Assert.Equal(manifest.Capabilities, roundTripped.Capabilities);
@@ -137,9 +137,9 @@ public static class AbstractionsTests
     private static string ResolveSampleExtensionOutputDirectory()
     {
         // Test bin: <root>/tests/Threadsmith.Milestone7.Tests/bin/Debug/net10.0
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "samples", "extensions", "MinimalToolExtension", "bin", configuration, "net10.0");
     }
 }

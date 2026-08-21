@@ -228,7 +228,7 @@ public sealed class ProcessManager : IProcessManager
         }
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        DateTimeOffset startedAt = _timeProvider.GetUtcNow();
+        var startedAt = _timeProvider.GetUtcNow();
         if (!process.Start())
         {
             throw new InvalidOperationException($"Process '{request.FileName}' did not start.");
@@ -243,11 +243,11 @@ public sealed class ProcessManager : IProcessManager
             request.WorkingDirectory,
             request.Timeout,
             request.Origin);
-        Task<(string Text, bool IsTruncated)> stdoutTask = ReadBoundedAsync(
+        var stdoutTask = ReadBoundedAsync(
             process.StandardOutput,
             request.MaximumOutputCharacters,
             cancellationToken);
-        Task<(string Text, bool IsTruncated)> stderrTask = ReadBoundedAsync(
+        var stderrTask = ReadBoundedAsync(
             process.StandardError,
             request.MaximumOutputCharacters,
             cancellationToken);
@@ -292,8 +292,8 @@ public sealed class ProcessManager : IProcessManager
                 throw;
             }
 
-            (string Text, bool IsTruncated) stdout = await stdoutTask;
-            (string Text, bool IsTruncated) stderr = await stderrTask;
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
             return new ProcessExecutionResult(
                 processId,
                 process.HasExited ? process.ExitCode : null,

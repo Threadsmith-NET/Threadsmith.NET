@@ -164,13 +164,13 @@ public sealed class SessionUsageProjection
             }
 
             requests ??= [];
-            long inputTokens = restored?.InputTokens ?? 0;
-            long outputTokens = restored?.OutputTokens ?? 0;
-            bool isEstimate = restored?.IsEstimate ?? false;
-            bool hasUnknownUsage = restored?.HasUnknownUsage ?? false;
+            var inputTokens = restored?.InputTokens ?? 0;
+            var outputTokens = restored?.OutputTokens ?? 0;
+            var isEstimate = restored?.IsEstimate ?? false;
+            var hasUnknownUsage = restored?.HasUnknownUsage ?? false;
             long cachedInputTokens = 0;
             long cacheWriteTokens = 0;
-            bool hasCacheObservation = false;
+            var hasCacheObservation = false;
             foreach (var usage in requests.Values)
             {
                 if (usage is null)

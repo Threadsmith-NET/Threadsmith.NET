@@ -62,7 +62,7 @@ public sealed class DomainEventStream : IDomainEventStream
             _subscriptions.Clear();
         }
 
-        foreach (Subscription subscription in subscriptions)
+        foreach (var subscription in subscriptions)
         {
             await subscription.DisposeCoreAsync();
         }
@@ -141,7 +141,7 @@ public sealed class DomainEventStream : IDomainEventStream
 
         private async Task ProcessAsync()
         {
-            await foreach (Delivery delivery in _channel.Reader.ReadAllAsync())
+            await foreach (var delivery in _channel.Reader.ReadAllAsync())
             {
                 try
                 {

@@ -249,7 +249,7 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
         {
             while (!_cancellation.IsCancellationRequested)
             {
-                using TcpClient client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
+                using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
                 await HandleAsync(client, _cancellation.Token);
             }
         }
@@ -266,12 +266,12 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
         private async Task HandleAsync(TcpClient client, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _requestCount);
-            await using NetworkStream stream = client.GetStream();
+            await using var stream = client.GetStream();
             var buffer = new byte[1024];
-            int total = 0;
+            var total = 0;
             while (total < buffer.Length)
             {
-                int read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
+                var read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
                 if (read == 0)
                 {
                     break;
@@ -284,11 +284,11 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
                 }
             }
 
-            string request = Encoding.ASCII.GetString(buffer, 0, total);
-            string response = request.StartsWith("GET /redirect ", StringComparison.Ordinal)
+            var request = Encoding.ASCII.GetString(buffer, 0, total);
+            var response = request.StartsWith("GET /redirect ", StringComparison.Ordinal)
                 ? "HTTP/1.1 302 Found\r\nLocation: /target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 : "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            byte[] payload = Encoding.ASCII.GetBytes(response);
+            var payload = Encoding.ASCII.GetBytes(response);
             await stream.WriteAsync(payload, cancellationToken);
         }
     }

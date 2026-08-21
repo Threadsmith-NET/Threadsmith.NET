@@ -287,7 +287,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             }
         }
 
-        bool completedWithinDeadline = true;
+        var completedWithinDeadline = true;
         foreach (var disposal in disposals)
         {
             try
@@ -404,7 +404,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
                 throw new InvalidOperationException($"MCP profile '{profile.Id}' contains an invalid HTTP header name.");
             }
 
-            string value = header.Value;
+            var value = header.Value;
             if (value.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase))
             {
                 if (!profile.SecretScope.Contains(value, StringComparer.Ordinal))

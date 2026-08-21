@@ -27,7 +27,7 @@ public sealed class Milestone19Tests
         Assert.Equal(
             ModelToolCanonicalizer.ComputeDigest(canonicalFirst),
             ModelToolCanonicalizer.ComputeDigest(canonicalSecond));
-        using JsonDocument schema = JsonDocument.Parse(canonicalFirst[1].ArgumentsJsonSchema);
+        using var schema = JsonDocument.Parse(canonicalFirst[1].ArgumentsJsonSchema);
         var property = schema.RootElement.GetProperty("properties").GetProperty("b");
         Assert.True(property.TryGetProperty("default", out var defaultValue));
         Assert.Equal(JsonValueKind.Null, defaultValue.ValueKind);
@@ -74,12 +74,12 @@ public sealed class Milestone19Tests
             }
             """;
 
-        string? strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+        var strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
             "sample",
             schema);
         Assert.NotNull(strictSchema);
 
-        using JsonDocument document = JsonDocument.Parse(strictSchema);
+        using var document = JsonDocument.Parse(strictSchema);
         var root = document.RootElement;
         Assert.False(root.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal(
@@ -151,8 +151,8 @@ public sealed class Milestone19Tests
     [Fact]
     public async Task InstructionResolver_ResolvesHierarchyAndRevalidatesEveryBoundary()
     {
-        string root = CreateTemporaryDirectory();
-        string child = Path.Combine(root, "src", "feature");
+        var root = CreateTemporaryDirectory();
+        var child = Path.Combine(root, "src", "feature");
         Directory.CreateDirectory(child);
         await File.WriteAllTextAsync(
             Path.Combine(root, "AGENTS.md"),
@@ -200,7 +200,7 @@ public sealed class Milestone19Tests
     [Fact]
     public async Task ContextAssembler_ProducesStableStructuredNativeRequest()
     {
-        string root = CreateTemporaryDirectory();
+        var root = CreateTemporaryDirectory();
         await File.WriteAllTextAsync(
             Path.Combine(root, "AGENTS.md"),
             "repository instruction",
@@ -371,7 +371,7 @@ public sealed class Milestone19Tests
 
     private static string CreateTemporaryDirectory()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"threadsmith-m19-{Guid.NewGuid():N}");
+        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-m19-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
     }

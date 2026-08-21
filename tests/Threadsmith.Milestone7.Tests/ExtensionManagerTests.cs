@@ -66,7 +66,7 @@ public sealed class ExtensionManagerTests
         host.SetDiscoveryDirectory(ResolveFixtureOutputDirectory("CleanUnloadExtension"));
         await ((IExtensionManager)host).LoadAsync("threadsmith.tests.clean-unload", SessionId.New());
 
-        bool unloaded = await ((IExtensionManager)host).UnloadAsync(
+        var unloaded = await ((IExtensionManager)host).UnloadAsync(
             "threadsmith.tests.clean-unload",
             SessionId.New());
 
@@ -101,7 +101,7 @@ public sealed class ExtensionManagerTests
     [Fact]
     public void ExtensionSelectionConfig_LoadOrDefault_returns_defaults_for_missing_file()
     {
-        string path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
+        var path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
         var config = ExtensionSelectionConfig.LoadOrDefault(path);
         Assert.Empty(config.AutoLoad);
         Assert.Equal(".threadsmith/extensions", config.DiscoveryDirectory);
@@ -111,7 +111,7 @@ public sealed class ExtensionManagerTests
     [Fact]
     public void ExtensionSelectionConfig_LoadOrDefault_parses_autoload_and_discovery_directory()
     {
-        string path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
+        var path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, """{"discoveryDirectory":".threadsmith/ext","autoLoad":["a","b"]}""");
         var config = ExtensionSelectionConfig.LoadOrDefault(path);
@@ -124,7 +124,7 @@ public sealed class ExtensionManagerTests
     [Fact]
     public void ExtensionSelectionConfig_LoadOrDefault_falls_back_on_malformed_json()
     {
-        string path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
+        var path = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N") + ".json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "{not valid json");
         var config = ExtensionSelectionConfig.LoadOrDefault(path);
@@ -133,24 +133,24 @@ public sealed class ExtensionManagerTests
 
     private static string NewStagingRoot()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
     }
 
     private static string ResolveSampleOutputDirectory()
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "samples", "extensions", "MinimalToolExtension", "bin", configuration, "net10.0");
     }
 
     private static string ResolveFixtureOutputDirectory(string fixtureProjectDirName)
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "tests", "Threadsmith.Milestone7.Tests", "Fixtures", fixtureProjectDirName, "bin", configuration, "net10.0");
     }
 }

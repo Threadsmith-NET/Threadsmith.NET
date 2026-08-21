@@ -195,7 +195,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         {
             var descriptor = EffectiveDescriptor(configured);
             cancellationToken.ThrowIfCancellationRequested();
-            string chainIdentity = $"{operationId:N}:{descriptor.Identity.Id.Value}:{point}";
+            var chainIdentity = $"{operationId:N}:{descriptor.Identity.Id.Value}:{point}";
             if (chain.Contains(chainIdentity, StringComparer.Ordinal))
             {
                 advice.Add($"{descriptor.Identity.Id}: recursive invocation suppressed");
@@ -243,7 +243,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
 
     private HookHandlerDescriptor EffectiveDescriptor(HookHandlerDescriptor descriptor)
     {
-        return _enablement.TryGetValue(descriptor.Identity.Id.Value, out bool enabled)
+        return _enablement.TryGetValue(descriptor.Identity.Id.Value, out var enabled)
             ? descriptor with { Enabled = enabled }
             : descriptor;
     }
@@ -263,7 +263,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var startedAt = _timeProvider.GetUtcNow();
-        HookInvocationId invocationId = HookInvocationId.New();
+        var invocationId = HookInvocationId.New();
         var envelope = new HookInvocationEnvelope
         {
             HookPoint = point,
@@ -390,7 +390,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         HookInvocationEnvelope envelope,
         CancellationToken cancellationToken)
     {
-        for (int attempt = 1; ; attempt++)
+        for (var attempt = 1; ; attempt++)
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(descriptor.Limits.Timeout);

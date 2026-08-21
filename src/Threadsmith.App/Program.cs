@@ -54,7 +54,7 @@ public static class Program
             ?? throw new InvalidOperationException("Successful command-line parsing did not produce options.");
         if (commandLine.ShowVersion)
         {
-            string informationalVersion = typeof(Program).Assembly
+            var informationalVersion = typeof(Program).Assembly
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
                 .InformationalVersion
                 ?? typeof(Program).Assembly.GetName().Version?.ToString()
@@ -73,7 +73,7 @@ public static class Program
             return 0;
         }
 
-        string? codexAuthenticationAction = commandLine.CodexAuthenticationAction;
+        var codexAuthenticationAction = commandLine.CodexAuthenticationAction;
         if (codexAuthenticationAction is null
             && commandLine.RequestArguments.Count is 2 or 3
             && string.Equals(commandLine.RequestArguments[0], "/auth", StringComparison.OrdinalIgnoreCase)
@@ -111,8 +111,8 @@ public static class Program
         }
 
         // Use concise phase-local aliases while retaining normalized values from the immutable startup records.
-        string repositoryRoot = paths.RepositoryRoot;
-        bool useInteractiveTerminal = commandLine.UseInteractiveTerminal
+        var repositoryRoot = paths.RepositoryRoot;
+        var useInteractiveTerminal = commandLine.UseInteractiveTerminal
             && commandLine.McpAction is null;
 
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
@@ -265,7 +265,7 @@ public static class Program
     internal static string FormatFatalError(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        string message = string.Join(
+        var message = string.Join(
             ' ',
             exception.Message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (message.Length == 0)
@@ -324,7 +324,7 @@ public static class Program
                     await oauth.CompleteDeviceAsync(challenge, TimeSpan.FromMinutes(10), cancellationToken);
                 }
 
-                string accessToken = await oauth.GetAccessTokenAsync(cancellationToken)
+                var accessToken = await oauth.GetAccessTokenAsync(cancellationToken)
                     ?? throw new InvalidOperationException("Codex authentication completed without an access token.");
                 var catalog = await new OpenAiCodexCatalogClient(httpClient)
                     .DiscoverAsync(accessToken, cancellationToken: cancellationToken);
@@ -354,7 +354,7 @@ public static class Program
         HookInvocationEnvelope envelope,
         CancellationToken cancellationToken)
     {
-        (string toolId, var registration) = ResolveCapabilityHookRegistration(
+        (var toolId, var registration) = ResolveCapabilityHookRegistration(
             toolPipeline,
             descriptor);
         var result = await toolPipeline.InvokeAsync(
@@ -395,8 +395,8 @@ public static class Program
             throw new InvalidOperationException("Capability hooks require the host-owned tool pipeline.");
         }
 
-        string[] target = descriptor.Target.Split("::", StringSplitOptions.None);
-        string toolId = descriptor.AdapterKind switch
+        var target = descriptor.Target.Split("::", StringSplitOptions.None);
+        var toolId = descriptor.AdapterKind switch
         {
             HookAdapterKind.Mcp when target.Length == 4 => target[3],
             HookAdapterKind.Extension when target.Length == 2 => target[1],
@@ -404,7 +404,7 @@ public static class Program
                 "MCP hook targets must be 'profile::server::schema-digest::tool' and extension hook targets must be 'generation::tool'."),
         };
         var registration = concretePipeline.Registry.Get(toolId);
-        bool identityMatches = descriptor.AdapterKind switch
+        var identityMatches = descriptor.AdapterKind switch
         {
             HookAdapterKind.Mcp when registration is McpImportedTool mcp =>
                 string.Equals(mcp.Profile.Id, target[0], StringComparison.Ordinal)

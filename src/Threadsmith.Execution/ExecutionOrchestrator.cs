@@ -86,7 +86,7 @@ public sealed class ExecutionOrchestrator :
             diagnosticIdentity,
             ExecutionCheckpointPhase.ImplementationPreparing,
             nextAction: "start implementation model turn");
-        ExecutionArtifactReference requestState = await _artifacts.PublishAsync(
+        var requestState = await _artifacts.PublishAsync(
             request.SessionId,
             "executionStartRequest",
             JsonSerializer.Serialize(request, JsonOptions),
@@ -94,10 +94,10 @@ public sealed class ExecutionOrchestrator :
         preparing = preparing with { StateArtifact = requestState };
         await SaveCheckpointAsync(preparing, cancellationToken);
 
-        ExecutionContinuation latestSafe = preparing;
+        var latestSafe = preparing;
         try
         {
-            ExecutionContinuation modelTurn = preparing with
+            var modelTurn = preparing with
             {
                 Phase = ExecutionCheckpointPhase.ImplementationModelTurn,
                 NextAction = "admit one propose_mutations call",
@@ -105,7 +105,7 @@ public sealed class ExecutionOrchestrator :
             };
             await SaveCheckpointAsync(modelTurn, cancellationToken);
             latestSafe = modelTurn;
-            StagedMutationSet staged = await _proposals.HandleAsync(
+            var staged = await _proposals.HandleAsync(
                 new ProposeMutationSetCommand(
                     request.SessionId,
                     request.RunId,
@@ -114,13 +114,13 @@ public sealed class ExecutionOrchestrator :
                     request.ApprovedPlan,
                     RunPhase.ImplementationModelTurn),
                 cancellationToken);
-            ExecutionArtifactReference diff = await _artifacts.PublishAsync(
+            var diff = await _artifacts.PublishAsync(
                 request.SessionId,
                 "executionDiff",
                 staged.Preview.UnifiedDiff,
                 CancellationToken.None);
             var active = new ActiveExecution(request, staged, null, null, [], [], [], []);
-            ExecutionArtifactReference state = await PublishStateAsync(active, CancellationToken.None);
+            var state = await PublishStateAsync(active, CancellationToken.None);
             var pendingApproval = modelTurn with
             {
                 Phase = ExecutionCheckpointPhase.MutationApprovalPending,
@@ -137,7 +137,7 @@ public sealed class ExecutionOrchestrator :
         }
         catch (OperationCanceledException)
         {
-            ExecutionContinuation cancelled = latestSafe with
+            var cancelled = latestSafe with
             {
                 Phase = ExecutionCheckpointPhase.Cancelled,
                 NextAction = "explicit resume after repository revalidation",
@@ -170,15 +170,15 @@ public sealed class ExecutionOrchestrator :
         CancellationToken cancellationToken = default)
     {
         ValidateContinueRequest(request);
-        using RunContinuationGateLease gate = await EnterRunContinuationGateAsync(
+        using var gate = await EnterRunContinuationGateAsync(
             request.RunId,
             cancellationToken);
-        ExecutionApplyResult applied = await ApplyCoreAsync(request, cancellationToken);
-        ActiveExecution active = await ResolveActiveAsync(
+        var applied = await ApplyCoreAsync(request, cancellationToken);
+        var active = await ResolveActiveAsync(
             request.SessionId,
             request.RunId,
             cancellationToken);
-        BaselineCapture baseline = active.BaselineCapture
+        var baseline = active.BaselineCapture
             ?? throw new InvalidDataException("Applied execution state has no immutable diagnostic baseline.");
         return await ValidateAndCompleteAsync(
             request,
@@ -196,14 +196,14 @@ public sealed class ExecutionOrchestrator :
         RunId runId,
         CancellationToken cancellationToken = default)
     {
-        using RunContinuationGateLease gate = await EnterRunContinuationGateAsync(
+        using var gate = await EnterRunContinuationGateAsync(
             runId,
             cancellationToken);
-        ActiveExecution active = await ResolveActiveAsync(
+        var active = await ResolveActiveAsync(
             sessionId,
             runId,
             cancellationToken);
-        ExecutionContinuation checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+        var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
         if (checkpoint.Phase != ExecutionCheckpointPhase.MutationApprovalPending)
         {
             return checkpoint;
@@ -214,21 +214,21 @@ public sealed class ExecutionOrchestrator :
             return checkpoint;
         }
 
-        BaselineCapture baseline = await _baselineValidation.HandleAsync(
+        var baseline = await _baselineValidation.HandleAsync(
             new CaptureBaselineBuildCommand(active.Request.ValidationRequest)
             {
                 MutationSet = active.Staged.MutationSet,
             },
             cancellationToken);
         ValidateBaselineCapture(active.Request, baseline);
-        ExecutionArtifactReference baselineArtifact = await _artifacts.PublishAsync(
+        var baselineArtifact = await _artifacts.PublishAsync(
             sessionId,
             "executionBaselineCapture",
             JsonSerializer.Serialize(baseline, JsonOptions),
             cancellationToken);
-        ActiveExecution preparedActive = active with { BaselineCapture = baseline };
-        ExecutionArtifactReference state = await PublishStateAsync(preparedActive, cancellationToken);
-        ExecutionContinuation prepared = checkpoint with
+        var preparedActive = active with { BaselineCapture = baseline };
+        var state = await PublishStateAsync(preparedActive, cancellationToken);
+        var prepared = checkpoint with
         {
             BaselineArtifact = baselineArtifact,
             StateArtifact = state,
@@ -246,7 +246,7 @@ public sealed class ExecutionOrchestrator :
         CancellationToken cancellationToken = default)
     {
         ValidateContinueRequest(request);
-        using RunContinuationGateLease gate = await EnterRunContinuationGateAsync(
+        using var gate = await EnterRunContinuationGateAsync(
             request.RunId,
             cancellationToken);
         return await ApplyCoreAsync(request, cancellationToken);
@@ -258,10 +258,10 @@ public sealed class ExecutionOrchestrator :
         RunId runId,
         CancellationToken cancellationToken = default)
     {
-        using RunContinuationGateLease gate = await EnterRunContinuationGateAsync(
+        using var gate = await EnterRunContinuationGateAsync(
             runId,
             cancellationToken);
-        ExecutionContinuation checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+        var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
         if (checkpoint.SessionId != sessionId)
         {
             throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
@@ -290,9 +290,9 @@ public sealed class ExecutionOrchestrator :
         if (checkpoint.Phase == ExecutionCheckpointPhase.Cancelled
             && checkpoint.MutationSetId is null)
         {
-            ExecutionStartRequest restart = await RestoreStartRequestAsync(checkpoint, cancellationToken);
+            var restart = await RestoreStartRequestAsync(checkpoint, cancellationToken);
             ValidateLiveWorkspace(checkpoint, restart.Baseline);
-            ExecutionContinuation restarted = await StartAsync(restart, cancellationToken);
+            var restarted = await StartAsync(restart, cancellationToken);
             await PublishResumeAsync(
                 sessionId,
                 runId,
@@ -302,7 +302,7 @@ public sealed class ExecutionOrchestrator :
             return restarted;
         }
 
-        ActiveExecution active = await RestoreStateAsync(checkpoint, cancellationToken);
+        var active = await RestoreStateAsync(checkpoint, cancellationToken);
         ValidateResumeState(checkpoint, active);
         ValidateLiveWorkspace(checkpoint, active.Request.Baseline);
         _runs[runId] = active;
@@ -322,7 +322,7 @@ public sealed class ExecutionOrchestrator :
             or ExecutionCheckpointPhase.TestValidation
             or ExecutionCheckpointPhase.CompletionPending)
         {
-            BaselineCapture baseline = active.BaselineCapture
+            var baseline = active.BaselineCapture
                 ?? throw new InvalidDataException("Applied execution state has no immutable diagnostic baseline.");
             var provenance = checkpoint.PolicyIdentity ?? "resumed execution authorization";
             _ = await ValidateAndCompleteAsync(
@@ -413,13 +413,13 @@ public sealed class ExecutionOrchestrator :
         RunId runId,
         CancellationToken cancellationToken = default)
     {
-        ExecutionOutcomeProjection? existing = await _checkpoints.GetOutcomeAsync(runId, cancellationToken);
+        var existing = await _checkpoints.GetOutcomeAsync(runId, cancellationToken);
         if (existing is not null)
         {
             return existing;
         }
 
-        TaskCompletionSource<ExecutionOutcomeProjection> completion = _terminalOutcomes.GetOrAdd(
+        var completion = _terminalOutcomes.GetOrAdd(
             runId,
             static _ => new TaskCompletionSource<ExecutionOutcomeProjection>(
                 TaskCreationOptions.RunContinuationsAsynchronously));
@@ -431,7 +431,7 @@ public sealed class ExecutionOrchestrator :
         GetExecutionMutationCommand command,
         CancellationToken cancellationToken = default)
     {
-        ExecutionContinuation? checkpoint = await _checkpoints.GetCheckpointAsync(
+        var checkpoint = await _checkpoints.GetCheckpointAsync(
             command.RunId,
             cancellationToken);
         if (checkpoint is null || checkpoint.SessionId != command.SessionId)
@@ -439,7 +439,7 @@ public sealed class ExecutionOrchestrator :
             return null;
         }
 
-        ActiveExecution active = await ResolveActiveAsync(
+        var active = await ResolveActiveAsync(
             command.SessionId,
             command.RunId,
             cancellationToken);
@@ -457,10 +457,10 @@ public sealed class ExecutionOrchestrator :
         ContinueExecutionRequest request,
         CancellationToken cancellationToken)
     {
-        ExecutionContinuation checkpoint = await WaitForMutationApprovalCheckpointAsync(
+        var checkpoint = await WaitForMutationApprovalCheckpointAsync(
             request.RunId,
             cancellationToken);
-        ActiveExecution active = await ResolveActiveAsync(
+        var active = await ResolveActiveAsync(
             request.SessionId,
             request.RunId,
             cancellationToken);
@@ -471,7 +471,7 @@ public sealed class ExecutionOrchestrator :
         }
 
         var provenance = Bound(request.ApprovalProvenance, 256);
-        ExecutionContinuation baselinePending = checkpoint with
+        var baselinePending = checkpoint with
         {
             Phase = ExecutionCheckpointPhase.BaselineValidation,
             PolicyIdentity = provenance,
@@ -479,10 +479,10 @@ public sealed class ExecutionOrchestrator :
             RecordedAt = DateTimeOffset.UtcNow,
         };
         await SaveCheckpointAsync(baselinePending, cancellationToken);
-        ExecutionArtifactReference? baselineArtifact = checkpoint.BaselineArtifact;
+        var baselineArtifact = checkpoint.BaselineArtifact;
         if (active.BaselineCapture is null || baselineArtifact is null)
         {
-            BaselineCapture capturedBaseline = await _baselineValidation.HandleAsync(
+            var capturedBaseline = await _baselineValidation.HandleAsync(
                 new CaptureBaselineBuildCommand(active.Request.ValidationRequest)
                 {
                     MutationSet = active.Staged.MutationSet,
@@ -498,7 +498,7 @@ public sealed class ExecutionOrchestrator :
             active = active with { BaselineCapture = capturedBaseline };
         }
 
-        Guid operationId = GetStableOperationId(request.RunId, active.Staged.MutationSet.MutationSetId);
+        var operationId = GetStableOperationId(request.RunId, active.Staged.MutationSet.MutationSetId);
         var intent = new ExecutionOperationRecord
         {
             OperationId = operationId,
@@ -507,8 +507,8 @@ public sealed class ExecutionOrchestrator :
             ExpectedPreState = checkpoint.MutationBaselineIdentity,
             ExpectedResult = active.Staged.MutationSet.MutationSetId.Value.ToString("D"),
         };
-        ExecutionArtifactReference stateBeforeCommit = await PublishStateAsync(active, cancellationToken);
-        ExecutionContinuation applyPending = baselinePending with
+        var stateBeforeCommit = await PublishStateAsync(active, cancellationToken);
+        var applyPending = baselinePending with
         {
             Phase = ExecutionCheckpointPhase.MutationApplyPending,
             BaselineArtifact = baselineArtifact,
@@ -536,7 +536,7 @@ public sealed class ExecutionOrchestrator :
         }
         catch (OperationCanceledException)
         {
-            FailedCommitReconciliation reconciliation = await ReconcileFailedCommitAsync(
+            var reconciliation = await ReconcileFailedCommitAsync(
                 active,
                 applyPending,
                 wasCancelled: true);
@@ -554,7 +554,7 @@ public sealed class ExecutionOrchestrator :
         }
         catch (Exception)
         {
-            FailedCommitReconciliation reconciliation = await ReconcileFailedCommitAsync(
+            var reconciliation = await ReconcileFailedCommitAsync(
                 active,
                 applyPending,
                 wasCancelled: false);
@@ -577,7 +577,7 @@ public sealed class ExecutionOrchestrator :
             ExpectedResult = GetHash(JsonSerializer.Serialize(committed, JsonOptions)),
             Reconciliation = "transaction returned its authoritative committed result",
         };
-        WorkspaceBaseline promotedBaseline = await _workspaces.PromoteBaselineAsync(
+        var promotedBaseline = await _workspaces.PromoteBaselineAsync(
             active.Request.Baseline.WorkspaceId,
             committed.ChangedFiles,
             cancellationToken);
@@ -606,8 +606,8 @@ public sealed class ExecutionOrchestrator :
                 .ToArray(),
         };
         _runs[request.RunId] = active;
-        ExecutionArtifactReference appliedState = await PublishStateAsync(active, cancellationToken);
-        ExecutionContinuation applied = applyPending with
+        var appliedState = await PublishStateAsync(active, cancellationToken);
+        var applied = applyPending with
         {
             Phase = ExecutionCheckpointPhase.MutationApplied,
             StateArtifact = appliedState,
@@ -644,9 +644,9 @@ public sealed class ExecutionOrchestrator :
         string provenance,
         CancellationToken cancellationToken)
     {
-        MutationCommitResult committed = active.Commit
+        var committed = active.Commit
             ?? throw new InvalidDataException("Applied execution state has no authoritative commit result.");
-        MutationValidationResult validation = await _mutationValidation.HandleAsync(
+        var validation = await _mutationValidation.HandleAsync(
             new ValidateMutationCommand
             {
                 Request = active.Request.ValidationRequest,
@@ -657,7 +657,7 @@ public sealed class ExecutionOrchestrator :
                 ResidualRisks = active.Request.ApprovedPlan.Risks,
             },
             cancellationToken);
-        ExecutionArtifactReference validationArtifact = await _artifacts.PublishAsync(
+        var validationArtifact = await _artifacts.PublishAsync(
             request.SessionId,
             "executionValidation",
             JsonSerializer.Serialize(validation, JsonOptions),
@@ -673,7 +673,7 @@ public sealed class ExecutionOrchestrator :
         if (!succeeded && applied.CorrectionAttempts < applied.CorrectionBudget)
         {
             var correctionEvidence = CreateCorrectionEvidence(validation);
-            StagedMutationSet correction = await _proposals.HandleAsync(
+            var correction = await _proposals.HandleAsync(
                 new ProposeMutationSetCommand(
                     request.SessionId,
                     request.RunId,
@@ -683,14 +683,14 @@ public sealed class ExecutionOrchestrator :
                     RunPhase.CorrectionModelTurn,
                     correctionEvidence),
                 cancellationToken);
-            ExecutionArtifactReference correctionDiff = await _artifacts.PublishAsync(
+            var correctionDiff = await _artifacts.PublishAsync(
                 request.SessionId,
                 "executionCorrectionDiff",
                 correction.Preview.UnifiedDiff,
                 cancellationToken);
             active = active with { Staged = correction };
             _runs[request.RunId] = active;
-            ExecutionArtifactReference correctionState = await PublishStateAsync(active, cancellationToken);
+            var correctionState = await PublishStateAsync(active, cancellationToken);
             await SaveCheckpointAsync(
                 applied with
                 {
@@ -710,14 +710,14 @@ public sealed class ExecutionOrchestrator :
             return CreateInterimCorrectionProjection(request, active, validation, provenance);
         }
 
-        ExecutionCheckpointPhase status = succeeded
+        var status = succeeded
             ? ExecutionCheckpointPhase.Completed
             : ExecutionCheckpointPhase.Failed;
         StepId[] allSteps = [.. active.Request.ApprovedPlan.Steps.Select(step => step.StepId)];
         HashSet<StepId> appliedStepIds = [.. active.AppliedPlanStepIds];
         StepId[] completedSteps = [.. allSteps.Where(appliedStepIds.Contains)];
         StepId[] uncompletedSteps = [.. allSteps.Where(stepId => !appliedStepIds.Contains(stepId))];
-        ExecutionArtifactReference? finalDiff = active.AppliedDiffs.Count == 0
+        var finalDiff = active.AppliedDiffs.Count == 0
             ? null
             : await _artifacts.PublishAsync(
                 request.SessionId,
@@ -783,14 +783,14 @@ public sealed class ExecutionOrchestrator :
         string provenance,
         IReadOnlyList<FileLifecycleReconciliation> currentReconciliations)
     {
-        ExecutionContinuation checkpoint = await RequireCheckpointAsync(request.RunId, CancellationToken.None);
+        var checkpoint = await RequireCheckpointAsync(request.RunId, CancellationToken.None);
         if (checkpoint.Phase != ExecutionCheckpointPhase.Failed)
         {
             return;
         }
 
         StepId[] allSteps = [.. active.Request.ApprovedPlan.Steps.Select(step => step.StepId)];
-        ExecutionArtifactReference? finalDiff = active.AppliedDiffs.Count == 0
+        var finalDiff = active.AppliedDiffs.Count == 0
             ? null
             : await _artifacts.PublishAsync(
                 request.SessionId,
@@ -843,7 +843,7 @@ public sealed class ExecutionOrchestrator :
     {
         while (true)
         {
-            ExecutionContinuation checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+            var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
             if (checkpoint.Phase == ExecutionCheckpointPhase.MutationApprovalPending)
             {
                 return checkpoint;
@@ -869,7 +869,7 @@ public sealed class ExecutionOrchestrator :
         RunId runId,
         CancellationToken cancellationToken)
     {
-        if (_runs.TryGetValue(runId, out ActiveExecution? active))
+        if (_runs.TryGetValue(runId, out var active))
         {
             if (active.Request.SessionId != sessionId)
             {
@@ -879,7 +879,7 @@ public sealed class ExecutionOrchestrator :
             return active;
         }
 
-        ExecutionContinuation checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+        var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
         active = await RestoreStateAsync(checkpoint, cancellationToken);
         ValidateResumeState(checkpoint, active);
         _runs[runId] = active;
@@ -898,7 +898,7 @@ public sealed class ExecutionOrchestrator :
         var json = await _artifacts.ReadAsync(checkpoint.StateArtifact, cancellationToken)
             ?? throw new InvalidDataException("The continuation-state artifact is missing or corrupt.");
 
-        ActiveExecution active = JsonSerializer.Deserialize<ActiveExecution>(json, JsonOptions)
+        var active = JsonSerializer.Deserialize<ActiveExecution>(json, JsonOptions)
             ?? throw new InvalidDataException("The continuation-state artifact is invalid.");
         ValidateActiveExecutionShape(active);
         return active;
@@ -923,7 +923,7 @@ public sealed class ExecutionOrchestrator :
         ExecutionContinuation checkpoint,
         WorkspaceBaseline persistedBaseline)
     {
-        WorkspaceBaseline liveBaseline = _workspaces.GetWorkspace(checkpoint.WorkspaceId).Baseline;
+        var liveBaseline = _workspaces.GetWorkspace(checkpoint.WorkspaceId).Baseline;
         var expectedIdentity = checkpoint.MutationBaselineIdentity;
         if (!string.Equals(GetBaselineIdentity(liveBaseline), expectedIdentity, StringComparison.Ordinal)
             || liveBaseline.TrustLevel != persistedBaseline.TrustLevel
@@ -1010,7 +1010,7 @@ public sealed class ExecutionOrchestrator :
         ExecutionContinuation checkpoint,
         bool wasCancelled)
     {
-        IReadOnlyList<FileLifecycleReconciliation> reconciliations = await _workspaces
+        var reconciliations = await _workspaces
             .GetWorkspace(active.Request.Baseline.WorkspaceId)
             .ReconcileLifecycleAsync(
                 active.Staged.MutationSet.MutationSetId,
@@ -1020,7 +1020,7 @@ public sealed class ExecutionOrchestrator :
             return new FailedCommitReconciliation(false, []);
         }
 
-        ExecutionOperationRecord operation = checkpoint.Operation
+        var operation = checkpoint.Operation
             ?? throw new InvalidOperationException("The apply checkpoint has no pending operation.");
         var summary = string.Join(
             "; ",
@@ -1035,7 +1035,7 @@ public sealed class ExecutionOrchestrator :
             && reconciliations.All(item =>
                 item.State is FileLifecycleReconciliationState.NotStarted
                     or FileLifecycleReconciliationState.Compensated);
-        ExecutionOperationRecord reconciledOperation = operation with
+        var reconciledOperation = operation with
         {
             State = safelyCompensated
                 ? ExecutionOperationState.RolledBack
@@ -1069,7 +1069,7 @@ public sealed class ExecutionOrchestrator :
         ExecutionContinuation checkpoint,
         string reason)
     {
-        ExecutionOperationRecord operation = checkpoint.Operation
+        var operation = checkpoint.Operation
             ?? throw new InvalidOperationException("The apply checkpoint has no pending operation.");
         var recovery = operation with
         {
@@ -1196,7 +1196,7 @@ public sealed class ExecutionOrchestrator :
         ImplementationPlan plan,
         MutationSet mutationSet)
     {
-        HashSet<string> files = mutationSet.Mutations
+        var files = mutationSet.Mutations
             .Select(mutation => mutation.RelativePath.Replace('\\', '/'))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return plan.Steps.FirstOrDefault(step => step.GetAffectedPaths()
@@ -1218,14 +1218,14 @@ public sealed class ExecutionOrchestrator :
 
     private static string CreateCorrectionEvidence(MutationValidationResult validation)
     {
-        Diagnostic? diagnostic = validation.Diagnostics.FirstOrDefault(item =>
+        var diagnostic = validation.Diagnostics.FirstOrDefault(item =>
             item.Severity == DiagnosticSeverity.Error && !item.IsBaselineDiagnostic);
         if (diagnostic is not null)
         {
             return $"Compiler {diagnostic.Code} in {diagnostic.File ?? diagnostic.Project}: {diagnostic.Message}";
         }
 
-        TestResult? failedTest = validation.Tests.Results.FirstOrDefault(item =>
+        var failedTest = validation.Tests.Results.FirstOrDefault(item =>
             item.Outcome == TestOutcome.Failed);
         if (failedTest is not null)
         {
@@ -1242,7 +1242,7 @@ public sealed class ExecutionOrchestrator :
         RunContinuationGate? gate = null;
         while (gate is null)
         {
-            if (!_runContinuationGates.TryGetValue(runId, out RunContinuationGate? current))
+            if (!_runContinuationGates.TryGetValue(runId, out var current))
             {
                 var candidate = new RunContinuationGate();
                 if (!_runContinuationGates.TryAdd(runId, candidate))
@@ -1279,7 +1279,7 @@ public sealed class ExecutionOrchestrator :
             return;
         }
 
-        var removed = _runContinuationGates.TryRemove(runId, out RunContinuationGate? registered);
+        var removed = _runContinuationGates.TryRemove(runId, out var registered);
         if (!removed || !ReferenceEquals(gate, registered))
         {
             throw new InvalidOperationException("The run continuation gate registry became inconsistent.");

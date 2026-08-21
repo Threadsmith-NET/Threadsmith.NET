@@ -119,11 +119,11 @@ public sealed class McpImportedTool : ITool
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
-        string argumentsJson = ((McpArguments)input).Json;
+        var argumentsJson = ((McpArguments)input).Json;
         using var invocation = _acquireInvocation?.Invoke();
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCancellation.CancelAfter(_profile.RequestTimeout);
-        long transportStarted = _timeProvider.GetTimestamp();
+        var transportStarted = _timeProvider.GetTimestamp();
         try
         {
             var result = await _transport.InvokeAsync(
@@ -138,7 +138,7 @@ public sealed class McpImportedTool : ITool
                     ToElapsedMilliseconds(_timeProvider.GetElapsedTime(transportStarted)));
             }
 
-            string sanitized = _sanitizer.Sanitize(result.ResultJson ?? "null");
+            var sanitized = _sanitizer.Sanitize(result.ResultJson ?? "null");
             object value = JsonDocument.Parse(sanitized).RootElement.Clone();
             var elapsed = _timeProvider.GetElapsedTime(transportStarted);
             return new ToolExecutionEnvelope(

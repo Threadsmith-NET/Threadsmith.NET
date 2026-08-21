@@ -335,7 +335,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         var matches = new List<TextSearchMatch>();
         var sources = new List<ToolProvenanceSource>();
         var truncated = false;
-        Regex? regex = input.UseRegularExpression
+        var regex = input.UseRegularExpression
             ? new Regex(
                 input.Query,
                 RegexOptions.CultureInvariant,
@@ -343,7 +343,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             : null;
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
         var maximumMatches = ResolveMaximumMatches(input);
-        RipgrepSearchAttempt ripgrepAttempt = await TryExecuteRipgrepAsync(
+        var ripgrepAttempt = await TryExecuteRipgrepAsync(
             input,
             context,
             repositoryPath,
@@ -354,7 +354,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             return ripgrepAttempt.Execution;
         }
 
-        SearchFileSet fileSet = await GetManagedSearchFilesAsync(
+        var fileSet = await GetManagedSearchFilesAsync(
             repositoryPath,
             context,
             cancellationToken);
@@ -388,7 +388,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 await foreach (var line in File.ReadLinesAsync(path, cancellationToken))
                 {
                     lineNumber++;
-                    Match? match = regex?.Match(line);
+                    var match = regex?.Match(line);
                     var column = regex is null
                         ? line.IndexOf(input.Query, StringComparison.OrdinalIgnoreCase)
                         : match is { Success: true }
@@ -599,7 +599,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             }
 
             relative = relative.Replace('\\', '/');
-            ReadOnlySpan<char> locationAndText = record.AsSpan(pathTerminator + 1).TrimEnd('\r');
+            var locationAndText = record.AsSpan(pathTerminator + 1).TrimEnd('\r');
             var lineSeparator = locationAndText.IndexOf(':');
             var columnSeparator = lineSeparator < 0
                 ? -1
@@ -640,7 +640,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
-        SearchFileSet? gitFileSet = await TryEnumerateGitSearchFilesAsync(
+        var gitFileSet = await TryEnumerateGitSearchFilesAsync(
             repositoryPath,
             context,
             cancellationToken);
@@ -843,7 +843,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
         CancellationToken cancellationToken = default)
     {
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        ProcessExecutionResult result = await _processManager.RunAsync(
+        var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {
                 ToolInvocationId = context.ToolInvocationId,
@@ -961,9 +961,9 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Semantic symbol search requires an opened workspace.");
-        IReadOnlyList<SymbolResult> results = await _semanticEngine.FindSymbolsAsync(
+        var results = await _semanticEngine.FindSymbolsAsync(
             workspaceId,
             input.Query,
             cancellationToken);
@@ -1037,9 +1037,9 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Semantic reference search requires an opened workspace.");
-        IReadOnlyList<ReferenceResult> results = await _semanticEngine.FindReferencesAsync(
+        var results = await _semanticEngine.FindReferencesAsync(
             workspaceId,
             input.SymbolId,
             input.AllowTextFallback,
@@ -1110,10 +1110,10 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException(
                 "Semantic implementation search requires an opened workspace.");
-        IReadOnlyList<ImplementationResult> results = await _semanticEngine.FindImplementationsAsync(
+        var results = await _semanticEngine.FindImplementationsAsync(
             workspaceId,
             input.SymbolId,
             cancellationToken);
@@ -1222,7 +1222,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             ".",
             context.Invocation);
         var timeoutSeconds = ResolveTimeoutSeconds(input);
-        ProcessExecutionResult result = await _processManager.RunAsync(
+        var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {
                 ToolInvocationId = context.ToolInvocationId,
@@ -1350,14 +1350,14 @@ internal static class ToolDefinitionFactory
         TimeSpan timeout,
         int maximumOutputBytes)
     {
-        JsonNode inputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
+        var inputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
             _schemaOptions,
             typeof(TInput),
             new JsonSchemaExporterOptions
             {
                 TreatNullObliviousAsNonNullable = true,
             });
-        JsonTypeInfo inputTypeInfo = _schemaOptions.GetTypeInfo(typeof(TInput));
+        var inputTypeInfo = _schemaOptions.GetTypeInfo(typeof(TInput));
         if (inputTypeInfo.Kind == JsonTypeInfoKind.Object
             && inputTypeInfo.Properties.Count == 0
             && inputSchema is JsonObject inputObject)
@@ -1366,7 +1366,7 @@ internal static class ToolDefinitionFactory
             inputObject["additionalProperties"] = false;
         }
 
-        JsonNode outputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
+        var outputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
             _schemaOptions,
             typeof(TOutput));
         return new()

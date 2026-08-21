@@ -42,7 +42,7 @@ public static class Program
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            ScriptWorkerRequest request = JsonSerializer.Deserialize<ScriptWorkerRequest>(
+            var request = JsonSerializer.Deserialize<ScriptWorkerRequest>(
                 requestJson,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidOperationException("The scripting request was empty.");
@@ -92,7 +92,7 @@ public static class Program
                 references.Add(Assembly.LoadFrom(assemblyPath));
             }
 
-            ScriptOptions options = ScriptOptions.Default
+            var options = ScriptOptions.Default
                 .WithReferences(references.Distinct())
                 .WithImports(request.AllowedAssemblies);
             var script = CSharpScript.Create(request.Code, options);
@@ -113,15 +113,15 @@ public static class Program
             }
 
             var semanticModel = compilation.GetSemanticModel(syntaxTree);
-            foreach (SimpleNameSyntax nameSyntax in syntaxRoot.DescendantNodes().OfType<SimpleNameSyntax>())
+            foreach (var nameSyntax in syntaxRoot.DescendantNodes().OfType<SimpleNameSyntax>())
             {
                 var symbolInfo = semanticModel.GetSymbolInfo(nameSyntax);
                 IEnumerable<ISymbol> symbols = symbolInfo.Symbol is null
                     ? symbolInfo.CandidateSymbols
                     : [symbolInfo.Symbol];
-                foreach (ISymbol originalSymbol in symbols)
+                foreach (var originalSymbol in symbols)
                 {
-                    ISymbol symbol = originalSymbol is IAliasSymbol alias ? alias.Target : originalSymbol;
+                    var symbol = originalSymbol is IAliasSymbol alias ? alias.Target : originalSymbol;
                     var namespaceName = symbol is INamespaceSymbol namespaceSymbol
                         ? namespaceSymbol.ToDisplayString()
                         : symbol.ContainingNamespace?.ToDisplayString() ?? string.Empty;

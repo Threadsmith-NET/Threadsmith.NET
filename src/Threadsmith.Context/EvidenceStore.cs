@@ -107,11 +107,11 @@ public sealed class EvidenceStore : IEvidenceStore
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        int staleCount = 0;
+        var staleCount = 0;
         lock (_gate)
         {
-            int pendingCount = _invalidations.Count;
-            for (int index = 0; index < pendingCount; index++)
+            var pendingCount = _invalidations.Count;
+            for (var index = 0; index < pendingCount; index++)
             {
                 var invalidation = _invalidations.Dequeue();
                 if (invalidation.SessionId != sessionId)
@@ -128,14 +128,14 @@ public sealed class EvidenceStore : IEvidenceStore
                         continue;
                     }
 
-                    string normalizedKey = invalidation.Key.Replace('\\', '/').TrimEnd('/');
-                    string? normalizedSource = evidence.Provenance.SourcePath?.Replace('\\', '/');
-                    bool matchesPath = normalizedSource is not null
+                    var normalizedKey = invalidation.Key.Replace('\\', '/').TrimEnd('/');
+                    var normalizedSource = evidence.Provenance.SourcePath?.Replace('\\', '/');
+                    var matchesPath = normalizedSource is not null
                         && (string.Equals(normalizedSource, normalizedKey, PathComparison)
                             || normalizedSource.StartsWith(
                                 normalizedKey + '/',
                                 PathComparison));
-                    bool matchesKey = evidence.InvalidationKeys.Contains(
+                    var matchesKey = evidence.InvalidationKeys.Contains(
                         invalidation.Key,
                         StringComparer.OrdinalIgnoreCase);
                     if (evidence.IsStale || (!matchesPath && !matchesKey))

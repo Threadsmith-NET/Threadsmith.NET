@@ -44,7 +44,7 @@ public static class TuiMarkdownRenderingTests
         var paragraph = Assert.IsType<TuiMarkdownParagraph>(document.Blocks[1]);
         Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(TuiMarkdownSpanStyle.Strong));
         Assert.Contains(paragraph.Spans, span => span.LinkTarget?.Host == "example.com");
-        string layout = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
+        var layout = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
         Assert.Contains("link (https://example.com/path)", layout, StringComparison.Ordinal);
     }
 
@@ -60,7 +60,7 @@ public static class TuiMarkdownRenderingTests
         ]);
 
         var segments = TuiMarkdownLayout.Format(document, 120);
-        string visible = string.Concat(segments.Select(segment => segment.Text));
+        var visible = string.Concat(segments.Select(segment => segment.Text));
 
         Assert.Equal("Primary\n═══════\n\nSecondary\n─────────\n\nMinor\n", visible);
         Assert.DoesNotContain('#', visible);
@@ -79,7 +79,7 @@ public static class TuiMarkdownRenderingTests
 
         var document = Assert.IsType<TuiMarkdownDocument>(result.Document);
         var paragraph = Assert.IsType<TuiMarkdownParagraph>(Assert.Single(document.Blocks));
-        string visible = string.Concat(paragraph.Spans.Select(span => span.Text));
+        var visible = string.Concat(paragraph.Spans.Select(span => span.Text));
         Assert.Contains("<script>bad()</script>", visible, StringComparison.Ordinal);
         Assert.Contains("javascript:alert(1)", visible, StringComparison.Ordinal);
         Assert.Contains("\\u001B", visible, StringComparison.Ordinal);
@@ -90,9 +90,9 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void TerminalEncoder_ControlsAndMalformedUnicode_UsesDeterministicEscapes()
     {
-        string input = "a\tb\n\r\u001b\u0085\ud800";
+        var input = "a\tb\n\r\u001b\u0085\ud800";
 
-        string encoded = TerminalControlEncoder.Encode(input);
+        var encoded = TerminalControlEncoder.Encode(input);
 
         Assert.Equal("a\tb\n\\u000D\\u001B\\u0085\\uD800", encoded);
         Assert.Equal(1, TuiMarkdownParser.SyntaxProfileVersion);
@@ -102,7 +102,7 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Parse_OversizedSource_FallsBackWithoutPartialDocument()
     {
-        string source = "\u001b" + new string('a', TuiMarkdownParser.MaximumSourceBytes + 1);
+        var source = "\u001b" + new string('a', TuiMarkdownParser.MaximumSourceBytes + 1);
 
         var result = new TuiMarkdownParser().Parse(source);
 
@@ -129,7 +129,7 @@ public static class TuiMarkdownRenderingTests
         var segments = TuiMarkdownLayout.Format(
             new TuiMarkdownDocument([table]),
             20);
-        string visible = string.Concat(segments.Select(segment => segment.Text));
+        var visible = string.Concat(segments.Select(segment => segment.Text));
 
         Assert.Contains("- Name: one", visible, StringComparison.Ordinal);
         Assert.Contains("- Description: xxxxx", visible, StringComparison.Ordinal);
@@ -146,7 +146,7 @@ public static class TuiMarkdownRenderingTests
         const string source = "| Resource |\n| --- |\n| [docs](https://example.com/docs) |";
         var document = Assert.IsType<TuiMarkdownDocument>(new TuiMarkdownParser().Parse(source).Document);
 
-        string visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
+        var visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
 
         Assert.Contains("docs (https://example.com/docs)", visible, StringComparison.Ordinal);
     }
@@ -162,7 +162,7 @@ public static class TuiMarkdownRenderingTests
                 [[new TuiMarkdownSpan(new string('x', 50))]]),
         ]);
 
-        string visible = string.Concat(TuiMarkdownLayout.Format(new TuiMarkdownDocument([table]), 20).Select(segment => segment.Text));
+        var visible = string.Concat(TuiMarkdownLayout.Format(new TuiMarkdownDocument([table]), 20).Select(segment => segment.Text));
 
         Assert.All(
             visible.Split('\n', StringSplitOptions.RemoveEmptyEntries),
@@ -197,7 +197,7 @@ public static class TuiMarkdownRenderingTests
                 [new TuiMarkdownParagraph([new TuiMarkdownSpan("quoted words continue across lines")])]),
         ]);
 
-        string visible = string.Concat(TuiMarkdownLayout.Format(document, 20).Select(segment => segment.Text));
+        var visible = string.Concat(TuiMarkdownLayout.Format(document, 20).Select(segment => segment.Text));
 
         Assert.Contains("- one two three four\n  five six", visible, StringComparison.Ordinal);
         Assert.Contains("> quoted words\n> continue", visible, StringComparison.Ordinal);
@@ -410,7 +410,7 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void DisplayOptions_MarkdownSetting_UsesDefaultOverrideAndDiagnostic()
     {
-        TuiDisplayOptions defaults = TuiDisplayOptions.Load(null);
+        var defaults = TuiDisplayOptions.Load(null);
         IConfiguration disabledConfiguration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["tui:renderMarkdown"] = "false" })
             .Build();
@@ -420,7 +420,7 @@ public static class TuiMarkdownRenderingTests
 
         Assert.True(defaults.RenderMarkdown);
         Assert.False(TuiDisplayOptions.Load(disabledConfiguration).RenderMarkdown);
-        TuiDisplayOptions malformed = TuiDisplayOptions.Load(malformedConfiguration);
+        var malformed = TuiDisplayOptions.Load(malformedConfiguration);
         Assert.True(malformed.RenderMarkdown);
         Assert.Contains(malformed.Diagnostics, diagnostic => diagnostic.Contains("tui:renderMarkdown", StringComparison.Ordinal));
     }

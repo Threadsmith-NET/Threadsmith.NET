@@ -193,8 +193,8 @@ public static class Plan35ConversationContextTests
 
         Assert.DoesNotContain("old-user", result.ModelInput, StringComparison.Ordinal);
         Assert.DoesNotContain("dangling-user", result.ModelInput, StringComparison.Ordinal);
-        int userIndex = result.ModelInput.IndexOf("new-user", StringComparison.Ordinal);
-        int assistantIndex = result.ModelInput.IndexOf("new-assistant", StringComparison.Ordinal);
+        var userIndex = result.ModelInput.IndexOf("new-user", StringComparison.Ordinal);
+        var assistantIndex = result.ModelInput.IndexOf("new-assistant", StringComparison.Ordinal);
         Assert.True(userIndex >= 0 && assistantIndex > userIndex);
         Assert.Equal(2, result.Inspection.ConversationItems.Count(item => item.Included && item.Kind is "User" or "Assistant"));
     }
@@ -278,7 +278,7 @@ public static class Plan35ConversationContextTests
             sessionId,
             current,
             "small-current"));
-        int pressuredBudget = baseline.Inspection.EstimatedTokens - 250;
+        var pressuredBudget = baseline.Inspection.EstimatedTokens - 250;
         var pressuredAssembler = CreateAssembler(
             fixture,
             events,
@@ -390,7 +390,7 @@ public static class Plan35ConversationContextTests
             new EvidenceStore(events, new SecretOutputSanitizer()));
 
         var inspection = await application.HandleAsync(new GetContextInspectionCommand(runId));
-        bool compacted = await application.HandleAsync(new RequestConversationCompactionCommand(sessionId));
+        var compacted = await application.HandleAsync(new RequestConversationCompactionCommand(sessionId));
 
         Assert.NotNull(inspection);
         Assert.True(compacted);
@@ -406,10 +406,10 @@ public static class Plan35ConversationContextTests
         var headless = new HeadlessShell(dispatcher, projections, TextWriter.Null);
         var sessionId = SessionId.New();
 
-        bool tuiResult = await presenter.SetConversationModeAsync(
+        var tuiResult = await presenter.SetConversationModeAsync(
             sessionId,
             ConversationContextMode.Stateless);
-        bool headlessResult = await headless.SetConversationModeAsync(
+        var headlessResult = await headless.SetConversationModeAsync(
             sessionId,
             ConversationContextMode.Stateless);
 

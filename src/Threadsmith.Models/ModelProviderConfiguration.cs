@@ -314,7 +314,7 @@ public sealed class EffectiveModelProviderCatalog
                 throw new InvalidOperationException($"Duplicate model provider id '{provider.Id}'.");
             }
 
-            string discriminator = provider.GetType() == typeof(ModelProviderConfiguration)
+            var discriminator = provider.GetType() == typeof(ModelProviderConfiguration)
                 ? throw new InvalidOperationException($"Provider '{provider.Id}' has no registered type.")
                 : registry.Registrations.Values
                     .SingleOrDefault(item => item.ProviderConfigurationType == provider.GetType())?.TypeDiscriminator
@@ -327,7 +327,7 @@ public sealed class EffectiveModelProviderCatalog
             }
 
             var profiles = registration.CreateProfiles(provider);
-            Dictionary<ModelProfileId, ModelConfiguration> models = provider.Models
+            var models = provider.Models
                 .Where(model => model.Enabled)
                 .ToDictionary(model => model.Id);
             foreach (var profile in profiles)
@@ -422,25 +422,25 @@ public sealed record ModelHttpTransportOptions
     public static ModelHttpTransportOptions Load(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        int pooledLifetimeSeconds = ReadBounded(
+        var pooledLifetimeSeconds = ReadBounded(
             configuration,
             "model:http:pooledConnectionLifetimeSeconds",
             900,
             60,
             86400);
-        int pooledIdleSeconds = ReadBounded(
+        var pooledIdleSeconds = ReadBounded(
             configuration,
             "model:http:pooledConnectionIdleTimeoutSeconds",
             120,
             10,
             3600);
-        int connectTimeoutSeconds = ReadBounded(
+        var connectTimeoutSeconds = ReadBounded(
             configuration,
             "model:http:connectTimeoutSeconds",
             30,
             1,
             300);
-        int maxConnectionsPerServer = ReadBounded(
+        var maxConnectionsPerServer = ReadBounded(
             configuration,
             "model:http:maxConnectionsPerServer",
             16,
@@ -462,7 +462,7 @@ public sealed record ModelHttpTransportOptions
         int minimum,
         int maximum)
     {
-        int value = configuration.GetValue(key, defaultValue);
+        var value = configuration.GetValue(key, defaultValue);
         if (value < minimum || value > maximum)
         {
             throw new InvalidOperationException(
@@ -531,9 +531,9 @@ public static class ModelProviderConfigurationLoader
                     registry.CreateSerializerOptions())
                 ?? throw new InvalidOperationException("The effective model provider catalog is empty.");
             var catalog = new EffectiveModelProviderCatalog(configuration, registry, enforceHttps);
-            int disabledProviders = configuration.Providers.Count(provider => !provider.Enabled);
-            int disabledModels = configuration.Providers.Sum(provider => provider.Models.Count(model => !model.Enabled));
-            string diagnosticMessage = $"Effective provider catalog contains {configuration.Providers.Count} providers, "
+            var disabledProviders = configuration.Providers.Count(provider => !provider.Enabled);
+            var disabledModels = configuration.Providers.Sum(provider => provider.Models.Count(model => !model.Enabled));
+            var diagnosticMessage = $"Effective provider catalog contains {configuration.Providers.Count} providers, "
                 + $"{catalog.ModelCatalog.Profiles.Count} selectable models, {disabledProviders} disabled providers, "
                 + $"and {disabledModels} disabled models; default provider='{configuration.DefaultProviderId ?? "none"}', "
                 + $"default model='{configuration.DefaultModelId?.Value.ToString("D") ?? "none"}'.";
@@ -560,10 +560,10 @@ public static class ModelProviderConfigurationLoader
                 $"The {layerName} model provider catalog exceeds the configured byte limit.");
         }
 
-        byte[] bytes = File.ReadAllBytes(path);
+        var bytes = File.ReadAllBytes(path);
         try
         {
-            JsonNode? node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
+            var node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
             {
                 MaxDepth = limits.MaximumDepth,
             });
@@ -586,7 +586,7 @@ public static class ModelProviderConfigurationLoader
         pending.Push((root, 1, "$"));
         while (pending.Count > 0)
         {
-            (var node, int depth, string path) = pending.Pop();
+            (var node, var depth, var path) = pending.Pop();
             if (depth > limits.MaximumDepth)
             {
                 throw new InvalidOperationException($"The {layerName} catalog exceeds the nesting limit at '{path}'.");
@@ -600,7 +600,7 @@ public static class ModelProviderConfigurationLoader
                 }
 
                 var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach ((string name, var value) in item)
+                foreach ((var name, var value) in item)
                 {
                     if (!propertyNames.Add(name))
                     {
@@ -613,11 +613,11 @@ public static class ModelProviderConfigurationLoader
                         throw new InvalidOperationException($"The {layerName} catalog contains an excessive property name.");
                     }
 
-                    bool isSecretReference = string.Equals(
+                    var isSecretReference = string.Equals(
                         name,
                         "secretKeyReference",
                         StringComparison.OrdinalIgnoreCase);
-                    bool isCredentialName = CredentialPropertyNames.Contains(name)
+                    var isCredentialName = CredentialPropertyNames.Contains(name)
                         || name.EndsWith("ApiKey", StringComparison.OrdinalIgnoreCase)
                         || name.EndsWith("Authorization", StringComparison.OrdinalIgnoreCase)
                         || name.EndsWith("Credential", StringComparison.OrdinalIgnoreCase)
@@ -638,7 +638,7 @@ public static class ModelProviderConfigurationLoader
             }
             else if (node is JsonArray array)
             {
-                for (int index = 0; index < array.Count; index++)
+                for (var index = 0; index < array.Count; index++)
                 {
                     if (array[index] is { } child)
                     {
@@ -647,7 +647,7 @@ public static class ModelProviderConfigurationLoader
                 }
             }
             else if (node is JsonValue value
-                && value.TryGetValue<string>(out string? text)
+                && value.TryGetValue<string>(out var text)
                 && text is not null
                 && text.Length > limits.MaximumStringLength)
             {
@@ -663,12 +663,12 @@ public static class ModelProviderConfigurationLoader
 
         var providerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var modelIds = new HashSet<Guid>();
-        int modelCount = 0;
+        var modelCount = 0;
         foreach (var providerNode in providers)
         {
             var provider = providerNode as JsonObject
                 ?? throw new InvalidOperationException($"The {layerName} catalog contains a non-object provider.");
-            string providerId = GetRequiredString(provider, "id", layerName + " provider");
+            var providerId = GetRequiredString(provider, "id", layerName + " provider");
             if (!providerIds.Add(providerId))
             {
                 throw new InvalidOperationException($"Duplicate provider id '{providerId}' in the {layerName} catalog.");
@@ -687,7 +687,7 @@ public static class ModelProviderConfigurationLoader
                 var model = modelNode as JsonObject
                     ?? throw new InvalidOperationException(
                         $"Provider '{providerId}' contains a non-object model in the {layerName} catalog.");
-                string modelIdText = GetRequiredString(model, "id", layerName + " model");
+                var modelIdText = GetRequiredString(model, "id", layerName + " model");
                 if (!Guid.TryParse(modelIdText, out var modelId))
                 {
                     throw new InvalidOperationException(
@@ -715,11 +715,11 @@ public static class ModelProviderConfigurationLoader
         ModelProviderCatalogLimits limits)
     {
         var result = inherited.DeepClone().AsObject();
-        foreach ((string overrideName, var overrideValue) in overrides)
+        foreach ((var overrideName, var overrideValue) in overrides)
         {
             var existing = result
                 .FirstOrDefault(item => string.Equals(item.Key, overrideName, StringComparison.OrdinalIgnoreCase));
-            string resultName = existing.Key ?? overrideName;
+            var resultName = existing.Key ?? overrideName;
             var inheritedValue = existing.Key is null ? null : existing.Value;
             if (overrideValue is JsonObject overrideObject && inheritedValue is JsonObject inheritedObject)
             {
@@ -753,7 +753,7 @@ public static class ModelProviderConfigurationLoader
     {
         var result = new JsonArray([.. inherited.Select(item => item?.DeepClone())]);
         var positions = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (int index = 0; index < result.Count; index++)
+        for (var index = 0; index < result.Count; index++)
         {
             var item = result[index] as JsonObject
                 ?? throw new InvalidOperationException($"Catalog entry at '{path}[{index}]' must be an object.");
@@ -764,8 +764,8 @@ public static class ModelProviderConfigurationLoader
         {
             var overrideItem = overrideNode as JsonObject
                 ?? throw new InvalidOperationException($"Catalog override at '{path}' must be an object.");
-            string id = GetRequiredString(overrideItem, "id", path);
-            if (!positions.TryGetValue(id, out int position))
+            var id = GetRequiredString(overrideItem, "id", path);
+            if (!positions.TryGetValue(id, out var position))
             {
                 GetRequiredString(overrideItem, "type", path + "['" + id + "']");
                 positions.Add(id, result.Count);
@@ -775,8 +775,8 @@ public static class ModelProviderConfigurationLoader
 
             var inheritedItem = result[position]?.AsObject()
                 ?? throw new InvalidOperationException($"Inherited catalog entry '{id}' is invalid.");
-            string inheritedType = GetRequiredString(inheritedItem, "type", path + "['" + id + "']");
-            string? overrideType = GetString(overrideItem, "type");
+            var inheritedType = GetRequiredString(inheritedItem, "type", path + "['" + id + "']");
+            var overrideType = GetString(overrideItem, "type");
             if (overrideType is not null
                 && !string.Equals(inheritedType, overrideType, StringComparison.OrdinalIgnoreCase))
             {
@@ -791,8 +791,8 @@ public static class ModelProviderConfigurationLoader
                     inheritedItem,
                     "reasoningCompatibility",
                     out var inheritedReasoningNode);
-                JsonObject? inheritedReasoning = inheritedReasoningNode as JsonObject;
-                JsonObject? overrideReasoning = overrideReasoningNode as JsonObject;
+                var inheritedReasoning = inheritedReasoningNode as JsonObject;
+                var overrideReasoning = overrideReasoningNode as JsonObject;
                 if ((inheritedReasoning is null) != (overrideReasoning is null))
                 {
                     throw new InvalidOperationException(
@@ -805,10 +805,10 @@ public static class ModelProviderConfigurationLoader
                     continue;
                 }
 
-                int? inheritedVersion = GetInt32(inheritedReasoning, "schemaVersion");
-                int? overrideVersion = GetInt32(overrideReasoning, "schemaVersion");
-                string? inheritedMode = GetString(inheritedReasoning, "mode");
-                string? overrideMode = GetString(overrideReasoning, "mode");
+                var inheritedVersion = GetInt32(inheritedReasoning, "schemaVersion");
+                var overrideVersion = GetInt32(overrideReasoning, "schemaVersion");
+                var inheritedMode = GetString(inheritedReasoning, "mode");
+                var overrideMode = GetString(overrideReasoning, "mode");
                 if ((overrideVersion is not null && overrideVersion != inheritedVersion)
                     || (overrideMode is not null
                         && !string.Equals(inheritedMode, overrideMode, StringComparison.OrdinalIgnoreCase)))
@@ -821,9 +821,9 @@ public static class ModelProviderConfigurationLoader
             if (string.Equals(path, "$.providers", StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(GetString(inheritedItem, "secretKeyReference")))
             {
-                foreach ((string name, var value) in overrideItem)
+                foreach ((var name, var value) in overrideItem)
                 {
-                    bool isRepositoryMutableProperty = string.Equals(name, "id", StringComparison.OrdinalIgnoreCase)
+                    var isRepositoryMutableProperty = string.Equals(name, "id", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(name, "type", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(name, "name", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(name, "enabled", StringComparison.OrdinalIgnoreCase)
@@ -851,7 +851,7 @@ public static class ModelProviderConfigurationLoader
 
     private static bool TryGetPropertyValue(JsonObject item, string name, out JsonNode? value)
     {
-        foreach ((string propertyName, var propertyValue) in item)
+        foreach ((var propertyName, var propertyValue) in item)
         {
             if (string.Equals(propertyName, name, StringComparison.OrdinalIgnoreCase))
             {
@@ -869,7 +869,7 @@ public static class ModelProviderConfigurationLoader
         var node = item
             .FirstOrDefault(property => string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
             .Value;
-        return node is JsonValue value && value.TryGetValue<int>(out int number)
+        return node is JsonValue value && value.TryGetValue<int>(out var number)
             ? number
             : null;
     }
@@ -894,7 +894,7 @@ public static class ModelProviderConfigurationLoader
         var node = item
             .FirstOrDefault(property => string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
             .Value;
-        return node is JsonValue value && value.TryGetValue<string>(out string? text)
+        return node is JsonValue value && value.TryGetValue<string>(out var text)
             ? text
             : null;
     }
@@ -908,7 +908,7 @@ public static class ModelProviderConfigurationLoader
             Type typeToConvert,
             JsonSerializerOptions options)
         {
-            string? value = reader.GetString();
+            var value = reader.GetString();
             return Guid.TryParse(value, out var id)
                 ? new ModelProfileId(id)
                 : throw new JsonException("Model id must be a GUID.");

@@ -226,7 +226,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
         }
 
         var shutdown = Stopwatch.StartNew();
-        bool completedWithinDeadline = true;
+        var completedWithinDeadline = true;
         if (capabilityChanges is not null)
         {
             var capabilityDisposal = capabilityChanges.DisposeAsync().AsTask();

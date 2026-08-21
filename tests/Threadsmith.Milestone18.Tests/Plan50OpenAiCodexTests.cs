@@ -38,8 +38,8 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task CatalogCache_RoundTripsDynamicModelsWithoutToken()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-{Guid.NewGuid():N}");
-        string path = Path.Combine(root, "models.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "models.json");
         var cache = new OpenAiCodexCatalogCache(path);
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
@@ -69,8 +69,8 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData("{\"SchemaVersion\":1,\"Models\":[{}]}")]
     public async Task CatalogCache_MalformedPayload_ReturnsNull(string payload)
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-cache-{Guid.NewGuid():N}");
-        string path = Path.Combine(root, "models.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-cache-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "models.json");
         Directory.CreateDirectory(root);
 
         try
@@ -106,8 +106,8 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task BrowserCompletion_ValidatesStateAndStoresThreadsmithGrant()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-oauth-{Guid.NewGuid():N}");
-        string path = Path.Combine(root, "token.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-oauth-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "token.json");
         var handler = new RecordingHandler(_ => JsonResponse(
             "{\"access_token\":\"access-value\",\"refresh_token\":\"refresh-value\",\"expires_in\":3600}"));
         using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler), path);
@@ -146,8 +146,8 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task AuthenticationStatus_MalformedCredentialPayload_IsUnauthenticated()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-status-{Guid.NewGuid():N}");
-        string path = Path.Combine(root, "token.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-status-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "token.json");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(path, "{}", TestContext.Current.CancellationToken);
         using var oauth = new OpenAiCodexOAuthManager(new HttpClient(new RecordingHandler(_ => JsonResponse("{}"))), path);
@@ -170,8 +170,8 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task TokenRefresh_HangingEndpoint_ObservesBoundedCancellation()
     {
-        string root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-timeout-{Guid.NewGuid():N}");
-        string path = Path.Combine(root, "token.json");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-timeout-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "token.json");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(
             path,
@@ -254,7 +254,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(3, usage.Cache?.CacheReadTokens);
         Assert.Equal(CacheReadInputSemantics.IncludedInInput, usage.Cache?.ReadInputSemantics);
         Assert.Equal(OpenAiCodexProviderRegistration.ResponsesEndpoint, handler.Request?.RequestUri);
-        string requestBody = handler.RequestBody ?? string.Empty;
+        var requestBody = handler.RequestBody ?? string.Empty;
         Assert.Contains("\"model\":\"dynamic\"", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"effort\":\"high\"", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"strict\":true", requestBody, StringComparison.Ordinal);
@@ -269,7 +269,7 @@ public sealed class Plan50OpenAiCodexTests
         var handler = new RecordingHandler(request => request.Headers.Authorization?.Parameter == "old-token"
             ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
             : StreamingResponse());
-        int refreshCount = 0;
+        var refreshCount = 0;
         var provider = await CreateProviderAsync(
             handler,
             "old-token",
@@ -294,7 +294,7 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task Provider_TransientResponse_HonorsRetryPolicy()
     {
-        int responseCount = 0;
+        var responseCount = 0;
         var handler = new RecordingHandler(_ => ++responseCount == 1
             ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
             : StreamingResponse());
@@ -380,8 +380,8 @@ public sealed class Plan50OpenAiCodexTests
 
     private static string CreateJwt(string accountId)
     {
-        string header = Base64Url("{\"alg\":\"none\"}");
-        string payload = Base64Url(JsonSerializer.Serialize(new Dictionary<string, object>
+        var header = Base64Url("{\"alg\":\"none\"}");
+        var payload = Base64Url(JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["https://api.openai.com/auth"] = new Dictionary<string, string>
             {

@@ -62,7 +62,7 @@ internal static class TuiMarkdownLayout
                 AppendHeadingUnderline(segments, heading, width, prefix);
                 break;
             case TuiMarkdownQuote quote:
-                foreach (TuiMarkdownBlock child in quote.Blocks)
+                foreach (var child in quote.Blocks)
                 {
                     AppendBlock(segments, child, width, prefix + "> ");
                 }
@@ -121,7 +121,7 @@ internal static class TuiMarkdownLayout
     {
         for (var index = 0; index < list.Items.Length; index++)
         {
-            TuiMarkdownListItem item = list.Items[index];
+            var item = list.Items[index];
             var marker = list.IsOrdered
                 ? ((long)list.Start + index).ToString(CultureInfo.InvariantCulture) + ". "
                 : "- ";
@@ -274,11 +274,11 @@ internal static class TuiMarkdownLayout
     {
         firstPrefix = BoundPrefix(firstPrefix, width);
         continuationPrefix = BoundPrefix(continuationPrefix, width);
-        IReadOnlyList<TuiTextSegment> inlineSegments = CreateInlineSegments(spans, forcedRole);
+        var inlineSegments = CreateInlineSegments(spans, forcedRole);
         output.Add(new TuiTextSegment(firstPrefix, prefixRole));
         var column = GetWidth(firstPrefix);
         var pendingWhitespace = string.Empty;
-        foreach (TuiTextSegment segment in inlineSegments)
+        foreach (var segment in inlineSegments)
         {
             var index = 0;
             while (index < segment.Text.Length)
@@ -372,14 +372,14 @@ internal static class TuiMarkdownLayout
     {
         var segments = new List<TuiTextSegment>();
         Uri? previousLink = null;
-        foreach (TuiMarkdownSpan span in spans)
+        foreach (var span in spans)
         {
             if (previousLink is not null && span.LinkTarget != previousLink)
             {
                 AppendLinkDestination(segments, previousLink);
             }
 
-            TuiTextRole role = forcedRole ?? GetRole(span);
+            var role = forcedRole ?? GetRole(span);
             segments.Add(new TuiTextSegment(span.Text, role, span.LinkTarget));
             previousLink = span.LinkTarget;
         }
@@ -416,7 +416,7 @@ internal static class TuiMarkdownLayout
     {
         var builder = new StringBuilder();
         Uri? previousLink = null;
-        foreach (TuiMarkdownSpan span in spans)
+        foreach (var span in spans)
         {
             if (previousLink is not null && span.LinkTarget != previousLink)
             {
@@ -552,7 +552,7 @@ internal sealed class TuiModelAnswerCollector
 
         try
         {
-            TuiMarkdownParseResult parsed = _parser.Parse(source);
+            var parsed = _parser.Parse(source);
             if (parsed.Document is { } document)
             {
                 TuiMarkdownValidator.Validate(document);

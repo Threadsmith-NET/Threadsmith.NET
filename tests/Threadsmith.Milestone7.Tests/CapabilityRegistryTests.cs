@@ -32,8 +32,8 @@ public sealed class CapabilityRegistryTests
     [Fact]
     public async Task Extension_lifecycle_updates_the_shared_tool_catalog()
     {
-        string repositoryRoot = Path.Combine(Path.GetTempPath(), "threadsmith-tool-catalog-tests", Guid.NewGuid().ToString("N"));
-        string configPath = Path.Combine(repositoryRoot, ".threadsmith", "config.json");
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), "threadsmith-tool-catalog-tests", Guid.NewGuid().ToString("N"));
+        var configPath = Path.Combine(repositoryRoot, ".threadsmith", "config.json");
         IConfiguration configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -152,7 +152,7 @@ public sealed class CapabilityRegistryTests
             NullLogger<ExtensionHost>.Instance,
             capabilityRegistry: capabilityRegistry,
             leaseAuthority: leaseAuthority);
-        string stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-invalid-tool-tests", Guid.NewGuid().ToString("N"));
+        var stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-invalid-tool-tests", Guid.NewGuid().ToString("N"));
 
         await Assert.ThrowsAsync<ArgumentException>(() => host.LoadAsync(new ExtensionLoadRequest
         {
@@ -176,13 +176,13 @@ public sealed class CapabilityRegistryTests
         var (host, _) = await LoadSampleAsync();
         var registration = host.Capabilities.Get("sample_echo")!;
         var proxy = registration.ToolProxy!;
-        object input = proxy.DeserializeInput("""{"message":"hello"}""");
+        var input = proxy.DeserializeInput("""{"message":"hello"}""");
         var result = await proxy.ExecuteAsync(
             input,
             new ToolExecutionContext(ToolInvocationId.New(), default, default, MakeInvocationContext()),
             CancellationToken.None);
         Assert.NotNull(result.Value);
-        string serialized = result.Value.ToString() ?? string.Empty;
+        var serialized = result.Value.ToString() ?? string.Empty;
         Assert.Contains("hello", serialized, StringComparison.Ordinal);
     }
 
@@ -245,7 +245,7 @@ public sealed class CapabilityRegistryTests
         var (host, generation) = await LoadSampleAsync();
         Assert.NotNull(host.Capabilities.Get("sample_echo"));
         Assert.NotEmpty(host.Capabilities.ModelPreferenceContributors);
-        int removed = host.Capabilities.RemoveGeneration(generation.GenerationId);
+        var removed = host.Capabilities.RemoveGeneration(generation.GenerationId);
         Assert.Equal(1, removed);
         Assert.Null(host.Capabilities.Get("sample_echo"));
         Assert.Empty(host.Capabilities.ModelPreferenceContributors);
@@ -258,7 +258,7 @@ public sealed class CapabilityRegistryTests
         var (host, generation) = await LoadSampleAsync();
         var registration = host.Capabilities.Get("sample_echo")!;
         var proxy = registration.ToolProxy!;
-        object input = proxy.DeserializeInput("""{"message":"leak-check"}""");
+        var input = proxy.DeserializeInput("""{"message":"leak-check"}""");
         var result = await proxy.ExecuteAsync(
             input,
             new ToolExecutionContext(ToolInvocationId.New(), default, default, MakeInvocationContext()),
@@ -289,7 +289,7 @@ public sealed class CapabilityRegistryTests
             generation,
             leaseAuthority,
             NullLogger.Instance);
-        object input = proxy.DeserializeInput("{}");
+        var input = proxy.DeserializeInput("{}");
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => proxy.ExecuteAsync(
                 input,
@@ -329,7 +329,7 @@ public sealed class CapabilityRegistryTests
     private static ExtensionLoadRequest CreateSampleLoadRequest(
         IReadOnlyDictionary<string, string?>? configuration = null)
     {
-        string stagingRoot = Path.Combine(
+        var stagingRoot = Path.Combine(
             Path.GetTempPath(),
             "threadsmith-m7-tests",
             Guid.NewGuid().ToString("N"));
@@ -363,18 +363,18 @@ public sealed class CapabilityRegistryTests
 
     private static string ResolveSampleOutputDirectory()
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "samples", "extensions", "MinimalToolExtension", "bin", configuration, "net10.0");
     }
 
     private static string ResolveFixtureOutputDirectory(string fixtureDirectory, string assemblyFileName)
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
-        string output = Path.Combine(
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var output = Path.Combine(
             repoRoot,
             "tests",
             "Threadsmith.Milestone7.Tests",

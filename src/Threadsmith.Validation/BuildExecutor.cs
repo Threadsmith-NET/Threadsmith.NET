@@ -32,7 +32,7 @@ public sealed partial class DiagnosticNormalizer
         var diagnostics = new List<Diagnostic>();
         foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
-            Match match = CompilerDiagnosticRegex().Match(line.Trim());
+            var match = CompilerDiagnosticRegex().Match(line.Trim());
             if (!match.Success)
             {
                 continue;
@@ -183,17 +183,17 @@ public sealed class BuildExecutor
         }
         else
         {
-            foreach (AffectedProject project in request.Projects)
+            foreach (var project in request.Projects)
             {
                 var target = Path.GetFullPath(project.FilePath);
-                IReadOnlyList<string> frameworks = project.TargetFrameworks.Count == 0
+                var frameworks = project.TargetFrameworks.Count == 0
                     ? [string.Empty]
                     : project.TargetFrameworks;
                 invocations.AddRange(frameworks.Select(framework => (target, project.Name, framework)));
             }
         }
 
-        foreach ((string Target, string ProjectName, string TargetFramework) invocation in invocations)
+        foreach (var invocation in invocations)
         {
             if (!IsWithinRoot(invocation.Target, root) || !File.Exists(invocation.Target))
             {
@@ -226,7 +226,7 @@ public sealed class BuildExecutor
         var stopwatch = Stopwatch.StartNew();
         var diagnostics = new List<Diagnostic>();
         var succeeded = true;
-        foreach ((string Target, string ProjectName, string TargetFramework) invocation in invocations)
+        foreach (var invocation in invocations)
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var process = new Process
@@ -260,11 +260,11 @@ public sealed class BuildExecutor
                 throw new InvalidOperationException($"Could not start dotnet build for '{invocation.Target}'.");
             }
 
-            Task<string> standardOutput = DrainAsync(process.StandardOutput);
-            Task<string> standardError = DrainAsync(process.StandardError);
-            Task exitTask = process.WaitForExitAsync(CancellationToken.None);
+            var standardOutput = DrainAsync(process.StandardOutput);
+            var standardError = DrainAsync(process.StandardError);
+            var exitTask = process.WaitForExitAsync(CancellationToken.None);
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            Task completed = await Task.WhenAny(exitTask, cancellationTask);
+            var completed = await Task.WhenAny(exitTask, cancellationTask);
             if (completed == cancellationTask)
             {
                 try
@@ -361,7 +361,7 @@ public sealed class BuildExecutor
 
     private static bool IsWithinRoot(string path, string root)
     {
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         var relative = Path.GetRelativePath(root, path);
@@ -393,7 +393,7 @@ public sealed class BaselineBuildCapture
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        BuildValidationResult result = await _executor.ExecuteAsync(request, cancellationToken);
+        var result = await _executor.ExecuteAsync(request, cancellationToken);
         return new BaselineCapture(
             request.Baseline.WorkspaceId,
             request.Baseline.CapturedAt,

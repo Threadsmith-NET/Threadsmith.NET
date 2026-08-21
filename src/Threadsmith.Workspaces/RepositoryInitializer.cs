@@ -64,7 +64,7 @@ public static class RepositoryInitializer
         string repositoryPath,
         CancellationToken cancellationToken = default)
     {
-        RepositoryInitializationStatus status = await GetStatusAsync(repositoryPath, cancellationToken);
+        var status = await GetStatusAsync(repositoryPath, cancellationToken);
         var configurationDirectory = Path.Combine(status.RepositoryPath, ".threadsmith");
         var configurationPath = Path.Combine(configurationDirectory, "config.json");
         if (File.Exists(configurationPath))

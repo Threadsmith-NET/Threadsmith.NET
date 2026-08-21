@@ -24,10 +24,10 @@ public sealed class Milestone17CompatibilityTests
         var catalog = CreateClaudeCatalog(directory.Path);
 
         // Act
-        IReadOnlyList<ClaudeSkillCandidate> candidates = await catalog.RefreshAsync();
+        var candidates = await catalog.RefreshAsync();
 
         // Assert
-        ClaudeSkillCandidate candidate = Assert.Single(candidates);
+        var candidate = Assert.Single(candidates);
         Assert.Equal(ClaudeSkillCompatibilityStatus.Compatible, candidate.Status);
         Assert.Equal(["read_file", "search_text"], candidate.MappedTools);
         Assert.Null(candidate.Identity.Digest);
@@ -43,12 +43,12 @@ public sealed class Milestone17CompatibilityTests
         var resource = Path.Combine(skillRoot, "reference.txt");
         await File.WriteAllTextAsync(resource, "first");
         var catalog = CreateClaudeCatalog(directory.Path);
-        ClaudeSkillCandidate candidate = Assert.Single(await catalog.RefreshAsync());
+        var candidate = Assert.Single(await catalog.RefreshAsync());
 
         // Act
-        ClaudeSkillSnapshot first = await catalog.ActivateAsync(candidate);
+        var first = await catalog.ActivateAsync(candidate);
         await File.WriteAllTextAsync(resource, "second");
-        ClaudeSkillSnapshot second = await catalog.ActivateAsync(candidate);
+        var second = await catalog.ActivateAsync(candidate);
 
         // Assert
         Assert.NotEqual(first.Candidate.Identity.Digest, second.Candidate.Identity.Digest);
@@ -71,11 +71,11 @@ public sealed class Milestone17CompatibilityTests
         var catalog = CreateClaudeCatalog(directory.Path);
 
         // Act
-        IReadOnlyList<ClaudeSkillCandidate> candidates = await catalog.RefreshAsync();
+        var candidates = await catalog.RefreshAsync();
 
         // Assert
         Assert.Equal(2, candidates.Count);
-        ClaudeSkillCandidate invalid = Assert.Single(
+        var invalid = Assert.Single(
             candidates,
             candidate => candidate.Identity.Name == "unsafe-skill");
         Assert.Equal(ClaudeSkillCompatibilityStatus.Unsupported, invalid.Status);
@@ -92,7 +92,7 @@ public sealed class Milestone17CompatibilityTests
         using var directory = new TemporaryDirectory();
         var skillRoot = CreateSkill(directory.Path, "portable-review", "allowed-tools: Read");
         var catalog = CreateClaudeCatalog(directory.Path);
-        ClaudeSkillCandidate candidate = Assert.Single(await catalog.RefreshAsync());
+        var candidate = Assert.Single(await catalog.RefreshAsync());
         await File.WriteAllTextAsync(
             Path.Combine(skillRoot, "SKILL.md"),
             "---\nname: portable-review\ndescription: Portable repository review\nhooks: unsafe\n---\nChanged.\n");
@@ -121,7 +121,7 @@ public sealed class Milestone17CompatibilityTests
         }
 
         var catalog = CreateClaudeCatalog(directory.Path);
-        ClaudeSkillCandidate candidate = Assert.Single(await catalog.RefreshAsync());
+        var candidate = Assert.Single(await catalog.RefreshAsync());
 
         // Act and assert
         _ = await Assert.ThrowsAsync<InvalidDataException>(() => catalog.ActivateAsync(candidate));
@@ -147,7 +147,7 @@ public sealed class Milestone17CompatibilityTests
         }
 
         var catalog = CreateClaudeCatalog(directory.Path);
-        ClaudeSkillCandidate candidate = Assert.Single(await catalog.RefreshAsync());
+        var candidate = Assert.Single(await catalog.RefreshAsync());
 
         // Act and assert
         _ = await Assert.ThrowsAsync<InvalidDataException>(() => catalog.ActivateAsync(candidate));
@@ -166,7 +166,7 @@ public sealed class Milestone17CompatibilityTests
         }
 
         var catalog = CreateClaudeCatalog(directory.Path);
-        ClaudeSkillCandidate candidate = Assert.Single(await catalog.RefreshAsync());
+        var candidate = Assert.Single(await catalog.RefreshAsync());
 
         // Act and assert
         _ = await Assert.ThrowsAsync<InvalidDataException>(() => catalog.ActivateAsync(candidate));
@@ -188,7 +188,7 @@ public sealed class Milestone17CompatibilityTests
         await catalog.BindRepositoryAsync(second.Path);
 
         // Assert
-        ClaudeSkillCandidate candidate = Assert.Single(catalog.Candidates);
+        var candidate = Assert.Single(catalog.Candidates);
         Assert.Equal("second-skill", candidate.Identity.Name);
     }
 
@@ -214,9 +214,9 @@ public sealed class Milestone17CompatibilityTests
             new SkillPackageVerifier(policy),
             catalog,
             policy);
-        SkillCatalogCandidate selected = await catalog.ResolveAsync(
+        var selected = await catalog.ResolveAsync(
             "claude:Repository:portable-review");
-        SkillCatalogCandidate initiallyVerified = await verifier.VerifyAsync(selected);
+        var initiallyVerified = await verifier.VerifyAsync(selected);
         await policy.SetEnabledAsync(initiallyVerified, enabled: true);
         var runner = new CapturingProcedureRunner();
         var state = new TestSkillStateStore();
@@ -240,7 +240,7 @@ public sealed class Milestone17CompatibilityTests
             events);
 
         // Act
-        SkillInvocationResult result = await orchestrator.InvokeAsync(
+        var result = await orchestrator.InvokeAsync(
             new SkillInvocationRequest
             {
                 InvocationId = SkillInvocationId.New(),
@@ -276,7 +276,7 @@ public sealed class Milestone17CompatibilityTests
             new SkillCatalog([new SkillCatalogSource(SkillScope.User, nativeRoot, "user:test")]),
             CreateClaudeCatalog(claudeRoot));
         await catalog.RefreshAsync();
-        SkillCatalogCandidate exact = await catalog.ResolveAsync(
+        var exact = await catalog.ResolveAsync(
             "claude:Repository:portable-review");
         await File.AppendAllTextAsync(Path.Combine(skillRoot, "SKILL.md"), "Changed.\n");
         var selector = $"Repository:{exact.Metadata.SkillId.Value}"
@@ -294,7 +294,7 @@ public sealed class Milestone17CompatibilityTests
         using var directory = new TemporaryDirectory();
         ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
         ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        EffectiveModelProviderCatalog catalog = CreateModelCatalog(firstId, secondId);
+        var catalog = CreateModelCatalog(firstId, secondId);
         var configurationPath = Path.Combine(directory.Path, ".threadsmith", "config.json");
         var configurationDirectory = Path.GetDirectoryName(configurationPath)
             ?? throw new InvalidOperationException("Test configuration path has no parent.");
@@ -330,7 +330,7 @@ public sealed class Milestone17CompatibilityTests
         using var directory = new TemporaryDirectory();
         ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
         ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        EffectiveModelProviderCatalog catalog = CreateModelCatalog(firstId, secondId);
+        var catalog = CreateModelCatalog(firstId, secondId);
         var configurationPath = Path.Combine(directory.Path, ".threadsmith", "config.json");
         var configurationDirectory = Path.GetDirectoryName(configurationPath)
             ?? throw new InvalidOperationException("Test configuration path has no parent.");
@@ -340,7 +340,7 @@ public sealed class Milestone17CompatibilityTests
         var service = new ActiveModelSelectionService(catalog, preferences, configurationPath);
 
         // Act
-        ActiveModelSelectionResult result = await service.SelectAsync(secondId);
+        var result = await service.SelectAsync(secondId);
         var saved = await File.ReadAllTextAsync(configurationPath);
 
         // Assert
@@ -390,12 +390,12 @@ public sealed class Milestone17CompatibilityTests
         ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
         ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
         var preferences = new SessionModelPreferences(firstId, ReasoningLevel.Low);
-        SessionModelPreferenceSnapshot request = preferences.Capture();
+        var request = preferences.Capture();
         preferences.SetReasoning(secondId, ReasoningLevel.Medium);
 
         // Act
-        ReasoningLevel requestReasoning = request.ResolveFor(firstId);
-        SessionModelPreferenceSnapshot current = preferences.Capture();
+        var requestReasoning = request.ResolveFor(firstId);
+        var current = preferences.Capture();
 
         // Assert
         Assert.Equal(ReasoningLevel.Low, requestReasoning);
@@ -418,8 +418,8 @@ public sealed class Milestone17CompatibilityTests
             Path.Combine(directory.Path, ".threadsmith", "config.json"));
         var assembler = new TrackingContextAssembler();
         var projections = new InMemoryProjectionStore();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
         await projections.ApplyAsync(new SessionCreated(sessionId, DateTimeOffset.UtcNow, "test"));
         await projections.ApplyAsync(new ContextAssembled(
             sessionId,
@@ -429,7 +429,7 @@ public sealed class Milestone17CompatibilityTests
 
         // Act
         _ = await application.HandleAsync(new SelectActiveModelCommand(secondId));
-        SessionProjection? projection = await projections.GetAsync<SessionProjection>(
+        var projection = await projections.GetAsync<SessionProjection>(
             new ProjectionKey("session", sessionId.Value.ToString("D")));
 
         // Assert
@@ -467,7 +467,7 @@ public sealed class Milestone17CompatibilityTests
             CreateModelCatalog(firstId, secondId),
             new SessionModelPreferences(firstId, ReasoningLevel.Low),
             configurationPath);
-        ActiveModelSelectionResult result = await service.SetReasoningAsync(ReasoningLevel.None);
+        var result = await service.SetReasoningAsync(ReasoningLevel.None);
 
         // Assert
         Assert.Equal(secondId, result.Selection.Profile.Id);
@@ -509,7 +509,7 @@ public sealed class Milestone17CompatibilityTests
 
         // Act
         await service.BindRepositoryAsync(second.Path);
-        ActiveModelSelectionResult result = await service.SelectAsync(firstId);
+        var result = await service.SelectAsync(firstId);
         var firstSaved = await File.ReadAllTextAsync(firstConfiguration);
         var secondSaved = await File.ReadAllTextAsync(secondConfiguration);
 
@@ -536,11 +536,11 @@ public sealed class Milestone17CompatibilityTests
         var dispatcher = new CommandDispatcher([service]);
 
         // Act
-        IReadOnlyList<SelectableModelEntry> models = await dispatcher.DispatchAsync(
+        var models = await dispatcher.DispatchAsync(
             new ListActiveModelsCommand());
-        ActiveModelSelectionResult changed = await dispatcher.DispatchAsync(
+        var changed = await dispatcher.DispatchAsync(
             new SelectActiveModelCommand(secondId));
-        ActiveModelSelectionSnapshot current = await dispatcher.DispatchAsync(
+        var current = await dispatcher.DispatchAsync(
             new GetActiveModelSelectionCommand());
 
         // Assert
@@ -679,7 +679,7 @@ public sealed class Milestone17CompatibilityTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _checkpoints.TryGetValue(invocationId, out SkillWorkflowCheckpoint? checkpoint);
+            _checkpoints.TryGetValue(invocationId, out var checkpoint);
             return Task.FromResult(checkpoint);
         }
 

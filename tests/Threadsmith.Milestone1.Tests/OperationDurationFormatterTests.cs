@@ -44,7 +44,7 @@ public static class OperationDurationFormatterTests
     [Fact]
     public static void TryFormat_NonInvariantCurrentCulture_RemainsInvariant()
     {
-        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+        var originalCulture = CultureInfo.CurrentCulture;
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
@@ -75,7 +75,7 @@ public static class OperationDurationFormatterTests
     public static void EndsTransientActivity_ReviewBoundaries_ReturnsTrue()
     {
         var sessionId = SessionId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
 
         Assert.True(PrettyPromptConsoleSurface.EndsTransientActivity(
             new PlanProposed(sessionId, occurredAt, "plan"),
@@ -99,7 +99,7 @@ public static class OperationDurationFormatterTests
             TimeProvider.System.GetTimestamp(),
             ShowDuration: true,
             TimeProvider.System);
-        Task display = PrettyPromptConsoleSurface.RefreshActivityUntilCompletedAsync(
+        var display = PrettyPromptConsoleSurface.RefreshActivityUntilCompletedAsync(
             activity,
             operation.Task,
             _ => { },
@@ -116,7 +116,7 @@ public static class OperationDurationFormatterTests
     [Fact]
     public static void TuiDisplayOptions_Load_IsImmutableValidatedSnapshot()
     {
-        TuiDisplayOptions defaults = TuiDisplayOptions.Load(configuration: null);
+        var defaults = TuiDisplayOptions.Load(configuration: null);
         IConfiguration configured = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -132,7 +132,7 @@ public static class OperationDurationFormatterTests
 
         Assert.True(defaults.ShowOperationDurations);
         Assert.False(TuiDisplayOptions.Load(configured).ShowOperationDurations);
-        TuiDisplayOptions recovered = TuiDisplayOptions.Load(malformed);
+        var recovered = TuiDisplayOptions.Load(malformed);
         Assert.True(recovered.ShowOperationDurations);
         Assert.Single(recovered.Diagnostics);
     }
@@ -289,7 +289,7 @@ public static class OperationDurationFormatterTests
     public static void ConversationTranscript_PlanProposal_RendersGuidedBlockWithoutApprovalBoundaryProse()
     {
         var sessionId = SessionId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
         var plan = new ImplementationPlan
         {
             Revision = 1,
@@ -380,7 +380,7 @@ public static class OperationDurationFormatterTests
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
         var plan = new ImplementationPlan
         {
             Revision = 1,
@@ -450,7 +450,7 @@ public static class OperationDurationFormatterTests
     public static void ConversationTranscript_AdjacentLifecycleBlocks_UsesExactlyOneBlankLine()
     {
         var sessionId = SessionId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
         var invocationId = ToolInvocationId.New();
         var plan = new ImplementationPlan
         {
@@ -502,7 +502,7 @@ public static class OperationDurationFormatterTests
     public static void ConversationTranscript_CrlfBlankLineBeforeLifecycleBlock_KeepsOneBlankLine()
     {
         var sessionId = SessionId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
         var invocationId = ToolInvocationId.New();
         var transcript = new ConversationTranscript(string.Empty);
 
@@ -519,7 +519,7 @@ public static class OperationDurationFormatterTests
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
-        DateTimeOffset occurredAt = DateTimeOffset.UtcNow;
+        var occurredAt = DateTimeOffset.UtcNow;
         var invocationId = ToolInvocationId.New();
         var transcript = new ConversationTranscript(string.Empty);
 
@@ -665,7 +665,7 @@ public static class OperationDurationFormatterTests
             ToolInvocationId.New(),
             Succeeded: true,
             ResultJson: "{}");
-        JsonObject json = JsonNode.Parse(DomainEventJson.Serialize(original))?.AsObject()
+        var json = JsonNode.Parse(DomainEventJson.Serialize(original))?.AsObject()
             ?? throw new InvalidOperationException("Serialized event was not an object.");
         json.Remove(nameof(ToolInvocationCompleted.Source));
         json.Remove(nameof(ToolInvocationCompleted.ElapsedMilliseconds));

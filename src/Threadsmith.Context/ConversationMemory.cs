@@ -370,7 +370,7 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
         var items = state.MemoryItems.ToList();
         if (request.SupersedesId is { } supersededId)
         {
-            int index = items.FindIndex(item => item.Id == supersededId);
+            var index = items.FindIndex(item => item.Id == supersededId);
             if (index < 0)
             {
                 throw new ArgumentException("The superseded memory item does not exist.", nameof(request));
@@ -404,8 +404,8 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
                 && item.SessionId == request.SessionId
                 && !string.IsNullOrWhiteSpace(item.Provenance.RepositoryRevision)))
         {
-            string content = BoundContent(_sanitizer.Sanitize(evidence.Content));
-            string key = CreateDeduplicationKey(ConversationMemoryKind.RepositoryFinding, content);
+            var content = BoundContent(_sanitizer.Sanitize(evidence.Content));
+            var key = CreateDeduplicationKey(ConversationMemoryKind.RepositoryFinding, content);
             if (!activeKeys.Add(key))
             {
                 continue;
@@ -429,7 +429,7 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
 
         EnforceActiveItemBound(items, now);
 
-        long version = (state.Summary?.Version ?? 0) + 1;
+        var version = (state.Summary?.Version ?? 0) + 1;
         var snapshot = new ConversationSummarySnapshot
         {
             SessionId = request.SessionId,
@@ -472,8 +472,8 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
 
     private void EnforceActiveItemBound(List<ConversationMemoryItem> items, DateTimeOffset now)
     {
-        int activeItemCount = items.Count(item => item.Validity == MemoryValidity.Active);
-        int overflowCount = Math.Max(0, activeItemCount - _policy.MaximumActiveMemoryItems);
+        var activeItemCount = items.Count(item => item.Validity == MemoryValidity.Active);
+        var overflowCount = Math.Max(0, activeItemCount - _policy.MaximumActiveMemoryItems);
         ConversationMemoryItem[] overflow =
         [
             .. items
@@ -484,7 +484,7 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
                 .Take(overflowCount),
         ];
         HashSet<ConversationMemoryId> overflowIds = [.. overflow.Select(item => item.Id)];
-        for (int index = 0; index < items.Count; index++)
+        for (var index = 0; index < items.Count; index++)
         {
             if (overflowIds.Contains(items[index].Id))
             {
@@ -521,11 +521,11 @@ public sealed class ConversationMemoryGovernor : IConversationMemoryGovernor
         DateTimeOffset now,
         ConversationMemoryId? supersedesId = null)
     {
-        foreach (string raw in contents)
+        foreach (var raw in contents)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(raw);
-            string content = BoundContent(_sanitizer.Sanitize(raw));
-            string key = CreateDeduplicationKey(kind, content);
+            var content = BoundContent(_sanitizer.Sanitize(raw));
+            var key = CreateDeduplicationKey(kind, content);
             if (!activeKeys.Add(key))
             {
                 continue;
@@ -581,7 +581,7 @@ public sealed class DeterministicConversationSummaryCandidateProvider : IConvers
                     SourceRunIds = [message.RunId],
                 }),
         ];
-        long through = request.Messages.Count == 0
+        var through = request.Messages.Count == 0
             ? request.ExistingSummary?.ThroughMessageSequence ?? 0
             : request.Messages.Max(message => message.Sequence);
         return Task.FromResult(new ConversationSummaryCandidate
@@ -629,7 +629,7 @@ public sealed class ConversationSummaryValidator : IConversationSummaryValidator
             errors.Add("Candidate item count exceeds the hard limit.");
         }
 
-        long maximumSourceSequence = request.Messages.Count == 0
+        var maximumSourceSequence = request.Messages.Count == 0
             ? 0
             : request.Messages.Max(message => message.Sequence);
         if (candidate.ThroughMessageSequence != maximumSourceSequence)
@@ -639,7 +639,7 @@ public sealed class ConversationSummaryValidator : IConversationSummaryValidator
 
         HashSet<ConversationMessageId> messageIds = [.. request.Messages.Select(message => message.Id)];
         HashSet<RunId> runIds = [.. request.Messages.Select(message => message.RunId)];
-        Dictionary<EvidenceId, Evidence> currentEvidence = request.Evidence
+        var currentEvidence = request.Evidence
             .Where(item => !item.IsStale)
             .ToDictionary(item => item.EvidenceId);
         HashSet<EvidenceId> evidenceIds = [.. currentEvidence.Keys];
@@ -745,7 +745,7 @@ public sealed class ConversationSummaryValidator : IConversationSummaryValidator
         IReadOnlyList<ConversationMessage> messages,
         ConversationMemoryCandidate candidate)
     {
-        HashSet<string> sourceTerms = messages
+        var sourceTerms = messages
             .Where(message => candidate.SourceMessageIds.Contains(message.Id))
             .SelectMany(message => (message.Content ?? string.Empty)
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
@@ -839,15 +839,15 @@ public sealed class ConversationCompactor : IConversationCompactor
                 sessionId,
                 includeBodies: true,
                 cancellationToken);
-            long through = state.Summary?.ThroughMessageSequence ?? 0;
+            var through = state.Summary?.ThroughMessageSequence ?? 0;
             ConversationMessage[] uncompacted =
             [
                 .. state.Messages
                     .Where(message => message.Sequence > through)
                     .Take(_policy.MaximumSourceMessages),
             ];
-            int uncompactedTokens = uncompacted.Sum(message => message.EstimatedTokens);
-            int activeItems = state.MemoryItems.Count(item => item.Validity == MemoryValidity.Active);
+            var uncompactedTokens = uncompacted.Sum(message => message.EstimatedTokens);
+            var activeItems = state.MemoryItems.Count(item => item.Validity == MemoryValidity.Active);
             if (uncompacted.Length == 0)
             {
                 return new ConversationCompactionResult(
@@ -889,7 +889,7 @@ public sealed class ConversationCompactor : IConversationCompactor
                 ExistingSummary = state.Summary,
                 Evidence = evidence.Where(item => item.SessionId == sessionId && !item.IsStale).ToArray(),
             };
-            int calls = 0;
+            var calls = 0;
             ConversationSummaryCandidate candidate;
             while (true)
             {
@@ -966,7 +966,7 @@ public sealed class ConversationCompactor : IConversationCompactor
             }
 
             ConversationMemoryItem[] allItems = [.. retained.Values];
-            long version = (state.Summary?.Version ?? 0) + 1;
+            var version = (state.Summary?.Version ?? 0) + 1;
             var snapshot = new ConversationSummarySnapshot
             {
                 SessionId = sessionId,
@@ -1060,10 +1060,10 @@ public sealed partial class ConversationMemoryRetriever : IConversationMemoryRet
             .ThenBy(result => result.Item.Id.Value)
             .ToArray();
         var selected = new List<ConversationRetrievedMemory>();
-        int tokens = 0;
+        var tokens = 0;
         foreach (var item in ranked)
         {
-            int itemTokens = Math.Max(1, (item.Item.Content.Length + 3) / 4);
+            var itemTokens = Math.Max(1, (item.Item.Content.Length + 3) / 4);
             if (selected.Count >= request.MaximumItems || tokens + itemTokens > request.MaximumTokens)
             {
                 continue;
@@ -1073,7 +1073,7 @@ public sealed partial class ConversationMemoryRetriever : IConversationMemoryRet
             tokens += itemTokens;
         }
 
-        int excluded = state.MemoryItems.Count(item => item.Validity != MemoryValidity.Active);
+        var excluded = state.MemoryItems.Count(item => item.Validity != MemoryValidity.Active);
         return new ConversationRetrievalResult(selected, eligible.Length, excluded);
     }
 
@@ -1123,7 +1123,7 @@ public sealed partial class ConversationMemoryRetriever : IConversationMemoryRet
     {
         var itemTerms = Tokenize(item.Content);
         string[] matched = [.. itemTerms.Intersect(queryTerms).Order(StringComparer.Ordinal)];
-        double lexical = matched.Length * 10d / Math.Max(1, queryTerms.Count);
+        var lexical = matched.Length * 10d / Math.Max(1, queryTerms.Count);
         double category = 6 - CategoryOrder(item.Kind, phase);
         double explicitPriority = item.Kind is ConversationMemoryKind.UserRequirement
             or ConversationMemoryKind.Decision
@@ -1131,7 +1131,7 @@ public sealed partial class ConversationMemoryRetriever : IConversationMemoryRet
             ? 3
             : 0;
         double repeatedSupport = Math.Min(3, item.SourceMessageIds.Count + item.SourceEvidenceIds.Count - 1);
-        double score = lexical + category + explicitPriority + Math.Max(0, repeatedSupport);
+        var score = lexical + category + explicitPriority + Math.Max(0, repeatedSupport);
         return new ConversationRetrievedMemory(
             item,
             new ConversationRetrievalRationale(
@@ -1183,7 +1183,7 @@ public sealed class ConversationMemoryInvalidator : IConversationMemoryInvalidat
             sessionId,
             includeBodies: false,
             cancellationToken);
-        bool repositoryChanged = invalidationKeys.Any(key =>
+        var repositoryChanged = invalidationKeys.Any(key =>
             string.Equals(key, "repository", StringComparison.OrdinalIgnoreCase)
             || key.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
             || key.StartsWith("symbol:", StringComparison.OrdinalIgnoreCase)

@@ -27,8 +27,8 @@ public static class SessionStatusTests
     public static void UsageProjection_RequestIdentity_IsIdempotent()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
         var requestId = new ModelRequestUsageId(runId, "conversation", 0, Guid.NewGuid());
 
         projection.Observe(sessionId, requestId, new ModelUsage(10, 2));
@@ -47,7 +47,7 @@ public static class SessionStatusTests
     {
         var projection = new SessionUsageProjection();
 
-        SessionUsageSnapshot snapshot = projection.GetSnapshot(SessionId.New());
+        var snapshot = projection.GetSnapshot(SessionId.New());
         var rendered = TuiSessionStatusFormatter.Format(
             CreateStatus(12_000, 32_000) with { Usage = snapshot },
             80,
@@ -63,13 +63,13 @@ public static class SessionStatusTests
     public static void UsageProjection_ReportedZero_RendersZero()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
+        var sessionId = SessionId.New();
         projection.Observe(
             sessionId,
             new ModelRequestUsageId(RunId.New(), "conversation", 0, Guid.NewGuid()),
             new ModelUsage(0, 0));
 
-        SessionUsageSnapshot snapshot = projection.GetSnapshot(sessionId);
+        var snapshot = projection.GetSnapshot(sessionId);
         var rendered = TuiSessionStatusFormatter.Format(
             CreateStatus(12_000, 32_000) with { Usage = snapshot },
             80,
@@ -84,8 +84,8 @@ public static class SessionStatusTests
     public static void UsageProjection_MissingMetadata_RemainsUnknown()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
         projection.Observe(
             sessionId,
             new ModelRequestUsageId(runId, "conversation", 0, Guid.NewGuid()),
@@ -94,7 +94,7 @@ public static class SessionStatusTests
             sessionId,
             new ModelRequestUsageId(runId, "conversation", 1, Guid.NewGuid()));
 
-        SessionUsageSnapshot snapshot = projection.GetSnapshot(sessionId);
+        var snapshot = projection.GetSnapshot(sessionId);
         var rendered = TuiSessionStatusFormatter.Format(
             CreateStatus(12_000, 32_000) with { Usage = snapshot },
             80,
@@ -109,8 +109,8 @@ public static class SessionStatusTests
     public static void UsageProjection_ConcurrentObservations_PreserveTotals()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
 
         Parallel.For(0, 100, round => projection.Observe(
             sessionId,
@@ -125,8 +125,8 @@ public static class SessionStatusTests
     public static void UsageProjection_Overflow_Saturates()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
 
         projection.Observe(
             sessionId,
@@ -137,7 +137,7 @@ public static class SessionStatusTests
             new ModelRequestUsageId(runId, "conversation", 1, Guid.NewGuid()),
             new ModelUsage(1, 1));
 
-        SessionUsageSnapshot snapshot = projection.GetSnapshot(sessionId);
+        var snapshot = projection.GetSnapshot(sessionId);
         Assert.Equal(long.MaxValue, snapshot.InputTokens);
         Assert.Equal(long.MaxValue, snapshot.OutputTokens);
         Assert.Equal(long.MaxValue, snapshot.TotalTokens);
@@ -147,7 +147,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFactory_ModelWindowBelowPolicyBudget_UsesModelWindow()
     {
-        ModelProfile profile = CreateProfile(16_000);
+        var profile = CreateProfile(16_000);
         var inspection = new ContextInspectionProjection
         {
             RunId = RunId.New(),
@@ -155,7 +155,7 @@ public static class SessionStatusTests
             TokenBudget = 32_000,
         };
 
-        TuiSessionStatus status = TuiSessionStatusFactory.Create(
+        var status = TuiSessionStatusFactory.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -173,7 +173,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFactory_ModelWindowAboveAssemblyBudget_UsesFullModelWindow()
     {
-        ModelProfile profile = CreateProfile(1_000_000);
+        var profile = CreateProfile(1_000_000);
         var inspection = new ContextInspectionProjection
         {
             RunId = RunId.New(),
@@ -181,7 +181,7 @@ public static class SessionStatusTests
             TokenBudget = 967_232,
         };
 
-        TuiSessionStatus status = TuiSessionStatusFactory.Create(
+        var status = TuiSessionStatusFactory.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -228,7 +228,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFormatter_CurrentBranch_ShowsBranch()
     {
-        TuiSessionStatus status = CreateStatus(12_000, 32_000) with { Branch = "feature/status-branch" };
+        var status = CreateStatus(12_000, 32_000) with { Branch = "feature/status-branch" };
 
         var rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
 

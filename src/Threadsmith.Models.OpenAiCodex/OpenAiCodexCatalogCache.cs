@@ -61,13 +61,13 @@ public sealed class OpenAiCodexCatalogCache
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        string? directory = Path.GetDirectoryName(_path);
+        var directory = Path.GetDirectoryName(_path);
         if (directory is not null)
         {
             Directory.CreateDirectory(directory);
         }
 
-        string temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
+        var temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
         OpenAiCodexModelConfiguration[] models =
         [
             .. configuration.Models.Cast<OpenAiCodexModelConfiguration>(),

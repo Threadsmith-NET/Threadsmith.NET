@@ -76,7 +76,7 @@ internal static class TuiPresentationFormatter
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
 
-        string checkName = string.IsNullOrWhiteSpace(completed.CheckName)
+        var checkName = string.IsNullOrWhiteSpace(completed.CheckName)
             ? started.CheckName
             : completed.CheckName;
         var block = new TuiBlockPresentation(
@@ -201,7 +201,7 @@ internal static class TuiPresentationFormatter
     {
         ArgumentNullException.ThrowIfNull(stages);
 
-        string stageList = stages.Count == 0
+        var stageList = stages.Count == 0
             ? "configured validation"
             : string.Join(", ", stages.Select(stage => stage.ToString().ToLowerInvariant()));
         return FormatBlock(new TuiBlockPresentation(
@@ -227,8 +227,8 @@ internal static class TuiPresentationFormatter
     {
         ArgumentNullException.ThrowIfNull(applied);
 
-        string path = applied.RelativePath ?? applied.MutationId.ToString();
-        string title = requiredApproval == MutationApprovalLevel.PolicyAutoApproved
+        var path = applied.RelativePath ?? applied.MutationId.ToString();
+        var title = requiredApproval == MutationApprovalLevel.PolicyAutoApproved
             ? "Applied under the active approval policy"
             : "Applied";
         var lines = new List<TuiBlockLine>
@@ -262,12 +262,12 @@ internal static class TuiPresentationFormatter
             return string.Empty;
         }
 
-        string[] lines = SplitLines(unifiedDiff);
+        var lines = SplitLines(unifiedDiff);
         var builder = new StringBuilder(unifiedDiff.Length + 16);
-        int index = 0;
+        var index = 0;
         while (index < lines.Length)
         {
-            string line = lines[index];
+            var line = lines[index];
             if (!IsHunkHeader(line))
             {
                 builder.Append(line);
@@ -279,7 +279,7 @@ internal static class TuiPresentationFormatter
             builder.AppendLine();
             index++;
 
-            int hunkStart = index;
+            var hunkStart = index;
             while (index < lines.Length
                 && !IsHunkHeader(lines[index])
                 && !IsDiffFileBoundary(lines, index))
@@ -338,8 +338,8 @@ internal static class TuiPresentationFormatter
         string childIndent,
         string outerIndent)
     {
-        int itemCount = lines.Count(line => line.Kind == TuiBlockLineKind.Item);
-        int itemIndex = 0;
+        var itemCount = lines.Count(line => line.Kind == TuiBlockLineKind.Item);
+        var itemIndex = 0;
         foreach (var line in lines)
         {
             if (line.Kind == TuiBlockLineKind.Item)
@@ -359,7 +359,7 @@ internal static class TuiPresentationFormatter
         string childIndent,
         string outerIndent)
     {
-        foreach (string line in SplitBlockText(text))
+        foreach (var line in SplitBlockText(text))
         {
             builder.Append(outerIndent);
             builder.Append(childIndent);
@@ -384,7 +384,7 @@ internal static class TuiPresentationFormatter
         builder.Append(outerIndent);
         builder.Append(childIndent);
         builder.Append(isLast ? '\u2514' : '\u251C');
-        string itemText = TruncateForDisplay(text);
+        var itemText = TruncateForDisplay(text);
         if (itemText.Length > 0)
         {
             builder.Append(' ');
@@ -416,8 +416,8 @@ internal static class TuiPresentationFormatter
         }
 
         var keep = new bool[body.Count];
-        bool hasChangedLine = false;
-        for (int index = 0; index < body.Count; index++)
+        var hasChangedLine = false;
+        for (var index = 0; index < body.Count; index++)
         {
             if (!IsChangedDiffLine(body[index]))
             {
@@ -425,9 +425,9 @@ internal static class TuiPresentationFormatter
             }
 
             hasChangedLine = true;
-            int start = Math.Max(0, index - DiffContextLines);
-            int end = Math.Min(body.Count - 1, index + DiffContextLines);
-            for (int keepIndex = start; keepIndex <= end; keepIndex++)
+            var start = Math.Max(0, index - DiffContextLines);
+            var end = Math.Min(body.Count - 1, index + DiffContextLines);
+            for (var keepIndex = start; keepIndex <= end; keepIndex++)
             {
                 keep[keepIndex] = true;
             }
@@ -435,7 +435,7 @@ internal static class TuiPresentationFormatter
 
         if (!hasChangedLine)
         {
-            foreach (string line in body)
+            foreach (var line in body)
             {
                 builder.Append(line);
             }
@@ -443,8 +443,8 @@ internal static class TuiPresentationFormatter
             return;
         }
 
-        int hidden = 0;
-        for (int index = 0; index < body.Count; index++)
+        var hidden = 0;
+        for (var index = 0; index < body.Count; index++)
         {
             if (keep[index])
             {
@@ -476,11 +476,11 @@ internal static class TuiPresentationFormatter
     private static string[] SplitLines(string value)
     {
         var lines = new List<string>();
-        int start = 0;
+        var start = 0;
         while (start < value.Length)
         {
-            int newline = value.IndexOf('\n', start);
-            int end = newline < 0 ? value.Length : newline + 1;
+            var newline = value.IndexOf('\n', start);
+            var end = newline < 0 ? value.Length : newline + 1;
             lines.Add(value[start..end]);
             start = end;
         }
@@ -500,7 +500,7 @@ internal static class TuiPresentationFormatter
             return false;
         }
 
-        string line = lines[index];
+        var line = lines[index];
         if (line.StartsWith("diff ", StringComparison.Ordinal))
         {
             return true;
@@ -525,7 +525,7 @@ internal static class TuiPresentationFormatter
 
     private static bool IsChangedDiffLine(string line)
     {
-        string content = line.TrimStart('\r', '\n');
+        var content = line.TrimStart('\r', '\n');
         return (content.StartsWith('+') && !content.StartsWith("+++", StringComparison.Ordinal))
             || (content.StartsWith('-') && !content.StartsWith("---", StringComparison.Ordinal));
     }
@@ -556,7 +556,7 @@ internal static class TuiPresentationFormatter
     {
         return showOperationDurations
             && elapsedMilliseconds is { } elapsed
-            && OperationDurationFormatter.TryFormat(elapsed, out string? formatted)
+            && OperationDurationFormatter.TryFormat(elapsed, out var formatted)
                 ? formatted
                 : null;
     }
@@ -626,7 +626,7 @@ internal static class TuiPresentationFormatter
 
     private static string GetSemanticCheckTitle(SemanticCheckPhase phase, string checkName)
     {
-        string sanitizedCheckName = TruncateForDisplay(checkName);
+        var sanitizedCheckName = TruncateForDisplay(checkName);
         return phase == SemanticCheckPhase.Baseline
             && !sanitizedCheckName.Contains("pre-apply", StringComparison.OrdinalIgnoreCase)
                 ? sanitizedCheckName + " (pre-apply baseline capture)"
@@ -657,7 +657,7 @@ internal static class TuiPresentationFormatter
 
     private static string TruncateForDisplay(string value)
     {
-        string sanitized = CollapseControls(value);
+        var sanitized = CollapseControls(value);
         return sanitized.Length <= MaximumToolDetailLength
             ? sanitized
             : sanitized[..MaximumToolDetailLength] + "...";
@@ -666,7 +666,7 @@ internal static class TuiPresentationFormatter
     private static string CollapseControls(string value)
     {
         var builder = new StringBuilder(value.Length);
-        foreach (char character in value)
+        foreach (var character in value)
         {
             builder.Append(char.IsControl(character) ? ' ' : character);
         }

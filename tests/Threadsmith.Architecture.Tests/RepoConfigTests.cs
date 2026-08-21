@@ -292,6 +292,7 @@ public static class RepoConfigTests
         Assert.False(httpProfile.GetValue("oauth:enabled", true));
         Assert.Equal("threadsmith", httpProfile["oauth:clientId"]);
         Assert.Equal("secrets:MCP_OAUTH_CLIENT_SECRET", httpProfile["oauth:clientSecret"]);
+        Assert.Null(httpProfile["oauth:clientMetadataDocumentUri"]);
         Assert.Equal(8400, httpProfile.GetValue("oauth:redirectPort", 0));
         Assert.Null(httpProfile["oauth:discoveryUrl"]);
         // Diagnostic bundles (plan-20, §23.4).

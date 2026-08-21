@@ -92,6 +92,23 @@ public sealed class McpManagerTests
         Assert.True(result.ResultJson.Length < (257 * 1024));
     }
 
+    /// <summary>Non-text tool output is represented honestly instead of disappearing as a complete empty result.</summary>
+    [Fact]
+    public static void ToolMapping_NonTextContent_IsVisibleAndIncomplete()
+    {
+        var result = McpTransportMapping.MapInvocation(new CallToolResult
+        {
+            Content =
+            [
+                new ImageContentBlock { MimeType = "image/png", Data = new byte[] { 0 } },
+            ],
+        });
+
+        Assert.True(result.IsTruncated);
+        Assert.Contains("image/png", result.ResultJson, StringComparison.Ordinal);
+        Assert.Contains("withheld", result.ResultJson, StringComparison.Ordinal);
+    }
+
     /// <summary>Defined disconnected profiles remain visible and untrusted profiles remain ineligible.</summary>
     [Fact]
     public async Task List_IncludesDisconnectedAndIneligibleProfiles()
@@ -555,6 +572,203 @@ public sealed class McpManagerTests
         Assert.Contains("token=refresh-canary", revocationBody, StringComparison.Ordinal);
     }
 
+    /// <summary>Revocation reuses the validated metadata-proxy path after a process restart.</summary>
+    [Fact]
+    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata()
+    {
+        var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["mcp:oauth:server:accessToken"] = "access-canary",
+            ["mcp:oauth:server:authorizationServer"] = "https://auth.example/tenant",
+        });
+        var canonicalAttempts = 0;
+        using var handler = new McpOAuthMetadataCompatibilityHandler(new DelegateHttpHandler((request, _) =>
+        {
+            var uri = request.RequestUri?.AbsoluteUri ?? string.Empty;
+            if (request.Method == HttpMethod.Post)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            }
+
+            if (uri == "https://auth.example/.well-known/oauth-authorization-server/tenant")
+            {
+                canonicalAttempts++;
+                return Task.FromResult(JsonResponse("{}"));
+            }
+
+            if (uri == "https://mcp.example/.well-known/oauth-protected-resource/mcp")
+            {
+                return Task.FromResult(JsonResponse(
+                    "{\"authorization_servers\":[\"https://mcp.example/oauth\"]}"));
+            }
+
+            return Task.FromResult(JsonResponse(
+                "{\"issuer\":\"https://auth.example/tenant\","
+                + "\"revocation_endpoint\":\"https://auth.example/revoke\"}"));
+        }));
+        using var httpClient = new HttpClient(handler);
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        var profile = Profile("server", oauth: true) with
+        {
+            Command = "https://mcp.example/mcp",
+            Transport = McpTransport.Http,
+        };
+
+        var result = await identity.RevokeAsync(profile, false);
+
+        Assert.True(result.Succeeded);
+        Assert.True(result.RemoteRevocationConfirmed);
+        Assert.Equal(1, canonicalAttempts);
+    }
+
+    /// <summary>Dynamic-client revocation reads client credentials from the coherent cached grant.</summary>
+    [Fact]
+    public async Task IdentityManager_DynamicRevocationUsesActiveGrantClientCredentials()
+    {
+        var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["mcp:oauth:server:grant:accessToken"] = "access-canary",
+            ["mcp:oauth:server:grant:refreshToken"] = "refresh-canary",
+            ["mcp:oauth:server:grant:authorizationServer"] = "https://auth.example/tenant",
+            ["mcp:oauth:server:grant:clientId"] = "dynamic-client",
+            ["mcp:oauth:server:grant:clientSecret"] = "dynamic-secret",
+            ["mcp:oauth:server:grant:tokenEndpointAuthMethod"] = "client_secret_post",
+        });
+        string? revocationBody = null;
+        using var httpClient = new HttpClient(new DelegateHttpHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse("{\"revocation_endpoint\":\"https://auth.example/revoke\"}");
+            }
+
+            revocationBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        var profile = Profile("server", oauth: true) with
+        {
+            OAuth = new McpOAuthOptions { Enabled = true },
+        };
+
+        var state = await identity.GetStateAsync(profile);
+        var result = await identity.RevokeAsync(profile, false);
+
+        Assert.Equal(McpAuthenticationState.Cached, state);
+        Assert.True(result.Succeeded);
+        Assert.Contains("client_id=dynamic-client", revocationBody, StringComparison.Ordinal);
+        Assert.Contains("client_secret=dynamic-secret", revocationBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>RFC 7009 revocation uses HTTP Basic when that method was bound to the cached client.</summary>
+    [Fact]
+    public async Task IdentityManager_DynamicRevocationHonorsClientSecretBasic()
+    {
+        var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["mcp:oauth:server:grant:accessToken"] = "access-canary",
+            ["mcp:oauth:server:grant:refreshToken"] = "refresh-canary",
+            ["mcp:oauth:server:grant:authorizationServer"] = "https://auth.example/tenant",
+            ["mcp:oauth:server:grant:clientId"] = "dynamic-client",
+            ["mcp:oauth:server:grant:clientSecret"] = "dynamic-secret",
+            ["mcp:oauth:server:grant:tokenEndpointAuthMethod"] = "client_secret_basic",
+        });
+        string? authorizationParameter = null;
+        string? revocationBody = null;
+        using var httpClient = new HttpClient(new DelegateHttpHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse("{\"revocation_endpoint\":\"https://auth.example/revoke\"}");
+            }
+
+            Assert.Equal("Basic", request.Headers.Authorization?.Scheme);
+            authorizationParameter = request.Headers.Authorization?.Parameter;
+            revocationBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        var profile = Profile("server", oauth: true) with
+        {
+            OAuth = new McpOAuthOptions { Enabled = true },
+        };
+
+        var result = await identity.RevokeAsync(profile, false);
+
+        var expected = Convert.ToBase64String(Encoding.UTF8.GetBytes("dynamic-client:dynamic-secret"));
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, authorizationParameter);
+        Assert.DoesNotContain("client_id", revocationBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("client_secret", revocationBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>Configured secret references remain authoritative after confidential-client secret rotation.</summary>
+    [Theory]
+    [InlineData("client_secret_post")]
+    [InlineData("client_secret_basic")]
+    public async Task IdentityManager_ConfiguredRevocationUsesRotatedSecret(
+        string tokenEndpointAuthMethod)
+    {
+        var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["mcp:oauth:server:grant:accessToken"] = "access-canary",
+            ["mcp:oauth:server:grant:refreshToken"] = "refresh-canary",
+            ["mcp:oauth:server:grant:authorizationServer"] = "https://auth.example/tenant",
+            ["mcp:oauth:server:grant:clientId"] = "fixture-client",
+            ["mcp:oauth:server:grant:clientSecret"] = "stale-secret",
+            ["mcp:oauth:server:grant:tokenEndpointAuthMethod"] = tokenEndpointAuthMethod,
+        });
+        string? authorizationParameter = null;
+        string? revocationBody = null;
+        using var httpClient = new HttpClient(new DelegateHttpHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return JsonResponse("{\"revocation_endpoint\":\"https://auth.example/revoke\"}");
+            }
+
+            authorizationParameter = request.Headers.Authorization?.Parameter;
+            revocationBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        using var identity = new McpIdentityManager(
+            store,
+            new FixedSecretResolver("secrets:oauth-client", "rotated-secret"),
+            httpClient);
+        var profile = Profile("server", oauth: true) with
+        {
+            SecretScope = ["secrets:oauth-client"],
+            OAuth = new McpOAuthOptions
+            {
+                Enabled = true,
+                ClientId = "fixture-client",
+                ClientSecret = "secrets:oauth-client",
+            },
+        };
+
+        var result = await identity.RevokeAsync(profile, false);
+
+        Assert.True(result.Succeeded);
+        if (tokenEndpointAuthMethod == "client_secret_basic")
+        {
+            var expected = Convert.ToBase64String(Encoding.UTF8.GetBytes("fixture-client:rotated-secret"));
+            Assert.Equal(expected, authorizationParameter);
+            Assert.DoesNotContain("stale-secret", revocationBody, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(authorizationParameter);
+            Assert.Contains("client_secret=rotated-secret", revocationBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("stale-secret", revocationBody, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>An unconfirmed revocation timeout applies explicitly authorized local cleanup.</summary>
     [Fact]
     public async Task Manager_RevocationTimeoutWithExplicitCleanup_ClearsLocalIdentity()
@@ -728,7 +942,7 @@ public sealed class McpManagerTests
         Assert.Equal(0, adapter.ToolInvocationCount);
     }
 
-    /// <summary>The real SDK stdio fixture discovers and explicitly serves tools, resources, templates, and prompts.</summary>
+    /// <summary>The real SDK stdio fixture discovers, serves bounded capabilities, and responds to protocol ping.</summary>
     [Fact]
     public async Task RealStdioTransport_DiscoversReadsAndRendersBoundedCapabilities()
     {
@@ -769,7 +983,7 @@ public sealed class McpManagerTests
         var promptResult = await transport.GetPromptAsync(
             prompt,
             new Dictionary<string, string>(StringComparer.Ordinal) { ["name"] = "sample" });
-        _ = await Assert.ThrowsAnyAsync<Exception>(() => transport.PingAsync());
+        await transport.PingAsync();
 
         Assert.Equal("fixture-ready", Assert.Single(resourceResult.Content).Text);
         Assert.Equal("fixture:sample", Assert.Single(templateResult.Content).Text);
@@ -851,6 +1065,51 @@ public sealed class McpManagerTests
                 mcpApprovalPath: approvalPath);
 
             Assert.False(changedManager.IsEnabled(changed.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>A malformed optional approval store fails closed and a later explicit enable repairs it privately.</summary>
+    [Fact]
+    public async Task ToolStateManager_MalformedApprovalStoreDoesNotBlockStartupOrRecovery()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m23-" + Guid.NewGuid().ToString("N"));
+        string configurationPath = Path.Combine(root, ".threadsmith", "config.json");
+        string approvalPath = Path.Combine(root, "user", "mcp-tool-approvals.json");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(approvalPath)
+                ?? throw new InvalidOperationException("The test approval path has no parent directory."));
+            await File.WriteAllTextAsync(approvalPath, "{ malformed");
+            var definition = McpToolDefinition("mcp-1-known");
+            IConfiguration requestedConfiguration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["tools:defaultEnabledOverrides:0"] = "server:echo@mcp-1-known",
+                })
+                .Build();
+            var manager = new ToolStateManager(
+                [definition],
+                requestedConfiguration,
+                configurationPath,
+                mcpApprovalPath: approvalPath);
+
+            Assert.False(manager.IsEnabled(definition.Id));
+            await manager.EnableAsync(definition.Id);
+            Assert.True(manager.IsEnabled(definition.Id));
+
+            var reloadedManager = new ToolStateManager(
+                [definition],
+                requestedConfiguration,
+                configurationPath,
+                mcpApprovalPath: approvalPath);
+            Assert.True(reloadedManager.IsEnabled(definition.Id));
         }
         finally
         {
@@ -1318,12 +1577,49 @@ public sealed class McpManagerTests
             return Task.FromResult(value);
         }
 
+        public Task<IReadOnlyDictionary<string, string>> GetSnapshotAsync(
+            string secretReferencePrefix,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyDictionary<string, string> snapshot = Values
+                .Where(pair => pair.Key.StartsWith(secretReferencePrefix, StringComparison.Ordinal))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            return Task.FromResult(snapshot);
+        }
+
         public Task SetAsync(
             string secretReference,
             string value,
             CancellationToken cancellationToken = default)
         {
             Values[secretReference] = value;
+            return Task.CompletedTask;
+        }
+
+        public Task ApplyAsync(
+            McpOAuthTokenStoreMutation mutation,
+            CancellationToken cancellationToken = default)
+        {
+            foreach (var reference in mutation.RemovedReferences)
+            {
+                Values.Remove(reference);
+            }
+
+            foreach (var prefix in mutation.RemovedPrefixes)
+            {
+                foreach (var key in Values.Keys
+                    .Where(key => key.StartsWith(prefix, StringComparison.Ordinal))
+                    .ToArray())
+                {
+                    Values.Remove(key);
+                }
+            }
+
+            foreach (var pair in mutation.Values)
+            {
+                Values[pair.Key] = pair.Value;
+            }
+
             return Task.CompletedTask;
         }
 
@@ -1350,6 +1646,21 @@ public sealed class McpManagerTests
         {
             return Task.FromException<SecretResolutionResult>(
                 new InvalidOperationException("The client-secret resolver should not be used by this fixture."));
+        }
+    }
+
+    private sealed class FixedSecretResolver(string reference, string value) : ISecretResolver
+    {
+        public Task<SecretResolutionResult> ResolveAsync(
+            SecretResolutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(reference, request.Reference.ToString());
+            return Task.FromResult(new SecretResolutionResult
+            {
+                Value = new SecretValue(value),
+                ProviderId = "fixture",
+            });
         }
     }
 

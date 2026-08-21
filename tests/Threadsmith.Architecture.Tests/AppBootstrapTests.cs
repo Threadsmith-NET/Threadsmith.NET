@@ -172,6 +172,21 @@ public static class AppBootstrapTests
         Assert.DoesNotContain(" at ", message, StringComparison.Ordinal);
     }
 
+    /// <summary>Unexpected process failures are reported as bounded single-line messages without stack traces.</summary>
+    [Fact]
+    public static void Program_FatalError_IsSanitizedAndBounded()
+    {
+        var exception = new InvalidOperationException("startup failed\r\n   at Internal.Component " + new string('x', 600));
+
+        string message = Program.FormatFatalError(exception);
+
+        Assert.StartsWith("Threadsmith could not start or continue:", message, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', message);
+        Assert.DoesNotContain('\n', message);
+        Assert.DoesNotContain("System.InvalidOperationException", message, StringComparison.Ordinal);
+        Assert.True(message.Length < 600);
+    }
+
     /// <summary>Configuration bootstrap preserves normal CLI precedence over compiled defaults.</summary>
     [Fact]
     public static void ConfigurationBootstrap_CommandLineOverride_WinsOverCompiledDefault()

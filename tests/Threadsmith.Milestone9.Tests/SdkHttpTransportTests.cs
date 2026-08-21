@@ -1,5 +1,6 @@
 namespace Threadsmith.Milestone9.Tests;
 
+using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
@@ -129,12 +130,87 @@ public sealed class SdkHttpTransportTests
         object input = tool.DeserializeInput("{}");
         var policy = new DefaultPolicyEngine();
 
+        Assert.Equal(ToolCategory.CodeExecution, tool.Definition.Category);
+        Assert.Equal(ToolSideEffect.ExecutesCode, tool.Definition.SideEffect);
+        Assert.Equal(ApprovalLevel.HostPolicy, tool.Definition.RequiredApproval);
+        Assert.Equal(RepositoryTrustLevel.TrustedBuild, tool.Definition.RequiredTrust);
+        Assert.True(tool.Definition.ConversationAvailable);
+
         var denied = policy.Evaluate(tool, input, CreateContext([]));
         var allowed = policy.Evaluate(tool, input, CreateContext(["mcp.example.test"]));
 
         Assert.False(denied.IsAllowed);
         Assert.Contains("network host", denied.Reason, StringComparison.OrdinalIgnoreCase);
         Assert.True(allowed.IsAllowed);
+    }
+
+    /// <summary>Unknown-length HTTP bodies are rejected at the transport stream before full materialization.</summary>
+    [Fact]
+    public async Task Http_response_stream_enforces_pre_materialization_wire_bound()
+    {
+        using var client = new HttpClient(new McpBoundedHttpResponseHandler(
+            new DelegateHttpHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new MemoryStream(
+                    new byte[McpBoundedHttpResponseHandler.MaximumResponseBytes + 1])),
+            }))));
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.GetByteArrayAsync("https://mcp.example.test/result"));
+    }
+
+    /// <summary>Long-lived SSE responses reset the wire ceiling at each bounded event boundary.</summary>
+    [Fact]
+    public async Task Http_response_stream_bounds_each_sse_event_not_connection_lifetime()
+    {
+        var eventData = "data:" + new string('x', 600 * 1024) + "\n\n";
+        using var client = new HttpClient(new McpBoundedHttpResponseHandler(
+            new DelegateHttpHandler((_, _) =>
+            {
+                var content = new StringContent(eventData + eventData);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                    "text/event-stream");
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+            })));
+
+        var result = await client.GetByteArrayAsync("https://mcp.example.test/events");
+
+        Assert.True(result.Length > McpBoundedHttpResponseHandler.MaximumResponseBytes);
+    }
+
+    /// <summary>A failed OAuth connection releases the redirect reservation owned by that attempt.</summary>
+    [Fact]
+    public async Task OAuth_connection_failure_releases_callback_reservation()
+    {
+        var callback = new TrackingCallbackListener();
+        var secrets = new DictionarySecretStore();
+        var flow = new McpOAuthFlow(
+            new NoOpBrowserLauncher(),
+            callback,
+            new DictionaryTokenStore(),
+            secrets,
+            NullLogger<McpOAuthFlow>.Instance);
+        using var httpClient = new HttpClient(new DelegateHttpHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))));
+        await using var transport = new SdkHttpTransport(
+            secrets,
+            NullLoggerFactory.Instance,
+            flow,
+            httpClient);
+        var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
+        {
+            OAuth = new McpOAuthOptions
+            {
+                Enabled = true,
+                ClientId = "fixture-client",
+                RedirectPort = 8400,
+            },
+        };
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => transport.StartAsync(profile, new Dictionary<string, string>()));
+
+        Assert.Equal(1, callback.ReleaseCount);
     }
 
     /// <summary>Every HTTP cleanup starts before any resource can consume the shared shutdown deadline.</summary>
@@ -215,7 +291,7 @@ public sealed class SdkHttpTransportTests
             DisplayName = "Remote MCP",
             Command = endpoint,
             Transport = transport,
-            Trust = McpTrustLevel.TrustedRead,
+            Trust = McpTrustLevel.TrustedExecution,
             StartupTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = TimeSpan.FromSeconds(10),
             AllowedCapabilities = [McpCapabilityKind.Tool],
@@ -227,7 +303,7 @@ public sealed class SdkHttpTransportTests
         return new()
         {
             RepositoryPath = Directory.GetCurrentDirectory(),
-            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            TrustLevel = RepositoryTrustLevel.TrustedBuild,
             ApprovedRoots = [Directory.GetCurrentDirectory()],
             AllowedNetworkHosts = networkHosts,
             RequestedBy = "milestone9-test",
@@ -241,6 +317,85 @@ public sealed class SdkHttpTransportTests
         public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Values.TryGetValue(secretReference, out string? value) ? value : null);
+        }
+    }
+
+    private sealed class DelegateHttpHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _handler;
+
+        internal DelegateHttpHandler(
+            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
+        {
+            _handler = handler;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            return _handler(request, cancellationToken);
+        }
+    }
+
+    private sealed class DictionaryTokenStore : IMcpOAuthTokenStore
+    {
+        public Task ApplyAsync(
+            McpOAuthTokenStoreMutation mutation,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        public Task<IReadOnlyDictionary<string, string>> GetSnapshotAsync(
+            string secretReferencePrefix,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyDictionary<string, string>>(
+                new Dictionary<string, string>());
+        }
+
+        public Task SetAsync(
+            string secretReference,
+            string value,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpBrowserLauncher : IBrowserLauncher
+    {
+        public Task LaunchAsync(Uri authorizationUri, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TrackingCallbackListener : IOAuthCallbackListener
+    {
+        public int ReleaseCount { get; private set; }
+
+        public void ReleaseRedirectUri(Uri redirectUri)
+        {
+            ReleaseCount++;
+        }
+
+        public Uri ReserveRedirectUri(int requestedPort)
+        {
+            return new Uri($"http://localhost:{requestedPort}/callback", UriKind.Absolute);
+        }
+
+        public Task<Uri> WaitForCallbackAsync(
+            Uri redirectUri,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<Uri>(new InvalidOperationException("Callback was not expected."));
         }
     }
 

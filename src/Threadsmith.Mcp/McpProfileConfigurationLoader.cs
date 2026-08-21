@@ -106,10 +106,24 @@ public static class McpProfileConfigurationLoader
             throw new InvalidOperationException($"MCP OAuth profile '{profile.Id}' requires an HTTP transport.");
         }
 
-        if (string.IsNullOrWhiteSpace(profile.OAuth.ClientId))
+        if (profile.OAuth.ClientMetadataDocumentUri is not null
+            && !string.IsNullOrWhiteSpace(profile.OAuth.ClientId))
         {
             throw new InvalidOperationException(
-                $"MCP OAuth profile '{profile.Id}' requires a pre-registered clientId.");
+                $"MCP OAuth profile '{profile.Id}' cannot configure both clientId and clientMetadataDocumentUri.");
+        }
+
+        if (profile.OAuth.ClientMetadataDocumentUri is not null && profile.OAuth.RedirectPort == 0)
+        {
+            throw new InvalidOperationException(
+                $"MCP OAuth profile '{profile.Id}' must configure a fixed redirectPort when using clientMetadataDocumentUri.");
+        }
+
+        if (string.IsNullOrWhiteSpace(profile.OAuth.ClientId)
+            && !string.IsNullOrWhiteSpace(profile.OAuth.ClientSecret))
+        {
+            throw new InvalidOperationException(
+                $"MCP OAuth profile '{profile.Id}' cannot configure clientSecret without clientId.");
         }
 
         if (profile.Headers.ContainsKey("Authorization"))
@@ -195,7 +209,18 @@ public static class McpProfileConfigurationLoader
                 + "the authorization server must be advertised by the MCP endpoint.");
         }
 
-        string? clientSecret = section["clientSecret"];
+        string? clientMetadataDocumentUriText = section["clientMetadataDocumentUri"];
+        Uri? clientMetadataDocumentUri = null;
+        if (!string.IsNullOrWhiteSpace(clientMetadataDocumentUriText)
+            && !McpOAuthClientMetadataDocumentUri.TryCreate(clientMetadataDocumentUriText, out clientMetadataDocumentUri))
+        {
+            throw new InvalidOperationException(
+                $"MCP OAuth clientMetadataDocumentUri in profile '{profile["id"]}' "
+                + McpOAuthClientMetadataDocumentUri.Requirements + ".");
+        }
+
+        string? clientId = NormalizeOptional(section["clientId"]);
+        string? clientSecret = NormalizeOptional(section["clientSecret"]);
         if (clientSecret is not null && !clientSecret.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -213,7 +238,8 @@ public static class McpProfileConfigurationLoader
         {
             Enabled = section.GetValue("enabled", false),
             Scopes = section.GetSection("scopes").Get<string[]>() ?? [],
-            ClientId = section["clientId"],
+            ClientId = clientId,
+            ClientMetadataDocumentUri = clientMetadataDocumentUri,
             ClientSecret = clientSecret,
             RedirectPort = redirectPort,
             DiscoveryUrl = discoveryUrl,
@@ -239,5 +265,10 @@ public static class McpProfileConfigurationLoader
         }
 
         return values;
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 }

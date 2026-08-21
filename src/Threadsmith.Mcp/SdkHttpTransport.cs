@@ -1,7 +1,9 @@
 namespace Threadsmith.Mcp;
 
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Threadsmith.Tools;
 
@@ -12,10 +14,12 @@ internal sealed class SdkHttpTransport : IMcpTransport
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly McpOAuthFlow? _oauthFlow;
+    private readonly McpOAuthMetadataCompatibilityHandler? _metadataHandler;
     private readonly ILogger<McpCapabilityChangeSubscription> _capabilityLogger;
     private readonly ILogger<SdkHttpTransport> _logger;
     private McpCapabilityChangeSubscription? _capabilityChanges;
     private McpClient? _client;
+    private ClientOAuthOptions? _oauthOptions;
     private HttpClientTransport? _transport;
 
     /// <summary>Initializes a new instance of the <see cref="SdkHttpTransport"/> class.</summary>
@@ -31,13 +35,17 @@ internal sealed class SdkHttpTransport : IMcpTransport
         _oauthFlow = oauthFlow;
         _capabilityLogger = loggerFactory.CreateLogger<McpCapabilityChangeSubscription>();
         _logger = loggerFactory.CreateLogger<SdkHttpTransport>();
-        _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler
+        if (httpClient is null)
         {
-            // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
-            // matches the model-transport host default. See Plan 67 (AR-04).
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-        });
-        _ownsHttpClient = httpClient is null;
+            _metadataHandler = CreateMetadataCompatibilityHandler();
+            _httpClient = CreateHttpClient(new McpBoundedHttpResponseHandler(_metadataHandler));
+            _ownsHttpClient = true;
+        }
+        else
+        {
+            _httpClient = httpClient;
+            _ownsHttpClient = false;
+        }
     }
 
     /// <summary>Initializes a new instance of the <see cref="SdkHttpTransport"/> class for legacy hosts and tests.</summary>
@@ -68,11 +76,13 @@ internal sealed class SdkHttpTransport : IMcpTransport
 
         var headers = await ResolveHeadersAsync(profile, cancellationToken);
         var transportOptions = CreateOptions(profile, headers);
+        ClientOAuthOptions? oauthOptions = null;
         if (profile.OAuth?.Enabled is true)
         {
             var oauthFlow = _oauthFlow
                 ?? throw new InvalidOperationException("Interactive MCP OAuth is not configured for this host surface.");
-            transportOptions.OAuth = await oauthFlow.CreateOptionsAsync(profile, cancellationToken);
+            oauthOptions = await oauthFlow.CreateOptionsAsync(profile, cancellationToken);
+            transportOptions.OAuth = oauthOptions;
         }
 
         var transport = new HttpClientTransport(
@@ -80,10 +90,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             _httpClient,
             NullLoggerFactory.Instance,
             ownsHttpClient: false);
-        var clientOptions = new McpClientOptions
-        {
-            InitializationTimeout = profile.StartupTimeout,
-        };
+        var clientOptions = McpProtocolCompatibility.CreateClientOptions(profile.StartupTimeout);
         try
         {
             var client = await McpClient.CreateAsync(
@@ -93,17 +100,18 @@ internal sealed class SdkHttpTransport : IMcpTransport
                 cancellationToken);
             try
             {
-                var capabilities = await DiscoverCapabilitiesAsync(
-                    client,
-                    profile,
-                    cancellationToken);
                 var capabilityChanges = new McpCapabilityChangeSubscription(
                     client,
                     profile,
                     _capabilityLogger);
+                var capabilities = await DiscoverCapabilitiesAsync(
+                    client,
+                    profile,
+                    cancellationToken);
                 _transport = transport;
                 _client = client;
                 _capabilityChanges = capabilityChanges;
+                _oauthOptions = oauthOptions;
                 return capabilities;
             }
             catch
@@ -114,7 +122,18 @@ internal sealed class SdkHttpTransport : IMcpTransport
         }
         catch
         {
-            await transport.DisposeAsync();
+            try
+            {
+                await transport.DisposeAsync();
+            }
+            finally
+            {
+                if (oauthOptions is not null)
+                {
+                    _oauthFlow?.ReleaseRedirectReservation(oauthOptions);
+                }
+            }
+
             throw;
         }
     }
@@ -214,6 +233,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             null);
         var client = Interlocked.Exchange(ref _client, null);
         var transport = Interlocked.Exchange(ref _transport, null);
+        var oauthOptions = Interlocked.Exchange(ref _oauthOptions, null);
         try
         {
             return await DisposeAllWithinDeadlineAsync(
@@ -222,6 +242,11 @@ internal sealed class SdkHttpTransport : IMcpTransport
         }
         finally
         {
+            if (oauthOptions is not null)
+            {
+                _oauthFlow?.ReleaseRedirectReservation(oauthOptions);
+            }
+
             if (_ownsHttpClient)
             {
                 _httpClient.Dispose();
@@ -409,6 +434,31 @@ internal sealed class SdkHttpTransport : IMcpTransport
         }
 
         return resolved;
+    }
+
+    /// <summary>Creates the owned metadata compatibility handler with bounded redirect-free transport behavior.</summary>
+    internal static McpOAuthMetadataCompatibilityHandler CreateMetadataCompatibilityHandler()
+    {
+        return new McpOAuthMetadataCompatibilityHandler(new SocketsHttpHandler
+        {
+            // Metadata compatibility validates one explicit document hop; automatic HTTP
+            // redirects would add unbounded, unvalidated network locations underneath it.
+            AllowAutoRedirect = false,
+
+            // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
+            // matches the model-transport host default. See Plan 67 (AR-04).
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+        });
+    }
+
+    /// <summary>Creates the owned MCP HTTP client with stable product identification.</summary>
+    internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
+    {
+        var client = new HttpClient(handler);
+        var version = typeof(SdkHttpTransport).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        client.DefaultRequestHeaders.UserAgent.Add(
+            new ProductInfoHeaderValue(new ProductHeaderValue("Threadsmith.NET", version)));
+        return client;
     }
 
     private static void ObserveBackgroundFailure(Task task)

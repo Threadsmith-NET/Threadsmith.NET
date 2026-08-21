@@ -4,6 +4,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using Threadsmith.Core;
 
 /// <summary>SDK-backed MCP transport for a child process communicating over standard input and output.</summary>
@@ -14,7 +15,10 @@ internal sealed class SdkStdioTransport : IMcpTransport
     private readonly ILogger<McpCapabilityChangeSubscription> _capabilityLogger;
     private McpCapabilityChangeSubscription? _capabilityChanges;
     private McpClient? _client;
-    private StdioClientTransportOptions? _transportOptions;
+    private Process? _process;
+    private CancellationTokenSource? _stderrLifetime;
+    private Task? _stderrPump;
+    private long _shutdownTimeoutTicks = TimeSpan.FromSeconds(10).Ticks;
 
     /// <summary>Initializes a new instance of the <see cref="SdkStdioTransport"/> class.</summary>
     internal SdkStdioTransport(IOutputSanitizer sanitizer, ILoggerFactory loggerFactory)
@@ -27,10 +31,23 @@ internal sealed class SdkStdioTransport : IMcpTransport
     }
 
     /// <inheritdoc />
-    public int? ProcessId => null;
+    public int? ProcessId
+    {
+        get
+        {
+            try
+            {
+                return Volatile.Read(ref _process) is { HasExited: false } process ? process.Id : null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+    }
 
     /// <inheritdoc />
-    public bool ProcessPresent => Volatile.Read(ref _client) is not null;
+    public bool ProcessPresent => ProcessId is not null;
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<McpImportedCapability>> StartAsync(
@@ -46,42 +63,62 @@ internal sealed class SdkStdioTransport : IMcpTransport
         }
 
         var transportOptions = CreateOptions(profile, environment);
-        var transport = new StdioClientTransport(transportOptions, NullLoggerFactory.Instance);
-        var clientOptions = new McpClientOptions
-        {
-            InitializationTimeout = profile.StartupTimeout,
-        };
+        var process = StartProcess(transportOptions);
+        var stderrLifetime = new CancellationTokenSource();
+        var stderrPump = PumpStandardErrorAsync(process, profile.Id, stderrLifetime.Token);
+        var transport = new StreamClientTransport(
+            process.StandardInput.BaseStream,
+            new McpBoundedLineReadStream(process.StandardOutput.BaseStream),
+            NullLoggerFactory.Instance);
+        var clientOptions = McpProtocolCompatibility.CreateClientOptions(profile.StartupTimeout);
+        McpClient? client = null;
 
         try
         {
-            var client = await McpClient.CreateAsync(
+            client = await McpClient.CreateAsync(
                 transport,
                 clientOptions,
                 NullLoggerFactory.Instance,
                 cancellationToken);
-            try
-            {
-                var capabilities = await DiscoverCapabilitiesAsync(
-                    client,
-                    profile,
-                    cancellationToken);
-                var capabilityChanges = new McpCapabilityChangeSubscription(
-                    client,
-                    profile,
-                    _capabilityLogger);
-                _client = client;
-                _capabilityChanges = capabilityChanges;
-                _transportOptions = transportOptions;
-                return capabilities;
-            }
-            catch
-            {
-                await client.DisposeAsync();
-                throw;
-            }
+            var capabilityChanges = new McpCapabilityChangeSubscription(
+                client,
+                profile,
+                _capabilityLogger);
+            var capabilities = await DiscoverCapabilitiesAsync(
+                client,
+                profile,
+                cancellationToken);
+            _client = client;
+            _capabilityChanges = capabilityChanges;
+            _process = process;
+            _stderrLifetime = stderrLifetime;
+            _stderrPump = stderrPump;
+            Interlocked.Exchange(ref _shutdownTimeoutTicks, profile.DrainKillTimeout.Ticks);
+            return capabilities;
         }
         catch
         {
+            var cleanup = CleanupProcessAsync(
+                client,
+                process,
+                stderrLifetime,
+                stderrPump,
+                profile.DrainKillTimeout);
+            try
+            {
+                await cleanup.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                ObserveBackgroundFailure(cleanup);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    "MCP stdio startup cleanup failed with {FailureType}.",
+                    exception.GetType().Name);
+            }
+
             throw;
         }
     }
@@ -180,10 +217,10 @@ internal sealed class SdkStdioTransport : IMcpTransport
             ref _capabilityChanges,
             null);
         var client = Interlocked.Exchange(ref _client, null);
-        var transportOptions = Interlocked.Exchange(
-            ref _transportOptions,
-            null);
-        if (client is null)
+        var process = Interlocked.Exchange(ref _process, null);
+        var stderrLifetime = Interlocked.Exchange(ref _stderrLifetime, null);
+        var stderrPump = Interlocked.Exchange(ref _stderrPump, null);
+        if (client is null && process is null)
         {
             return true;
         }
@@ -211,39 +248,58 @@ internal sealed class SdkStdioTransport : IMcpTransport
             }
         }
 
-        if (transportOptions is not null && drainKillTimeout != Timeout.InfiniteTimeSpan)
+        if (client is not null)
         {
-            var remaining = drainKillTimeout - shutdown.Elapsed;
-            if (remaining <= TimeSpan.Zero)
+            var clientDisposal = client.DisposeAsync().AsTask();
+            try
             {
-                remaining = TimeSpan.FromMilliseconds(2);
+                await clientDisposal.WaitAsync(cancellationToken);
             }
-
-            // The SDK can spend one timeout waiting for exit and another terminating the process
-            // tree. Giving each half of the remaining host deadline prevents the original profile
-            // timeout from surviving into this shortened stop attempt.
-            transportOptions.ShutdownTimeout = TimeSpan.FromTicks(Math.Max(
-                TimeSpan.FromMilliseconds(1).Ticks,
-                remaining.Ticks / 2));
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                completedWithinDeadline = false;
+                ObserveBackgroundFailure(clientDisposal);
+            }
         }
 
-        var clientDisposal = client.DisposeAsync().AsTask();
-        try
+        if (process is not null)
         {
-            await clientDisposal.WaitAsync(cancellationToken);
-            return completedWithinDeadline;
+            process.StandardInput.Close();
+            var remaining = drainKillTimeout == Timeout.InfiniteTimeSpan
+                ? Timeout.InfiniteTimeSpan
+                : drainKillTimeout - shutdown.Elapsed;
+            completedWithinDeadline &= await StopProcessAsync(process, remaining, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+        if (stderrLifetime is not null)
         {
-            ObserveBackgroundFailure(clientDisposal);
-            return false;
+            await stderrLifetime.CancelAsync();
         }
+
+        if (stderrPump is not null)
+        {
+            try
+            {
+                await stderrPump.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                completedWithinDeadline = false;
+                ObserveBackgroundFailure(stderrPump);
+            }
+        }
+
+        stderrLifetime?.Dispose();
+        process?.Dispose();
+        return completedWithinDeadline;
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        await StopAsync(Timeout.InfiniteTimeSpan, CancellationToken.None);
+        var shutdownTimeout = TimeSpan.FromTicks(Interlocked.Read(ref _shutdownTimeoutTicks));
+        using var cancellation = new CancellationTokenSource(shutdownTimeout);
+        await StopAsync(shutdownTimeout, cancellation.Token);
     }
 
     /// <summary>Discovers only server-supported and profile-allowed bounded capabilities.</summary>
@@ -293,7 +349,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
     }
 
     /// <summary>Maps a host-owned connection profile to SDK stdio transport options.</summary>
-    internal StdioClientTransportOptions CreateOptions(
+    internal static StdioClientTransportOptions CreateOptions(
         McpConnectionProfile profile,
         IReadOnlyDictionary<string, string> environment)
     {
@@ -314,11 +370,203 @@ internal sealed class SdkStdioTransport : IMcpTransport
             InheritEnvironmentVariables = false,
             EnvironmentVariables = scopedEnvironment,
             ShutdownTimeout = profile.DrainKillTimeout,
-            StandardErrorLines = line => _logger.LogWarning(
-                "MCP server '{ProfileId}' stderr: {ServerError}",
-                profile.Id,
-                _sanitizer.Sanitize(line)),
         };
+    }
+
+    private static Process StartProcess(StdioClientTransportOptions options)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = options.Command,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = options.WorkingDirectory ?? string.Empty,
+        };
+        foreach (var argument in options.Arguments ?? [])
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment.Clear();
+        foreach (var pair in options.EnvironmentVariables
+            ?? new Dictionary<string, string?>(StringComparer.Ordinal))
+        {
+            if (pair.Value is not null)
+            {
+                startInfo.Environment[pair.Key] = pair.Value;
+            }
+        }
+
+        var process = new Process
+        {
+            StartInfo = startInfo,
+            EnableRaisingEvents = true,
+        };
+        try
+        {
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("The MCP stdio server process did not start.");
+            }
+
+            return process;
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
+        }
+    }
+
+    private async Task PumpStandardErrorAsync(
+        Process process,
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        const int maximumRetainedLineCharacters = 8192;
+        using var reader = process.StandardError;
+        var buffer = new char[2048];
+        var line = new System.Text.StringBuilder(maximumRetainedLineCharacters);
+        var discardRemainder = false;
+        try
+        {
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, cancellationToken);
+                if (read == 0)
+                {
+                    if (line.Length > 0)
+                    {
+                        LogStandardError(profileId, line.ToString(), discardRemainder);
+                    }
+
+                    return;
+                }
+
+                foreach (var character in buffer.AsSpan(0, read))
+                {
+                    if (character == '\n')
+                    {
+                        LogStandardError(profileId, line.ToString().TrimEnd('\r'), discardRemainder);
+                        line.Clear();
+                        discardRemainder = false;
+                    }
+                    else if (line.Length < maximumRetainedLineCharacters)
+                    {
+                        line.Append(character);
+                    }
+                    else
+                    {
+                        discardRemainder = true;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (IOException) when (process.HasExited)
+        {
+        }
+    }
+
+    private void LogStandardError(string profileId, string line, bool truncated)
+    {
+        if (line.Length == 0 && !truncated)
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "MCP server '{ProfileId}' stderr: {ServerError}",
+            profileId,
+            _sanitizer.Sanitize(line) + (truncated ? " [truncated]" : string.Empty));
+    }
+
+    private static async Task CleanupProcessAsync(
+        McpClient? client,
+        Process process,
+        CancellationTokenSource stderrLifetime,
+        Task stderrPump,
+        TimeSpan timeout)
+    {
+        using var cleanupCancellation = new CancellationTokenSource();
+        if (timeout != Timeout.InfiniteTimeSpan)
+        {
+            cleanupCancellation.CancelAfter(timeout);
+        }
+
+        if (client is not null)
+        {
+            var disposal = client.DisposeAsync().AsTask();
+            try
+            {
+                await disposal.WaitAsync(cleanupCancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                ObserveBackgroundFailure(disposal);
+            }
+        }
+
+        process.StandardInput.Close();
+        _ = await StopProcessAsync(process, TimeSpan.Zero, CancellationToken.None);
+        await stderrLifetime.CancelAsync();
+        try
+        {
+            await stderrPump.WaitAsync(cleanupCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            ObserveBackgroundFailure(stderrPump);
+        }
+        finally
+        {
+            stderrLifetime.Dispose();
+            process.Dispose();
+        }
+    }
+
+    private static async Task<bool> StopProcessAsync(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return true;
+            }
+
+            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (timeout != Timeout.InfiniteTimeSpan)
+            {
+                waitCancellation.CancelAfter(timeout <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : timeout);
+            }
+
+            try
+            {
+                await process.WaitForExitAsync(waitCancellation.Token);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+
+                return false;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
     }
 
     private static void ObserveBackgroundFailure(Task task)

@@ -23,7 +23,14 @@ internal sealed class McpToolApprovalStore
     internal McpToolApprovalStore(string? path)
     {
         _path = string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
-        _approvals = Load(_path);
+        try
+        {
+            _approvals = Load(_path);
+        }
+        catch (Exception exception) when (IsRecoverableLoadFailure(exception))
+        {
+            _approvals = new HashSet<string>(StringComparer.Ordinal);
+        }
     }
 
     /// <summary>Checks exact repository, profile-qualified capability, and schema approval.</summary>
@@ -103,6 +110,14 @@ internal sealed class McpToolApprovalStore
         var existingVersion = existing.IndexOf("@mcp-", StringComparison.OrdinalIgnoreCase);
         var existingIdentity = existingVersion < 0 ? existing : existing[..existingVersion];
         return string.Equals(existingIdentity, requestedIdentity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRecoverableLoadFailure(Exception exception)
+    {
+        return exception is IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or System.Text.Json.JsonException;
     }
 
     private static HashSet<string> Load(string? path)
@@ -234,30 +249,75 @@ internal sealed class McpToolApprovalStore
                         .Order(StringComparer.Ordinal)
                         .Select(value => (JsonNode?)JsonValue.Create(value))]),
                 };
-                var temporaryPath = path + ".tmp";
-                await File.WriteAllTextAsync(
-                    temporaryPath,
-                    root.ToJsonString() + Environment.NewLine,
-                    token);
-                if (!OperatingSystem.IsWindows())
+                byte[] content = Encoding.UTF8.GetBytes(root.ToJsonString() + Environment.NewLine);
+                var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+                try
                 {
-                    File.SetUnixFileMode(
-                        temporaryPath,
-                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                }
-
-                File.Move(temporaryPath, path, overwrite: true);
-                if (OperatingSystem.IsWindows())
-                {
-                    FileSecurity security = new FileInfo(path).GetAccessControl(
-                        AccessControlSections.Access | AccessControlSections.Owner);
-                    if (!HasSafeWindowsPermissions(security))
+                    await using (FileStream stream = CreatePrivateFile(temporaryPath))
                     {
-                        throw new UnauthorizedAccessException(
-                            "The MCP tool approval store permissions are unsafe.");
+                        await stream.WriteAsync(content, token);
+                        await stream.FlushAsync(token);
+                    }
+
+                    File.Move(temporaryPath, path, overwrite: true);
+                    if (OperatingSystem.IsWindows())
+                    {
+                        FileSecurity security = new FileInfo(path).GetAccessControl(
+                            AccessControlSections.Access | AccessControlSections.Owner);
+                        if (!HasSafeWindowsPermissions(security))
+                        {
+                            throw new UnauthorizedAccessException(
+                                "The MCP tool approval store permissions are unsafe.");
+                        }
+                    }
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath))
+                    {
+                        File.Delete(temporaryPath);
                     }
                 }
             },
             cancellationToken);
+    }
+
+    private static FileStream CreatePrivateFile(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return new FileInfo(path).Create(
+                FileMode.CreateNew,
+                FileSystemRights.FullControl,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous,
+                CreatePrivateWindowsSecurity());
+        }
+
+        return new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.Asynchronous,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        });
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static FileSecurity CreatePrivateWindowsSecurity()
+    {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        SecurityIdentifier currentUser = identity.User
+            ?? throw new InvalidOperationException("The current Windows user has no security identifier.");
+        var security = new FileSecurity();
+        security.SetOwner(currentUser);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            currentUser,
+            FileSystemRights.FullControl,
+            AccessControlType.Allow));
+        return security;
     }
 }

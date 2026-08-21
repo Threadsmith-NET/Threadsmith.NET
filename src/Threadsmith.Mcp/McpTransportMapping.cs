@@ -245,8 +245,8 @@ internal static class McpTransportMapping
         var text = new List<string>();
         var retainedCharacters = 0;
         var truncated = false;
-        TextContentBlock[] textBlocks = [.. result.Content.OfType<TextContentBlock>().Take(65)];
-        foreach (TextContentBlock block in textBlocks.Take(64))
+        ContentBlock[] contentBlocks = [.. result.Content.Take(65)];
+        foreach (ContentBlock block in contentBlocks.Take(64))
         {
             var remaining = MaximumContentCharacters - retainedCharacters;
             if (remaining <= 0)
@@ -255,15 +255,27 @@ internal static class McpTransportMapping
                 break;
             }
 
-            var value = block.Text ?? string.Empty;
+            var value = block switch
+            {
+                TextContentBlock textBlock => textBlock.Text ?? string.Empty,
+                ImageContentBlock image
+                    => $"[MCP image withheld; media type {NormalizeOptional(image.MimeType, 256)}]",
+                AudioContentBlock audio
+                    => $"[MCP audio withheld; media type {NormalizeOptional(audio.MimeType, 256)}]",
+                EmbeddedResourceBlock { Resource: TextResourceContents resource }
+                    => $"[embedded MCP text resource withheld; URI {NormalizeOptional(resource.Uri, 1024)}]",
+                EmbeddedResourceBlock { Resource: BlobResourceContents resource }
+                    => $"[embedded MCP binary resource withheld; URI {NormalizeOptional(resource.Uri, 1024)}]",
+                _ => "[unsupported MCP tool content withheld]",
+            };
             var itemTruncated = value.Length > remaining;
             value = NormalizeOptional(value, remaining);
             retainedCharacters += value.Length;
-            truncated |= itemTruncated;
+            truncated |= itemTruncated || block is not TextContentBlock;
             text.Add(value);
         }
 
-        truncated |= textBlocks.Length > text.Count;
+        truncated |= contentBlocks.Length > text.Count;
         return new McpTransportInvocation
         {
             Succeeded = result.IsError is not true,

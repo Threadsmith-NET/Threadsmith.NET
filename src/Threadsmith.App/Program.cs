@@ -21,6 +21,25 @@ public static class Program
     /// <returns>Process exit code.</returns>
     public static async Task<int> Main(string[] args)
     {
+        try
+        {
+            return await RunAsync(args);
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync("Threadsmith was canceled.");
+            return 130;
+        }
+        catch (Exception exception)
+        {
+            await Console.Error.WriteLineAsync(FormatFatalError(exception));
+            return 1;
+        }
+    }
+
+    /// <summary>Runs the composed application after the process-level failure boundary.</summary>
+    internal static async Task<int> RunAsync(string[] args)
+    {
         ArgumentNullException.ThrowIfNull(args);
 
         // Parse host-owned switches before configuration so invalid command lines fail without side effects.
@@ -240,6 +259,25 @@ public static class Program
                 DirectFetchApprovalPrompt = foundation.DirectFetchApprovalPrompt,
             },
             processCancellation);
+    }
+
+    /// <summary>Formats a bounded single-line fatal error without exposing a stack trace.</summary>
+    internal static string FormatFatalError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = string.Join(
+            ' ',
+            exception.Message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (message.Length == 0)
+        {
+            message = "An unexpected error occurred.";
+        }
+        else if (message.Length > 512)
+        {
+            message = message[..512] + "…";
+        }
+
+        return $"Threadsmith could not start or continue: {message}";
     }
 
     /// <summary>Runs the standalone host-owned Codex authentication surface.</summary>

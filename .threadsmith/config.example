@@ -594,13 +594,18 @@
           "Authorization": "secrets:MCP_HTTP_TOKEN",
           "X-Tenant-Id": "example"
         },
-        // Interactive authorization-code + PKCE for HTTP/SSE. clientId must be
-        // pre-registered; redirectPort 0 selects an ephemeral localhost port.
+        // Interactive authorization-code + PKCE for HTTP/SSE. Use either a
+        // pre-registered clientId/clientSecret pair, a public client metadata
+        // document URI, or URL-only dynamic registration fallback. A client
+        // metadata document requires a fixed redirectPort that exactly matches
+        // the document's redirect_uris entry; redirectPort 0 selects an
+        // ephemeral localhost port only for dynamic registration.
         "oauth": {
           "enabled": false,
           "scopes": [ "tools.read" ],
           "clientId": "threadsmith",
           "clientSecret": "secrets:MCP_OAUTH_CLIENT_SECRET",
+          "clientMetadataDocumentUri": null,
           "redirectPort": 8400
         },
         "startupTimeoutSeconds": 30,

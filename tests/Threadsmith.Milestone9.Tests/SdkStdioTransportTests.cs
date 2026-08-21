@@ -16,12 +16,9 @@ public sealed class SdkStdioTransportTests
     [Fact]
     public void Profile_maps_to_scoped_stdio_options()
     {
-        var transport = new SdkStdioTransport(
-            new SecretOutputSanitizer(),
-            NullLoggerFactory.Instance);
         var profile = CreateProfile(["server.dll"]);
 
-        var options = transport.CreateOptions(
+        var options = SdkStdioTransport.CreateOptions(
             profile,
             new Dictionary<string, string> { ["THREADSMITH_TEST"] = "value" });
 
@@ -31,6 +28,17 @@ public sealed class SdkStdioTransportTests
         Assert.False(options.InheritEnvironmentVariables);
         Assert.Equal("value", options.EnvironmentVariables?["THREADSMITH_TEST"]);
         Assert.Equal(profile.DrainKillTimeout, options.ShutdownTimeout);
+    }
+
+    /// <summary>An oversized stdio frame is rejected before the SDK can materialize its JSON.</summary>
+    [Fact]
+    public void Stdio_message_stream_rejects_oversized_line()
+    {
+        using var source = new MemoryStream(new byte[McpBoundedLineReadStream.MaximumLineBytes + 1]);
+        using var bounded = new McpBoundedLineReadStream(source);
+        var buffer = new byte[McpBoundedLineReadStream.MaximumLineBytes + 1];
+
+        _ = Assert.Throws<InvalidDataException>(() => bounded.Read(buffer, 0, buffer.Length));
     }
 
     /// <summary>A real stdio server imports and invokes echo through the host-owned imported tool.</summary>

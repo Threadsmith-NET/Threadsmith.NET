@@ -705,11 +705,11 @@ public sealed class TuiPresenter
         CancellationToken cancellationToken = default)
     {
         var state = await GetSessionProjectionAsync(sessionId, cancellationToken);
-        string semanticStatus = state?.IsSemanticLoadComplete == true
+        var semanticStatus = state?.IsSemanticLoadComplete == true
             && state.SemanticConfidence == SemanticConfidenceLevel.None
             ? "Unavailable"
             : state?.SemanticConfidence.ToString() ?? SemanticConfidenceLevel.None.ToString();
-        string repositorySummary = state?.RepositoryPath is null
+        var repositorySummary = state?.RepositoryPath is null
             ? string.Empty
             : $"Repository: {state.RepositoryPath}\n"
                 + $"Trust: {state.RepositoryTrust}\n"
@@ -720,18 +720,18 @@ public sealed class TuiPresenter
                 + $"Semantic confidence: {semanticStatus}\n";
         var toolActivity = state?.ToolActivity.Select(tool =>
             {
-                string status = tool.IsCompleted
+                var status = tool.IsCompleted
                     ? tool.Succeeded ? "succeeded" : "failed"
                     : "running";
-                string error = tool.Error is null ? string.Empty : $" - {tool.Error}";
-                string result = tool.ResultPreview is null
+                var error = tool.Error is null ? string.Empty : $" - {tool.Error}";
+                var result = tool.ResultPreview is null
                     ? string.Empty
                     : $"\n{tool.ResultPreview}\n";
                 return $"Tool {tool.ToolName} ({tool.RequestedBy}): {status}{error}{result}\n";
             }) ?? [];
         var approvals = state?.PendingApprovals.Select(approval =>
             $"Approval pending: {approval.Action}\n") ?? [];
-        string plan = state?.Plan is null
+        var plan = state?.Plan is null
             ? string.Empty
             : $"Plan revision {state.Plan.Plan.Revision} ({state.Plan.Status}): "
                 + $"{state.Plan.Plan.Summary}\n"
@@ -739,7 +739,7 @@ public sealed class TuiPresenter
                     string.Empty,
                     state.Plan.Plan.Steps.Select((step, index) =>
                         $"  {index + 1}. {step.Title} — {step.ExpectedOutcome}\n"));
-        string context = state?.ContextInspection is null
+        var context = state?.ContextInspection is null
             ? string.Empty
             : $"Context: logical {state.ContextInspection.LogicalTokens}, wire "
                 + $"{state.ContextInspection.WireInputTokens}/"
@@ -759,7 +759,7 @@ public sealed class TuiPresenter
                     string.Empty,
                     state.ContextInspection.ModelRationale.Select(reason =>
                         $"  model: {reason}\n"));
-        string diagnostics = state?.Diagnostics.Count > 0
+        var diagnostics = state?.Diagnostics.Count > 0
             ? $"Diagnostics ({state.Diagnostics.Count}):\n"
                 + string.Join(
                     string.Empty,
@@ -775,7 +775,7 @@ public sealed class TuiPresenter
                                 + ": ")
                         + $"{diagnostic.Message}\n"))
             : string.Empty;
-        string tests = state?.TestValidation is null
+        var tests = state?.TestValidation is null
             ? string.Empty
             : $"Tests ({state.TestValidation.Passed} passed, "
                 + $"{state.TestValidation.Failed} failed, {state.TestValidation.Skipped} skipped):\n"
@@ -789,7 +789,7 @@ public sealed class TuiPresenter
                         $"  {result.Project.Name}: {result.Outcome} "
                         + $"({result.Passed} passed, {result.Failed} failed, "
                         + $"{result.Skipped} skipped; {result.Duration.TotalMilliseconds:F0} ms)\n"));
-        string mutation = state?.Mutation is null
+        var mutation = state?.Mutation is null
             ? string.Empty
             : $"Mutation set {state.Mutation.MutationSetId} "
                 + $"({state.Mutation.IsolationMode}; {state.Mutation.RequiredApproval}; "
@@ -809,7 +809,7 @@ public sealed class TuiPresenter
                         .Select(change =>
                             $"Change {change.MutationId} ({change.RelativePath})\n"
                             + TuiPresentationFormatter.FormatUnifiedDiffForDisplay(change.UnifiedDiff)));
-        string workspace = state is null
+        var workspace = state is null
             ? string.Empty
             : repositorySummary
                 + string.Join(string.Empty, state.Activity)
@@ -1324,9 +1324,9 @@ public sealed class TuiController
             return new RepositoryOpenWorkflowResult(opened, null);
         }
 
-        bool useRememberedSolution = requestedSolutionPath is null
+        var useRememberedSolution = requestedSolutionPath is null
             && !string.IsNullOrWhiteSpace(opened.Configuration.SolutionPath);
-        string? solutionPath = requestedSolutionPath
+        var solutionPath = requestedSolutionPath
             ?? opened.Configuration.SolutionPath
             ?? (opened.SolutionCandidates.Count == 1
                 ? opened.SolutionCandidates[0]
@@ -1416,19 +1416,30 @@ public sealed class TuiController
             return false;
         }
 
-        bool cancelled = await _presenter.CancelAsync(sessionId.Value, runId.Value, cancellationToken);
-        if (cancelled)
+        var cancelled = await _presenter.CancelAsync(sessionId.Value, runId.Value, cancellationToken);
+        if (!cancelled)
         {
-            lock (_gate)
+            return false;
+        }
+
+        try
+        {
+            _ = await _presenter.WaitAsync(runId.Value, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled run reports its terminal state through the wait boundary by throwing.
+        }
+
+        lock (_gate)
+        {
+            if (_activeRunId == runId)
             {
-                if (_activeRunId == runId)
-                {
-                    _activeRunId = null;
-                }
+                _activeRunId = null;
             }
         }
 
-        return cancelled;
+        return true;
     }
 
     /// <summary>Approves the active run's pending plan.</summary>
@@ -1467,7 +1478,7 @@ public sealed class TuiController
                 "An active approved-plan review and submitted request are required before mutation preparation.");
         }
 
-        bool approved = await _presenter.ApprovePlanAsync(sessionId, runId, cancellationToken);
+        var approved = await _presenter.ApprovePlanAsync(sessionId, runId, cancellationToken);
         if (!approved)
         {
             return null;
@@ -2023,7 +2034,7 @@ internal sealed class ConversationTranscript
         }
 
         var key = (proposed.RunId, proposed.Plan.Revision);
-        string basis = CreatePlanRiskBasis(
+        var basis = CreatePlanRiskBasis(
             proposed.Plan.Risks.Count,
             _planSanityChecks.TryGetValue(key, out var sanity) ? sanity : null);
         if (!string.IsNullOrWhiteSpace(basis))
@@ -2042,7 +2053,7 @@ internal sealed class ConversationTranscript
         var details = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var step in proposed.Plan.Steps)
         {
-            foreach (string path in step.GetAffectedPaths())
+            foreach (var path in step.GetAffectedPaths())
             {
                 if (!string.IsNullOrWhiteSpace(path))
                 {
@@ -2056,7 +2067,7 @@ internal sealed class ConversationTranscript
 
     private string? GetPlanRiskBasis(PlanAutoApproved approved)
     {
-        return _planRiskBases.TryGetValue((approved.RunId, approved.Revision), out string? basis)
+        return _planRiskBases.TryGetValue((approved.RunId, approved.Revision), out var basis)
             ? basis
             : null;
     }
@@ -2080,14 +2091,14 @@ internal sealed class ConversationTranscript
     {
         return applied.RelativePath is not null
             && _planStepDetailsByMutationSet.TryGetValue(applied.MutationSetId, out var detailsByPath)
-            && detailsByPath.TryGetValue(applied.RelativePath, out string? detail)
+            && detailsByPath.TryGetValue(applied.RelativePath, out var detail)
                 ? detail
                 : null;
     }
 
     private void RemoveRunCorrelationState(RunId runId)
     {
-        foreach ((var pendingRunId, int revision) in _planSanityChecks.Keys.ToArray())
+        foreach ((var pendingRunId, var revision) in _planSanityChecks.Keys.ToArray())
         {
             if (pendingRunId == runId)
             {
@@ -2095,7 +2106,7 @@ internal sealed class ConversationTranscript
             }
         }
 
-        foreach ((var pendingRunId, int revision) in _planRiskBases.Keys.ToArray())
+        foreach ((var pendingRunId, var revision) in _planRiskBases.Keys.ToArray())
         {
             if (pendingRunId == runId)
             {
@@ -2229,7 +2240,7 @@ internal sealed class ConversationTranscript
             return;
         }
 
-        int trailingNewLineCount = CountTrailingNewLines();
+        var trailingNewLineCount = CountTrailingNewLines();
         if (trailingNewLineCount == 0)
         {
             _text.AppendLine();
@@ -2245,8 +2256,8 @@ internal sealed class ConversationTranscript
 
     private int CountTrailingNewLines()
     {
-        int count = 0;
-        for (int index = _text.Length - 1; index >= 0;)
+        var count = 0;
+        for (var index = _text.Length - 1; index >= 0;)
         {
             if (_text[index] == '\n')
             {

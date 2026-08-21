@@ -161,8 +161,8 @@ public static class ModelOutputValidator
             return true;
         }
 
-        bool hasDestination = !string.IsNullOrWhiteSpace(intent.DestinationPath);
-        bool destinationAllowed = intent.Kind is PlanFileChangeKind.Move or PlanFileChangeKind.Rename;
+        var hasDestination = !string.IsNullOrWhiteSpace(intent.DestinationPath);
+        var destinationAllowed = intent.Kind is PlanFileChangeKind.Move or PlanFileChangeKind.Rename;
         return !Enum.IsDefined(intent.Kind)
             || IsInvalidPlanPath(intent.Path)
             || (destinationAllowed != hasDestination)
@@ -176,7 +176,7 @@ public static class ModelOutputValidator
             return true;
         }
 
-        string[] segments = path.Replace('\\', '/')
+        var segments = path.Replace('\\', '/')
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
         return path.Length > 1024
             || Path.IsPathRooted(path)
@@ -220,7 +220,7 @@ public static class ModelOutputValidator
             }
 
             replacementCharacters += mutation.ReplacementText.Length;
-            string[] segments = mutation.RelativePath.Replace('\\', '/')
+            var segments = mutation.RelativePath.Replace('\\', '/')
                 .Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (mutation.MutationId == default
                 || !ids.Add(mutation.MutationId)
@@ -277,8 +277,8 @@ public static class ModelOutputValidator
 
             if (mutation.Type == MutationType.MoveFile)
             {
-                string destination = mutation.DestinationRelativePath ?? string.Empty;
-                string[] destinationSegments = destination.Replace('\\', '/')
+                var destination = mutation.DestinationRelativePath ?? string.Empty;
+                var destinationSegments = destination.Replace('\\', '/')
                     .Split('/', StringSplitOptions.RemoveEmptyEntries);
                 if (mutation.StartOffset != 0
                     || mutation.Length != 0

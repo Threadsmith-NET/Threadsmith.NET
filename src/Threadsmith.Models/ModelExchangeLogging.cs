@@ -271,7 +271,7 @@ public sealed class LoggingModelProvider : IModelProvider
         string? finishReason = null;
         ModelUsage? usage = null;
         List<ModelExchangeToolCallSummary> toolCalls = [];
-        await using IAsyncEnumerator<ModelChunk> enumerator = _inner
+        await using var enumerator = _inner
             .StreamAsync(request, cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
         while (true)
@@ -296,7 +296,7 @@ public sealed class LoggingModelProvider : IModelProvider
                 break;
             }
 
-            ModelChunk chunk = enumerator.Current;
+            var chunk = enumerator.Current;
             textCharacters += chunk.Text?.Length ?? 0;
             reasoningCharacters += chunk.Reasoning?.Length ?? 0;
             if (chunk.Output is ToolRequestModelOutput toolRequest)

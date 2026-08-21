@@ -52,7 +52,7 @@ public sealed class SecretResolutionTests
         try
         {
             var resolver = fixture.CreateResolver();
-            SecretResolutionResult result = await resolver.ResolveAsync(fixture.CreateRequest());
+            var result = await resolver.ResolveAsync(fixture.CreateRequest());
 
             Assert.Equal("environment", result.ProviderId);
             Assert.Equal("environment-value", result.Value?.Reveal());
@@ -72,7 +72,7 @@ public sealed class SecretResolutionTests
         fixture.WriteRepository("repository-value", ignored: true);
         fixture.WriteUser("user-value");
 
-        SecretResolutionResult result = await fixture.CreateResolver().ResolveAsync(
+        var result = await fixture.CreateResolver().ResolveAsync(
             fixture.CreateRequest(SecretProviderTrust.UserOwned));
 
         Assert.Equal("user-file", result.ProviderId);
@@ -88,7 +88,7 @@ public sealed class SecretResolutionTests
         fixture.WriteRepository("canary-secret", ignored: false);
         fixture.Git("add", "-f", ".threadsmith/secrets/config.json");
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -110,7 +110,7 @@ public sealed class SecretResolutionTests
         File.Delete(ancestor);
         fixture.WriteRepository("canary-secret", ignored: true);
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -136,7 +136,7 @@ public sealed class SecretResolutionTests
             new UTF8Encoding(false));
         fixture.Git("add", "-f", "opened-subdirectory/.threadsmith/secrets/config.json");
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(openedRepository)
+        var result = await new RepositoryFileSecretProvider(openedRepository)
             .TryResolveAsync(fixture.CreateRequest() with { RepositoryRoot = openedRepository });
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -151,7 +151,7 @@ public sealed class SecretResolutionTests
         using var fixture = new SecretFixture();
         fixture.WriteRepository("repository-value", ignored: true);
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal("repository-value", result.Value?.Reveal());
@@ -180,7 +180,7 @@ public sealed class SecretResolutionTests
         File.Delete(probePath);
         var provider = new ReplacingFileSecretProvider(storePath, outsidePath);
 
-        SecretProviderResult result = await provider.TryResolveAsync(fixture.CreateRequest());
+        var result = await provider.TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
         Assert.Null(result.Value);
@@ -205,7 +205,7 @@ public sealed class SecretResolutionTests
             ".threadsmith/secrets/config.json\n",
             new UTF8Encoding(false));
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
             .TryResolveAsync(fixture.CreateRequest())
             .WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -225,7 +225,7 @@ public sealed class SecretResolutionTests
             new UTF8Encoding(false));
         fixture.SecureUserStore();
 
-        SecretProviderResult result = await new UserFileSecretProvider(fixture.UserStorePath)
+        var result = await new UserFileSecretProvider(fixture.UserStorePath)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.MalformedStore, result.Failure);
@@ -246,7 +246,7 @@ public sealed class SecretResolutionTests
         fixture.WriteUser("canary-secret");
         fixture.GrantWindowsWorldRead();
 
-        SecretProviderResult result = await new UserFileSecretProvider(fixture.UserStorePath)
+        var result = await new UserFileSecretProvider(fixture.UserStorePath)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
@@ -264,9 +264,9 @@ public sealed class SecretResolutionTests
         second.WriteRepository("second-value", ignored: true);
         var provider = new RepositorySecretProvider(first.RepositoryRoot);
 
-        SecretProviderResult before = await provider.TryResolveAsync(first.CreateRequest());
+        var before = await provider.TryResolveAsync(first.CreateRequest());
         provider.BindRepository(second.RepositoryRoot);
-        SecretProviderResult after = await provider.TryResolveAsync(second.CreateRequest());
+        var after = await provider.TryResolveAsync(second.CreateRequest());
 
         Assert.Equal("first-value", before.Value?.Reveal());
         Assert.Equal("second-value", after.Value?.Reveal());
@@ -277,7 +277,7 @@ public sealed class SecretResolutionTests
     public async Task Resolver_AcceptsFutureProviderContractAsync()
     {
         var resolver = new SecretResolver([new FakeExternalProvider()]);
-        SecretResolutionResult result = await resolver.ResolveAsync(new SecretResolutionRequest
+        var result = await resolver.ResolveAsync(new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:external:example"),
             ComponentId = "tests:future-provider",
@@ -294,7 +294,7 @@ public sealed class SecretResolutionTests
     public async Task Resolver_SanitizesProviderDiagnosticCodeAsync()
     {
         var resolver = new SecretResolver([new FakeExternalProvider("value-leak with whitespace")]);
-        SecretResolutionResult result = await resolver.ResolveAsync(new SecretResolutionRequest
+        var result = await resolver.ResolveAsync(new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:external:missing"),
             ComponentId = "tests:diagnostics",
@@ -329,7 +329,7 @@ public sealed class SecretResolutionTests
             ProviderTimeout = TimeSpan.FromMilliseconds(50),
         };
 
-        SecretResolutionResult result = await resolver.ResolveAsync(request);
+        var result = await resolver.ResolveAsync(request);
         await provider.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal(SecretResolutionFailure.ProviderUnavailable, result.Failure);
@@ -362,7 +362,7 @@ public sealed class SecretResolutionTests
         fixture.WriteRepository("repository-value", ignored: true);
         var caseDistinctRoot = Path.Combine(fixture.Root, "REPO");
 
-        SecretProviderResult result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
             .TryResolveAsync(fixture.CreateRequest() with { RepositoryRoot = caseDistinctRoot });
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
@@ -587,17 +587,31 @@ public sealed class SecretResolutionTests
 
         internal void SecureUserStore()
         {
-            if (!OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows())
             {
-                File.SetUnixFileMode(UserStorePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                using var identity = WindowsIdentity.GetCurrent();
+                var currentUser = identity.User;
+                Assert.NotNull(currentUser);
+
+                var security = new FileSecurity();
+                security.SetOwner(currentUser);
+                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+                security.AddAccessRule(new FileSystemAccessRule(
+                    currentUser,
+                    FileSystemRights.FullControl,
+                    AccessControlType.Allow));
+                new FileInfo(UserStorePath).SetAccessControl(security);
+                return;
             }
+
+            File.SetUnixFileMode(UserStorePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
         [SupportedOSPlatform("windows")]
         internal void GrantWindowsWorldRead()
         {
             var file = new FileInfo(UserStorePath);
-            FileSecurity security = file.GetAccessControl();
+            var security = file.GetAccessControl();
             security.AddAccessRule(new FileSystemAccessRule(
                 new SecurityIdentifier(WellKnownSidType.WorldSid, domainSid: null),
                 FileSystemRights.ReadData,

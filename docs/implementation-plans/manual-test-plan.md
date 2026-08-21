@@ -62,9 +62,9 @@ Expected: repository configuration alone cannot grant MCP availability; approval
 
 ## MTP-237 — MCP OAuth logout, revoke, and switch
 
-1. Against an explicitly authorized OAuth HTTP fixture, run `/mcp auth`, restart, and confirm cached authentication. Verify list/inspect/diagnose do not open the browser.
+1. Against an explicitly authorized OAuth HTTP fixture, run `/mcp auth`, restart, and confirm cached authentication. Verify automatic connection and list/inspect/diagnose do not open the browser or dynamically register another client.
 2. Run `/mcp logout`, confirm the exact profile/origin, and verify disconnect precedes atomic removal of only `mcp:oauth:<profileId>:*` while another profile remains intact.
-3. Test `/mcp revoke` against confirmed same-origin success, metadata redirect, cross-origin or missing revocation endpoint, timeout, and ambiguous failure. On ambiguity, first retain local identity, then explicitly select local-only cleanup.
+3. Test `/mcp revoke` against confirmed same-origin success for registrations using `none`, `client_secret_post`, and `client_secret_basic`, then test metadata redirect, cross-origin or missing revocation endpoint, timeout, and ambiguous failure. Verify each confidential-client request uses the registered authentication method; for a configured client, rotate the referenced secret after caching and verify revocation uses the new value for both confidential methods. On ambiguity, first retain local identity, then explicitly select local-only cleanup.
 4. Run `/mcp switch-account`, once choosing local logout and once advertised revocation. Cancel at confirmation, callback, and reconnect boundaries. Repeat headlessly with `--confirm`, `--revoke-current`, and `--allow-local-cleanup`.
 5. Attempt identity actions on a static-token profile.
 
@@ -1260,23 +1260,33 @@ Expected: the scoped static token is sent but never logged/status-projected; out
 ### MTP-150 — interactive browser authorization and cached refresh
 
 1. Register Threadsmith's loopback callback with an authorized OAuth-protected MCP HTTP/SSE server and configure `oauth.enabled`, `clientId`, scopes, and a fixed `redirectPort` (or `0` when the provider accepts an ephemeral port).
-2. Start interactively with the profile in trusted user/machine configuration and `autoConnect: true`.
-3. Complete authorization in the launched browser, invoke an imported tool, then restart Threadsmith and invoke again.
+2. Start interactively with the profile in trusted user/machine configuration and `autoConnect: true`, but with no cached identity. Verify the best-effort automatic attempt neither launches a browser nor performs dynamic registration.
+3. Run `/mcp auth <profile>`, complete authorization in the launched browser, invoke an imported tool, then restart Threadsmith and invoke again through cached automatic connection.
 4. Allow the access token to expire while the refresh token remains valid and invoke once more.
 5. Repeat while already signed in to the identity provider so its redirect returns immediately, and verify the callback does not receive a connection-refused error.
 6. With an identity provider that advertises broader scopes, verify the consent request contains only the intersection with the configured profile scopes.
 
-Expected: the browser opens only because the configured profile initiates connection; the localhost callback is bound before browser launch and completes even after an immediate redirect; authorization never exceeds the configured scopes; the tool receives an automatically attached bearer token; restart reuses the user-owned per-profile cache; and expiry refreshes without another prompt. Output, logs, connection status, projections, and repository files contain no access token, refresh token, client secret, code, or callback query.
+Expected: the browser opens only for explicit authentication; the localhost callback is bound before browser launch and completes even after an immediate redirect; authorization never exceeds the configured scopes; the tool receives an automatically attached bearer token; restart reuses the user-owned per-profile cache; and expiry refreshes without another prompt. Output, logs, connection status, projections, and repository files contain no access token, refresh token, client secret, code, or callback query.
 
 ### MTP-151 — headless callback UX and denial cases
 
 1. Run the same authorized profile headlessly. Open the printed authorization URL and paste the complete callback URL when prompted.
-2. Repeat with OAuth on a stdio profile, without `clientId`, with both OAuth and an `Authorization` header, with an out-of-scope/missing client-secret reference, with an `oauth.discoveryUrl` override, and with a callback whose scheme/host/port/path does not match the configured loopback redirect.
+2. Repeat with OAuth on a stdio profile, with both OAuth and an `Authorization` header, with an out-of-scope/missing configured client-secret reference, with an `oauth.discoveryUrl` override, and with a callback whose scheme/host/port/path does not match the configured loopback redirect.
 3. Cancel while waiting for the callback.
 
 Expected: the valid headless flow connects and invokes identically to interactive mode. Every invalid configuration fails before protected MCP use; callback mismatch and cancellation terminate the flow without token exchange or cache mutation. Diagnostics remain sanitized.
 
-### MTP-152 — single-user cache boundary
+### MTP-152 — URL-only dynamic registration
+
+1. Configure a standards-compliant OAuth-protected HTTP/SSE MCP endpoint with `oauth.enabled: true`, scopes, and `redirectPort`, but omit `oauth.clientId` and `oauth.clientSecret`.
+2. Before authentication, start with `autoConnect: true` and verify the automatic attempt does not launch a browser, invoke the registration endpoint, or mutate the OAuth cache.
+3. Run `/mcp auth <profile>` interactively and complete authorization.
+4. Restart Threadsmith and connect again without changing configuration. Verify cached dynamic-registration client credentials are reused only when the cached redirect URI exactly matches the current callback URI; with `redirectPort: 0`, repeat explicit re-authentication after local logout to force a fresh registration for a new process-selected port.
+5. Repeat explicit authentication with a server that does not advertise dynamic client registration or rejects the loopback redirect URI.
+
+Expected: only explicit authentication can register a public native PKCE client through advertised metadata. Registration remains pending until the token grant and registration fields are committed together as one replaceable user-owned cache generation; cached dynamic-registration client credentials are reused only for the exact redirect URI they were registered with. Superseded grants, refresh tokens, client secrets, and pending registrations are removed after commit. Unsupported or rejected registration reports an actionable authentication failure and does not fall back to proprietary flows.
+
+### MTP-153 — single-user cache boundary
 
 1. Inspect `~/.threadsmith/mcp-oauth-tokens.json` after authorization and verify keys are under `mcp:oauth:<profileId>:*` only.
 2. Confirm no token cache exists under the repository and diagnostic export/redaction checks do not include its values.
@@ -1285,7 +1295,7 @@ Expected: the valid headless flow connects and invokes identically to interactiv
 5. Confirm startup continues with a sanitized warning, then authorize again and verify the malformed cache is replaced.
 6. Remove only the selected profile's entries while Threadsmith is stopped, then reconnect.
 
-Expected: one identity is cached per profile outside repository control; credential files are private from creation; malformed optional cache state never aborts startup; and clearing profile entries causes reauthorization. Dynamic client registration, account switching, logout/revocation UI, and stdio OAuth remain unavailable by design.
+Expected: one identity and one dynamic client registration are cached per profile outside repository control; credential files are private from creation; malformed optional cache state never aborts startup; and clearing profile entries causes reauthorization. Account switching and logout/revocation UI use the same profile cache boundary; stdio OAuth remains unavailable by design.
 
 
 ## 16. Current limitations
@@ -1293,7 +1303,7 @@ Expected: one identity is cached per profile outside repository control; credent
 - Interactive plan approval starts model mutation preparation only when the session has a selected solution baseline. Semantic authoring remains available at application-command/component boundaries; dedicated public authoring commands are not yet exposed.
 - Build/test orchestration is available at the validation component boundary and projects classified diagnostics, explained test scope, and results into CLI/TUI state; a dedicated interactive/headless command that initiates a full mutation-validation turn is not yet exposed.
 - Test selection is intentionally project-level. Coverage-based method selection, flaky-test policy, explicit parallel scheduling, and analyzer execution remain outside the current selection contract.
-- Stdio, SSE, and streamable-HTTP transports, interactive OAuth, and shared `/mcp` lifecycle management are implemented. Live HTTP/IdP/revocation verification remains opt-in because no external endpoint or identity provider is assumed in CI. MCP retains one replaceable identity per profile and intentionally excludes dynamic client registration and stdio OAuth. Diagnostic bundle generation still has no CLI/TUI command.
+- Stdio, SSE, and streamable-HTTP transports, interactive OAuth, dynamic client registration for explicit HTTP authentication, and shared `/mcp` lifecycle management are implemented. Live HTTP/IdP/revocation verification remains opt-in because no external endpoint or identity provider is assumed in CI. MCP retains one replaceable identity per profile and intentionally excludes stdio OAuth. Diagnostic bundle generation still has no CLI/TUI command.
 - Real cancellation requires a slow controlled endpoint because deterministic fake turns usually finish too quickly.
 
 Never bypass trust, approval, confinement, or conflict checks to exercise an internal capability.

@@ -114,7 +114,7 @@ public sealed class ValidationPipeline
                 "Validation evidence, build request, and mutation set must share one immutable baseline identity.");
         }
 
-        bool buildRequired = RequiresBuildValidation(request.Stages);
+        var buildRequired = RequiresBuildValidation(request.Stages);
         var build = buildRequired
             ? await _buildExecutor.ExecuteAsync(request, cancellationToken)
             : new BuildValidationResult(true, [], [], TimeSpan.Zero);
@@ -133,7 +133,7 @@ public sealed class ValidationPipeline
             currentDiagnostics,
             request.Confidence);
         var correlated = DiagnosticCorrelator.Correlate(classified, mutationSet);
-        bool semanticOnly = request.Stages.Contains(MutationValidationStage.Semantic)
+        var semanticOnly = request.Stages.Contains(MutationValidationStage.Semantic)
             && !buildRequired;
         foreach (var diagnostic in correlated.Where(diagnostic => ShouldPublishDiagnostic(diagnostic, semanticOnly)))
         {
@@ -149,10 +149,10 @@ public sealed class ValidationPipeline
 
         _baselineDiagnostics.Add(correlated.LongCount(diagnostic => diagnostic.IsBaselineDiagnostic));
         _introducedDiagnostics.Add(correlated.LongCount(diagnostic => !diagnostic.IsBaselineDiagnostic));
-        bool hasClassifiedBuildErrors = correlated.Any(diagnostic =>
+        var hasClassifiedBuildErrors = correlated.Any(diagnostic =>
             diagnostic.Severity == DiagnosticSeverity.Error);
-        bool buildStageCompleted = !buildRequired || build.Succeeded || hasClassifiedBuildErrors;
-        bool testsRequired = request.Stages.Contains(MutationValidationStage.Tests);
+        var buildStageCompleted = !buildRequired || build.Succeeded || hasClassifiedBuildErrors;
+        var testsRequired = request.Stages.Contains(MutationValidationStage.Tests);
         TestValidationResult tests;
         if (build.Succeeded && testsRequired && semanticResult.Completed)
         {
@@ -250,7 +250,7 @@ public sealed class ValidationPipeline
         }
 
         var checkId = SemanticCheckId.New();
-        long started = Stopwatch.GetTimestamp();
+        var started = Stopwatch.GetTimestamp();
         await _events.PublishAsync(
             new SemanticCheckStarted(
                 request.SessionId,
@@ -310,7 +310,7 @@ public sealed class ValidationPipeline
             result,
             phase,
             baselineCapture);
-        int blockingDiagnosticCount = CountBlockingSemanticDiagnostics(
+        var blockingDiagnosticCount = CountBlockingSemanticDiagnostics(
             request,
             result,
             phase,
@@ -442,7 +442,7 @@ public sealed class ValidationPipeline
         SemanticDiagnosticsResult result,
         int blockingDiagnosticCount)
     {
-        string completion = result.Completed ? "completed" : "incomplete";
+        var completion = result.Completed ? "completed" : "incomplete";
         return $"{projectCount} projects, {result.Diagnostics.Count} diagnostics, {blockingDiagnosticCount} blocking, {completion}";
     }
 

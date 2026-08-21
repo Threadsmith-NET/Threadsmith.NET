@@ -36,7 +36,7 @@ internal static class IntegrationComposition
             leaseAuthority: leaseAuthority,
             extensionLoggerFactory: loggerFactory);
         var selectionPath = Path.Combine(repositoryRoot, ".threadsmith", "extensions.json");
-        ExtensionSelectionConfig selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
+        var selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
         extensionHost.SetDiscoveryDirectory(
             Path.GetFullPath(selection.DiscoveryDirectory, repositoryRoot));
         if (!useInteractiveTerminal || selection.AutoLoad.Count == 0)
@@ -45,7 +45,7 @@ internal static class IntegrationComposition
         }
 
         // Extension failures are isolated so one optional integration cannot prevent the shell from starting.
-        ILogger startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
+        var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
         await extensionHost.DiscoverAsync(cancellationToken);
         foreach (var extensionId in selection.AutoLoad)
         {
@@ -127,7 +127,7 @@ internal static class IntegrationComposition
             loggerFactory.CreateLogger<McpAdapter>(),
             toolRegistry);
         var identityManager = new McpIdentityManager(tokenStore, secretResolver);
-        IReadOnlyList<McpConnectionProfile> profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
+        var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null;
         if (hookCoordinator is not null)
         {
@@ -148,7 +148,7 @@ internal static class IntegrationComposition
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
                 var policyTool = new McpExplicitReadPolicyTool(profile, capability);
-                ToolInvocationResult decision = await toolPipeline.InvokeAsync(
+                var decision = await toolPipeline.InvokeAsync(
                     new ToolInvocationRequest
                     {
                         ExpectedRegistration = policyTool,
@@ -251,8 +251,8 @@ internal static class IntegrationComposition
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
             toolRegistry);
-        IReadOnlyList<McpConnectionProfile> profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
-        ILogger startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");
+        var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
+        var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");
         if (profiles.Count > 0)
         {
             startupLogger.LogInformation("Loaded {Count} MCP connection profile(s).", profiles.Count);
@@ -260,11 +260,11 @@ internal static class IntegrationComposition
 
         try
         {
-            foreach (McpConnectionProfile profile in profiles.Where(profile => profile.AutoConnect))
+            foreach (var profile in profiles.Where(profile => profile.AutoConnect))
             {
                 try
                 {
-                    McpConnectionResult result = await adapter.ConnectAsync(profile, cancellationToken);
+                    var result = await adapter.ConnectAsync(profile, cancellationToken);
                     if (!result.Succeeded)
                     {
                         startupLogger.LogWarning(

@@ -100,7 +100,7 @@ public sealed class WebSearchTests
     public void SensitiveQuery_IsRejectedBeforeProviderCall()
     {
         var client = new StubWebSearchClient();
-        WebSearchTool tool = CreateTool(client);
+        var tool = CreateTool(client);
 
         string[] queries =
         [
@@ -150,7 +150,7 @@ public sealed class WebSearchTests
                     RequestedBy = "test",
                 });
 
-            ToolExecution<WebSearchResponse> execution = await tool.ExecuteAsync(
+            var execution = await tool.ExecuteAsync(
                 new WebSearchRequest { Query = "threadsmith" },
                 context);
 
@@ -185,9 +185,9 @@ public sealed class WebSearchTests
             new StubSecretStore(),
             options);
 
-        WebSearchResponse response = await client.SearchAsync(new WebSearchRequest { Query = "threadsmith", MaximumResults = 1 });
+        var response = await client.SearchAsync(new WebSearchRequest { Query = "threadsmith", MaximumResults = 1 });
 
-        WebSearchResult result = Assert.Single(response.Results);
+        var result = Assert.Single(response.Results);
         Assert.Equal("Example", result.Title);
         Assert.Equal("https://example.com/a", result.CanonicalUrl);
         Assert.Contains("UNTRUSTED EXTERNAL EVIDENCE", response.TrustBoundary, StringComparison.Ordinal);

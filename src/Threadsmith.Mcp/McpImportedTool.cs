@@ -119,11 +119,11 @@ public sealed class McpImportedTool : ITool
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
-        string argumentsJson = ((McpArguments)input).Json;
+        var argumentsJson = ((McpArguments)input).Json;
         using var invocation = _acquireInvocation?.Invoke();
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCancellation.CancelAfter(_profile.RequestTimeout);
-        long transportStarted = _timeProvider.GetTimestamp();
+        var transportStarted = _timeProvider.GetTimestamp();
         try
         {
             var result = await _transport.InvokeAsync(
@@ -138,7 +138,7 @@ public sealed class McpImportedTool : ITool
                     ToElapsedMilliseconds(_timeProvider.GetElapsedTime(transportStarted)));
             }
 
-            string sanitized = _sanitizer.Sanitize(result.ResultJson ?? "null");
+            var sanitized = _sanitizer.Sanitize(result.ResultJson ?? "null");
             object value = JsonDocument.Parse(sanitized).RootElement.Clone();
             var elapsed = _timeProvider.GetElapsedTime(transportStarted);
             return new ToolExecutionEnvelope(
@@ -174,12 +174,17 @@ public sealed class McpImportedTool : ITool
             EnabledByDefault = false,
             Version = $"mcp-1-{capability.Digest}",
             Description = capability.Description.Length > 0 ? capability.Description : $"MCP tool {capability.ServerName}",
-            Category = ToolCategory.RepositoryInspection,
+
+            // MCP tool implementations are opaque remote behavior. Server-provided annotations and
+            // profile labels cannot prove that an invocation is read-only, so the host must place
+            // every imported tool in its executable-authority lane.
+            Category = ToolCategory.CodeExecution,
             InputSchema = new ToolSchema("McpArguments", 1, capability.InputSchemaJson ?? "{}"),
             OutputSchema = new ToolSchema("McpResult", 1, "{}"),
-            RequiredTrust = MapTrust(profile.Trust),
-            RequiredApproval = profile.Trust >= McpTrustLevel.TrustedExecution ? ApprovalLevel.HostPolicy : ApprovalLevel.None,
-            SideEffect = ToolSideEffect.ReadOnly,
+            RequiredTrust = MapToolTrust(profile.Trust),
+            RequiredApproval = ApprovalLevel.HostPolicy,
+            SideEffect = ToolSideEffect.ExecutesCode,
+            ConversationAvailable = true,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
             Timeout = profile.RequestTimeout,
@@ -187,15 +192,15 @@ public sealed class McpImportedTool : ITool
         };
     }
 
-    private static RepositoryTrustLevel MapTrust(McpTrustLevel trust)
+    private static RepositoryTrustLevel MapToolTrust(McpTrustLevel trust)
     {
         return trust switch
         {
-            McpTrustLevel.Untrusted => RepositoryTrustLevel.UntrustedInspection,
-            McpTrustLevel.TrustedRead => RepositoryTrustLevel.TrustedRead,
+            McpTrustLevel.Untrusted => RepositoryTrustLevel.TrustedBuild,
+            McpTrustLevel.TrustedRead => RepositoryTrustLevel.TrustedBuild,
             McpTrustLevel.TrustedExecution => RepositoryTrustLevel.TrustedBuild,
             McpTrustLevel.FullyTrusted => RepositoryTrustLevel.TrustedMutation,
-            _ => RepositoryTrustLevel.UntrustedInspection,
+            _ => RepositoryTrustLevel.TrustedBuild,
         };
     }
 

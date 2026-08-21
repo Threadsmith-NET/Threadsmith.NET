@@ -162,7 +162,7 @@ public static class AppBootstrapTests
         var parser = new FormatException("',' is invalid after a single JSON value. LineNumber: 170 | BytePositionInLine: 1.");
         var load = new InvalidDataException($"Failed to load configuration from file '{path}'.", parser);
 
-        string message = ConfigurationBootstrap.FormatLoadError(load);
+        var message = ConfigurationBootstrap.FormatLoadError(load);
 
         Assert.StartsWith("Configuration error:", message, StringComparison.Ordinal);
         Assert.Contains(path, message, StringComparison.Ordinal);
@@ -172,11 +172,26 @@ public static class AppBootstrapTests
         Assert.DoesNotContain(" at ", message, StringComparison.Ordinal);
     }
 
+    /// <summary>Unexpected process failures are reported as bounded single-line messages without stack traces.</summary>
+    [Fact]
+    public static void Program_FatalError_IsSanitizedAndBounded()
+    {
+        var exception = new InvalidOperationException("startup failed\r\n   at Internal.Component " + new string('x', 600));
+
+        var message = Program.FormatFatalError(exception);
+
+        Assert.StartsWith("Threadsmith could not start or continue:", message, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', message);
+        Assert.DoesNotContain('\n', message);
+        Assert.DoesNotContain("System.InvalidOperationException", message, StringComparison.Ordinal);
+        Assert.True(message.Length < 600);
+    }
+
     /// <summary>Configuration bootstrap preserves normal CLI precedence over compiled defaults.</summary>
     [Fact]
     public static void ConfigurationBootstrap_CommandLineOverride_WinsOverCompiledDefault()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
         var paths = CreatePaths(root);
 
         var configuration = ConfigurationBootstrap.Build(
@@ -191,7 +206,7 @@ public static class AppBootstrapTests
     [Fact]
     public static void ConfigurationBootstrap_OperationDuration_UsesStandardLayering()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
         var paths = CreatePaths(root);
         Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
         File.WriteAllText(paths.UserConfiguration, "{\"tui\":{\"showOperationDurations\":false}}");
@@ -208,7 +223,7 @@ public static class AppBootstrapTests
     [Fact]
     public static void ConfigurationBootstrap_TrustedView_ExcludesRepositoryOverrides()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
         var paths = CreatePaths(root);
         Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
         File.WriteAllText(
@@ -226,9 +241,9 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task ConfigurationBootstrap_EnvironmentSecrets_StayOutsideOrdinaryConfiguration()
     {
-        string id = "key" + Guid.NewGuid().ToString("N");
-        string ordinaryVariable = "THREADSMITH_bootstrap__" + id;
-        string secretVariable = "THREADSMITH_secrets__bootstrap__" + id;
+        var id = "key" + Guid.NewGuid().ToString("N");
+        var ordinaryVariable = "THREADSMITH_bootstrap__" + id;
+        var secretVariable = "THREADSMITH_secrets__bootstrap__" + id;
         Environment.SetEnvironmentVariable(ordinaryVariable, "ordinary-value");
         Environment.SetEnvironmentVariable(secretVariable, "canary-secret");
         try
@@ -358,7 +373,7 @@ public static class AppBootstrapTests
                 ["model:profiles:1:intendedWorkloadClasses:0"] = "codeEdit",
             })
             .Build();
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-model-startup-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-model-startup-" + Guid.NewGuid().ToString("N"));
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         using var models = await ModelComposition.CreateAsync(
@@ -377,7 +392,7 @@ public static class AppBootstrapTests
     {
         IConfiguration configuration = new ConfigurationBuilder().Build();
 
-        string[] allowedExecutables = HostFoundation.ResolveAllowedExecutables(configuration);
+        var allowedExecutables = HostFoundation.ResolveAllowedExecutables(configuration);
 
         Assert.Contains(OperatingSystem.IsWindows() ? "powershell" : "bash", allowedExecutables);
         Assert.Contains("dotnet", allowedExecutables);
@@ -423,10 +438,10 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task ModelComposition_ValidateRawModelLogPath_AllowsIgnoredRepositoryPath()
     {
-        string repositoryRoot = FindRepositoryRoot();
-        string path = Path.Combine(repositoryRoot, ".inbox", "model-exchange-test.jsonl");
+        var repositoryRoot = FindRepositoryRoot();
+        var path = Path.Combine(repositoryRoot, ".inbox", "model-exchange-test.jsonl");
 
-        string? validated = await ModelComposition.ValidateRawModelLogPathAsync(
+        var validated = await ModelComposition.ValidateRawModelLogPathAsync(
             repositoryRoot,
             path,
             TestContext.Current.CancellationToken);
@@ -438,8 +453,8 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task ModelComposition_ValidateRawModelLogPath_RejectsUnignoredRepositoryPath()
     {
-        string repositoryRoot = FindRepositoryRoot();
-        string path = Path.Combine(repositoryRoot, "src", "Threadsmith.App", "raw-model-log-unignored.jsonl");
+        var repositoryRoot = FindRepositoryRoot();
+        var path = Path.Combine(repositoryRoot, "src", "Threadsmith.App", "raw-model-log-unignored.jsonl");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ModelComposition.ValidateRawModelLogPathAsync(
@@ -454,9 +469,9 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task JsonlModelExchangeLog_ConcurrentAppends_WriteCompleteLines()
     {
-        string path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-concurrent-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        var path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-concurrent-" + Guid.NewGuid().ToString("N") + ".jsonl");
         var log = new JsonlModelExchangeLog(path);
-        RunId runId = RunId.New();
+        var runId = RunId.New();
 
         Task[] writes =
         [
@@ -469,11 +484,11 @@ public static class AppBootstrapTests
         ];
         await Task.WhenAll(writes);
 
-        string[] lines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
+        var lines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(32, lines.Length);
-        foreach (string line in lines)
+        foreach (var line in lines)
         {
-            using JsonDocument entry = JsonDocument.Parse(line);
+            using var entry = JsonDocument.Parse(line);
             Assert.Equal("completion", entry.RootElement.GetProperty("Kind").GetString());
         }
     }
@@ -482,7 +497,7 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task LoggingModelProvider_WritesRequestChunksAndCompletion()
     {
-        string path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        var path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-" + Guid.NewGuid().ToString("N") + ".jsonl");
         var provider = new LoggingModelProvider(new SingleChunkModelProvider(), new JsonlModelExchangeLog(path));
         var request = new ModelStreamRequest
         {
@@ -505,14 +520,14 @@ public static class AppBootstrapTests
             chunks.Add(chunk);
         }
 
-        string[] lines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
+        var lines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
         Assert.Single(chunks);
         Assert.Equal(5, lines.Length);
-        using JsonDocument requestSummaryEntry = JsonDocument.Parse(lines[0]);
-        using JsonDocument requestEntry = JsonDocument.Parse(lines[1]);
-        using JsonDocument chunkEntry = JsonDocument.Parse(lines[2]);
-        using JsonDocument responseSummaryEntry = JsonDocument.Parse(lines[3]);
-        using JsonDocument completionEntry = JsonDocument.Parse(lines[4]);
+        using var requestSummaryEntry = JsonDocument.Parse(lines[0]);
+        using var requestEntry = JsonDocument.Parse(lines[1]);
+        using var chunkEntry = JsonDocument.Parse(lines[2]);
+        using var responseSummaryEntry = JsonDocument.Parse(lines[3]);
+        using var completionEntry = JsonDocument.Parse(lines[4]);
         Assert.Equal("requestSummary", requestSummaryEntry.RootElement.GetProperty("Kind").GetString());
         Assert.Equal(1, requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("ToolCount").GetInt32());
         Assert.Equal("read_file", requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("AdvertisedTools")[0].GetProperty("Name").GetString());
@@ -533,7 +548,7 @@ public static class AppBootstrapTests
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
-        string? accessToken = await ModelComposition.GetOptionalCodexAccessTokenAsync(
+        var accessToken = await ModelComposition.GetOptionalCodexAccessTokenAsync(
             _ => Task.FromException<string?>(new HttpRequestException("offline")),
             loggerFactory.CreateLogger("test"),
             TestContext.Current.CancellationToken);
@@ -556,10 +571,10 @@ public static class AppBootstrapTests
 
     private static string FindRepositoryRoot()
     {
-        string? directory = AppContext.BaseDirectory;
+        var directory = AppContext.BaseDirectory;
         while (!string.IsNullOrWhiteSpace(directory))
         {
-            string gitPath = Path.Combine(directory, ".git");
+            var gitPath = Path.Combine(directory, ".git");
             if (Directory.Exists(gitPath) || File.Exists(gitPath))
             {
                 return directory;

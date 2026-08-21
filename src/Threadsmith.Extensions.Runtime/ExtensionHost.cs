@@ -122,7 +122,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     {
         cancellationToken.ThrowIfCancellationRequested();
         var discovered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        string root = ResolveDiscoveryRoot();
+        var root = ResolveDiscoveryRoot();
         var summaries = new List<ExtensionSummary>();
         if (Directory.Exists(root))
         {
@@ -135,10 +135,10 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 summaries.Add(BuildSummary(rootId, root, rootActive));
             }
 
-            foreach (string dir in Directory.EnumerateDirectories(root))
+            foreach (var dir in Directory.EnumerateDirectories(root))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string? id = TryPeekExtensionId(dir);
+                var id = TryPeekExtensionId(dir);
                 if (id is null)
                 {
                     continue;
@@ -153,7 +153,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         // Merge in any loaded extensions not present in the discovery directory (e.g. loaded ad hoc).
         foreach (var generation in Generations)
         {
-            string id = generation.ExtensionId.Value.ToString();
+            var id = generation.ExtensionId.Value.ToString();
             if (!discovered.ContainsKey(id))
             {
                 discovered[id] = generation.StagingPath;
@@ -187,7 +187,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             return BuildSummary(extensionId, GetDiscoveredDirectory(extensionId), activeGeneration);
         }
 
-        string? dir = GetDiscoveredDirectory(extensionId);
+        var dir = GetDiscoveredDirectory(extensionId);
         if (string.IsNullOrWhiteSpace(dir))
         {
             // Refresh discovery if the id was not yet known.
@@ -199,7 +199,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             }
         }
 
-        string stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-extensions", Guid.NewGuid().ToString("N"));
+        var stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-extensions", Guid.NewGuid().ToString("N"));
         var generation = await LoadAsync(
             new ExtensionLoadRequest
             {
@@ -234,7 +234,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         var summaries = new List<ExtensionSummary>();
         foreach (var generation in Generations)
         {
-            string id = generation.ExtensionId.Value.ToString();
+            var id = generation.ExtensionId.Value.ToString();
             summaries.Add(BuildSummary(id, generation.StagingPath, generation));
         }
 
@@ -309,7 +309,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     {
         // Peek the extension id without loading the assembly: prefer a manifest, then the first DLL
         // that references the shared contract assembly. Returns null when no extension is found.
-        string? manifestPath = Path.Combine(extensionDirectory, "threadsmith.extension.json");
+        var manifestPath = Path.Combine(extensionDirectory, "threadsmith.extension.json");
         if (File.Exists(manifestPath))
         {
             try
@@ -327,7 +327,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             }
         }
 
-        foreach (string dll in Directory.EnumerateFiles(extensionDirectory, "*.dll", SearchOption.TopDirectoryOnly))
+        foreach (var dll in Directory.EnumerateFiles(extensionDirectory, "*.dll", SearchOption.TopDirectoryOnly))
         {
             if (ReferencesContractAssembly(dll))
             {
@@ -406,11 +406,11 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             new ExtensionDiscovered(request.SessionId, DateTimeOffset.UtcNow, extensionId),
             cancellationToken);
 
-        string stagingPath = await _shadowCopier.StageAsync(
+        var stagingPath = await _shadowCopier.StageAsync(
             request.ExtensionDirectory,
             request.ShadowStagingRoot,
             cancellationToken);
-        string entryAssemblyPath = ResolveEntryAssembly(stagingPath, request.Manifest);
+        var entryAssemblyPath = ResolveEntryAssembly(stagingPath, request.Manifest);
         var loadContext = new ExtensionLoadContext(entryAssemblyPath, _sharedContractAssemblyName);
         var lifecycle = new ExtensionLifecycle();
         var generationId = ExtensionGenerationId.New();
@@ -484,7 +484,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         // host's single shared copy from the default context (Â§17.11, gap #5). Detect the duplicate
         // explicitly so the rejection surfaces as DuplicateContractAssemblyException rather than a
         // wrapped ReflectionTypeLoadException.
-        string bundled = Path.Combine(stagingPath, _sharedContractAssemblyName + ".dll");
+        var bundled = Path.Combine(stagingPath, _sharedContractAssemblyName + ".dll");
         if (File.Exists(bundled))
         {
             throw new DuplicateContractAssemblyException(_sharedContractAssemblyName, bundled);
@@ -516,14 +516,14 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 
         if (candidates.Count == 0)
         {
-            string assemblyName = assembly.GetName().Name ?? "<unknown>";
+            var assemblyName = assembly.GetName().Name ?? "<unknown>";
             throw new ExtensionLoadException(
                 $"No concrete {nameof(IThreadsmithExtension)} implementation was found in '{assemblyName}'.");
         }
 
         if (candidates.Count > 1 && manifest is null)
         {
-            string assemblyName = assembly.GetName().Name ?? "<unknown>";
+            var assemblyName = assembly.GetName().Name ?? "<unknown>";
             throw new ExtensionLoadException(
                 $"Multiple {nameof(IThreadsmithExtension)} implementations were found in '{assemblyName}'. "
                 + "Provide a manifest declaring which entry class to activate.");
@@ -588,14 +588,14 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 
     private static bool IsContractVersionCompatible(string requested)
     {
-        string current = ExtensionContractVersion.Current;
+        var current = ExtensionContractVersion.Current;
         return requested.Split('.')[0] == current.Split('.')[0];
     }
 
     private static void ValidatePermissions(ExtensionLoadRequest request, ExtensionDescriptor descriptor)
     {
         var granted = GrantPermissions(request.EffectiveTrust);
-        foreach (string permission in descriptor.Permissions)
+        foreach (var permission in descriptor.Permissions)
         {
             if (!IsPermissionGranted(permission, granted))
             {
@@ -637,7 +637,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     private static bool IsPermissionGranted(string permission, ExtensionPermission granted)
     {
         // Permission names follow the kebab-case manifest convention (Â§17.8) e.g. "repository-read".
-        string normalized = permission.Replace("-", string.Empty);
+        var normalized = permission.Replace("-", string.Empty);
         return Enum.TryParse<ExtensionPermission>(normalized, ignoreCase: true, out var requested)
             && (granted & requested) == requested;
     }
@@ -666,7 +666,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         // the shared contract assembly. Reading metadata only (MetadataReader) avoids loading the
         // collectible context early.
         string? entry = null;
-        foreach (string path in dlls)
+        foreach (var path in dlls)
         {
             try
             {
@@ -704,7 +704,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         foreach (var handle in reader.AssemblyReferences)
         {
             var reference = reader.GetAssemblyReference(handle);
-            string? name = reader.GetString(reference.Name);
+            var name = reader.GetString(reference.Name);
             if (name is not null
                 && name.StartsWith("Threadsmith.Extensions.Abstractions", StringComparison.Ordinal))
             {
@@ -766,7 +766,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         // Derive the extension-facing logger from the host's logger factory so extension log output
         // flows through the host pipeline. A no-op factory is used when the host does not supply one
         // (e.g. isolated unit tests).
-        string category = string.IsNullOrWhiteSpace(descriptor.Id)
+        var category = string.IsNullOrWhiteSpace(descriptor.Id)
             ? "Threadsmith.Extensions.Unknown"
             : $"Threadsmith.Extensions.{descriptor.Id}";
         return _extensionLoggerFactory.CreateLogger(category);
@@ -774,7 +774,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 
     private ExtensionId ResolveStableId(string? logicalId)
     {
-        string key = string.IsNullOrWhiteSpace(logicalId) ? Guid.NewGuid().ToString("N") : logicalId;
+        var key = string.IsNullOrWhiteSpace(logicalId) ? Guid.NewGuid().ToString("N") : logicalId;
         lock (_gate)
         {
             if (_stableIds.TryGetValue(key, out var existing))
@@ -782,7 +782,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 return existing;
             }
 
-            ExtensionId id = ExtensionId.New();
+            var id = ExtensionId.New();
             _stableIds[key] = id;
             return id;
         }

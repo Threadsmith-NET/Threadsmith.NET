@@ -156,7 +156,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
             throw new InvalidDataException("User skill policy exceeds its byte limit.");
         }
 
-        UserSkillPolicy policy = JsonSerializer.Deserialize<UserSkillPolicy>(File.ReadAllText(path))
+        var policy = JsonSerializer.Deserialize<UserSkillPolicy>(File.ReadAllText(path))
             ?? throw new InvalidDataException("User skill policy is empty.");
         if (policy.SchemaVersion != 1
             || policy.AllowlistedPackages.Count > 2048

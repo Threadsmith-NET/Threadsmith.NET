@@ -44,18 +44,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var expanded = new HashSet<string>(StringComparer.Ordinal);
         AddNode(nodes, root, 0, snapshot, projection);
         pending.Enqueue((root, 0));
-        bool depthReached = false;
-        bool nodeReached = false;
-        bool edgeReached = false;
-        bool timeReached = false;
+        var depthReached = false;
+        var nodeReached = false;
+        var edgeReached = false;
+        var timeReached = false;
 
         try
         {
             while (pending.Count > 0)
             {
                 timeout.Token.ThrowIfCancellationRequested();
-                (var symbol, int depth) = pending.Dequeue();
-                string symbolId = CreateIdentity(symbol).Id;
+                (var symbol, var depth) = pending.Dequeue();
+                var symbolId = CreateIdentity(symbol).Id;
                 if (!expanded.Add(symbolId))
                 {
                     continue;
@@ -95,11 +95,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         break;
                     }
 
-                    string callerId = CreateIdentity(caller).Id;
-                    string calleeId = CreateIdentity(callee).Id;
+                    var callerId = CreateIdentity(caller).Id;
+                    var calleeId = CreateIdentity(callee).Id;
                     var traversedEndpoint = callerId == symbolId ? callee : caller;
-                    string traversedEndpointId = CreateIdentity(traversedEndpoint).Id;
-                    bool cycle = expanded.Contains(traversedEndpointId);
+                    var traversedEndpointId = CreateIdentity(traversedEndpoint).Id;
+                    var cycle = expanded.Contains(traversedEndpointId);
                     ISymbol[] endpoints = [caller, callee];
                     ISymbol[] missingEndpoints = [.. endpoints
                         .Where(endpoint => !nodes.ContainsKey(CreateIdentity(endpoint).Id))
@@ -147,7 +147,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         EnsureCurrent(engine, snapshot.Generation);
-        string[] omissions = BuildOmissions(depthReached, nodeReached, edgeReached, timeReached);
+        var omissions = BuildOmissions(depthReached, nodeReached, edgeReached, timeReached);
         return new CallHierarchyResult(
             snapshot.Generation,
             snapshot.Confidence,
@@ -185,10 +185,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         };
         var edges = new List<ImpactEdge>();
         var omissions = new List<string>();
-        bool depthReached = false;
-        bool nodeReached = false;
-        bool edgeReached = false;
-        bool timeReached = false;
+        var depthReached = false;
+        var nodeReached = false;
+        var edgeReached = false;
+        var timeReached = false;
 
         try
         {
@@ -196,7 +196,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             foreach (var reference in references.SelectMany(item => item.Locations))
             {
                 var location = await CreateLocationAsync(snapshot, projection, reference.Location, timeout.Token);
-                string referenceId = location is null
+                var referenceId = location is null
                     ? string.Empty
                     : $"reference:{location.FilePath}:{location.Range.StartLine}:{location.Range.StartColumn}";
                 if (location is null || !TryAddImpact(
@@ -275,11 +275,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var pendingProjects = new Queue<(string ProjectName, int Depth)>(projectDepths
                 .OrderBy(item => item.Key, StringComparer.Ordinal)
                 .Select(item => (item.Key, item.Value)));
-            bool projectBoundsReached = false;
+            var projectBoundsReached = false;
             while (pendingProjects.Count > 0 && !projectBoundsReached)
             {
                 timeout.Token.ThrowIfCancellationRequested();
-                (string impactedProject, int depth) = pendingProjects.Dequeue();
+                (var impactedProject, var depth) = pendingProjects.Dequeue();
                 Project[] dependents = [.. snapshot.Solution.Projects
                     .Where(project => project.ProjectReferences.Any(reference =>
                         string.Equals(snapshot.Solution.GetProject(reference.ProjectId)?.Name, impactedProject, StringComparison.Ordinal)))
@@ -293,8 +293,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 foreach (var project in dependents.Where(project => !projectDepths.ContainsKey(project.Name)))
                 {
                     var kind = IsTestProject(project) ? ImpactKind.Test : ImpactKind.Project;
-                    string id = $"project:{project.Id.Id:D}";
-                    string reason = kind == ImpactKind.Test
+                    var id = $"project:{project.Id.Id:D}";
+                    var reason = kind == ImpactKind.Test
                         ? "Test project depends on an impacted project."
                         : "Project depends on an impacted project.";
                     if (!TryAddImpact(
@@ -315,7 +315,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         break;
                     }
 
-                    int projectDepth = depth + 1;
+                    var projectDepth = depth + 1;
                     projectDepths.Add(project.Name, projectDepth);
                     pendingProjects.Enqueue((project.Name, projectDepth));
                 }
@@ -326,8 +326,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 var location = node.Location
                     ?? throw new InvalidOperationException("A classified impact node requires a source location.");
                 var kind = location.IsGenerated ? ImpactKind.GeneratedDocument : ImpactKind.LinkedDocument;
-                string id = $"{kind}:{location.FilePath}";
-                string reason = location.IsGenerated
+                var id = $"{kind}:{location.FilePath}";
+                var reason = location.IsGenerated
                     ? "Impacted symbol evidence is generated source."
                     : "Impacted symbol evidence is linked source.";
                 if (!TryAddImpact(
@@ -391,8 +391,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         using var timeout = CreateTimeout(request.TimeoutMilliseconds, cancellationToken);
         var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
         var matches = new List<CSharpPatternMatch>();
-        bool timeReached = false;
-        string? normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+        var timeReached = false;
+        var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
         try
         {
             foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
@@ -466,13 +466,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
-        string? normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+        var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
         var documents = new List<GeneratedDocumentInfo>();
-        bool truncated = false;
+        var truncated = false;
         foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            bool projectFileScoped = normalizedScope is not null
+            var projectFileScoped = normalizedScope is not null
                 && project.FilePath is not null
                 && Path.GetFullPath(project.FilePath).Equals(normalizedScope, PathComparison);
             var candidates = new List<(Document Document, GeneratedCodeOrigin Origin, string? OriginName)>();
@@ -481,7 +481,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 .Select(document => (document, GeneratedCodeOrigin.FileConvention, (string?)null)));
             IEnumerable<Document> generated = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
             candidates.AddRange(generated.Select(document => (document, GeneratedCodeOrigin.SourceGenerator, (string?)document.Name)));
-            foreach ((var document, var origin, string? originName) in candidates
+            foreach ((var document, var origin, var originName) in candidates
                 .GroupBy(item => item.Document.Id)
                 .Select(group => group.OrderByDescending(item => item.Origin).First())
                 .OrderBy(item => item.Document.FilePath ?? item.Document.Name, StringComparer.Ordinal))
@@ -498,14 +498,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
 
                 var text = await document.GetTextAsync(cancellationToken);
-                string? content = request.IncludeContent ? text.ToString() : null;
-                bool contentTruncated = content is { Length: var length } && length > request.MaximumContentCharacters;
+                var content = request.IncludeContent ? text.ToString() : null;
+                var contentTruncated = content is { Length: var length } && length > request.MaximumContentCharacters;
                 if (contentTruncated)
                 {
                     content = content?[..request.MaximumContentCharacters];
                 }
 
-                string filePath = document.FilePath ?? document.Name;
+                var filePath = document.FilePath ?? document.Name;
                 documents.Add(new GeneratedDocumentInfo(
                     document.Id.Id.ToString("D"),
                     document.Name,
@@ -571,7 +571,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern-search bounds are outside host limits.");
         }
 
-        foreach (string value in request.Pattern.RequiredModifiers)
+        foreach (var value in request.Pattern.RequiredModifiers)
         {
             if (!AllowedModifiers.Contains(value))
             {
@@ -579,7 +579,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        foreach (string? value in new[] { request.Pattern.Name, request.Pattern.ContainingType, request.Pattern.Capture }
+        foreach (var value in new[] { request.Pattern.Name, request.Pattern.ContainingType, request.Pattern.Capture }
             .Concat(request.Pattern.RequiredAttributes))
         {
             if (value is { Length: > 256 } || (value is not null && !IsSafeName(value)))
@@ -688,7 +688,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static SemanticSymbolIdentity CreateIdentity(ISymbol symbol)
     {
-        string id = symbol.GetDocumentationCommentId()
+        var id = symbol.GetDocumentationCommentId()
             ?? $"{symbol.Kind}:{symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}";
         return new(id, symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat), symbol.Kind.ToString());
     }
@@ -780,7 +780,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SemanticSourceProjection projection)
     {
         var lineSpan = syntaxTree.GetLineSpan(span);
-        string filePath = document.FilePath ?? document.Name;
+        var filePath = document.FilePath ?? document.Name;
         var range = new SourceRange(
             lineSpan.StartLinePosition.Line + 1,
             lineSpan.StartLinePosition.Character + 1,
@@ -853,7 +853,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool MatchesPattern(SyntaxNode node, CSharpPattern pattern)
     {
-        string? name = GetSimpleName(node);
+        var name = GetSimpleName(node);
         if (pattern.Name is not null && !string.Equals(pattern.Name, name, StringComparison.Ordinal))
         {
             return false;
@@ -861,7 +861,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (pattern.ContainingType is not null)
         {
-            string? containing = node.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText;
+            var containing = node.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText;
             if (!string.Equals(pattern.ContainingType, containing, StringComparison.Ordinal))
             {
                 return false;
@@ -942,7 +942,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return null;
         }
 
-        string fullPath = Path.GetFullPath(path, repositoryPath);
+        var fullPath = Path.GetFullPath(path, repositoryPath);
         if (!fullPath.Equals(repositoryPath, PathComparison)
             && !fullPath.StartsWith(repositoryPath + Path.DirectorySeparatorChar, PathComparison))
         {

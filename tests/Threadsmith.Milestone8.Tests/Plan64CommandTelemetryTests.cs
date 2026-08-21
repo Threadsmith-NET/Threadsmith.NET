@@ -29,7 +29,7 @@ public static class Plan64CommandTelemetryTests
             CancellationToken.None);
 
         Assert.Equal("ok", response);
-        LogEntry entry = Assert.Single(logger.Entries);
+        var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, entry.Level);
         Assert.Null(entry.Exception);
         Assert.Contains(nameof(CanaryCommand), entry.Message, StringComparison.Ordinal);
@@ -65,14 +65,14 @@ public static class Plan64CommandTelemetryTests
         var middleware = new CommandTelemetryMiddleware(logger);
         var canary = new OperationCanceledException();
 
-        OperationCanceledException thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             middleware.InvokeAsync(
                 new CanaryCommand("a", "b"),
                 _ => Task.FromException<string>(canary),
                 CancellationToken.None));
 
         Assert.Same(canary, thrown);
-        LogEntry entry = Assert.Single(logger.Entries);
+        var entry = Assert.Single(logger.Entries);
         Assert.Contains(CommandDispatchOutcome.Cancelled, entry.Message, StringComparison.Ordinal);
         Assert.Null(entry.Exception);
     }
@@ -111,14 +111,14 @@ public static class Plan64CommandTelemetryTests
         const string secretMessage = "CANARY-EXCEPTION-MESSAGE-xyz";
         var canary = new InvalidOperationException(secretMessage);
 
-        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             middleware.InvokeAsync(
                 new CanaryCommand("a", "b"),
                 _ => Task.FromException<string>(canary),
                 CancellationToken.None));
 
         Assert.Same(canary, thrown);
-        LogEntry entry = Assert.Single(logger.Entries);
+        var entry = Assert.Single(logger.Entries);
         Assert.Contains(CommandDispatchOutcome.Failure, entry.Message, StringComparison.Ordinal);
         Assert.Null(entry.Exception);
         Assert.DoesNotContain(secretMessage, entry.Message, StringComparison.Ordinal);
@@ -146,7 +146,7 @@ public static class Plan64CommandTelemetryTests
         var middleware = new CommandTelemetryMiddleware(new ThrowingLogger<CommandTelemetryMiddleware>());
         var canary = new OperationCanceledException();
 
-        OperationCanceledException thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             middleware.InvokeAsync(
                 new CanaryCommand("a", "b"),
                 _ => Task.FromException<string>(canary),
@@ -162,7 +162,7 @@ public static class Plan64CommandTelemetryTests
         var middleware = new CommandTelemetryMiddleware(new ThrowingLogger<CommandTelemetryMiddleware>());
         var canary = new InvalidOperationException("handler failure");
 
-        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             middleware.InvokeAsync(
                 new CanaryCommand("a", "b"),
                 _ => Task.FromException<string>(canary),
@@ -176,7 +176,7 @@ public static class Plan64CommandTelemetryTests
     public static async Task ActivityListenerFailure_PreservesSuccessfulResponse()
     {
         var middleware = new CommandTelemetryMiddleware(new RecordingLogger<CommandTelemetryMiddleware>());
-        using ActivityListener listener = CreateThrowingActivityListener();
+        using var listener = CreateThrowingActivityListener();
         ActivitySource.AddActivityListener(listener);
 
         var response = await middleware.InvokeAsync(
@@ -193,10 +193,10 @@ public static class Plan64CommandTelemetryTests
     {
         var middleware = new CommandTelemetryMiddleware(new RecordingLogger<CommandTelemetryMiddleware>());
         var canary = new InvalidOperationException("handler failure");
-        using ActivityListener listener = CreateThrowingActivityListener();
+        using var listener = CreateThrowingActivityListener();
         ActivitySource.AddActivityListener(listener);
 
-        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             middleware.InvokeAsync(
                 new ListenerFailureCommand(),
                 _ => Task.FromException<string>(canary),
@@ -231,15 +231,15 @@ public static class Plan64CommandTelemetryTests
             CancellationToken.None);
 
         Assert.Equal(canaryResponse, response);
-        LogEntry entry = Assert.Single(logger.Entries);
+        var entry = Assert.Single(logger.Entries);
         Assert.DoesNotContain(canaryProperty, entry.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(canaryResponse, entry.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(canaryProperty, entry.State, StringComparison.Ordinal);
         Assert.DoesNotContain(canaryResponse, entry.State, StringComparison.Ordinal);
 
-        Activity activity = Assert.Single(capturedActivities);
+        var activity = Assert.Single(capturedActivities);
         Assert.Equal(CommandTelemetryMiddleware.ActivityName, activity.OperationName);
-        foreach (KeyValuePair<string, object?> tag in activity.TagObjects)
+        foreach (var tag in activity.TagObjects)
         {
             var value = tag.Value?.ToString();
             Assert.NotEqual(canaryProperty, value);
@@ -272,7 +272,7 @@ public static class Plan64CommandTelemetryTests
                 _ => Task.FromException<string>(new InvalidOperationException("boom")),
                 CancellationToken.None));
 
-        Activity activity = Assert.Single(capturedActivities);
+        var activity = Assert.Single(capturedActivities);
         Assert.Equal(CommandTelemetryMiddleware.ActivityName, activity.OperationName);
         Assert.Equal(ActivityStatusCode.Error, activity.Status);
         Assert.Equal(nameof(CanaryCommand), GetTag(activity, "threadsmith.command.type"));
@@ -315,7 +315,7 @@ public static class Plan64CommandTelemetryTests
 
     private static string? GetTag(Activity activity, string key)
     {
-        foreach (KeyValuePair<string, object?> tag in activity.TagObjects)
+        foreach (var tag in activity.TagObjects)
         {
             if (string.Equals(tag.Key, key, StringComparison.Ordinal))
             {
@@ -386,7 +386,7 @@ public static class Plan64CommandTelemetryTests
             CancellationToken cancellationToken = default)
         {
             _order.Add($"{_name}:before");
-            TResponse response = await next(cancellationToken);
+            var response = await next(cancellationToken);
             _order.Add($"{_name}:after");
             return response;
         }

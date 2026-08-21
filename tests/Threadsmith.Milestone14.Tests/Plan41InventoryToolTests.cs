@@ -57,7 +57,7 @@ public sealed class Plan41InventoryToolTests
     public async Task GitQueries_OpenedSubdirectoryOfRepository_IsRejected()
     {
         await using var repository = await TestRepository.CreateAsync();
-        string subdirectory = Path.Combine(repository.Path, "src");
+        var subdirectory = Path.Combine(repository.Path, "src");
         Directory.CreateDirectory(subdirectory);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new GitQueryService().DiffAsync(
@@ -174,8 +174,8 @@ public sealed class Plan41InventoryToolTests
     {
         // Arrange
         await using var repository = await TestRepository.CreateAsync();
-        string literal = Path.Combine(repository.Path, "literal[1].txt");
-        string matchedByMagic = Path.Combine(repository.Path, "literal1.txt");
+        var literal = Path.Combine(repository.Path, "literal[1].txt");
+        var matchedByMagic = Path.Combine(repository.Path, "literal1.txt");
         await File.WriteAllTextAsync(literal, "initial\n");
         await File.WriteAllTextAsync(matchedByMagic, "initial\n");
         await repository.RunGitAsync("add", "literal[1].txt", "literal1.txt");
@@ -362,7 +362,7 @@ public sealed class Plan41InventoryToolTests
         await using var repository = await TestRepository.CreateDotNetAsync();
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
-        WorkspaceId workspaceId = WorkspaceId.New();
+        var workspaceId = WorkspaceId.New();
         var load = await registry.LoadAsync(new SemanticLoadRequest(
             SessionId.New(),
             workspaceId,
@@ -591,13 +591,13 @@ public sealed class Plan41InventoryToolTests
                     UseShellExecute = false,
                 },
             };
-            foreach (string argument in arguments)
+            foreach (var argument in arguments)
             {
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
             process.Start();
-            string error = await process.StandardError.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
             Assert.True(process.ExitCode == 0, error);
         }
@@ -610,7 +610,7 @@ public sealed class Plan41InventoryToolTests
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                foreach (string file in Directory.EnumerateFiles(Path, "*", SearchOption.AllDirectories))
+                foreach (var file in Directory.EnumerateFiles(Path, "*", SearchOption.AllDirectories))
                 {
                     File.SetAttributes(file, FileAttributes.Normal);
                 }

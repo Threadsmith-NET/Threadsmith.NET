@@ -31,10 +31,10 @@ public sealed class ExtensionRuntimeTests
     [Fact]
     public async Task LoadAsync_loads_two_generations_of_same_extension_in_independent_ALCs()
     {
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        string sampleDir = ResolveSampleOutputDirectory();
+        var sampleDir = ResolveSampleOutputDirectory();
         var request = new ExtensionLoadRequest
         {
             ExtensionDirectory = sampleDir,
@@ -54,10 +54,10 @@ public sealed class ExtensionRuntimeTests
     [Fact]
     public async Task LoadAsync_rejects_duplicate_contract_assembly()
     {
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        string badDir = ResolveFixtureOutputDirectory("BadContractExtension");
+        var badDir = ResolveFixtureOutputDirectory("BadContractExtension");
         var request = new ExtensionLoadRequest
         {
             ExtensionDirectory = badDir,
@@ -75,10 +75,10 @@ public sealed class ExtensionRuntimeTests
     [Fact]
     public async Task LoadAsync_activation_failure_keeps_host_operational()
     {
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        string throwingDir = ResolveFixtureOutputDirectory("ThrowingExtension");
+        var throwingDir = ResolveFixtureOutputDirectory("ThrowingExtension");
         var request = new ExtensionLoadRequest
         {
             ExtensionDirectory = throwingDir,
@@ -107,7 +107,7 @@ public sealed class ExtensionRuntimeTests
         // Two extensions each bundle a same-named private assembly (Threadsmith.PrivateLib) with
         // different contents. Each must load in its own collectible ALC and resolve its own copy
         // (§17.10, §17.26). Invoking each tool returns the version its ALC resolved.
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
         var genA = await host.LoadAsync(new ExtensionLoadRequest
@@ -152,7 +152,7 @@ public sealed class ExtensionRuntimeTests
     [Fact]
     public async Task LoadAsync_publishes_discovered_and_activated_events()
     {
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
         await host.LoadAsync(new ExtensionLoadRequest
@@ -168,7 +168,7 @@ public sealed class ExtensionRuntimeTests
 
     private static async Task<(ExtensionHost host, SessionId sessionId)> LoadSampleAsync()
     {
-        string stagingRoot = NewStagingRoot();
+        var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
         var sessionId = SessionId.New();
@@ -184,7 +184,7 @@ public sealed class ExtensionRuntimeTests
 
     private static string NewStagingRoot()
     {
-        string root = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
     }
@@ -201,17 +201,17 @@ public sealed class ExtensionRuntimeTests
 
     private static string ResolveFixtureOutputDirectory(string fixtureProjectDirName)
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "tests", "Threadsmith.Milestone7.Tests", "Fixtures", fixtureProjectDirName, "bin", configuration, "net10.0");
     }
 
     private static string ResolveProjectOutput(string projectDir, string assemblyName)
     {
-        string bin = AppContext.BaseDirectory;
-        string repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        string configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
+        var bin = AppContext.BaseDirectory;
+        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
+        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
         return Path.Combine(repoRoot, "samples", "extensions", projectDir, "bin", configuration, "net10.0");
     }
 }

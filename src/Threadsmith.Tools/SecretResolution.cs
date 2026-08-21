@@ -114,7 +114,7 @@ public sealed record SecretReference
             return false;
         }
 
-        string[] segments = value.Split(':');
+        var segments = value.Split(':');
         if (segments.Length < 2
             || segments.Any(segment => string.IsNullOrWhiteSpace(segment)
                 || segment is "." or ".."
@@ -175,7 +175,7 @@ public sealed record SecretResolutionRequest
             throw new ArgumentException("Component categories must be bounded diagnostic tokens.", nameof(category));
         }
 
-        string digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configuredIdentifier)));
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configuredIdentifier)));
         return category + ":" + digest;
     }
 }
@@ -384,7 +384,7 @@ public sealed class SecretResolver : ISecretResolver
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        string cycleKey = request.ComponentId + "\n" + request.Reference.CanonicalName;
+        var cycleKey = request.ComponentId + "\n" + request.Reference.CanonicalName;
         var active = ActiveRequests.Value ??= new(StringComparer.OrdinalIgnoreCase);
         if (!active.Add(cycleKey))
         {
@@ -398,7 +398,7 @@ public sealed class SecretResolver : ISecretResolver
         try
         {
             var diagnostics = new List<string>();
-            bool eligible = false;
+            var eligible = false;
             var aggregateFailure = SecretResolutionFailure.NotFound;
             foreach (var provider in _providers)
             {
@@ -441,7 +441,7 @@ public sealed class SecretResolver : ISecretResolver
                     };
                 }
 
-                string diagnosticCode = IsSafeDiagnosticToken(result.DiagnosticCode)
+                var diagnosticCode = IsSafeDiagnosticToken(result.DiagnosticCode)
                     ? result.DiagnosticCode
                     : "invalid-provider-diagnostic";
                 diagnostics.Add(provider.Id + ":" + diagnosticCode);
@@ -511,8 +511,8 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
-        string variable = "THREADSMITH_" + request.Reference.CanonicalName.Replace(":", "__", StringComparison.Ordinal);
-        string? value = Environment.GetEnvironmentVariable(variable);
+        var variable = "THREADSMITH_" + request.Reference.CanonicalName.Replace(":", "__", StringComparison.Ordinal);
+        var value = Environment.GetEnvironmentVariable(variable);
         return Task.FromResult(string.IsNullOrEmpty(value)
             ? SecretProviderResult.NotFound(value is null ? "not-found" : "empty-rejected")
             : SecretProviderResult.Found(value));
@@ -587,7 +587,7 @@ public sealed class UserFileSecretProvider : JsonFileSecretProvider
     [SupportedOSPlatform("windows")]
     private static bool HasSafeWindowsPermissions(FileSecurity security)
     {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        using var identity = WindowsIdentity.GetCurrent();
         var currentUser = identity.User;
         if (currentUser is null
             || security.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner
@@ -596,7 +596,7 @@ public sealed class UserFileSecretProvider : JsonFileSecretProvider
             return false;
         }
 
-        byte[] descriptorBytes = security.GetSecurityDescriptorBinaryForm();
+        var descriptorBytes = security.GetSecurityDescriptorBinaryForm();
         var descriptor = new RawSecurityDescriptor(descriptorBytes, offset: 0);
         if (descriptor.DiscretionaryAcl is null)
         {
@@ -737,8 +737,8 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 
         using var validationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         validationCancellation.CancelAfter(request.ProviderTimeout);
-        string relative = Path.GetRelativePath(RepositoryRoot, StorePath).Replace('\\', '/');
-        foreach (string indexPath in GetApplicableIndexPaths(relative))
+        var relative = Path.GetRelativePath(RepositoryRoot, StorePath).Replace('\\', '/');
+        foreach (var indexPath in GetApplicableIndexPaths(relative))
         {
             var indexed = await RunGitAsync(
                 [
@@ -778,11 +778,11 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 
     private static IEnumerable<string> GetApplicableIndexPaths(string relative)
     {
-        string? current = relative;
+        var current = relative;
         while (!string.IsNullOrEmpty(current))
         {
             yield return current;
-            int separator = current.LastIndexOf('/');
+            var separator = current.LastIndexOf('/');
             current = separator > 0 ? current[..separator] : null;
         }
     }
@@ -808,7 +808,7 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
         process.StartInfo.ArgumentList.Add("core.quotepath=false");
         process.StartInfo.ArgumentList.Add("-C");
         process.StartInfo.ArgumentList.Add(RepositoryRoot);
-        foreach (string argument in arguments)
+        foreach (var argument in arguments)
         {
             process.StartInfo.ArgumentList.Add(argument);
         }
@@ -857,7 +857,7 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 
     private static bool IsConfinedPath(string root, string path)
     {
-        string relative = Path.GetRelativePath(root, Path.GetFullPath(path));
+        var relative = Path.GetRelativePath(root, Path.GetFullPath(path));
         return relative != ".."
             && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             && !Path.IsPathRooted(relative);
@@ -865,7 +865,7 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 
     private static bool HasReparsePoint(string root, string path)
     {
-        string? current = Path.GetDirectoryName(path);
+        var current = Path.GetDirectoryName(path);
         while (current is not null && IsConfinedPath(root, current))
         {
             if (Directory.Exists(current)
@@ -936,7 +936,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
 
         try
         {
-            byte[]? bytes = await ReadBoundedFileWithoutFollowingLinksAsync(
+            var bytes = await ReadBoundedFileWithoutFollowingLinksAsync(
                 StorePath,
                 cancellationToken).ConfigureAwait(false);
             if (bytes is null)
@@ -944,22 +944,22 @@ public abstract class JsonFileSecretProvider : ISecretProvider
                 return Failure(SecretResolutionFailure.MalformedStore, "store-too-large");
             }
 
-            string json = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
-            using JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions
+            var json = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
                 CommentHandling = JsonCommentHandling.Disallow,
                 MaxDepth = 16,
             });
-            int propertyCount = 0;
+            var propertyCount = 0;
             if (!ValidateElement(document.RootElement, ref propertyCount))
             {
                 return Failure(SecretResolutionFailure.MalformedStore, "invalid-duplicate-or-excessive-content");
             }
 
-            string[] path = request.Reference.CanonicalName.Split(':');
+            var path = request.Reference.CanonicalName.Split(':');
             var current = document.RootElement;
-            foreach (string segment in path)
+            foreach (var segment in path)
             {
                 if (current.ValueKind != JsonValueKind.Object)
                 {
@@ -991,7 +991,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
                 return Failure(SecretResolutionFailure.MalformedStore, "secret-value-not-string");
             }
 
-            string? value = current.GetString();
+            var value = current.GetString();
             return string.IsNullOrEmpty(value)
                 ? SecretProviderResult.NotFound("empty-rejected")
                 : SecretProviderResult.Found(value);
@@ -1053,10 +1053,10 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         }
 
         var buffer = new byte[MaximumBytes + 1];
-        int total = 0;
+        var total = 0;
         while (total < buffer.Length)
         {
-            int read = await stream.ReadAsync(buffer.AsMemory(total), cancellationToken).ConfigureAwait(false);
+            var read = await stream.ReadAsync(buffer.AsMemory(total), cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 break;
@@ -1084,7 +1084,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         }
         else
         {
-            int flags = UnixOpenReadOnly
+            var flags = UnixOpenReadOnly
                 | (OperatingSystem.IsMacOS()
                     ? MacOpenNoFollow | MacOpenCloseOnExec | MacOpenNonBlocking
                     : LinuxOpenNoFollow | LinuxOpenCloseOnExec | LinuxOpenNonBlocking);
@@ -1119,7 +1119,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
 
     private static bool IsRegularUnixFile(SafeFileHandle handle)
     {
-        int fileDescriptor = handle.DangerousGetHandle().ToInt32();
+        var fileDescriptor = handle.DangerousGetHandle().ToInt32();
         ushort mode;
         if (OperatingSystem.IsMacOS())
         {
@@ -1153,13 +1153,13 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         if (OperatingSystem.IsWindows())
         {
             var path = new StringBuilder(32_768);
-            uint length = GetFinalPathNameByHandleWindows(handle, path, (uint)path.Capacity, 0);
+            var length = GetFinalPathNameByHandleWindows(handle, path, (uint)path.Capacity, 0);
             if (length == 0 || length >= path.Capacity)
             {
                 throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
             }
 
-            string openedPath = path.ToString();
+            var openedPath = path.ToString();
             return openedPath.StartsWith("\\\\?\\UNC\\", StringComparison.OrdinalIgnoreCase)
                 ? "\\\\" + openedPath[8..]
                 : openedPath.StartsWith("\\\\?\\", StringComparison.Ordinal)
@@ -1175,11 +1175,11 @@ public abstract class JsonFileSecretProvider : ISecretProvider
                 throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
             }
 
-            int terminator = Array.IndexOf(path, (byte)0);
+            var terminator = Array.IndexOf(path, (byte)0);
             return Encoding.UTF8.GetString(path, 0, terminator >= 0 ? terminator : path.Length);
         }
 
-        string descriptorPath = $"/proc/self/fd/{handle.DangerousGetHandle()}";
+        var descriptorPath = $"/proc/self/fd/{handle.DangerousGetHandle()}";
         var target = File.ResolveLinkTarget(descriptorPath, returnFinalTarget: true);
         return target?.FullName
             ?? throw new UnauthorizedAccessException("Secret store path could not be safely opened.");

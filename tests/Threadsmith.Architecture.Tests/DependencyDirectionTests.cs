@@ -105,7 +105,7 @@ public static class DependencyDirectionTests
             .Where(n => n.StartsWith("Threadsmith.", StringComparison.Ordinal) && n != projectName)
             .ToHashSet();
 
-        HashSet<string> allowed = _allowedGraph.TryGetValue(projectName, out HashSet<string>? a) ? a : [];
+        var allowed = _allowedGraph.TryGetValue(projectName, out var a) ? a : [];
         var forbidden = referenced.Except(allowed).ToHashSet();
         Assert.True(
             forbidden.Count == 0,
@@ -118,7 +118,7 @@ public static class DependencyDirectionTests
     [MemberData(nameof(GuardedProjectNames))]
     public static void ProjectDoesNotReferenceForbiddenPackages(string projectName)
     {
-        HashSet<string> forbidden = _forbiddenPackages[projectName];
+        var forbidden = _forbiddenPackages[projectName];
         var violations = GetPackageReferences(projectName)
             .Where(p => forbidden.Any(f => p.StartsWith(f, StringComparison.Ordinal)))
             .ToHashSet();
@@ -209,7 +209,7 @@ public static class DependencyDirectionTests
     {
         // Simulate the assertion used by the theory on a hypothetical wrong reference.
         // Core is permitted to reference no Threadsmith.* project (omitted key = empty set).
-        HashSet<string> allowed = _allowedGraph.TryGetValue("Threadsmith.Core", out HashSet<string>? coreAllowed)
+        var allowed = _allowedGraph.TryGetValue("Threadsmith.Core", out var coreAllowed)
             ? coreAllowed : [];
         var hypotheticalWrong = new HashSet<string> { "Threadsmith.Tui" };
         var forbidden = hypotheticalWrong.Except(allowed).ToHashSet();

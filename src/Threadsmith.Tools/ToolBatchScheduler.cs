@@ -74,7 +74,7 @@ internal sealed class ToolSourceConcurrencyLimiter
                     _states.Add(source, state);
                 }
 
-                int effectiveMaximum = state.ActiveCaps.Count == 0
+                var effectiveMaximum = state.ActiveCaps.Count == 0
                     ? maximumConcurrency
                     : Math.Min(maximumConcurrency, state.ActiveCaps.Min());
                 if (state.ActiveCaps.Count < effectiveMaximum)
@@ -167,7 +167,7 @@ internal sealed class ToolConflictPlanner
         foreach (var request in requests.OrderBy(item => item.Ordinal))
         {
             var planned = Prepare(request);
-            int earliestWave = FindEarliestAllowedWave(waves, planned);
+            var earliestWave = FindEarliestAllowedWave(waves, planned);
             var selected = _options.Enabled
                 ? waves
                     .Skip(earliestWave)
@@ -190,7 +190,7 @@ internal sealed class ToolConflictPlanner
         try
         {
             var registration = _registry.GetRegistration(request.Invocation.ToolId);
-            object input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
+            var input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
             IReadOnlyList<ToolResourceClaim> claims = registration.Tool
                 .GetSchedulingClaims(input, request.Invocation.Context)
                 .OrderBy(claim => claim.ResourceKind)
@@ -208,8 +208,8 @@ internal sealed class ToolConflictPlanner
         IReadOnlyList<List<PlannedToolInvocation>> waves,
         PlannedToolInvocation planned)
     {
-        int earliestWave = 0;
-        for (int waveIndex = 0; waveIndex < waves.Count; waveIndex++)
+        var earliestWave = 0;
+        for (var waveIndex = 0; waveIndex < waves.Count; waveIndex++)
         {
             if (waves[waveIndex].Any(existing => Conflicts(existing, planned)))
             {
@@ -233,7 +233,7 @@ internal sealed class ToolConflictPlanner
 
         var source = planned.Registration.Source;
         PlannedToolInvocation[] sameSource = [.. wave.Where(existing => existing.Registration?.Source == source)];
-        int sourceCount = sameSource.Length + 1;
+        var sourceCount = sameSource.Length + 1;
         return sourceCount <= planned.Registration.Tool.Definition.Scheduling.MaximumSourceConcurrency
             && sameSource.All(existing => existing.Registration is { } registration
                 && sourceCount <= registration.Tool.Definition.Scheduling.MaximumSourceConcurrency);
@@ -290,8 +290,8 @@ internal sealed class ToolConflictPlanner
             return false;
         }
 
-        string leftPath = Path.TrimEndingDirectorySeparator(left.CanonicalIdentity);
-        string rightPath = Path.TrimEndingDirectorySeparator(right.CanonicalIdentity);
+        var leftPath = Path.TrimEndingDirectorySeparator(left.CanonicalIdentity);
+        var rightPath = Path.TrimEndingDirectorySeparator(right.CanonicalIdentity);
         return leftPath.StartsWith(string.Concat(rightPath, Path.DirectorySeparatorChar), comparison)
             || rightPath.StartsWith(string.Concat(leftPath, Path.DirectorySeparatorChar), comparison);
     }

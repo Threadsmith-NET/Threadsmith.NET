@@ -45,7 +45,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                     tool.Definition.Id,
                     StringComparer.OrdinalIgnoreCase)))
         {
-            string reason = context.DenyAllTools
+            var reason = context.DenyAllTools
                 ? "The effective policy denies all tools."
                 : "Repository configuration denies this tool.";
             return new ToolPolicyDecision(
@@ -56,7 +56,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         if (context.TrustLevel < tool.Definition.RequiredTrust)
         {
-            string reason = $"{tool.Definition.Id} requires {tool.Definition.RequiredTrust}; "
+            var reason = $"{tool.Definition.Id} requires {tool.Definition.RequiredTrust}; "
                 + $"current trust is {context.TrustLevel}.";
             return new ToolPolicyDecision(
                 false,
@@ -64,7 +64,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 reason);
         }
 
-        foreach (string resourcePath in tool.GetResourcePaths(input, context))
+        foreach (var resourcePath in tool.GetResourcePaths(input, context))
         {
             try
             {
@@ -88,7 +88,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                     "Executable values must be bare allow-listed names without a path.");
             }
 
-            string basename = Path.GetFileNameWithoutExtension(executable);
+            var basename = Path.GetFileNameWithoutExtension(executable);
             if (!context.AllowedExecutables.Contains(basename, StringComparer.OrdinalIgnoreCase))
             {
                 return new ToolPolicyDecision(
@@ -98,7 +98,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        foreach (string secretReference in tool.GetSecretReferences(input))
+        foreach (var secretReference in tool.GetSecretReferences(input))
         {
             if (!secretReference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase)
                 || !context.AllowedSecretReferences.Contains(
@@ -112,12 +112,12 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        foreach (string networkHost in tool.GetNetworkHosts(input))
+        foreach (var networkHost in tool.GetNetworkHosts(input))
         {
-            bool configuredHost = context.AllowedNetworkHosts.Contains(
+            var configuredHost = context.AllowedNetworkHosts.Contains(
                 networkHost,
                 StringComparer.OrdinalIgnoreCase);
-            bool hostAuthorized = tool is IHostAuthorizedNetworkClaims scopedClaims
+            var hostAuthorized = tool is IHostAuthorizedNetworkClaims scopedClaims
                 && scopedClaims.IsNetworkHostAuthorized(input, context, networkHost);
             if (!configuredHost && !hostAuthorized)
             {
@@ -178,17 +178,17 @@ internal static class ToolPathRules
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
-        string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath, repositoryRoot));
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath, repositoryRoot));
         if (!normalized.Equals(repositoryRoot, comparison)
             && !normalized.StartsWith(repositoryRoot + Path.DirectorySeparatorChar, comparison))
         {
             throw new UnauthorizedAccessException("Tool path escapes the repository root.");
         }
 
-        bool approved = context.ApprovedRoots.Any(root =>
+        var approved = context.ApprovedRoots.Any(root =>
         {
-            string approvedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
+            var approvedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
             return normalized.Equals(approvedRoot, comparison)
                 || normalized.StartsWith(approvedRoot + Path.DirectorySeparatorChar, comparison);
         });
@@ -197,14 +197,14 @@ internal static class ToolPathRules
             throw new UnauthorizedAccessException("Tool path is outside the configured approved roots.");
         }
 
-        string relative = Path.GetRelativePath(repositoryRoot, normalized).Replace('\\', '/');
+        var relative = Path.GetRelativePath(repositoryRoot, normalized).Replace('\\', '/');
         if (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
         {
             throw new UnauthorizedAccessException("Tool path matches a prohibited repository pattern.");
         }
 
-        string current = repositoryRoot;
-        foreach (string segment in Path.GetRelativePath(repositoryRoot, normalized)
+        var current = repositoryRoot;
+        foreach (var segment in Path.GetRelativePath(repositoryRoot, normalized)
             .Split(
                 [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                 StringSplitOptions.RemoveEmptyEntries))
@@ -251,9 +251,9 @@ internal static class ToolPathRules
 
     private static bool IsReservedWindowsDeviceName(string segment)
     {
-        string normalized = segment.TrimEnd(' ', '.');
-        int extensionSeparator = normalized.IndexOf('.');
-        string baseName = extensionSeparator >= 0 ? normalized[..extensionSeparator] : normalized;
+        var normalized = segment.TrimEnd(' ', '.');
+        var extensionSeparator = normalized.IndexOf('.');
+        var baseName = extensionSeparator >= 0 ? normalized[..extensionSeparator] : normalized;
         if (baseName.Equals("CON", StringComparison.OrdinalIgnoreCase)
             || baseName.Equals("PRN", StringComparison.OrdinalIgnoreCase)
             || baseName.Equals("AUX", StringComparison.OrdinalIgnoreCase)

@@ -38,7 +38,7 @@ public sealed class OpenAiCodexCatalogClient
             request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", effectiveAccountId);
         }
 
-        using HttpResponseMessage response = await _httpClient.SendAsync(
+        using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
@@ -51,9 +51,9 @@ public sealed class OpenAiCodexCatalogClient
         }
 
         await response.Content.LoadIntoBufferAsync(1024 * 1024, cancellationToken).ConfigureAwait(false);
-        await using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using JsonDocument document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (!document.RootElement.TryGetProperty("models", out JsonElement models)
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!document.RootElement.TryGetProperty("models", out var models)
             || models.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("The Codex model response does not contain a models array.");
@@ -101,8 +101,8 @@ public sealed class OpenAiCodexCatalogClient
             ?? GetPositiveInt(element, "max_context_window")
             ?? DefaultContextWindow;
         var reserve = Math.Min(DefaultOutputReserve, Math.Max(1, contextWindow / 4));
-        ReasoningLevel[] supported = ResolveReasoningLevels(element);
-        ReasoningLevel defaultLevel = ResolveReasoningLevel(GetString(element, "default_reasoning_level"));
+        var supported = ResolveReasoningLevels(element);
+        var defaultLevel = ResolveReasoningLevel(GetString(element, "default_reasoning_level"));
         if (!supported.Contains(defaultLevel))
         {
             defaultLevel = supported.Contains(ReasoningLevel.Medium) ? ReasoningLevel.Medium : supported[0];
@@ -137,10 +137,10 @@ public sealed class OpenAiCodexCatalogClient
     private static ReasoningLevel[] ResolveReasoningLevels(JsonElement model)
     {
         HashSet<ReasoningLevel> levels = [ReasoningLevel.None];
-        if (model.TryGetProperty("supported_reasoning_levels", out JsonElement values)
+        if (model.TryGetProperty("supported_reasoning_levels", out var values)
             && values.ValueKind == JsonValueKind.Array)
         {
-            foreach (JsonElement value in values.EnumerateArray())
+            foreach (var value in values.EnumerateArray())
             {
                 var effort = value.ValueKind == JsonValueKind.String
                     ? value.GetString()
@@ -173,7 +173,7 @@ public sealed class OpenAiCodexCatalogClient
     private static ModelProfileId StableProfileId(string slug)
     {
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"openai-codex:{slug}"));
-        Span<byte> guidBytes = digest.AsSpan(0, 16);
+        var guidBytes = digest.AsSpan(0, 16);
         guidBytes[6] = (byte)((guidBytes[6] & 0x0f) | 0x50);
         guidBytes[8] = (byte)((guidBytes[8] & 0x3f) | 0x80);
         return new ModelProfileId(new Guid(guidBytes));
@@ -181,7 +181,7 @@ public sealed class OpenAiCodexCatalogClient
 
     private static int? GetPositiveInt(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.TryGetInt32(out var result)
         && result > 0
             ? result
@@ -190,7 +190,7 @@ public sealed class OpenAiCodexCatalogClient
 
     private static string? GetString(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;

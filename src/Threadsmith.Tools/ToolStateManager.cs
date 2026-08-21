@@ -109,7 +109,7 @@ public sealed class ToolStateManager : IToolStateManager
         _fetchAuthorization?.SetCurrentMessageConsentEvaluator(
             repositoryRoot => _consentStore.HasCurrentMessageUrlConsent(repositoryRoot));
         var enabledSection = configuration.GetSection("tools:enabled");
-        bool repositoryHasEnabledAllowList = false;
+        var repositoryHasEnabledAllowList = false;
         if (File.Exists(_repositoryConfigurationPath))
         {
             var repositoryConfiguration = JsonNode.Parse(
@@ -137,7 +137,7 @@ public sealed class ToolStateManager : IToolStateManager
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        string configurationPath = Path.Combine(
+        var configurationPath = Path.Combine(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
             ".threadsmith",
             "config.json");
@@ -149,7 +149,7 @@ public sealed class ToolStateManager : IToolStateManager
                 .AddJsonFile(configurationPath, optional: true)
                 .Build();
             var enabledSection = configuration.GetSection("tools:enabled");
-            bool hasEnabledAllowList = false;
+            var hasEnabledAllowList = false;
             if (File.Exists(configurationPath))
             {
                 var repositoryConfiguration = JsonNode.Parse(
@@ -223,7 +223,7 @@ public sealed class ToolStateManager : IToolStateManager
             return;
         }
 
-        string consentToolId = string.Equals(toolId, "web_fetch", StringComparison.OrdinalIgnoreCase)
+        var consentToolId = string.Equals(toolId, "web_fetch", StringComparison.OrdinalIgnoreCase)
             ? "web_search"
             : toolId;
         if (string.Equals(consentToolId, "web_search", StringComparison.OrdinalIgnoreCase)
@@ -233,7 +233,7 @@ public sealed class ToolStateManager : IToolStateManager
                 "Web search consent requires explicit disclosure that authorized results may be retrieved, decoded, extracted, and supplied to the model.");
         }
 
-        int schemaVersion = currentMessageUrlDisclosureAcknowledged
+        var schemaVersion = currentMessageUrlDisclosureAcknowledged
             ? OutboundConsentRecord.CurrentSchemaVersion
             : 2;
         await _consentStore.GrantAsync(
@@ -268,7 +268,7 @@ public sealed class ToolStateManager : IToolStateManager
             return;
         }
 
-        string preferenceId = GetPreferenceId(definition);
+        var preferenceId = GetPreferenceId(definition);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -370,7 +370,7 @@ public sealed class ToolStateManager : IToolStateManager
             return;
         }
 
-        string preferenceId = GetPreferenceId(definition);
+        var preferenceId = GetPreferenceId(definition);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -431,8 +431,8 @@ public sealed class ToolStateManager : IToolStateManager
 
     private bool IsAvailabilityRequested(ToolDefinition definition)
     {
-        string preferenceId = GetPreferenceId(definition);
-        bool requested = !_disabled.Contains(preferenceId)
+        var preferenceId = GetPreferenceId(definition);
+        var requested = !_disabled.Contains(preferenceId)
             && (_hasEnabledAllowList
                 ? _enabled.Contains(preferenceId)
                 : definition.EnabledByDefault || _defaultEnabledOverrides.Contains(preferenceId));
@@ -465,12 +465,12 @@ public sealed class ToolStateManager : IToolStateManager
         IReadOnlyCollection<string> defaultEnabledOverrides,
         CancellationToken cancellationToken)
     {
-        string configurationPath = _repositoryConfigurationPath;
+        var configurationPath = _repositoryConfigurationPath;
         await RepositorySettingsCoordinator.ExecuteWriteAsync(
             configurationPath,
             async token =>
             {
-                string? directory = Path.GetDirectoryName(configurationPath);
+                var directory = Path.GetDirectoryName(configurationPath);
                 if (string.IsNullOrWhiteSpace(directory))
                 {
                     throw new InvalidOperationException(
@@ -512,7 +512,7 @@ public sealed class ToolStateManager : IToolStateManager
                     tools.Remove("defaultEnabledOverrides");
                 }
 
-                string temporaryPath = configurationPath + ".tmp";
+                var temporaryPath = configurationPath + ".tmp";
                 await File.WriteAllTextAsync(
                     temporaryPath,
                     root.ToJsonString(_jsonOptions) + Environment.NewLine,

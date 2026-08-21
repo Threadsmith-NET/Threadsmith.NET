@@ -101,7 +101,7 @@ internal static class TuiMarkdownValidator
             foreach (IReadOnlyList<TuiMarkdownSpan> cell in row.Cells)
             {
                 state.AddNode();
-                int before = state.CharacterCount;
+                var before = state.CharacterCount;
                 ValidateSpans(cell, state);
                 if (state.CharacterCount - before > TuiMarkdownParser.MaximumCellCharacters)
                 {
@@ -125,7 +125,7 @@ internal static class TuiMarkdownValidator
             ValidateText(span.Text, TuiMarkdownParser.MaximumSourceBytes, state);
             if (span.LinkTarget is { } target)
             {
-                string value = target.OriginalString;
+                var value = target.OriginalString;
                 if (!target.IsAbsoluteUri
                     || target.Scheme is not "http" and not "https"
                     || string.IsNullOrEmpty(target.Host)

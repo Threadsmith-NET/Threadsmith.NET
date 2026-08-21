@@ -179,7 +179,7 @@ public static class Milestone1Tests
                 }
 
                 observed.Clear();
-                bool isLegal = !terminal.Contains(source)
+                var isLegal = !terminal.Contains(source)
                     && (destination is RunPhase.Failed or RunPhase.Cancelled
                         || allowed.Contains((source, destination)));
                 if (isLegal)
@@ -205,13 +205,13 @@ public static class Milestone1Tests
 
         foreach (var expected in expectedEvents)
         {
-            string polymorphicJson = JsonSerializer.Serialize<IDomainEvent>(expected);
+            var polymorphicJson = JsonSerializer.Serialize<IDomainEvent>(expected);
             var polymorphic = JsonSerializer.Deserialize<IDomainEvent>(polymorphicJson);
             Assert.NotNull(polymorphic);
             Assert.Equal(expected.GetType(), polymorphic.GetType());
             Assert.Equal(1, polymorphic.SchemaVersion);
 
-            string eventName = DomainEventJson.GetDiscriminator(expected);
+            var eventName = DomainEventJson.GetDiscriminator(expected);
             var durable = DomainEventJson.Deserialize(
                 eventName,
                 expected.SchemaVersion,
@@ -298,7 +298,7 @@ public static class Milestone1Tests
         release.TrySetResult();
         await publish;
 
-        for (int index = 0; index < 2048; index++)
+        for (var index = 0; index < 2048; index++)
         {
             await stream.PublishAsync(
                 new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, index.ToString()));
@@ -391,7 +391,7 @@ public static class Milestone1Tests
             [new EchoHandler(order)],
             [new RecordingMiddleware("one", order), new RecordingMiddleware("two", order)]);
 
-        string result = await dispatcher.DispatchAsync(new EchoCommand("value"));
+        var result = await dispatcher.DispatchAsync(new EchoCommand("value"));
 
         Assert.Equal("value", result);
         Assert.Equal(["one:before", "two:before", "handler", "two:after", "one:after"], order);
@@ -523,9 +523,9 @@ public static class Milestone1Tests
             ],
         };
 
-        string first = await CollectAsync(new FakeModelProvider(script), 42);
-        string second = await CollectAsync(new FakeModelProvider(script), 42);
-        string differentSeed = await CollectAsync(new FakeModelProvider(script), 7);
+        var first = await CollectAsync(new FakeModelProvider(script), 42);
+        var second = await CollectAsync(new FakeModelProvider(script), 42);
+        var differentSeed = await CollectAsync(new FakeModelProvider(script), 7);
 
         Assert.Equal(first, second);
         Assert.NotEqual(first, differentSeed);
@@ -618,14 +618,14 @@ public static class Milestone1Tests
     [Fact]
     public static async Task FakeModel_CheckedInFixtures_ExerciseScriptContract()
     {
-        string fixtureDirectory = Path.Combine(AppContext.BaseDirectory, "fixtures", "scripts");
+        var fixtureDirectory = Path.Combine(AppContext.BaseDirectory, "fixtures", "scripts");
         var success = FakeModelProvider.Load(
             await File.ReadAllTextAsync(Path.Combine(fixtureDirectory, "success.json")));
         var missingUsage = FakeModelProvider.Load(
             await File.ReadAllTextAsync(Path.Combine(fixtureDirectory, "missing-usage.json")));
 
-        string successOutput = await CollectAsync(new FakeModelProvider(success), 42);
-        string missingUsageOutput = await CollectAsync(new FakeModelProvider(missingUsage), 42);
+        var successOutput = await CollectAsync(new FakeModelProvider(success), 42);
+        var missingUsageOutput = await CollectAsync(new FakeModelProvider(missingUsage), 42);
 
         Assert.NotEmpty(successOutput);
         Assert.Equal("read_file", success.Turns[0].ToolName);
@@ -874,10 +874,10 @@ public static class Milestone1Tests
     [Fact]
     public static void ConversationalShell_PostApplyValidationFailure_IsReportedSeparately()
     {
-        (string failedMessage, var failedRole) = ConversationalShell.FormatPostApplyValidationResult(
+        (var failedMessage, var failedRole) = ConversationalShell.FormatPostApplyValidationResult(
             ExecutionCheckpointPhase.Failed,
             " (1.7s)");
-        (string completedMessage, var completedRole) = ConversationalShell.FormatPostApplyValidationResult(
+        (var completedMessage, var completedRole) = ConversationalShell.FormatPostApplyValidationResult(
             ExecutionCheckpointPhase.Completed,
             " (1.7s)");
 
@@ -956,7 +956,7 @@ public static class Milestone1Tests
         Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
         Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "existing response")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
-        string existingConversation = transcript.Text;
+        var existingConversation = transcript.Text;
 
         Assert.True(transcript.Apply(new RepositoryOpened(
             sessionId,
@@ -1158,7 +1158,7 @@ public static class Milestone1Tests
             _ => throw new ArgumentOutOfRangeException(nameof(failureKind)),
         };
 
-        string? branch = await ConversationalShell.ResolveCurrentBranchAsync(
+        var branch = await ConversationalShell.ResolveCurrentBranchAsync(
             new FailingGitQueryService(failure),
             "repository",
             repositoryIsOpen: true,
@@ -1190,7 +1190,7 @@ public static class Milestone1Tests
         Assert.DoesNotContain(
             surface.Segments,
             segment => segment.Role == TuiTextRole.UserPrompt);
-        string defaultText = string.Concat(
+        var defaultText = string.Concat(
             surface.Segments
                 .Where(segment => segment.Role == TuiTextRole.Default)
                 .Select(segment => segment.Text));
@@ -1198,8 +1198,8 @@ public static class Milestone1Tests
         var markdown = Assert.Single(surface.OutputItems.OfType<TuiMarkdownOutput>());
         var paragraph = Assert.IsType<TuiMarkdownParagraph>(Assert.Single(markdown.Document.Blocks));
         Assert.Equal("amber reply", string.Concat(paragraph.Spans.Select(span => span.Text)));
-        int thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
-        int answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
+        var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
+        var answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
         Assert.True(thinkingEnded >= 0 && thinkingEnded < answerWritten);
         Assert.Contains(harness.Events, item => item is RunCompleted { Succeeded: true });
         Assert.Contains(
@@ -1211,7 +1211,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_LargeMultilinePaste_IsNotReplayedPerCharacter()
     {
-        string pastedText = " leading line\n" + new string('x', 100_000) + "\ntrailing line ";
+        var pastedText = " leading line\n" + new string('x', 100_000) + "\ntrailing line ";
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
             Turns = [new ScriptedTurn { Text = "received" }],
@@ -1557,8 +1557,8 @@ public static class Milestone1Tests
     public static void SessionUsageProjection_RequestIdentity_DeduplicatesUsage()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
         var firstRequest = new ModelRequestUsageId(runId, "conversation", 0, Guid.NewGuid());
 
         projection.Observe(sessionId, firstRequest, new ModelUsage(100, 20));
@@ -1588,7 +1588,7 @@ public static class Milestone1Tests
             32_000,
             new SessionUsageSnapshot(8_000, 2_000, true));
 
-        string rendered = TuiSessionStatusFormatter.Format(status, 80, " | ");
+        var rendered = TuiSessionStatusFormatter.Format(status, 80, " | ");
 
         Assert.NotEmpty(rendered);
         Assert.DoesNotContain('\n', rendered);
@@ -1605,8 +1605,8 @@ public static class Milestone1Tests
     public static void SessionUsageProjection_LargeUsage_SaturatesTotals()
     {
         var projection = new SessionUsageProjection();
-        SessionId sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
 
         projection.Observe(
             sessionId,
@@ -1668,7 +1668,7 @@ public static class Milestone1Tests
             null,
             new SessionUsageSnapshot(0, 0, false));
 
-        string rendered = TuiSessionStatusFormatter.Format(status, 80, " | ");
+        var rendered = TuiSessionStatusFormatter.Format(status, 80, " | ");
 
         Assert.Contains("ctx --", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain('%', rendered);
@@ -1692,7 +1692,7 @@ public static class Milestone1Tests
             32_000,
             new SessionUsageSnapshot(8_000, 2_000, false));
 
-        string rendered = TuiSessionStatusFormatter.Format(status, width, " | ");
+        var rendered = TuiSessionStatusFormatter.Format(status, width, " | ");
 
         Assert.DoesNotContain('\n', rendered);
         Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered.AsSpan()) == width);
@@ -1716,7 +1716,7 @@ public static class Milestone1Tests
             100,
             new SessionUsageSnapshot(1, 1, false));
 
-        string rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
+        var rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
 
         Assert.Contains("folder C:/…/Threadsmith/src", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("a-very-long-root-name", rendered, StringComparison.Ordinal);
@@ -1735,7 +1735,7 @@ public static class Milestone1Tests
             32_000,
             new SessionUsageSnapshot(8_000, 2_000, true));
 
-        string rendered = TuiSessionStatusFormatter.Format(status, 60, "｜");
+        var rendered = TuiSessionStatusFormatter.Format(status, 60, "｜");
 
         Assert.NotEmpty(rendered);
         Assert.Equal(60, UnicodeWidth.GetWidth(rendered.AsSpan()));
@@ -1912,7 +1912,7 @@ public static class Milestone1Tests
             ["tui:themes:1:styles:Hyperlink:underline"] = "true",
         }).Build();
 
-        (var catalog, string defaultId) = TuiThemeConfigurationLoader.Load(configuration);
+        (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
         var preferences = new SessionThemePreferences(catalog, defaultId);
 
         Assert.Equal(["system", "forge-dark", "ocean", "high-contrast", "project-blue"], catalog.Themes.Select(theme => theme.Theme.Id));
@@ -1959,7 +1959,7 @@ public static class Milestone1Tests
             ["tui:themes:0:styles:Branding:foreground"] = "cyan",
         }).Build();
 
-        (var catalog, string defaultId) = TuiThemeConfigurationLoader.Load(configuration);
+        (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
         var preferences = new SessionThemePreferences(catalog, defaultId);
         Assert.Equal("system", preferences.ActiveTheme.Theme.Id);
         Assert.Equal(2, catalog.Warnings.Count);
@@ -1975,7 +1975,7 @@ public static class Milestone1Tests
             ["tui:themes:0:id"] = "unsafe",
             ["tui:themes:0:name"] = "bad\u001bname",
         }).Build();
-        (var controlCatalog, string controlDefaultId) = TuiThemeConfigurationLoader.Load(controls);
+        (var controlCatalog, var controlDefaultId) = TuiThemeConfigurationLoader.Load(controls);
         Assert.Equal("system", controlDefaultId);
         Assert.DoesNotContain('\u001b', Assert.Single(controlCatalog.Warnings));
 
@@ -1984,7 +1984,7 @@ public static class Milestone1Tests
             ["tui:themes:0:id"] = "invalid-color",
             ["tui:themes:0:styles:Brand:foreground"] = "chartreuse",
         }).Build();
-        (var colorCatalog, string colorDefaultId) = TuiThemeConfigurationLoader.Load(invalidColor);
+        (var colorCatalog, var colorDefaultId) = TuiThemeConfigurationLoader.Load(invalidColor);
         Assert.Equal("system", colorDefaultId);
         Assert.Contains("Unsupported theme color", Assert.Single(colorCatalog.Warnings), StringComparison.Ordinal);
 
@@ -2022,12 +2022,12 @@ public static class Milestone1Tests
             ["tui:themes:1:name"] = "Invalid Theme",
         }).Build();
 
-        (var catalog, string defaultId) = TuiThemeConfigurationLoader.Load(configuration);
+        (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
         var preferences = new SessionThemePreferences(catalog, defaultId);
 
         Assert.Equal("valid-theme", preferences.ActiveTheme.Theme.Id);
         Assert.Contains(catalog.Themes, theme => theme.Theme.Id == "valid-theme");
-        string warning = Assert.Single(catalog.Warnings);
+        var warning = Assert.Single(catalog.Warnings);
         Assert.Contains("Configured theme '/theme' is invalid and was ignored.", warning, StringComparison.Ordinal);
         Assert.Contains("Theme ids may contain only", warning, StringComparison.Ordinal);
     }
@@ -2036,8 +2036,8 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_ThemeCommands_PersistUserDefault()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(directory, "config.json");
+        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(directory, "config.json");
         Directory.CreateDirectory(directory);
         const string initialConfiguration = """
             {
@@ -2069,8 +2069,8 @@ public static class Milestone1Tests
 
             await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
-            string persistedText = await File.ReadAllTextAsync(configurationPath);
-            using JsonDocument persisted = JsonDocument.Parse(persistedText, new JsonDocumentOptions
+            var persistedText = await File.ReadAllTextAsync(configurationPath);
+            using var persisted = JsonDocument.Parse(persistedText, new JsonDocumentOptions
             {
                 AllowTrailingCommas = true,
                 CommentHandling = JsonCommentHandling.Skip,
@@ -2083,7 +2083,7 @@ public static class Milestone1Tests
             var restartedConfiguration = new ConfigurationBuilder()
                 .AddJsonFile(configurationPath)
                 .Build();
-            (var restartedCatalog, string restartedDefault) =
+            (var restartedCatalog, var restartedDefault) =
                 TuiThemeConfigurationLoader.Load(restartedConfiguration);
             var restartedPreferences = new SessionThemePreferences(restartedCatalog, restartedDefault);
             Assert.Equal("forge-dark", restartedPreferences.ActiveTheme.Theme.Id);
@@ -2105,8 +2105,8 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ThemePreferenceStore_ExistingDefault_PreservesConfigurationSyntax()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(directory, "config.json");
+        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(directory, "config.json");
         Directory.CreateDirectory(directory);
         const string initialConfiguration = """
             {
@@ -2125,8 +2125,8 @@ public static class Milestone1Tests
 
             await store.SetDefaultThemeAsync("ocean");
 
-            string persisted = await File.ReadAllTextAsync(configurationPath);
-            string expected = initialConfiguration.Replace("\"system\"", "\"ocean\"", StringComparison.Ordinal);
+            var persisted = await File.ReadAllTextAsync(configurationPath);
+            var expected = initialConfiguration.Replace("\"system\"", "\"ocean\"", StringComparison.Ordinal);
             Assert.Equal(expected, persisted);
         }
         finally
@@ -2139,8 +2139,8 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_ThemePersistenceFailure_LeavesSelectionUnchanged()
     {
-        string directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
-        string configurationPath = Path.Combine(directory, "config.json");
+        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(directory, "config.json");
         Directory.CreateDirectory(directory);
         await File.WriteAllTextAsync(configurationPath, "[]", new UTF8Encoding(false));
         try
@@ -2318,7 +2318,7 @@ public static class Milestone1Tests
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
         var segments = new List<TuiTextSegment>();
-        string proposedText = " PLAN: revision 1"
+        var proposedText = " PLAN: revision 1"
             + Environment.NewLine
             + " \u2502 Update the formatter."
             + Environment.NewLine
@@ -2328,7 +2328,7 @@ public static class Milestone1Tests
             + Environment.NewLine
             + " \u2514 1. Add shared block - Tool, plan, and semantic text align."
             + Environment.NewLine;
-        string approvedText = " PLAN: auto-approved"
+        var approvedText = " PLAN: auto-approved"
             + Environment.NewLine
             + " \u2502 Revision: 1"
             + Environment.NewLine
@@ -2378,7 +2378,7 @@ public static class Milestone1Tests
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
         var segments = new List<TuiTextSegment>();
-        string text = " MUTATION: Applied under the active approval policy"
+        var text = " MUTATION: Applied under the active approval policy"
             + Environment.NewLine
             + " \u2502 Mutation applied: src/File.cs"
             + Environment.NewLine
@@ -2413,11 +2413,11 @@ public static class Milestone1Tests
         var occurredAt = DateTimeOffset.UtcNow;
         var runId = RunId.New();
         var segments = new List<TuiTextSegment>();
-        string startedText = " MUTATION: Preparing preview"
+        var startedText = " MUTATION: Preparing preview"
             + Environment.NewLine
             + " \u2514 Attempt: 1/2"
             + Environment.NewLine;
-        string repairText = " MUTATION: Retrying proposal with correction evidence"
+        var repairText = " MUTATION: Retrying proposal with correction evidence"
             + Environment.NewLine
             + " \u2502 Attempt: 2/2"
             + Environment.NewLine
@@ -2641,10 +2641,10 @@ public static class Milestone1Tests
             await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
-            RunId firstRunId = RunId.New();
-            SemanticCheckId firstCheckId = SemanticCheckId.New();
-            RunId secondRunId = RunId.New();
-            SemanticCheckId secondCheckId = SemanticCheckId.New();
+            var firstRunId = RunId.New();
+            var firstCheckId = SemanticCheckId.New();
+            var secondRunId = RunId.New();
+            var secondCheckId = SemanticCheckId.New();
             var occurredAt = DateTimeOffset.UtcNow;
             var firstStarted = new SemanticCheckStarted(
                 sessionId,
@@ -2674,7 +2674,7 @@ public static class Milestone1Tests
             await harness.EventStream.PublishAsync(secondStarted);
             await harness.EventStream.PublishAsync(firstCompleted);
 
-            bool keptSecondActivity = await WaitForConditionAsync(() =>
+            var keptSecondActivity = await WaitForConditionAsync(() =>
                 surface.Output.Contains(
                     "SEMANTIC CHECKS: first semantic check - completed",
                     StringComparison.Ordinal)
@@ -2777,7 +2777,7 @@ public static class Milestone1Tests
         Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "42")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
 
-        string newline = Environment.NewLine;
+        var newline = Environment.NewLine;
         Assert.Equal($"42{newline}{newline}", transcript.Text);
         Assert.Equal("Let me think... Now I know.", transcript.LatestReasoning);
     }
@@ -2787,7 +2787,7 @@ public static class Milestone1Tests
     public static void ConversationTranscript_ReasoningAcrossToolRound_OmitsThinkingMarker()
     {
         var sessionId = SessionId.New();
-        RunId runId = RunId.New();
+        var runId = RunId.New();
         var occurredAt = DateTimeOffset.UtcNow;
         var transcript = new ConversationTranscript(string.Empty);
         Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "look up a symbol")));
@@ -2799,7 +2799,7 @@ public static class Milestone1Tests
         Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "found it")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, runId, true)));
 
-        string newline = Environment.NewLine;
+        var newline = Environment.NewLine;
         Assert.DoesNotContain("THINKING", transcript.Text, StringComparison.Ordinal);
         Assert.Contains(
             " TOOLS: find_symbol - completed"
@@ -2824,7 +2824,7 @@ public static class Milestone1Tests
         Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "answer")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
 
-        string newline = Environment.NewLine;
+        var newline = Environment.NewLine;
         Assert.Equal($"answer{newline}{newline}", transcript.Text);
     }
 
@@ -2839,7 +2839,7 @@ public static class Milestone1Tests
         Assert.False(transcript.Apply(new ModelReasoningObserved(sessionId, occurredAt, "thinking...")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
 
-        string newline = Environment.NewLine;
+        var newline = Environment.NewLine;
         Assert.Equal($"{newline}{newline}", transcript.Text);
         Assert.DoesNotContain("Threadsmith:", transcript.Text, StringComparison.Ordinal);
     }
@@ -2868,7 +2868,7 @@ public static class Milestone1Tests
         Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "Found 3 references.")));
         Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, runId, true)));
 
-        string newline = Environment.NewLine;
+        var newline = Environment.NewLine;
         Assert.StartsWith(newline + " TOOLS: find_references - completed", transcript.Text, StringComparison.Ordinal);
         Assert.Contains($" TOOLS: find_references - completed{newline}   \u2514 no additional detail{newline}", transcript.Text, StringComparison.Ordinal);
         Assert.Contains("Found 3 references.", transcript.Text, StringComparison.Ordinal);
@@ -3207,7 +3207,7 @@ public static class Milestone1Tests
     public static async Task UiEventDispatcher_Flooding_CoalescesWithoutLoss()
     {
         var dispatcher = new UiEventDispatcher(32);
-        int rendered = 0;
+        var rendered = 0;
         var drain = dispatcher.DrainAsync((batch, _) =>
         {
             rendered += batch.Count;
@@ -3215,7 +3215,7 @@ public static class Milestone1Tests
         });
         var sessionId = SessionId.New();
 
-        for (int index = 0; index < 5000; index++)
+        for (var index = 0; index < 5000; index++)
         {
             await dispatcher.QueueAsync(
                 new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "x"));
@@ -3241,7 +3241,7 @@ public static class Milestone1Tests
         var tui = await controller.RenderAsync();
         using var writer = new StringWriter();
 
-        int exitCode = await new HeadlessShell(
+        var exitCode = await new HeadlessShell(
             harness.Dispatcher,
             harness.Projections,
             writer).RunAsync("CLI", "request");
@@ -3294,11 +3294,11 @@ public static class Milestone1Tests
             writer);
 
         // Act
-        int exitCode = await shell.RunAsync("CLI", "request");
+        var exitCode = await shell.RunAsync("CLI", "request");
 
         // Assert
         Assert.Equal(0, exitCode);
-        string output = writer.ToString();
+        var output = writer.ToString();
         Assert.DoesNotContain("approve this URL", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Tool web_fetch", output, StringComparison.Ordinal);
         Assert.Contains("Tool read_file: succeeded", output, StringComparison.Ordinal);
@@ -3308,7 +3308,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task SqliteEventStore_CompleteCatalog_RoundTripsDurably()
     {
-        string databasePath = Path.Combine(
+        var databasePath = Path.Combine(
             Path.GetTempPath(),
             $"threadsmith-m1-{Guid.NewGuid():N}.db");
         try
@@ -3365,7 +3365,7 @@ public static class Milestone1Tests
     {
         var sanitizer = new SecretOutputSanitizer();
 
-        string sanitized = sanitizer.Sanitize(input + "\u001b");
+        var sanitized = sanitizer.Sanitize(input + "\u001b");
 
         Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
         Assert.Contains("[REDACTED]", sanitized, StringComparison.Ordinal);
@@ -3442,7 +3442,7 @@ public static class Milestone1Tests
             _whitespaceEmitted.TrySetResult();
             await _releaseAnswer.Task.WaitAsync(cancellationToken);
             yield return new ModelChunk { Text = "answer" };
-            for (int index = 0; index < _trailingChunkCount; index++)
+            for (var index = 0; index < _trailingChunkCount; index++)
             {
                 yield return new ModelChunk { Text = index.ToString(CultureInfo.InvariantCulture) };
             }
@@ -3558,7 +3558,7 @@ public static class Milestone1Tests
                 CancellationToken.None)));
             if (selections is not null)
             {
-                foreach (int selection in selections)
+                foreach (var selection in selections)
                 {
                     _selections.Enqueue(selection);
                 }
@@ -3709,7 +3709,7 @@ public static class Milestone1Tests
                 return Task.CompletedTask;
             }
 
-            string rendered = TuiSessionStatusFormatter.Format(status, _statusWidth, separator);
+            var rendered = TuiSessionStatusFormatter.Format(status, _statusWidth, separator);
             if (string.IsNullOrEmpty(rendered))
             {
                 return Task.CompletedTask;
@@ -3749,7 +3749,7 @@ public static class Milestone1Tests
             lock (_gate)
             {
                 _output.AppendLine(title);
-                for (int index = 0; index < choices.Count; index++)
+                for (var index = 0; index < choices.Count; index++)
                 {
                     _output.AppendLine($"{index + 1}. {choices[index]}");
                 }

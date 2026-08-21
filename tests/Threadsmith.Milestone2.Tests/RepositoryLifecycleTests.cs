@@ -102,9 +102,9 @@ public static class RepositoryLifecycleTests
         Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.CurrentPolicy);
         await policy.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo);
 
-        using JsonDocument firstConfig = JsonDocument.Parse(
+        using var firstConfig = JsonDocument.Parse(
             await File.ReadAllTextAsync(firstRepository.ConfigurationPath));
-        using JsonDocument secondConfig = JsonDocument.Parse(
+        using var secondConfig = JsonDocument.Parse(
             await File.ReadAllTextAsync(secondRepository.ConfigurationPath));
         Assert.Equal(
             "alwaysTrustRepo",
@@ -123,7 +123,7 @@ public static class RepositoryLifecycleTests
         await using var link = await TemporaryDirectoryLink.CreateAsync(
             repository.RootPath,
             ".threadsmith");
-        string configurationPath = Path.Combine(link.LinkPath, "config.json");
+        var configurationPath = Path.Combine(link.LinkPath, "config.json");
         var policy = new MutationApprovalPolicyService(
             new ConfigurationBuilder().Build(),
             configurationPath);
@@ -144,7 +144,7 @@ public static class RepositoryLifecycleTests
         }
 
         await using var repository = await TemporaryRepository.CreateAsync();
-        string reservedPath = @"\\?\" + Path.Combine(repository.RootPath, "nul");
+        var reservedPath = @"\\?\" + Path.Combine(repository.RootPath, "nul");
         await File.WriteAllTextAsync(reservedPath, "ignored");
         try
         {
@@ -281,7 +281,7 @@ public static class RepositoryLifecycleTests
     public static async Task RepositoryLifecycle_PathEscape_IsRejected()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        string escapedConfig = """
+        var escapedConfig = """
             {
               "solution": { "path": "../outside.sln" },
               "editableRoots": [ "src" ]
@@ -306,7 +306,7 @@ public static class RepositoryLifecycleTests
         await File.WriteAllTextAsync(
             Path.Combine(linkedDirectory.TargetPath, "Outside.sln"),
             "Microsoft Visual Studio Solution File, Format Version 12.00");
-        string escapedConfig = $$"""
+        var escapedConfig = $$"""
             {
               "solution": { "path": "{{linkedDirectory.Name}}/Outside.sln" },
               "editableRoots": [ "src" ]
@@ -331,7 +331,7 @@ public static class RepositoryLifecycleTests
         await File.WriteAllTextAsync(
             Path.Combine(linkedDirectory.TargetPath, "Outside.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-        string solutionContent = $$"""
+        var solutionContent = $$"""
             Microsoft Visual Studio Solution File, Format Version 12.00
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Outside", "{{linkedDirectory.Name}}\Outside.csproj", "{33333333-3333-3333-3333-333333333333}"
             EndProject
@@ -358,13 +358,13 @@ public static class RepositoryLifecycleTests
     public static async Task RecordBaseline_ProhibitedGlobs_UseSegmentAwareSemantics()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        string nestedDirectory = Path.Combine(repository.RootPath, "src", "App", "Nested");
-        string generatedDirectory = Path.Combine(nestedDirectory, "generated");
+        var nestedDirectory = Path.Combine(repository.RootPath, "src", "App", "Nested");
+        var generatedDirectory = Path.Combine(nestedDirectory, "generated");
         Directory.CreateDirectory(generatedDirectory);
         await File.WriteAllTextAsync(Path.Combine(repository.RootPath, "src", "App", "Secret.cs"), "blocked");
         await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "Secret.cs"), "allowed");
         await File.WriteAllTextAsync(Path.Combine(generatedDirectory, "Blocked.cs"), "blocked");
-        string configuration = """
+        var configuration = """
             {
               "solution": { "path": "Sample.sln" },
               "editableRoots": [ "src" ],
@@ -415,7 +415,7 @@ public static class RepositoryLifecycleTests
             opened.WorkspaceId,
             repository.SolutionPath));
 
-        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
         Assert.Equal("Sample.sln", document.RootElement.GetProperty("solution").GetProperty("path").GetString());
         Assert.True(document.RootElement.GetProperty("custom").GetProperty("preserved").GetBoolean());
     }
@@ -445,7 +445,7 @@ public static class RepositoryLifecycleTests
             opened.WorkspaceId,
             repository.SolutionPath));
 
-        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
         var solution = Assert.Single(
             document.RootElement.EnumerateObject(),
             property => string.Equals(property.Name, "solution", StringComparison.OrdinalIgnoreCase));
@@ -484,7 +484,7 @@ public static class RepositoryLifecycleTests
 
         Assert.Null(opened.Configuration.SolutionPath);
         Assert.Contains(repository.SolutionPath, opened.SolutionCandidates);
-        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("solution").GetProperty("path").ValueKind);
         Assert.Equal("src", document.RootElement.GetProperty("editableRoots")[0].GetString());
     }
@@ -493,7 +493,7 @@ public static class RepositoryLifecycleTests
     [Fact]
     public static async Task RepositoryInitializer_CreatesMinimalConfigurationWithoutOverwrite()
     {
-        string repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-init-{Guid.NewGuid():N}");
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-init-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
         try
         {
@@ -507,7 +507,7 @@ public static class RepositoryLifecycleTests
             Assert.False(repeated.Created);
             Assert.True(after.HasConfigurationDirectory);
             Assert.False(after.ShouldOfferInitialization);
-            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(created.ConfigurationPath));
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(created.ConfigurationPath));
             Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("solution").GetProperty("path").ValueKind);
             Assert.Equal(JsonValueKind.Array, document.RootElement.GetProperty("tools").GetProperty("disabled").ValueKind);
         }
@@ -521,7 +521,7 @@ public static class RepositoryLifecycleTests
     [Fact]
     public static async Task RepositoryInitializer_LinkedConfigurationDirectory_IsRejected()
     {
-        string repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-init-link-{Guid.NewGuid():N}");
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-init-link-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
         try
         {
@@ -543,13 +543,13 @@ public static class RepositoryLifecycleTests
     public static async Task TuiRepositoryWorkflow_RememberedSolution_AutoLoadsWithoutPrompt()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        string secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
+        var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("Remembered solution");
-        int solutionPromptCount = 0;
+        var solutionPromptCount = 0;
 
         var remembered = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -566,7 +566,7 @@ public static class RepositoryLifecycleTests
         Assert.Equal(repository.SolutionPath, remembered.Solution.SolutionPath);
 
         using var output = new StringWriter();
-        int exitCode = await new HeadlessShell(dispatcher, harness.Projections, output)
+        var exitCode = await new HeadlessShell(dispatcher, harness.Projections, output)
             .InspectRepositoryAsync(
                 "Remembered CLI solution",
                 repository.RootPath,
@@ -585,7 +585,7 @@ public static class RepositoryLifecycleTests
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         using var output = new StringWriter();
 
-        int exitCode = await new HeadlessShell(
+        var exitCode = await new HeadlessShell(
             dispatcher,
             harness.Projections,
             output).InspectRepositoryAsync(
@@ -615,14 +615,14 @@ public static class RepositoryLifecycleTests
         await File.WriteAllTextAsync(
             repository.ConfigurationPath,
             "{ \"solution\": { \"path\": null }, \"editableRoots\": [ \"src\" ] }");
-        string secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
+        var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         using var output = new StringWriter();
 
-        int exitCode = await new HeadlessShell(
+        var exitCode = await new HeadlessShell(
             dispatcher,
             harness.Projections,
             output).InspectRepositoryAsync(
@@ -650,8 +650,8 @@ public static class RepositoryLifecycleTests
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI persisted trust");
-        int trustPromptCount = 0;
-        int solutionPromptCount = 0;
+        var trustPromptCount = 0;
+        var solutionPromptCount = 0;
 
         var result = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -684,7 +684,7 @@ public static class RepositoryLifecycleTests
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI trusted build");
-        int trustPromptCount = 0;
+        var trustPromptCount = 0;
 
         var result = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -716,8 +716,8 @@ public static class RepositoryLifecycleTests
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI trust upgrade");
-        int initialTrustPromptCount = 0;
-        int upgradePromptCount = 0;
+        var initialTrustPromptCount = 0;
+        var upgradePromptCount = 0;
 
         var result = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -750,15 +750,15 @@ public static class RepositoryLifecycleTests
         await File.WriteAllTextAsync(
             repository.ConfigurationPath,
             "{ \"solution\": { \"path\": null }, \"editableRoots\": [ \"src\" ] }");
-        string secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
+        var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI multiple solutions");
-        int trustPromptCount = 0;
-        int solutionPromptCount = 0;
+        var trustPromptCount = 0;
+        var solutionPromptCount = 0;
 
         var result = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -787,15 +787,15 @@ public static class RepositoryLifecycleTests
     public static async Task TuiRepositoryWorkflow_StartupOptions_BypassPrompts()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        string secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
+        var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI startup options");
-        int trustPromptCount = 0;
-        int solutionPromptCount = 0;
+        var trustPromptCount = 0;
+        var solutionPromptCount = 0;
 
         var result = await controller.OpenRepositoryWorkflowAsync(
             repository.RootPath,
@@ -818,7 +818,7 @@ public static class RepositoryLifecycleTests
         Assert.Equal(RepositoryTrustLevel.TrustedRead, result.Repository.Trust.Level);
         Assert.NotNull(result.Solution);
         Assert.Equal(secondSolutionPath, result.Solution.SolutionPath);
-        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(repository.ConfigurationPath));
         Assert.Equal("Second.sln", document.RootElement.GetProperty("solution").GetProperty("path").GetString());
     }
 
@@ -862,7 +862,7 @@ public static class RepositoryLifecycleTests
     public static async Task ConversationalShell_RememberedSolution_PrintsNotification()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        string secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
+        var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
@@ -888,11 +888,11 @@ public static class RepositoryLifecycleTests
     [Fact]
     public static async Task ConversationalShell_EmptyRepository_OffersInitialization()
     {
-        string repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-shell-init-{Guid.NewGuid():N}");
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-shell-init-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
         try
         {
-            bool configurationDirectoryExistedAtStartup =
+            var configurationDirectoryExistedAtStartup =
                 Directory.Exists(Path.Combine(repositoryPath, ".threadsmith"));
             Directory.CreateDirectory(Path.Combine(repositoryPath, ".threadsmith"));
             await using var harness = await RepositoryHarness.CreateAsync(repositoryPath);
@@ -991,7 +991,7 @@ public static class RepositoryLifecycleTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int selection = _selections.Count > 0
+            var selection = _selections.Count > 0
                 ? _selections.Dequeue()
                 : choices.Count - 1;
             return Task.FromResult(selection);
@@ -1078,7 +1078,7 @@ public static class RepositoryLifecycleTests
             string repositoryPath,
             bool useExternalDatabase = false)
         {
-            string databasePath = useExternalDatabase
+            var databasePath = useExternalDatabase
                 ? Path.Combine(Path.GetTempPath(), $"threadsmith-m2-facts-{Guid.NewGuid():N}.db")
                 : Path.Combine(repositoryPath, ".threadsmith", "facts.db");
             var facts = new SqliteRepositoryFactsStore($"Data Source={databasePath};Pooling=False");
@@ -1176,15 +1176,15 @@ public static class RepositoryLifecycleTests
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-            string name = requestedName ?? $"linked-{Guid.NewGuid():N}";
+            var name = requestedName ?? $"linked-{Guid.NewGuid():N}";
             if (name.Contains(Path.DirectorySeparatorChar)
                 || name.Contains(Path.AltDirectorySeparatorChar))
             {
                 throw new ArgumentException("Link names must be one path segment.", nameof(requestedName));
             }
 
-            string linkPath = Path.Combine(repositoryPath, name);
-            string targetPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-external-{Guid.NewGuid():N}");
+            var linkPath = Path.Combine(repositoryPath, name);
+            var targetPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-external-{Guid.NewGuid():N}");
             Directory.CreateDirectory(targetPath);
             try
             {
@@ -1218,8 +1218,8 @@ public static class RepositoryLifecycleTests
                     var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
                     var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
                     await process.WaitForExitAsync(cancellationToken);
-                    string output = await outputTask;
-                    string error = await errorTask;
+                    var output = await outputTask;
+                    var error = await errorTask;
                     if (process.ExitCode != 0)
                     {
                         throw new IOException(
@@ -1256,8 +1256,8 @@ public static class RepositoryLifecycleTests
                 Directory.Delete(LinkPath);
             }
 
-            string fullTargetPath = Path.GetFullPath(TargetPath);
-            string tempPath = Path.GetFullPath(Path.GetTempPath());
+            var fullTargetPath = Path.GetFullPath(TargetPath);
+            var tempPath = Path.GetFullPath(Path.GetTempPath());
             if (!fullTargetPath.StartsWith(tempPath, StringComparison.OrdinalIgnoreCase)
                 || !Path.GetFileName(fullTargetPath).StartsWith(
                     "threadsmith-m2-external-",
@@ -1292,17 +1292,17 @@ public static class RepositoryLifecycleTests
 
         public static async Task<TemporaryRepository> CreateAsync()
         {
-            string rootPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-{Guid.NewGuid():N}");
-            string appDirectory = Path.Combine(rootPath, "src", "App");
-            string libDirectory = Path.Combine(rootPath, "src", "Lib");
-            string configDirectory = Path.Combine(rootPath, ".threadsmith");
+            var rootPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-{Guid.NewGuid():N}");
+            var appDirectory = Path.Combine(rootPath, "src", "App");
+            var libDirectory = Path.Combine(rootPath, "src", "Lib");
+            var configDirectory = Path.Combine(rootPath, ".threadsmith");
             Directory.CreateDirectory(appDirectory);
             Directory.CreateDirectory(libDirectory);
             Directory.CreateDirectory(configDirectory);
             Directory.CreateDirectory(Path.Combine(appDirectory, "obj"));
-            string solutionPath = Path.Combine(rootPath, "Sample.sln");
-            string configurationPath = Path.Combine(configDirectory, "config.json");
-            string solutionContent = """
+            var solutionPath = Path.Combine(rootPath, "Sample.sln");
+            var configurationPath = Path.Combine(configDirectory, "config.json");
+            var solutionContent = """
                 Microsoft Visual Studio Solution File, Format Version 12.00
                 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
                 EndProject
@@ -1311,17 +1311,17 @@ public static class RepositoryLifecycleTests
                 Global
                 EndGlobal
                 """;
-            string appProjectContent = """
+            var appProjectContent = """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFrameworks>net10.0;net9.0</TargetFrameworks></PropertyGroup>
                 </Project>
                 """;
-            string libProjectContent = """
+            var libProjectContent = """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
                 </Project>
                 """;
-            string configurationContent = """
+            var configurationContent = """
                 {
                   "solution": { "path": "Sample.sln" },
                   "editableRoots": [ "src" ],
@@ -1340,8 +1340,8 @@ public static class RepositoryLifecycleTests
 
         public ValueTask DisposeAsync()
         {
-            string fullPath = Path.GetFullPath(RootPath);
-            string tempPath = Path.GetFullPath(Path.GetTempPath());
+            var fullPath = Path.GetFullPath(RootPath);
+            var tempPath = Path.GetFullPath(Path.GetTempPath());
             if (!fullPath.StartsWith(tempPath, StringComparison.OrdinalIgnoreCase)
                 || !Path.GetFileName(fullPath).StartsWith("threadsmith-m2-", StringComparison.Ordinal))
             {

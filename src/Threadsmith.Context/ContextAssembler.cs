@@ -287,7 +287,7 @@ public sealed class ContextAssembler : IContextAssembler
         activity?.SetTag("threadsmith.session.id", request.SessionId.Value.ToString("D"));
         activity?.SetTag("threadsmith.run.id", request.RunId.Value.ToString("D"));
         activity?.SetTag("threadsmith.context.phase", request.Phase.ToString());
-        int invalidated = await _evidence.ApplyInvalidationsAsync(
+        var invalidated = await _evidence.ApplyInvalidationsAsync(
             request.SessionId,
             cancellationToken);
         activity?.SetTag("threadsmith.context.evidence.invalidated", invalidated);
@@ -306,7 +306,7 @@ public sealed class ContextAssembler : IContextAssembler
                 request.ProhibitedPaths,
                 request.TrustGeneration,
                 cancellationToken);
-        string phaseInstructions = ContextPolicy.GetPhaseInstructions(request.Phase);
+        var phaseInstructions = ContextPolicy.GetPhaseInstructions(request.Phase);
         var sanitizedTask = request.Task with
         {
             Intent = _sanitizer.Sanitize(request.Task.Intent),
@@ -320,12 +320,12 @@ public sealed class ContextAssembler : IContextAssembler
                 .Select(_sanitizer.Sanitize)
                 .ToArray(),
         };
-        string taskJson = Escape(JsonSerializer.Serialize(sanitizedTask));
+        var taskJson = Escape(JsonSerializer.Serialize(sanitizedTask));
         string[] currentTurnHostContext =
         [
             .. request.CurrentTurnHostContext.Select(_sanitizer.Sanitize),
         ];
-        string structuredTaskStateJson = Escape(JsonSerializer.Serialize(new
+        var structuredTaskStateJson = Escape(JsonSerializer.Serialize(new
         {
             sanitizedTask.AcceptanceCriteria,
             sanitizedTask.UserConstraints,
@@ -350,7 +350,7 @@ public sealed class ContextAssembler : IContextAssembler
                     .ToArray(),
                 PlannedFiles = affectedPaths.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
             };
-        string governedState = JsonSerializer.Serialize(new
+        var governedState = JsonSerializer.Serialize(new
         {
             Phase = request.Phase.ToString(),
             ConversationHistoryIncluded = conversation.Mode == ConversationContextMode.ConversationAware,
@@ -367,11 +367,11 @@ public sealed class ContextAssembler : IContextAssembler
                 Description = schema.Description,
                 ArgumentsJsonSchema = schema.JsonSchema,
             }));
-        string toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
-        string toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
+        var toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
+        var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
             ? ModelToolCanonicalizer.RenderText(canonicalTools)
             : string.Empty;
-        string outputSchema = request.Phase switch
+        var outputSchema = request.Phase switch
         {
             RunPhase.EvidenceCollection =>
                 "Return ordinary assistant text for conversation or read-only answers. For a repository change "
@@ -396,7 +396,7 @@ public sealed class ContextAssembler : IContextAssembler
                 + "expectedOutcome:string,validation:string[]}],risks:string[],outstandingQuestions:string[]}}. "
                 + "Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds omit it.",
         };
-        string appendContent = string.Join(
+        var appendContent = string.Join(
             '\n',
             instructionBundle.Sources.Select(source => source.Kind == RepositoryInstructionSourceKind.PromptAppend
                 ? $"<project_context id=\"{Escape(source.Id)}\" version=\"{Escape(source.Version)}\">\n"
@@ -425,8 +425,8 @@ public sealed class ContextAssembler : IContextAssembler
             ["wireFraming"] = 0,
             ["outputSchema"] = TokenEstimator.Estimate(outputSchema),
         };
-        int fixedTokens = tokensByCategory.Values.Sum();
-        int optionalConversationTokens = tokensByCategory["recentTurns"]
+        var fixedTokens = tokensByCategory.Values.Sum();
+        var optionalConversationTokens = tokensByCategory["recentTurns"]
             + tokensByCategory["conversationSummary"]
             + tokensByCategory["retrievedMemory"];
         var allowedKinds = ContextPolicy.GetAllowedKinds(request.Phase);
@@ -437,8 +437,8 @@ public sealed class ContextAssembler : IContextAssembler
             .ThenBy(item => item.CollectedAt)
             .ThenBy(item => item.EvidenceId.Value)];
         var workloadClass = ResolveWorkloadClass(request.Phase);
-        int tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
-        int requiredFixedTokens = fixedTokens - optionalConversationTokens;
+        var tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
+        var requiredFixedTokens = fixedTokens - optionalConversationTokens;
         if (requiredFixedTokens > tokenBudget)
         {
             throw new InvalidOperationException(
@@ -449,12 +449,12 @@ public sealed class ContextAssembler : IContextAssembler
         var evidenceProjections = new List<ContextEvidenceProjection>();
         var reductions = new List<string>();
         var selected = new List<Evidence>();
-        int selectedTokens = 0;
+        var selectedTokens = 0;
         var contentHashes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int tokens = item.EstimatedTokens > 0
+            var tokens = item.EstimatedTokens > 0
                 ? item.EstimatedTokens
                 : TokenEstimator.Estimate(item.Content);
             string? omissionReason = null;
@@ -468,7 +468,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
             else
             {
-                string hash = Convert.ToHexStringLower(
+                var hash = Convert.ToHexStringLower(
                     SHA256.HashData(Encoding.UTF8.GetBytes(item.Content)));
                 if (!contentHashes.Add(hash))
                 {
@@ -517,8 +517,8 @@ public sealed class ContextAssembler : IContextAssembler
             request.DefaultModelProfileId);
         tokenBudget = ResolveInputTokenBudget(modelResolution, _options.MaximumTokens);
 
-        string evidenceContent = BuildEvidenceContent(selected);
-        string modelInput = BuildModelInput(
+        var evidenceContent = BuildEvidenceContent(selected);
+        var modelInput = BuildModelInput(
             appendContent,
             phaseInstructions,
             taskJson,
@@ -527,7 +527,7 @@ public sealed class ContextAssembler : IContextAssembler
             evidenceContent,
             toolSchemas,
             outputSchema);
-        int totalTokens = EstimateWireInputTokens(
+        var totalTokens = EstimateWireInputTokens(
             modelInput,
             tokensByCategory["nativeToolSchemas"],
             tokensByCategory["wireFraming"]);
@@ -554,7 +554,7 @@ public sealed class ContextAssembler : IContextAssembler
 
             var removed = selected[^1];
             selected.RemoveAt(selected.Count - 1);
-            int projectionIndex = evidenceProjections.FindIndex(
+            var projectionIndex = evidenceProjections.FindIndex(
                 item => item.EvidenceId == removed.EvidenceId);
             const string reason = "Omitted during final reduction to include request framing within the token budget.";
             if (projectionIndex >= 0)
@@ -632,9 +632,9 @@ public sealed class ContextAssembler : IContextAssembler
             evidenceContent,
             toolSchemas,
             outputSchema);
-        int stablePrefixMessageCount = Math.Min(3, messages.Count);
-        string stablePrefixDigest = ComputeMessageDigest(messages.Take(stablePrefixMessageCount));
-        string cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:{request.Phase}:"
+        var stablePrefixMessageCount = Math.Min(3, messages.Count);
+        var stablePrefixDigest = ComputeMessageDigest(messages.Take(stablePrefixMessageCount));
+        var cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:{request.Phase}:"
             + $"{stablePrefixDigest}:{instructionBundle.Digest}:{toolInventoryDigest}";
         var layout = new ModelRequestLayout
         {
@@ -657,9 +657,9 @@ public sealed class ContextAssembler : IContextAssembler
         }
 
         totalTokens = wireEstimate.WireInputTokens;
-        int effectiveContextWindow = modelResolution?.ContextWindow ?? _options.MaximumTokens;
-        double contextPressurePercent = totalTokens * 100d / effectiveContextWindow;
-        bool compactionRecommended = contextPressurePercent
+        var effectiveContextWindow = modelResolution?.ContextWindow ?? _options.MaximumTokens;
+        var contextPressurePercent = totalTokens * 100d / effectiveContextWindow;
+        var compactionRecommended = contextPressurePercent
             >= _options.Conversation.CompactionPressurePercent;
         var inspection = new ContextInspectionProjection
         {
@@ -726,7 +726,7 @@ public sealed class ContextAssembler : IContextAssembler
         _evidenceCount.Record(selected.Count, new KeyValuePair<string, object?>(
             "threadsmith.context.phase",
             request.Phase.ToString()));
-        int reductionCount = reductions.Count + conversation.Reductions.Count;
+        var reductionCount = reductions.Count + conversation.Reductions.Count;
         if (reductionCount > 0)
         {
             _reductions.Add(reductionCount, new KeyValuePair<string, object?>(
@@ -813,13 +813,13 @@ public sealed class ContextAssembler : IContextAssembler
                 cancellationToken);
         var mode = request.ConversationModeOverride
             ?? (_conversationStore is null ? _options.Conversation.Mode : state.Mode);
-        string modeSource = request.ConversationModeOverride is not null
+        var modeSource = request.ConversationModeOverride is not null
             ? request.ConversationModeSource ?? "session-override"
             : _conversationStore is null ? "configuration" : "session-state";
         var current = request.CurrentMessageId is { } currentId
             ? state.Messages.FirstOrDefault(message => message.Id == currentId)
             : null;
-        string currentContent = _sanitizer.Sanitize(current?.Content ?? task.Intent);
+        var currentContent = _sanitizer.Sanitize(current?.Content ?? task.Intent);
         HashSet<ConversationMessageId> sensitiveMessageIds =
         [
             .. state.Messages
@@ -903,7 +903,7 @@ public sealed class ContextAssembler : IContextAssembler
                     .. task.AcceptanceCriteria.Select(item => item.Description),
                     .. task.UserConstraints ?? [],
                 ];
-                string query = string.Join(' ', queryParts);
+                var query = string.Join(' ', queryParts);
                 var retrieval = await _conversationRetriever.RetrieveAsync(
                     new ConversationRetrievalRequest
                     {
@@ -936,7 +936,7 @@ public sealed class ContextAssembler : IContextAssembler
             item.Validity != MemoryValidity.Active);
         foreach (var item in ineligibleMemory)
         {
-            string reason = item.Validity == MemoryValidity.Stale
+            var reason = item.Validity == MemoryValidity.Stale
                 ? "Repository-dependent memory is stale."
                 : $"Memory is {item.Validity}.";
             assembly.AddExcludedMemory(item, reason);
@@ -969,7 +969,7 @@ public sealed class ContextAssembler : IContextAssembler
             return fallbackBudget;
         }
 
-        int requestOutputTokenReserve = resolution.EffectiveRequestOutputTokenReserve;
+        var requestOutputTokenReserve = resolution.EffectiveRequestOutputTokenReserve;
         if (resolution.ContextWindow > 0
             && resolution.MaximumOutputTokens == 0
             && requestOutputTokenReserve == 0)
@@ -996,7 +996,7 @@ public sealed class ContextAssembler : IContextAssembler
     {
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
-        for (int index = 0; index + 1 < ordered.Length; index++)
+        for (var index = 0; index + 1 < ordered.Length; index++)
         {
             if (ordered[index].Role == ConversationRole.User
                 && ordered[index + 1].Role == ConversationRole.Assistant)
@@ -1051,7 +1051,7 @@ public sealed class ContextAssembler : IContextAssembler
         int position,
         string content)
     {
-        string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
         return new PromptAssetReference(id, $"sha256:{hash}", source, position, content.Length);
     }
 
@@ -1061,15 +1061,15 @@ public sealed class ContextAssembler : IContextAssembler
         '\n',
         selected.Select(item =>
         {
-            string digest = Convert.ToHexStringLower(
+            var digest = Convert.ToHexStringLower(
                 SHA256.HashData(Encoding.UTF8.GetBytes(item.Content)));
-            string sourcePath = item.Provenance.SourcePath is null
+            var sourcePath = item.Provenance.SourcePath is null
                 ? string.Empty
                 : $" path=\"{Escape(item.Provenance.SourcePath)}\"";
-            string revision = item.Provenance.RepositoryRevision is null
+            var revision = item.Provenance.RepositoryRevision is null
                 ? string.Empty
                 : $" revision=\"{Escape(item.Provenance.RepositoryRevision)}\"";
-            string invocation = item.Provenance.ToolInvocationId is null
+            var invocation = item.Provenance.ToolInvocationId is null
                 ? string.Empty
                 : $" tool_invocation=\"{item.Provenance.ToolInvocationId.Value.Value:D}\"";
             return $"<evidence id=\"sha256:{digest}\" kind=\"{item.Kind}\" "
@@ -1093,8 +1093,8 @@ public sealed class ContextAssembler : IContextAssembler
         string? workingScope,
         IReadOnlyList<PromptAppendSegment> appendSegments)
     {
-        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        string scope = string.IsNullOrWhiteSpace(workingScope)
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+        var scope = string.IsNullOrWhiteSpace(workingScope)
             ? string.Empty
             : Path.GetRelativePath(root, Path.GetFullPath(workingScope, root)).Replace('\\', '/');
         RepositoryInstructionSource[] sources = [.. appendSegments
@@ -1106,9 +1106,9 @@ public sealed class ContextAssembler : IContextAssembler
                 segment.Version,
                 segment.Content,
                 position))];
-        string identity = string.Join('\n', sources.Select(source =>
+        var identity = string.Join('\n', sources.Select(source =>
             $"{source.Id}|{source.Version}|{source.Position}"));
-        string digest = "sha256:"
+        var digest = "sha256:"
             + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
         return new RepositoryInstructionBundle
         {
@@ -1129,7 +1129,7 @@ public sealed class ContextAssembler : IContextAssembler
 
     private static string ComputeMessageDigest(IEnumerable<ModelMessage> messages)
     {
-        string encoded = JsonSerializer.Serialize(messages);
+        var encoded = JsonSerializer.Serialize(messages);
         return "sha256:"
             + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(encoded)));
     }
@@ -1139,7 +1139,7 @@ public sealed class ContextAssembler : IContextAssembler
     {
         return [.. messages.Select(message =>
         {
-            string content = string.Concat(message.Content.Select(part => part.Content));
+            var content = string.Concat(message.Content.Select(part => part.Content));
             var volatility = message.SectionId switch
             {
                 "host-policy" => ContextVolatilityClass.Process,
@@ -1168,7 +1168,7 @@ public sealed class ContextAssembler : IContextAssembler
         string toolSchemas,
         string outputSchema)
     {
-        string repositoryInstructions = string.IsNullOrWhiteSpace(appendContent)
+        var repositoryInstructions = string.IsNullOrWhiteSpace(appendContent)
             ? "No repository instruction assets apply to this working scope."
             : appendContent;
         var messages = new List<ModelMessage>
@@ -1422,7 +1422,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         public void RemoveSummaryItem(ConversationMemoryId id, string reason)
         {
-            int index = _summary.FindIndex(item => item.Id == id);
+            var index = _summary.FindIndex(item => item.Id == id);
             if (index < 0)
             {
                 return;
@@ -1451,7 +1451,7 @@ public sealed class ContextAssembler : IContextAssembler
                 return true;
             }
 
-            int summaryIndex = _summary.FindLastIndex(item => MemoryPreservationOrder(item.Kind) >= 4);
+            var summaryIndex = _summary.FindLastIndex(item => MemoryPreservationOrder(item.Kind) >= 4);
             if (summaryIndex >= 0)
             {
                 var removed = _summary[summaryIndex];

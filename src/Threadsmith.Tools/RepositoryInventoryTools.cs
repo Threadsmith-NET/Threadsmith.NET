@@ -63,8 +63,8 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     private static void ValidateDiffRequest(GitDiffRequest input)
     {
         var mode = input.Mode ?? GitComparisonMode.WorkingTree;
-        int maximumEntries = input.MaximumEntries ?? 200;
-        int maximumPatchCharacters = input.MaximumPatchCharacters ?? 131072;
+        var maximumEntries = input.MaximumEntries ?? 200;
+        var maximumPatchCharacters = input.MaximumPatchCharacters ?? 131072;
         if (maximumEntries is < 1 or > 2000)
         {
             throw new ToolArgumentValidationException("maximumEntries must be between 1 and 2000; omit it or pass null to use the default 200.");
@@ -131,7 +131,7 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
-        string revision = NormalizeRevisionOrDefault(input.Revision);
+        var revision = NormalizeRevisionOrDefault(input.Revision);
         var result = await _service.LogAsync(
             context.Invocation.RepositoryPath,
             input,
@@ -145,8 +145,8 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
     /// <inheritdoc />
     protected override void ValidateInput(GitLogRequest input)
     {
-        string revision = NormalizeRevisionOrDefault(input.Revision);
-        int maximumCommits = input.MaximumCommits ?? 50;
+        var revision = NormalizeRevisionOrDefault(input.Revision);
+        var maximumCommits = input.MaximumCommits ?? 50;
         ValidateRevision(revision, nameof(input.Revision));
         if (maximumCommits is < 1 or > 500)
         {
@@ -272,7 +272,7 @@ public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
-        string revision = NormalizeRevisionOrDefault(input.Revision);
+        var revision = NormalizeRevisionOrDefault(input.Revision);
         var result = await _service.BlameAsync(
             context.Invocation.RepositoryPath,
             input,
@@ -430,7 +430,7 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryRequest, DotNetInv
         {
             RepositoryPath = context.Invocation.RepositoryPath,
         };
-        foreach (string resourcePath in _service.GetResourcePaths(effective))
+        foreach (var resourcePath in _service.GetResourcePaths(effective))
         {
             _ = ToolPathRules.NormalizeAndValidate(resourcePath, context.Invocation);
         }
@@ -495,7 +495,7 @@ internal static class RepositoryInventoryToolPolicy
         ToolInvocationContext context)
         where TInput : class
     {
-        foreach (string resourcePath in ((ITool)tool).GetResourcePaths(input, context))
+        foreach (var resourcePath in ((ITool)tool).GetResourcePaths(input, context))
         {
             _ = ToolPathRules.NormalizeAndValidate(resourcePath, context);
         }
@@ -513,8 +513,8 @@ internal static class RepositoryInventoryToolPolicy
         }
 
         GitDiffEntry[] entries = [.. result.Entries.Where(entry => IsAllowed(entry, context))];
-        bool withheldPatch = IsRecursiveScopeRestricted(context) && result.Patch.Length > 0;
-        bool omittedEntries = entries.Length != result.Entries.Count;
+        var withheldPatch = IsRecursiveScopeRestricted(context) && result.Patch.Length > 0;
+        var omittedEntries = entries.Length != result.Entries.Count;
         return result with
         {
             Entries = entries,
@@ -549,7 +549,7 @@ internal static class RepositoryInventoryToolPolicy
             return result;
         }
 
-        int patchStart = result.Content.IndexOf("diff --git ", StringComparison.Ordinal);
+        var patchStart = result.Content.IndexOf("diff --git ", StringComparison.Ordinal);
         if (patchStart < 0)
         {
             return result;
@@ -603,7 +603,7 @@ internal static class RepositoryInventoryToolPolicy
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
         return !context.ApprovedRoots.Any(root =>
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot))
                 .Equals(repositoryRoot, comparison));

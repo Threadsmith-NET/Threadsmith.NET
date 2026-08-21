@@ -72,7 +72,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
             throw new ArgumentOutOfRangeException(nameof(query), "Skill search result limit must be 1-500.");
         }
 
-        string? text = string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim();
+        var text = string.IsNullOrWhiteSpace(query.Text) ? null : query.Text.Trim();
         return Snapshot.Candidates
             .Where(item => query.SkillId is null
                 || string.Equals(item.Metadata.SkillId.Value, query.SkillId.Value, StringComparison.Ordinal))
@@ -89,8 +89,8 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     public SkillCatalogCandidate Resolve(string selector)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
-        string normalized = NormalizeClaudeSelector(selector);
-        SkillSelector parsed = SkillSelector.Parse(normalized);
+        var normalized = NormalizeClaudeSelector(selector);
+        var parsed = SkillSelector.Parse(normalized);
         SkillCatalogCandidate[] matches =
         [
             .. Snapshot.Candidates
@@ -123,8 +123,8 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
         string selector,
         CancellationToken cancellationToken = default)
     {
-        string normalized = NormalizeClaudeSelector(selector);
-        SkillSelector parsed = SkillSelector.Parse(normalized);
+        var normalized = NormalizeClaudeSelector(selector);
+        var parsed = SkillSelector.Parse(normalized);
         if (!parsed.SkillId.StartsWith("claude.", StringComparison.Ordinal))
         {
             return _native is IAsyncSkillCatalog asynchronous
@@ -134,7 +134,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
 
         var source = ResolveClaudeSource(parsed);
         var activated = await _claude.ActivateAsync(source, cancellationToken);
-        string digest = activated.Candidate.Identity.Digest
+        var digest = activated.Candidate.Identity.Digest
             ?? throw new InvalidDataException("Claude skill activation did not produce an exact digest.");
         if (parsed.Digest is not null
             && !string.Equals(parsed.Digest, digest, StringComparison.OrdinalIgnoreCase))
@@ -159,7 +159,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
                 : candidate;
         }
 
-        string key = candidate.Identity.Digest.Value;
+        var key = candidate.Identity.Digest.Value;
         if (!_snapshots.ContainsKey(key))
         {
             throw new KeyNotFoundException("The activated Claude skill snapshot is no longer available.");
@@ -195,14 +195,14 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(candidate);
-        string selector = string.Equals(
+        var selector = string.Equals(
             candidate.Identity.Digest.Value,
             PendingDigest,
             StringComparison.Ordinal)
             ? $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
             : FormatSelector(candidate);
         var exact = await ResolveAsync(selector, cancellationToken);
-        string digest = exact.Identity.Digest.Value;
+        var digest = exact.Identity.Digest.Value;
         var snapshot = _snapshots[digest];
         return (exact, snapshot);
     }
@@ -226,7 +226,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
 
     private ClaudeSkillCandidate ResolveClaudeSource(SkillSelector selector)
     {
-        string name = selector.SkillId["claude.".Length..];
+        var name = selector.SkillId["claude.".Length..];
         ClaudeSkillCandidate[] matches =
         [
             .. _claude.Candidates
@@ -249,7 +249,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
 
     private static SkillCatalogCandidate ProjectSnapshot(ClaudeSkillSnapshot snapshot)
     {
-        string digest = snapshot.Candidate.Identity.Digest
+        var digest = snapshot.Candidate.Identity.Digest
             ?? throw new InvalidDataException("Claude skill snapshot has no digest.");
         return Project(snapshot.Candidate, digest, snapshot.PackageRoot, snapshot.Files);
     }
@@ -260,7 +260,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
         string packageRoot,
         IReadOnlyList<ClaudeSkillSnapshotFile> files)
     {
-        string skillId = $"claude.{source.Identity.Name}";
+        var skillId = $"claude.{source.Identity.Name}";
         SkillAssetMetadata[] assets =
         [
             .. files.Select(file => new SkillAssetMetadata
@@ -335,13 +335,13 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
 
     private static string NormalizeClaudeSelector(string selector)
     {
-        string value = selector.Trim();
+        var value = selector.Trim();
         if (!value.StartsWith("claude:", StringComparison.OrdinalIgnoreCase))
         {
             return value;
         }
 
-        string[] parts = value.Split(':', 3, StringSplitOptions.TrimEntries);
+        var parts = value.Split(':', 3, StringSplitOptions.TrimEntries);
         if (parts.Length != 3 || !Enum.TryParse(parts[1], ignoreCase: true, out SkillScope scope))
         {
             throw new ArgumentException("Claude skill selector must be claude:<scope>:<name>.", nameof(selector));
@@ -393,7 +393,7 @@ public sealed class CompatibleSkillPackageVerifier : ISkillPackageVerifier
         {
             (var exact, _) = await _catalog.RevalidateAsync(candidate, cancellationToken);
             var policy = _policy.Snapshot;
-            string digest = exact.Identity.Digest.Value;
+            var digest = exact.Identity.Digest.Value;
             if (exact.VerificationReason.Contains("unsupported runtime behavior", StringComparison.Ordinal))
             {
                 return exact with
@@ -404,12 +404,12 @@ public sealed class CompatibleSkillPackageVerifier : ISkillPackageVerifier
                 };
             }
 
-            string allowlist = string.Join(
+            var allowlist = string.Join(
                 '|',
                 digest,
                 exact.Metadata.Publisher,
                 exact.Provenance.Source);
-            string selector = $"{exact.Provenance.Scope}:{exact.Metadata.SkillId.Value}"
+            var selector = $"{exact.Provenance.Scope}:{exact.Metadata.SkillId.Value}"
                 + $"@{exact.Metadata.Version}+{digest}";
             if (policy.DeniedSkillIds.Contains(exact.Metadata.SkillId.Value)
                 || policy.DeniedPublishers.Contains(exact.Metadata.Publisher)
@@ -423,8 +423,8 @@ public sealed class CompatibleSkillPackageVerifier : ISkillPackageVerifier
                 };
             }
 
-            bool allowlisted = policy.AllowlistedDigests.Contains(allowlist);
-            bool enabled = allowlisted && !policy.DisabledSelectors.Contains(selector);
+            var allowlisted = policy.AllowlistedDigests.Contains(allowlist);
+            var enabled = allowlisted && !policy.DisabledSelectors.Contains(selector);
             return exact with
             {
                 Verification = allowlisted
@@ -498,7 +498,7 @@ public sealed class CompatibleSkillContentLoader : ISkillContentLoader
         }
 
         var segments = new List<SkillContextSegment>();
-        int remaining = maximumTokens;
+        var remaining = maximumTokens;
         AddSegment("SKILL.md", snapshot.Instructions, required: true);
         foreach (var resource in snapshot.Resources.OrderBy(item => item.Key, StringComparer.Ordinal))
         {
@@ -509,8 +509,8 @@ public sealed class CompatibleSkillContentLoader : ISkillContentLoader
 
         void AddSegment(string path, string content, bool required)
         {
-            string sanitized = _sanitizer.Sanitize(content);
-            int tokens = Math.Max(1, (sanitized.Length + 3) / 4);
+            var sanitized = _sanitizer.Sanitize(content);
+            var tokens = Math.Max(1, (sanitized.Length + 3) / 4);
             if (tokens > remaining)
             {
                 if (required)

@@ -291,13 +291,13 @@ public static class CurrentUserUrlRecognizer
     {
         ArgumentNullException.ThrowIfNull(rawMessage);
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumUrlCharacters, 1);
-        int length = Math.Min(rawMessage.Length, MaximumScannedCharacters);
+        var length = Math.Min(rawMessage.Length, MaximumScannedCharacters);
         var results = new List<RecognizedUserUrl>(MaximumCandidates);
         var digests = new HashSet<string>(StringComparer.Ordinal);
-        int searchIndex = 0;
+        var searchIndex = 0;
         while (searchIndex < length && results.Count < MaximumCandidates)
         {
-            int start = rawMessage.IndexOf("https://", searchIndex, length - searchIndex, StringComparison.OrdinalIgnoreCase);
+            var start = rawMessage.IndexOf("https://", searchIndex, length - searchIndex, StringComparison.OrdinalIgnoreCase);
             if (start < 0)
             {
                 break;
@@ -309,22 +309,22 @@ public static class CurrentUserUrlRecognizer
                 continue;
             }
 
-            int end = start;
+            var end = start;
             while (end < length && !IsTerminator(rawMessage[end]))
             {
                 end++;
             }
 
-            bool scanBoundaryCutsCandidate = end == length
+            var scanBoundaryCutsCandidate = end == length
                 && length < rawMessage.Length;
             searchIndex = Math.Max(end, start + "https://".Length);
-            bool apostropheCutsCandidate = end < length && rawMessage[end] == '\'';
+            var apostropheCutsCandidate = end < length && rawMessage[end] == '\'';
             if (scanBoundaryCutsCandidate || apostropheCutsCandidate)
             {
                 continue;
             }
 
-            string candidate = TrimTerminalPunctuation(rawMessage[start..end]);
+            var candidate = TrimTerminalPunctuation(rawMessage[start..end]);
             if (candidate.Length == 0)
             {
                 continue;
@@ -333,7 +333,7 @@ public static class CurrentUserUrlRecognizer
             try
             {
                 var normalized = WebFetchUrlPolicy.Normalize(candidate, maximumUrlCharacters);
-                string digest = WebFetchUrlPolicy.Digest(normalized);
+                var digest = WebFetchUrlPolicy.Digest(normalized);
                 if (digests.Add(digest))
                 {
                     results.Add(new RecognizedUserUrl(normalized, digest, results.Count + 1));
@@ -359,7 +359,7 @@ public static class CurrentUserUrlRecognizer
             return true;
         }
 
-        char preceding = rawMessage[start - 1];
+        var preceding = rawMessage[start - 1];
         return char.IsWhiteSpace(preceding)
             || char.IsControl(preceding)
             || preceding is '(' or '[' or '{' or '<' or '"' or '\'';
@@ -374,7 +374,7 @@ public static class CurrentUserUrlRecognizer
 
     private static string TrimTerminalPunctuation(string candidate)
     {
-        int length = candidate.Length;
+        var length = candidate.Length;
         while (length > 0 && candidate[length - 1] is '.' or ',' or ';' or '!')
         {
             length--;
@@ -390,8 +390,8 @@ public static class CurrentUserUrlRecognizer
     {
         while (length > 0 && candidate[length - 1] == closing)
         {
-            int openings = candidate.AsSpan(0, length).Count(opening);
-            int closings = candidate.AsSpan(0, length).Count(closing);
+            var openings = candidate.AsSpan(0, length).Count(opening);
+            var closings = candidate.AsSpan(0, length).Count(closing);
             if (closings <= openings)
             {
                 break;
@@ -473,7 +473,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
         var options = _options.Current;
         var normalizedUrl = WebFetchUrlPolicy.Normalize(exactUrl.AbsoluteUri, options.MaximumUrlCharacters);
-        string id = CreateOpaqueId();
+        var id = CreateOpaqueId();
         lock (_gate)
         {
             PruneCore();
@@ -520,7 +520,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            int removed = _userReferences.RemoveWhere(item => item.Value.SessionId == sessionId);
+            var removed = _userReferences.RemoveWhere(item => item.Value.SessionId == sessionId);
             removed += _invocationGrants.RemoveWhere(item => item.Value.SessionId == sessionId);
             foreach ((var activeSessionId, var activeRunId) in _activeRuns.Keys
                 .Where(item => item.SessionId == sessionId && item.RunId != runId)
@@ -540,15 +540,15 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 return [];
             }
 
-            string repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
-            string policyFingerprint = CreatePolicyFingerprint(policyContext);
+            var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
+            var policyFingerprint = CreatePolicyFingerprint(policyContext);
             var now = DateTimeOffset.UtcNow;
             var expiresAt = now + options.ReferenceLifetime;
             var issued = new List<UserUrlReference>(candidates.Count);
             foreach (var candidate in candidates)
             {
                 MakeReferenceCapacityCore();
-                string id = CreateOpaqueId();
+                var id = CreateOpaqueId();
                 _userReferences[id] = new UserMessageReference(
                     repositoryIdentity,
                     candidate.Url,
@@ -603,8 +603,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             throw new WebFetchException(WebFetchFailureKind.InvalidRequest, "A direct fetch chain cannot contain duplicate URLs.");
         }
 
-        string repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
-        string groupId = CreateOpaqueId();
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
+        var groupId = CreateOpaqueId();
         lock (_gate)
         {
             PruneCore();
@@ -614,7 +614,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             }
 
             var expiresAt = DateTimeOffset.UtcNow + options.ReferenceLifetime;
-            for (int index = 0; index < normalizedUrls.Length; index++)
+            for (var index = 0; index < normalizedUrls.Length; index++)
             {
                 _directGrants[digests[index]] = new DirectGrant(
                     repositoryIdentity,
@@ -648,7 +648,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
-        string repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
         lock (_gate)
         {
             PruneCore();
@@ -696,7 +696,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             }
 
             var uri = WebFetchUrlPolicy.Normalize(request.Url ?? string.Empty, _options.Current.MaximumUrlCharacters);
-            string digest = WebFetchUrlPolicy.Digest(uri);
+            var digest = WebFetchUrlPolicy.Digest(uri);
             if (_invocationGrants.TryGetValue(context.ToolInvocationId, out var invocationGrant)
                 && invocationGrant.SessionId == context.SessionId
                 && invocationGrant.RunId == context.RunId
@@ -727,7 +727,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             string[] redirectGrantDigests = [.. _directGrants
                 .Where(item => string.Equals(item.Value.GroupId, grant.GroupId, StringComparison.Ordinal))
                 .Select(item => item.Key)];
-            foreach (string redirectGrantDigest in redirectGrantDigests)
+            foreach (var redirectGrantDigest in redirectGrantDigests)
             {
                 _directGrants.Remove(redirectGrantDigest);
             }
@@ -745,8 +745,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     {
         ArgumentNullException.ThrowIfNull(context);
         var normalized = WebFetchUrlPolicy.Normalize(url, _options.Current.MaximumUrlCharacters);
-        string digest = WebFetchUrlPolicy.Digest(normalized);
-        string repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        var digest = WebFetchUrlPolicy.Digest(normalized);
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
         lock (_gate)
         {
             PruneCore();
@@ -778,7 +778,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(exactUrl);
         var normalized = WebFetchUrlPolicy.Normalize(exactUrl.AbsoluteUri, _options.Current.MaximumUrlCharacters);
-        string digest = WebFetchUrlPolicy.Digest(normalized);
+        var digest = WebFetchUrlPolicy.Digest(normalized);
         lock (_gate)
         {
             PruneCore();
@@ -807,7 +807,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     {
         lock (_gate)
         {
-            int removed = _searchReferences.RemoveWhere(item =>
+            var removed = _searchReferences.RemoveWhere(item =>
                     item.Value.SessionId == sessionId && item.Value.ProducingRunId == runId)
                 + _userReferences.RemoveWhere(item =>
                     item.Value.SessionId == sessionId && item.Value.RunId == runId)
@@ -850,7 +850,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            bool active = _activeRuns.Count > 0 || _directGrants.Count > 0;
+            var active = _activeRuns.Count > 0 || _directGrants.Count > 0;
             return new WebFetchActivationStatus
             {
                 Active = active,
@@ -892,7 +892,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     public IReadOnlyList<string> GetDirectRouteHosts(string url)
     {
         var normalized = WebFetchUrlPolicy.Normalize(url, _options.Current.MaximumUrlCharacters);
-        string digest = WebFetchUrlPolicy.Digest(normalized);
+        var digest = WebFetchUrlPolicy.Digest(normalized);
         lock (_gate)
         {
             PruneCore();
@@ -943,7 +943,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 return false;
             }
 
-            string digest = WebFetchUrlPolicy.Digest(normalized);
+            var digest = WebFetchUrlPolicy.Digest(normalized);
             return _directGrants.TryGetValue(digest, out var initialGrant)
                 && initialGrant.IsInitialUrl
                 && string.Equals(initialGrant.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
@@ -981,13 +981,13 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
     private static string CreateRedactedPathProjection(Uri normalized)
     {
-        string escapedPath = normalized.GetComponents(UriComponents.Path, UriFormat.UriEscaped);
+        var escapedPath = normalized.GetComponents(UriComponents.Path, UriFormat.UriEscaped);
         if (string.IsNullOrEmpty(escapedPath))
         {
             return string.Empty;
         }
 
-        string redacted = string.Join(
+        var redacted = string.Join(
             '/',
             escapedPath.Split('/', StringSplitOptions.None)
                 .Select(segment => segment.Length == 0 ? string.Empty : "[REDACTED]"));
@@ -1027,7 +1027,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
         static void Append(StringBuilder target, IReadOnlyList<string> values)
         {
-            foreach (string value in values.Order(StringComparer.OrdinalIgnoreCase))
+            foreach (var value in values.Order(StringComparer.OrdinalIgnoreCase))
             {
                 target.Append(value).Append('\n');
             }
@@ -1076,7 +1076,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     private void PruneCore()
     {
         var now = DateTimeOffset.UtcNow;
-        int removed = _searchReferences.RemoveWhere(item => item.Value.ExpiresAt <= now)
+        var removed = _searchReferences.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _userReferences.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _directGrants.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _invocationGrants.RemoveWhere(item => item.Value.ExpiresAt <= now);
@@ -1215,10 +1215,10 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                 cancellationToken);
             if (outcome == DirectFetchApprovalOutcome.Unavailable)
             {
-                string path = string.IsNullOrEmpty(approvalRequest.Path)
+                var path = string.IsNullOrEmpty(approvalRequest.Path)
                     ? "/"
                     : approvalRequest.Path;
-                string transientError = "DirectAuthorizationRequired: explicit exact-URL authority is required for "
+                var transientError = "DirectAuthorizationRequired: explicit exact-URL authority is required for "
                     + $"origin {approvalRequest.Origin}; path {path}; exact digest {approvalRequest.UrlDigest}. "
                     + "Use /fetch-authorize or the headless authorization input and retry.";
                 throw new ToolExecutionException(
@@ -1272,14 +1272,14 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
             return false;
         }
 
-        string repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.RepositoryPath);
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.RepositoryPath);
         return _authorization.IsHostAuthorized(request, repositoryIdentity, networkHost);
     }
 
     /// <inheritdoc />
     protected override void ValidateInput(WebFetchRequest input)
     {
-        int routeCount = (string.IsNullOrWhiteSpace(input.SearchResultId) ? 0 : 1)
+        var routeCount = (string.IsNullOrWhiteSpace(input.SearchResultId) ? 0 : 1)
             + (string.IsNullOrWhiteSpace(input.UserUrlId) ? 0 : 1)
             + (string.IsNullOrWhiteSpace(input.Url) ? 0 : 1);
         if (routeCount != 1)

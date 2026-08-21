@@ -74,7 +74,7 @@ public sealed class BoundedJsonSchemaValidator
             CommentHandling = JsonCommentHandling.Disallow,
             MaxDepth = _options.MaximumDepth,
         });
-        int properties = 0;
+        var properties = 0;
         ValidateSchemaNode(document.RootElement, depth: 0, ref properties);
         return new SkillCompiledSchema(schemaJson, _options);
     }
@@ -107,7 +107,7 @@ public sealed class BoundedJsonSchemaValidator
             throw new InvalidDataException("Skill schema depth or node kind is unsupported.");
         }
 
-        foreach (JsonProperty property in schema.EnumerateObject())
+        foreach (var property in schema.EnumerateObject())
         {
             if (!SupportedKeywords.Contains(property.Name))
             {
@@ -115,8 +115,8 @@ public sealed class BoundedJsonSchemaValidator
             }
         }
 
-        string type = GetRequiredType(schema);
-        if (schema.TryGetProperty("additionalProperties", out JsonElement additionalProperties)
+        var type = GetRequiredType(schema);
+        if (schema.TryGetProperty("additionalProperties", out var additionalProperties)
             && additionalProperties.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
         {
             throw new InvalidDataException("Schema additionalProperties must be a boolean.");
@@ -124,14 +124,14 @@ public sealed class BoundedJsonSchemaValidator
 
         ValidateBoundedMetadata(schema, "title");
         ValidateBoundedMetadata(schema, "description");
-        if (schema.TryGetProperty("properties", out JsonElement properties))
+        if (schema.TryGetProperty("properties", out var properties))
         {
             if (type != "object" || properties.ValueKind != JsonValueKind.Object)
             {
                 throw new InvalidDataException("Schema properties require object type.");
             }
 
-            foreach (JsonProperty property in properties.EnumerateObject())
+            foreach (var property in properties.EnumerateObject())
             {
                 propertyCount++;
                 if (propertyCount > _options.MaximumProperties
@@ -145,7 +145,7 @@ public sealed class BoundedJsonSchemaValidator
             }
         }
 
-        if (schema.TryGetProperty("required", out JsonElement required))
+        if (schema.TryGetProperty("required", out var required))
         {
             if (type != "object" || required.ValueKind != JsonValueKind.Array)
             {
@@ -166,7 +166,7 @@ public sealed class BoundedJsonSchemaValidator
 
             IReadOnlySet<string> declaredNames = schema.TryGetProperty(
                 "properties",
-                out JsonElement declaredProperties)
+                out var declaredProperties)
                     ? declaredProperties.EnumerateObject()
                         .Select(item => item.Name)
                         .ToHashSet(StringComparer.Ordinal)
@@ -177,7 +177,7 @@ public sealed class BoundedJsonSchemaValidator
             }
         }
 
-        if (schema.TryGetProperty("items", out JsonElement items))
+        if (schema.TryGetProperty("items", out var items))
         {
             if (type != "array")
             {
@@ -194,7 +194,7 @@ public sealed class BoundedJsonSchemaValidator
         ValidateOrderedBounds(schema, "minItems", "maxItems");
         ValidateOrderedBounds(schema, "minLength", "maxLength");
         ValidateNumericBounds(schema);
-        if (schema.TryGetProperty("enum", out JsonElement enumValues)
+        if (schema.TryGetProperty("enum", out var enumValues)
             && (enumValues.ValueKind != JsonValueKind.Array || enumValues.GetArrayLength() is < 1 or > 256))
         {
             throw new InvalidDataException("Skill schema enum is invalid or exceeds its bound.");
@@ -208,14 +208,14 @@ public sealed class BoundedJsonSchemaValidator
             throw new InvalidDataException($"Skill value at {path} exceeds the depth limit.");
         }
 
-        string type = GetRequiredType(schema);
+        var type = GetRequiredType(schema);
         if (!Matches(type, value.ValueKind)
             || (type == "integer" && !value.TryGetInt64(out _)))
         {
             throw new InvalidDataException($"Skill value at {path} does not match type '{type}'.");
         }
 
-        if (schema.TryGetProperty("enum", out JsonElement enumValues)
+        if (schema.TryGetProperty("enum", out var enumValues)
             && !enumValues.EnumerateArray().Any(item => JsonElement.DeepEquals(item, value)))
         {
             throw new InvalidDataException($"Skill value at {path} is outside the declared enum.");
@@ -241,13 +241,13 @@ public sealed class BoundedJsonSchemaValidator
 
     private void ValidateObject(JsonElement schema, JsonElement value, string path, int depth)
     {
-        var properties = schema.TryGetProperty("properties", out JsonElement declared)
+        var properties = schema.TryGetProperty("properties", out var declared)
             ? declared.EnumerateObject().ToDictionary(item => item.Name, item => item.Value, StringComparer.Ordinal)
             : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        var required = schema.TryGetProperty("required", out JsonElement requiredNode)
+        var required = schema.TryGetProperty("required", out var requiredNode)
             ? requiredNode.EnumerateArray().Select(item => item.GetString() ?? string.Empty).ToHashSet(StringComparer.Ordinal)
             : [];
-        foreach (string name in required)
+        foreach (var name in required)
         {
             if (!value.TryGetProperty(name, out _))
             {
@@ -255,11 +255,11 @@ public sealed class BoundedJsonSchemaValidator
             }
         }
 
-        bool additional = !schema.TryGetProperty("additionalProperties", out JsonElement additionalNode)
+        var additional = !schema.TryGetProperty("additionalProperties", out var additionalNode)
             || additionalNode.ValueKind != JsonValueKind.False;
-        foreach (JsonProperty property in value.EnumerateObject())
+        foreach (var property in value.EnumerateObject())
         {
-            if (!properties.TryGetValue(property.Name, out JsonElement propertySchema))
+            if (!properties.TryGetValue(property.Name, out var propertySchema))
             {
                 if (!additional)
                 {
@@ -275,18 +275,18 @@ public sealed class BoundedJsonSchemaValidator
 
     private void ValidateArray(JsonElement schema, JsonElement value, string path, int depth)
     {
-        int count = value.GetArrayLength();
-        int minimum = GetInteger(schema, "minItems", 0);
-        int maximum = GetInteger(schema, "maxItems", _options.MaximumArrayItems);
+        var count = value.GetArrayLength();
+        var minimum = GetInteger(schema, "minItems", 0);
+        var maximum = GetInteger(schema, "maxItems", _options.MaximumArrayItems);
         if (count < minimum || count > maximum)
         {
             throw new InvalidDataException($"Skill array at {path} is outside its item bounds.");
         }
 
-        if (schema.TryGetProperty("items", out JsonElement itemSchema))
+        if (schema.TryGetProperty("items", out var itemSchema))
         {
-            int index = 0;
-            foreach (JsonElement item in value.EnumerateArray())
+            var index = 0;
+            foreach (var item in value.EnumerateArray())
             {
                 ValidateValue(itemSchema, item, $"{path}[{index}]", depth + 1);
                 index++;
@@ -296,9 +296,9 @@ public sealed class BoundedJsonSchemaValidator
 
     private static void ValidateString(JsonElement schema, JsonElement value, string path)
     {
-        int length = (value.GetString() ?? string.Empty).Length;
-        int minimum = GetInteger(schema, "minLength", 0);
-        int maximum = GetInteger(schema, "maxLength", int.MaxValue);
+        var length = (value.GetString() ?? string.Empty).Length;
+        var minimum = GetInteger(schema, "minLength", 0);
+        var maximum = GetInteger(schema, "maxLength", int.MaxValue);
         if (length < minimum || length > maximum)
         {
             throw new InvalidDataException($"Skill string at {path} is outside its length bounds.");
@@ -307,9 +307,9 @@ public sealed class BoundedJsonSchemaValidator
 
     private static void ValidateNumber(JsonElement schema, JsonElement value, string path)
     {
-        decimal number = value.GetDecimal();
-        if ((schema.TryGetProperty("minimum", out JsonElement minimum) && number < minimum.GetDecimal())
-            || (schema.TryGetProperty("maximum", out JsonElement maximum) && number > maximum.GetDecimal()))
+        var number = value.GetDecimal();
+        if ((schema.TryGetProperty("minimum", out var minimum) && number < minimum.GetDecimal())
+            || (schema.TryGetProperty("maximum", out var maximum) && number > maximum.GetDecimal()))
         {
             throw new InvalidDataException($"Skill number at {path} is outside its declared range.");
         }
@@ -317,13 +317,13 @@ public sealed class BoundedJsonSchemaValidator
 
     private static string GetRequiredType(JsonElement schema)
     {
-        if (!schema.TryGetProperty("type", out JsonElement typeNode)
+        if (!schema.TryGetProperty("type", out var typeNode)
             || typeNode.ValueKind != JsonValueKind.String)
         {
             throw new InvalidDataException("Every skill schema node requires one explicit type.");
         }
 
-        string type = typeNode.GetString() ?? string.Empty;
+        var type = typeNode.GetString() ?? string.Empty;
         return type is "object" or "array" or "string" or "integer" or "number" or "boolean" or "null"
             ? type
             : throw new NotSupportedException($"Skill schema type '{type}' is unsupported.");
@@ -346,7 +346,7 @@ public sealed class BoundedJsonSchemaValidator
 
     private static void ValidateBoundedMetadata(JsonElement schema, string property)
     {
-        if (!schema.TryGetProperty(property, out JsonElement value))
+        if (!schema.TryGetProperty(property, out var value))
         {
             return;
         }
@@ -363,8 +363,8 @@ public sealed class BoundedJsonSchemaValidator
         string minimumProperty,
         string maximumProperty)
     {
-        if (schema.TryGetProperty(minimumProperty, out JsonElement minimum)
-            && schema.TryGetProperty(maximumProperty, out JsonElement maximum)
+        if (schema.TryGetProperty(minimumProperty, out var minimum)
+            && schema.TryGetProperty(maximumProperty, out var maximum)
             && minimum.GetInt32() > maximum.GetInt32())
         {
             throw new InvalidDataException("Skill schema minimum exceeds its maximum.");
@@ -373,8 +373,8 @@ public sealed class BoundedJsonSchemaValidator
 
     private static void ValidateNumericBounds(JsonElement schema)
     {
-        bool hasMinimum = schema.TryGetProperty("minimum", out JsonElement minimum);
-        bool hasMaximum = schema.TryGetProperty("maximum", out JsonElement maximum);
+        var hasMinimum = schema.TryGetProperty("minimum", out var minimum);
+        var hasMaximum = schema.TryGetProperty("maximum", out var maximum);
         if ((hasMinimum && minimum.ValueKind != JsonValueKind.Number)
             || (hasMaximum && maximum.ValueKind != JsonValueKind.Number)
             || (hasMinimum && hasMaximum && minimum.GetDecimal() > maximum.GetDecimal()))
@@ -385,18 +385,18 @@ public sealed class BoundedJsonSchemaValidator
 
     private static int GetInteger(JsonElement schema, string property, int fallback)
     {
-        return schema.TryGetProperty(property, out JsonElement value) ? value.GetInt32() : fallback;
+        return schema.TryGetProperty(property, out var value) ? value.GetInt32() : fallback;
     }
 
     private static void ValidateNonNegativeInteger(JsonElement schema, string property, int maximum)
     {
-        if (!schema.TryGetProperty(property, out JsonElement value))
+        if (!schema.TryGetProperty(property, out var value))
         {
             return;
         }
 
         if (value.ValueKind != JsonValueKind.Number
-            || !value.TryGetInt32(out int parsed)
+            || !value.TryGetInt32(out var parsed)
             || parsed < 0
             || parsed > maximum)
         {

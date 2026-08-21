@@ -112,8 +112,18 @@ public static class Milestone4Tests
         var request = Assert.Single(model.Requests);
         Assert.False(request.RequiredCapabilities.StructuredOutput);
         Assert.True(request.RequiredCapabilities.ToolCalls);
+        Assert.Contains(
+            "read-only exploration, audits, explanations, or diagnostics",
+            request.Input,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Call propose_plan only when the user is asking Threadsmith to make actual repository changes",
+            request.Input,
+            StringComparison.Ordinal);
         var tool = Assert.Single(request.Tools);
         Assert.Equal("propose_plan", tool.Name);
+        Assert.Contains("only when the user requests actual repository changes", tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not call for read-only exploration", tool.Description, StringComparison.Ordinal);
     }
 
     /// <summary>Conversational streaming stops before retaining or publishing output beyond the host bound.</summary>
@@ -1451,9 +1461,14 @@ public static class Milestone4Tests
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
+        var observedGate = new object();
         await using var capture = events.Subscribe((domainEvent, _) =>
         {
-            observed.Add(domainEvent);
+            lock (observedGate)
+            {
+                observed.Add(domainEvent);
+            }
+
             return Task.CompletedTask;
         });
         var plan = CreatePlan("Structured risk plan", 1) with
@@ -1480,18 +1495,28 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("structured risk plan"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!observed.OfType<ApprovalRequested>().Any(item => item.SessionId == sessionId))
+        List<IDomainEvent> snapshot;
+        do
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-        }
+            lock (observedGate)
+            {
+                snapshot = [.. observed];
+            }
 
-        Assert.Empty(observed.OfType<PlanAutoApproved>());
-        var requested = Assert.Single(observed.OfType<ApprovalRequested>());
+            if (!snapshot.OfType<ApprovalRequested>().Any(item => item.SessionId == sessionId))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+        }
+        while (!snapshot.OfType<ApprovalRequested>().Any(item => item.SessionId == sessionId));
+
+        Assert.Empty(snapshot.OfType<PlanAutoApproved>());
+        var requested = Assert.Single(snapshot.OfType<ApprovalRequested>());
         Assert.Equal(ApprovalRequestKind.Plan, requested.Kind);
         Assert.Equal(2, requested.SchemaVersion);
-        var proposed = Assert.Single(observed.OfType<PlanProposed>());
+        var proposed = Assert.Single(snapshot.OfType<PlanProposed>());
         Assert.Equal(PlanReviewStatus.Pending, proposed.ReviewStatus);
-        var sanity = Assert.Single(observed.OfType<PlanSanityCheckCompleted>());
+        var sanity = Assert.Single(snapshot.OfType<PlanSanityCheckCompleted>());
         Assert.Equal(PlanRiskClassification.High, sanity.Risk);
         Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
@@ -2161,6 +2186,7 @@ public static class Milestone4Tests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
             var model = new CaptureToolsModelProvider(CreatePlan("plan without denied tool", 1));
+            var repositoryMemoryGovernor = new ThrowingRepositoryMemoryGovernor();
             var application = new SessionApplication(
                 events,
                 model,
@@ -2177,7 +2203,8 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                repositoryMemoryGovernor: repositoryMemoryGovernor);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("deny check"));
             var runId = await dispatcher.DispatchAsync(
@@ -2204,6 +2231,7 @@ public static class Milestone4Tests
             Assert.DoesNotContain("run_process", advertisedToolNames);
             Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.True(repositoryMemoryGovernor.PromotionAttempted);
         }
         finally
         {
@@ -2211,7 +2239,7 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>Planning withholds inspection tools after its evidence window while retaining propose_plan.</summary>
+    /// <summary>Planning withholds inspection tools after an explicitly configured evidence window.</summary>
     [Fact]
     public static async Task PlanningToolRounds_ConvergesBeforeCompleteContinuationBudget()
     {
@@ -2284,6 +2312,91 @@ public static class Milestone4Tests
             Assert.DoesNotContain(convergenceRequest.Tools, tool => tool.Name == "list_files");
             Assert.Contains(convergenceRequest.Tools, tool => tool.Name == "propose_plan");
             Assert.Equal(2, evidence.Snapshot(sessionId).Count(item => item.Kind == EvidenceKind.ToolResult));
+            Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete")));
+            Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>The default planning-tool setting does not cut off exploration at the former 16-round window.</summary>
+    [Fact]
+    public static async Task PlanningToolRounds_DefaultDoesNotWithholdInspectionToolsAfterFormerSixteenRoundLimit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-unbounded-planning-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "sample.txt"), "sample");
+            await using var events = new DomainEventStream();
+            var projections = new InMemoryProjectionStore();
+            await using var subscription = events.Subscribe(projections.ApplyAsync);
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var registry = new ToolRegistry([new ListFilesTool()]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new ToolForManyRoundsThenPlanModelProvider(
+                CreatePlan("after extended exploration", 1),
+                toolRounds: 17);
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry,
+                limits: new ExecutionLimits
+                {
+                    MaxModelRounds = 20,
+                });
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("extended planning tools"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect more than sixteen things, then plan"));
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            SessionProjection? projection;
+            do
+            {
+                projection = await projections.GetAsync<SessionProjection>(
+                    new ProjectionKey("session", sessionId.Value.ToString("D")),
+                    timeout.Token);
+                if (projection?.Phase != RunPhase.AwaitingPlanApproval)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+                }
+            }
+            while (projection?.Phase != RunPhase.AwaitingPlanApproval);
+
+            Assert.Equal(18, model.Requests.Count);
+            Assert.All(
+                model.Requests.Take(17),
+                request => Assert.Contains(request.Tools, tool => tool.Name == "list_files"));
+            var postFormerLimitRequest = model.Requests[16];
+            Assert.Contains(postFormerLimitRequest.Tools, tool => tool.Name == "list_files");
+            var finalRequest = model.Requests[17];
+            Assert.Contains(finalRequest.Tools, tool => tool.Name == "list_files");
+            Assert.Contains(finalRequest.Tools, tool => tool.Name == "propose_plan");
+            Assert.Equal(17, evidence.Snapshot(sessionId).Count(item => item.Kind == EvidenceKind.ToolResult));
             Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete")));
             Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -2425,7 +2538,7 @@ public static class Milestone4Tests
             }
             while (projection?.Error is null);
 
-            Assert.Contains("exceeded the limit of 2", projection.Error, StringComparison.Ordinal);
+            Assert.Contains("exceeded the configured limit of 2", projection.Error, StringComparison.Ordinal);
         }
         finally
         {
@@ -3486,6 +3599,50 @@ public static class Milestone4Tests
         }
     }
 
+    private sealed class ToolForManyRoundsThenPlanModelProvider : IModelProvider
+    {
+        private readonly ImplementationPlan _plan;
+        private readonly int _toolRounds;
+
+        public ToolForManyRoundsThenPlanModelProvider(ImplementationPlan plan, int toolRounds)
+        {
+            _plan = plan;
+            _toolRounds = toolRounds;
+        }
+
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count <= _toolRounds)
+            {
+                Assert.Contains(request.Tools, tool => tool.Name == "list_files");
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "list_files",
+                        $"{{\"path\":\".\",\"maximumEntries\":{Requests.Count}}}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            Assert.Contains(request.Tools, tool => tool.Name == "propose_plan");
+            yield return new ModelChunk
+            {
+                Output = new ToolRequestModelOutput(
+                    "propose_plan",
+                    JsonSerializer.Serialize(new { schemaVersion = 1, plan = _plan })),
+                FinishReason = ModelFinishReason.ToolCalls,
+            };
+        }
+    }
+
     private sealed class ToolUntilPlanningConvergenceModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
@@ -3744,6 +3901,61 @@ public static class Milestone4Tests
         public bool SetEnabled(HookHandlerId handlerId, bool enabled)
         {
             return false;
+        }
+    }
+
+    private sealed class ThrowingRepositoryMemoryGovernor : IRepositoryMemoryGovernor
+    {
+        public bool PromotionAttempted { get; private set; }
+
+        public Task<bool> ForgetAsync(
+            ForgetRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<RepositoryMemoryItem?> InspectAsync(
+            InspectRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<RepositoryMemorySnapshot> ListAsync(
+            ListRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<RepositoryMemoryRememberResult> PromoteHostObservedAsync(
+            HostObservedRepositoryMemoryPromotion promotion,
+            CancellationToken cancellationToken = default)
+        {
+            PromotionAttempted = true;
+            throw new InvalidOperationException("Simulated repository-memory persistence failure.");
+        }
+
+        public Task<RepositoryMemoryRememberResult> RememberAsync(
+            RememberRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<RepositoryMemorySupersedeResult> SupersedeAsync(
+            SupersedeRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<RepositoryMemoryValidationResult> ValidateAsync(
+            ValidateRepositoryMemoryCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
         }
     }
 

@@ -1363,8 +1363,9 @@ internal static class ToolDefinitionFactory
             && inputSchema is JsonObject inputObject)
         {
             inputObject["properties"] = new JsonObject();
-            inputObject["additionalProperties"] = false;
         }
+
+        SealObjectSchemas(inputSchema);
 
         var outputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
             _schemaOptions,
@@ -1395,6 +1396,50 @@ internal static class ToolDefinitionFactory
             MaximumOutputBytes = maximumOutputBytes,
             RequiresWorkspace = category == ToolCategory.SemanticSearch,
             Scheduling = CreateSchedulingDescriptor(category, sideEffect),
+        };
+    }
+
+    private static void SealObjectSchemas(JsonNode? schema)
+    {
+        switch (schema)
+        {
+            case JsonObject schemaObject:
+                if (IsObjectSchema(schemaObject))
+                {
+                    schemaObject["additionalProperties"] ??= false;
+                }
+
+                foreach (var property in schemaObject.ToArray())
+                {
+                    SealObjectSchemas(property.Value);
+                }
+
+                break;
+            case JsonArray schemaArray:
+                foreach (var item in schemaArray)
+                {
+                    SealObjectSchemas(item);
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsObjectSchema(JsonObject schemaObject)
+    {
+        if (schemaObject.ContainsKey("properties"))
+        {
+            return true;
+        }
+
+        return schemaObject["type"] switch
+        {
+            JsonValue typeValue when typeValue.TryGetValue<string>(out var type) =>
+                string.Equals(type, "object", StringComparison.Ordinal),
+            JsonArray typeArray => typeArray.OfType<JsonValue>()
+                .Any(value => value.TryGetValue<string>(out var type)
+                    && string.Equals(type, "object", StringComparison.Ordinal)),
+            _ => false,
         };
     }
 

@@ -632,7 +632,7 @@ public sealed class SkillSubsystemTests
             await store.SaveCheckpointAsync(checkpoint, expectedVersion: null);
 
             // Assert
-            Assert.Equal(8, version);
+            Assert.Equal(9, version);
             Assert.Equal(identity, await store.GetPinAsync(identity.SkillId));
             var restored = await store.GetCheckpointAsync(invocationId);
             Assert.NotNull(restored);

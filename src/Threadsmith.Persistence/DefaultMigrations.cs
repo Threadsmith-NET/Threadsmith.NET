@@ -492,6 +492,79 @@ public sealed class SessionLifecycleSchemaMigration : IDatabaseMigration
     }
 }
 
+/// <summary>Version 9: adds repository-scoped cross-session memory tables.</summary>
+public sealed class RepositoryMemorySchemaMigration : IDatabaseMigration
+{
+    /// <inheritdoc />
+    public int Version => 9;
+
+    /// <inheritdoc />
+    public string Name => "Repository-scoped cross-session memory";
+
+    /// <inheritdoc />
+    public async Task ApplyAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        cancellationToken.ThrowIfCancellationRequested();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS repository_memory (
+                memory_id TEXT PRIMARY KEY,
+                repository_identity TEXT NOT NULL,
+                kind INTEGER NOT NULL,
+                authority INTEGER NOT NULL,
+                validity INTEGER NOT NULL,
+                sensitivity INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                repository_revision TEXT NULL,
+                supersedes_id TEXT NULL,
+                state_reason TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                schema_version INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_repository_memory_repository_validity_kind
+                ON repository_memory(repository_identity, validity, kind, updated_at DESC, memory_id);
+            CREATE INDEX IF NOT EXISTS ix_repository_memory_supersedes
+                ON repository_memory(repository_identity, supersedes_id);
+            CREATE TABLE IF NOT EXISTS repository_memory_sources (
+                memory_id TEXT NOT NULL,
+                source_kind INTEGER NOT NULL,
+                source_id TEXT NOT NULL,
+                description TEXT NULL,
+                ordinal INTEGER NOT NULL,
+                PRIMARY KEY(memory_id, source_kind, source_id)
+            );
+            CREATE TABLE IF NOT EXISTS repository_memory_scope (
+                memory_id TEXT NOT NULL,
+                scope_kind TEXT NOT NULL,
+                scope_value TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                PRIMARY KEY(memory_id, scope_kind, scope_value)
+            );
+            CREATE INDEX IF NOT EXISTS ix_repository_memory_scope_lookup
+                ON repository_memory_scope(scope_kind, scope_value, memory_id);
+            CREATE TABLE IF NOT EXISTS repository_memory_snapshots (
+                repository_identity TEXT PRIMARY KEY,
+                version INTEGER NOT NULL,
+                memory_index_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                schema_version INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS repository_memory_invalidations (
+                repository_identity TEXT NOT NULL,
+                memory_id TEXT NOT NULL,
+                invalidation_key TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                invalidated_at TEXT NOT NULL,
+                PRIMARY KEY(repository_identity, memory_id, invalidation_key)
+            );
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+}
+
 /// <summary>The default ordered migration set for the persistence layer.</summary>
 public sealed class DefaultMigrations
 {
@@ -507,5 +580,6 @@ public sealed class DefaultMigrations
         new LifecycleHookSchemaMigration(),
         new ReasoningPrivacyMigration(),
         new SessionLifecycleSchemaMigration(),
+        new RepositoryMemorySchemaMigration(),
     ];
 }

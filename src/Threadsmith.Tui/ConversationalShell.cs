@@ -1734,6 +1734,17 @@ public sealed class ConversationalShell
                     continue;
                 }
 
+                if (commandText.StartsWith("/memory", StringComparison.OrdinalIgnoreCase)
+                    && (commandText.Length == 7 || char.IsWhiteSpace(commandText[7])))
+                {
+                    await HandleMemoryCommandAsync(
+                        sessionId,
+                        activeRepository?.Repository?.RepositoryPath,
+                        commandText,
+                        lifetime.Token);
+                    continue;
+                }
+
                 if (commandText.StartsWith("/context", StringComparison.OrdinalIgnoreCase)
                     && (commandText.Length == 8 || char.IsWhiteSpace(commandText[8])))
                 {
@@ -2476,6 +2487,7 @@ public sealed class ConversationalShell
             ("/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
             ("/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource|prompt|auth|logout|revoke|switch-account|diagnose]", "Manage MCP profiles and capabilities"),
             ("/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Govern lifecycle hooks"),
+            ("/memory [remember|list|inspect|supersede|forget|validate]", "Manage local repository memory"),
             ("/context [mode|inspect|compact]", "Inspect or control bounded conversation context"),
             ("/validation retry", "Resume interrupted post-apply validation"),
             ("/agents <id> [cancel|cancel-child <id>]", "Inspect or cancel a delegation tree"),
@@ -3176,6 +3188,190 @@ public sealed class ConversationalShell
         }
     }
 
+    private async Task HandleMemoryCommandAsync(
+        SessionId sessionId,
+        string? repositoryPath,
+        string commandText,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            await _surface.WriteAsync(
+                "Repository memory requires an open repository.\n",
+                TuiTextRole.Error,
+                cancellationToken);
+            return;
+        }
+
+        var repositoryIdentity = RepositoryIdentity.Create(repositoryPath);
+        var argument = commandText.Length == 7 ? "list repo" : commandText[7..].Trim();
+        var separator = argument.IndexOf(' ');
+        var operation = separator < 0 ? argument : argument[..separator];
+        var remainder = separator < 0 ? string.Empty : argument[(separator + 1)..].Trim();
+        try
+        {
+            switch (operation.ToLowerInvariant())
+            {
+                case "remember":
+                    var rememberText = remainder.StartsWith("repo ", StringComparison.OrdinalIgnoreCase)
+                        ? remainder[5..].Trim()
+                        : string.Empty;
+                    if (string.IsNullOrWhiteSpace(rememberText))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory remember repo <text>\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var remembered = await _presenter.RememberRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        rememberText,
+                        RepositoryMemoryKind.WorkflowFact,
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        $"Remembered repository memory {remembered.Id.Value:D}.\n",
+                        TuiTextRole.Status,
+                        cancellationToken);
+                    return;
+
+                case "list":
+                    if (!remainder.StartsWith("repo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory list repo [active|stale|superseded|forgotten|rejected|all]\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var filterText = remainder.Length == 4 ? string.Empty : remainder[4..].Trim();
+                    if (!TryParseRepositoryMemoryValidity(filterText, out var validity))
+                    {
+                        await _surface.WriteAsync(
+                            $"Unknown repository-memory validity '{filterText}'.\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var listed = await _presenter.ListRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        validity,
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        FormatRepositoryMemorySnapshot(listed),
+                        TuiTextRole.Status,
+                        cancellationToken);
+                    return;
+
+                case "inspect":
+                    if (!TryParseRepositoryMemoryId(remainder, out var inspectId))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory inspect <memory-id>\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var inspected = await _presenter.InspectRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        inspectId,
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        inspected is null ? "Repository memory item was not found.\n" : FormatRepositoryMemoryItem(inspected),
+                        inspected is null ? TuiTextRole.Warning : TuiTextRole.Status,
+                        cancellationToken);
+                    return;
+
+                case "supersede":
+                    var supersedeSeparator = remainder.IndexOf(' ');
+                    if (supersedeSeparator < 0
+                        || !TryParseRepositoryMemoryId(remainder[..supersedeSeparator], out var supersedeId)
+                        || string.IsNullOrWhiteSpace(remainder[(supersedeSeparator + 1)..]))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory supersede <memory-id> <replacement-text>\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var replacement = await _presenter.SupersedeRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        supersedeId,
+                        remainder[(supersedeSeparator + 1)..].Trim(),
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        $"Superseded repository memory with {replacement.Id.Value:D}.\n",
+                        TuiTextRole.Status,
+                        cancellationToken);
+                    return;
+
+                case "forget":
+                    if (!TryParseRepositoryMemoryId(remainder, out var forgetId))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory forget <memory-id>\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var forgotten = await _presenter.ForgetRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        forgetId,
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        forgotten ? "Repository memory item forgotten.\n" : "Repository memory item was not found.\n",
+                        forgotten ? TuiTextRole.Status : TuiTextRole.Warning,
+                        cancellationToken);
+                    return;
+
+                case "validate":
+                    if (!string.Equals(remainder, "repo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _surface.WriteAsync(
+                            "Usage: /memory validate repo\n",
+                            TuiTextRole.Warning,
+                            cancellationToken);
+                        return;
+                    }
+
+                    var validated = await _presenter.ValidateRepositoryMemoryAsync(
+                        sessionId,
+                        repositoryIdentity,
+                        cancellationToken);
+                    await _surface.WriteAsync(
+                        FormatRepositoryMemorySnapshot(validated),
+                        TuiTextRole.Status,
+                        cancellationToken);
+                    return;
+
+                default:
+                    await _surface.WriteAsync(
+                        "Usage: /memory [remember repo <text>|list repo [filter]|inspect <id>|supersede <id> <text>|forget <id>|validate repo]\n",
+                        TuiTextRole.Warning,
+                        cancellationToken);
+                    return;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await _surface.WriteAsync(
+                $"Repository-memory command failed: {exception.Message}{Environment.NewLine}",
+                TuiTextRole.Error,
+                cancellationToken);
+        }
+    }
+
     private async Task HandleContextCommandAsync(
         TuiController controller,
         string commandText,
@@ -3251,6 +3447,10 @@ public sealed class ConversationalShell
                     string.Empty,
                     inspection.ConversationItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} {item.Kind} {item.Id}: {item.Rationale}\n"))
+                + string.Join(
+                    string.Empty,
+                    inspection.RepositoryMemoryItems.Select(item =>
+                        $"  {(item.Included ? "included" : "omitted")} repository-memory {item.Kind} {item.Id.Value:D}: {item.Rationale}\n"))
                 + string.Join(
                     string.Empty,
                     inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
@@ -3728,6 +3928,70 @@ public sealed class ConversationalShell
                     $"  {outcome.AssignmentId.Value:D} {outcome.Status}; "
                     + $"tools {outcome.Usage.ToolCalls}; tokens {outcome.Usage.ModelTokens}; {outcome.Reason}\n"));
         await _surface.WriteAsync(output, TuiTextRole.Status, cancellationToken);
+    }
+
+    private static string FormatRepositoryMemorySnapshot(RepositoryMemorySnapshot snapshot)
+    {
+        var warnings = snapshot.Warnings.Count == 0
+            ? string.Empty
+            : string.Join(string.Empty, snapshot.Warnings.Select(warning => $"  warning: {warning}\n"));
+        var items = snapshot.Items.Count == 0
+            ? "  no repository memory items\n"
+            : string.Join(string.Empty, snapshot.Items.Select(FormatRepositoryMemorySummary));
+        return $"Repository memory ({snapshot.Items.Count} item(s)):\n" + warnings + items;
+    }
+
+    private static string FormatRepositoryMemoryItem(RepositoryMemoryItem item)
+    {
+        var sources = item.Sources.Count == 0
+            ? "  sources: none\n"
+            : string.Join(string.Empty, item.Sources.Select(source =>
+                $"  source {source.Kind}: {source.SourceId} {source.Description}\n"));
+        return FormatRepositoryMemorySummary(item)
+            + $"  content: {item.Content}\n"
+            + $"  sensitivity: {item.Sensitivity}\n"
+            + $"  hash: {item.ContentHash}\n"
+            + sources;
+    }
+
+    private static string FormatRepositoryMemorySummary(RepositoryMemoryItem item)
+    {
+        var reason = string.IsNullOrWhiteSpace(item.StateReason) ? string.Empty : $" — {item.StateReason}";
+        return $"  {item.Id.Value:D} [{item.Validity}] {item.Kind}/{item.Authority}: {item.Content}{reason}\n";
+    }
+
+    private static bool TryParseRepositoryMemoryId(string value, out RepositoryMemoryId memoryId)
+    {
+        if (Guid.TryParse(value, out var guid))
+        {
+            memoryId = new RepositoryMemoryId(guid);
+            return true;
+        }
+
+        memoryId = default;
+        return false;
+    }
+
+    private static bool TryParseRepositoryMemoryValidity(
+        string value,
+        out RepositoryMemoryValidity? validity)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || string.Equals(value, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            validity = null;
+            return true;
+        }
+
+        if (Enum.TryParse(value, ignoreCase: true, out RepositoryMemoryValidity parsed)
+            && Enum.IsDefined(parsed))
+        {
+            validity = parsed;
+            return true;
+        }
+
+        validity = null;
+        return false;
     }
 
     private static string FormatConversationMode(ConversationContextMode mode)

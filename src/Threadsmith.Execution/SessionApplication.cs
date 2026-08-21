@@ -93,6 +93,7 @@ public sealed class SessionApplication :
     private readonly IHookCoordinator? _hooks;
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IPlanSanityChecker? _planSanityChecker;
+    private readonly IRepositoryMemoryGovernor? _repositoryMemoryGovernor;
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
 
@@ -170,7 +171,8 @@ public sealed class SessionApplication :
         IPlanSanityChecker? planSanityChecker = null,
         IPlanApprovalPolicy? planApprovalPolicy = null,
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
-            planSanityRequestFactory = null)
+            planSanityRequestFactory = null,
+        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -206,6 +208,7 @@ public sealed class SessionApplication :
         _planSanityChecker = planSanityChecker;
         _planApprovalPolicy = planApprovalPolicy;
         _planSanityRequestFactory = planSanityRequestFactory;
+        _repositoryMemoryGovernor = repositoryMemoryGovernor;
         _userUrlIntake = userUrlIntake;
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
@@ -679,6 +682,7 @@ public sealed class SessionApplication :
                 "scripted activity completed",
                 registration.Cancellation.Token);
             await PromoteHostObservedMemoryAsync(
+                runId,
                 registration,
                 completedWork: [$"Completed request: {registration.Task.Intent}"],
                 cancellationToken: registration.Cancellation.Token);
@@ -745,6 +749,15 @@ public sealed class SessionApplication :
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
                 CancellationToken.None);
+            if (succeeded)
+            {
+                await PromoteHostObservedMemoryAsync(
+                    runId,
+                    registration,
+                    completedWork: [$"Completed approved execution: {registration.Task.Intent}"],
+                    cancellationToken: CancellationToken.None);
+            }
+
             await _events.PublishAsync(
                 new RunCompleted(
                     registration.SessionId,
@@ -825,29 +838,123 @@ public sealed class SessionApplication :
     }
 
     private async Task PromoteHostObservedMemoryAsync(
+        RunId runId,
         RunRegistration registration,
         IReadOnlyList<string>? decisions = null,
         IReadOnlyList<string>? unresolvedQuestions = null,
         IReadOnlyList<string>? completedWork = null,
         CancellationToken cancellationToken = default)
     {
-        if (_conversationGovernor is null || registration.SourceMessage is not { } sourceMessage)
+        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
+        if (_conversationGovernor is not null && registration.SourceMessage is { } sourceMessage)
+        {
+            await _conversationGovernor.PromoteAsync(
+                new ConversationPromotionRequest
+                {
+                    SessionId = registration.SessionId,
+                    SourceMessage = sourceMessage,
+                    Decisions = decisions ?? [],
+                    UnresolvedQuestions = unresolvedQuestions ?? [],
+                    CompletedWork = completedWork ?? [],
+                    RepositoryEvidence = repositoryEvidence,
+                },
+                cancellationToken);
+        }
+
+        try
+        {
+            await PromoteHostObservedRepositoryMemoryAsync(
+                runId,
+                registration,
+                decisions ?? [],
+                unresolvedQuestions ?? [],
+                completedWork ?? [],
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Repository-memory promotion failed for run {RunId}; the authoritative run outcome is unchanged.",
+                runId.Value);
+        }
+    }
+
+    private async Task PromoteHostObservedRepositoryMemoryAsync(
+        RunId runId,
+        RunRegistration registration,
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork,
+        CancellationToken cancellationToken)
+    {
+        if (_repositoryMemoryGovernor is null
+            || string.IsNullOrWhiteSpace(registration.RepositoryIdentity))
         {
             return;
         }
 
-        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
-        await _conversationGovernor.PromoteAsync(
-            new ConversationPromotionRequest
+        var repositoryIdentity = RepositoryIdentity.Create(registration.RepositoryIdentity);
+        foreach (var (kind, content) in CreateRepositoryMemoryCandidates(
+            decisions,
+            unresolvedQuestions,
+            completedWork))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(content))
             {
-                SessionId = registration.SessionId,
-                SourceMessage = sourceMessage,
-                Decisions = decisions ?? [],
-                UnresolvedQuestions = unresolvedQuestions ?? [],
-                CompletedWork = completedWork ?? [],
-                RepositoryEvidence = repositoryEvidence,
-            },
-            cancellationToken);
+                continue;
+            }
+
+            var result = await _repositoryMemoryGovernor.PromoteHostObservedAsync(
+                new HostObservedRepositoryMemoryPromotion(
+                    registration.SessionId,
+                    runId,
+                    repositoryIdentity,
+                    kind,
+                    content),
+                cancellationToken);
+            foreach (var change in result.StateUpdates.Where(change => change.PreviousValidity != change.Validity))
+            {
+                await _events.PublishAsync(
+                    new RepositoryMemoryValidityChanged(
+                        registration.SessionId,
+                        DateTimeOffset.UtcNow,
+                        repositoryIdentity,
+                        change.MemoryId,
+                        change.Validity,
+                        change.Reason),
+                    cancellationToken);
+            }
+
+            if (!result.WasInserted)
+            {
+                continue;
+            }
+
+            await _events.PublishAsync(
+                new RepositoryMemoryRemembered(
+                    registration.SessionId,
+                    DateTimeOffset.UtcNow,
+                    repositoryIdentity,
+                    result.Item.Id,
+                    result.Item.Kind,
+                    result.Item.Authority),
+                cancellationToken);
+        }
+    }
+
+    private static IReadOnlyList<(RepositoryMemoryKind Kind, string Content)> CreateRepositoryMemoryCandidates(
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork)
+    {
+        return
+        [
+            .. decisions.Select(content => (RepositoryMemoryKind.ArchitectureDecision, content)),
+            .. unresolvedQuestions.Select(content => (RepositoryMemoryKind.UnresolvedQuestion, content)),
+            .. completedWork.Select(content => (RepositoryMemoryKind.WorkflowFact, content)),
+        ];
     }
 
     private static string RenderLegacyContinuation(
@@ -1174,10 +1281,7 @@ public sealed class SessionApplication :
         CancellationToken cancellationToken)
     {
         var maximumModelRounds = _limits.MaxModelRounds;
-        var maximumPlanningToolRounds = Math.Clamp(
-            _limits.MaxPlanningToolRounds,
-            1,
-            Math.Max(1, maximumModelRounds - 1));
+        var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
         ToolInvocationContext? invocationContext = null;
         if (_toolContextFactory is not null)
         {
@@ -1196,9 +1300,10 @@ public sealed class SessionApplication :
         var semanticToolAttempted = false;
         var planProposalRepairAttempts = 0;
         var maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
-        for (var modelRound = 1; modelRound <= maximumModelRounds; modelRound++)
+        for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
             var planningToolsWithheld = phase == RunPhase.EvidenceCollection
+                && maximumPlanningToolRounds > 0
                 && modelRound > maximumPlanningToolRounds;
             ToolDefinition[] conversationDefinitions = !planningToolsWithheld
                 && _toolPipeline is not null
@@ -1226,7 +1331,7 @@ public sealed class SessionApplication :
                 modelTools.Add(new ModelToolDefinition
                 {
                     Name = ProposePlanToolName,
-                    Description = "Propose a governed implementation plan when the user requests repository changes. Calling this tool never mutates files.",
+                    Description = "Propose a governed implementation plan only when the user requests actual repository changes. Do not call for read-only exploration, audits, explanations, or diagnostics. Calling this tool never mutates files.",
                     ArgumentsJsonSchema = ProposePlanArgumentsSchema,
                 });
             }
@@ -1441,7 +1546,7 @@ public sealed class SessionApplication :
                                 plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson).Plan;
                             }
                             catch (MalformedModelOutputException)
-                                when (modelRound < maximumModelRounds
+                                when ((maximumModelRounds <= 0 || modelRound < maximumModelRounds)
                                     && planProposalRepairAttempts < maximumPlanProposalRepairAttempts)
                             {
                                 planProposalRepairAttempts++;
@@ -1492,7 +1597,8 @@ public sealed class SessionApplication :
                             {
                                 const string convergenceContent =
                                     "The host planning-exploration limit was reached, so this inspection tool was not invoked. "
-                                    + "Use the gathered evidence and call propose_plan now, or answer directly if no repository change is needed.";
+                                    + "If this is read-only exploration, an audit, an explanation, or diagnostics, answer directly from the gathered evidence. "
+                                    + "Call propose_plan only if the user is asking Threadsmith to make actual repository changes.";
                                 continuationMessages.Add(CreateToolResultMessage(
                                     toolCallId,
                                     tool.ToolName,
@@ -1745,10 +1851,10 @@ public sealed class SessionApplication :
                 return null;
             }
 
-            if (modelRound == maximumModelRounds)
+            if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
             {
                 throw new InvalidOperationException(
-                    $"The model exceeded the limit of {maximumModelRounds} tool continuation rounds.");
+                    $"The model exceeded the configured limit of {maximumModelRounds} tool continuation rounds.");
             }
         }
 
@@ -2140,6 +2246,7 @@ public sealed class SessionApplication :
                     registration.Cancellation.Token);
                 _ = CompleteExecutionAsync(runId, registration);
                 await PromoteHostObservedMemoryAsync(
+                    runId,
                     registration,
                     decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
                     unresolvedQuestions: approvedPlan.OutstandingQuestions,
@@ -2192,6 +2299,7 @@ public sealed class SessionApplication :
             "plan approved in compatibility planning mode",
             cancellationToken);
         await PromoteHostObservedMemoryAsync(
+            runId,
             registration,
             decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
             unresolvedQuestions: approvedPlan.OutstandingQuestions,

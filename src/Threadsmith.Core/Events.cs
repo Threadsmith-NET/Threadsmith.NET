@@ -51,6 +51,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ConversationMemoryPromoted), "conversationMemoryPromoted")]
 [JsonDerivedType(typeof(ConversationMemorySuperseded), "conversationMemorySuperseded")]
 [JsonDerivedType(typeof(ConversationMemoryInvalidated), "conversationMemoryInvalidated")]
+[JsonDerivedType(typeof(RepositoryMemoryRemembered), "repositoryMemoryRemembered")]
+[JsonDerivedType(typeof(RepositoryMemorySuperseded), "repositoryMemorySuperseded")]
+[JsonDerivedType(typeof(RepositoryMemoryValidityChanged), "repositoryMemoryValidityChanged")]
 [JsonDerivedType(typeof(ConversationSummarySnapshotReplaced), "conversationSummarySnapshotReplaced")]
 [JsonDerivedType(typeof(ExecutionCheckpointWritten), "executionCheckpointWritten")]
 [JsonDerivedType(typeof(ExecutionSideEffectRecorded), "executionSideEffectRecorded")]
@@ -514,6 +517,32 @@ public sealed record ConversationMemoryInvalidated(
     ConversationMemoryId MemoryId,
     string Reason) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>A repository-scoped memory item was remembered through a host-owned boundary.</summary>
+public sealed record RepositoryMemoryRemembered(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId MemoryId,
+    RepositoryMemoryKind Kind,
+    RepositoryMemoryAuthority Authority) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A repository-scoped memory correction superseded an older item.</summary>
+public sealed record RepositoryMemorySuperseded(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId SupersededId,
+    RepositoryMemoryId ReplacementId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A repository-scoped memory item changed selection validity without deleting audit metadata.</summary>
+public sealed record RepositoryMemoryValidityChanged(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId MemoryId,
+    RepositoryMemoryValidity Validity,
+    string Reason) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>The active structured conversation summary was atomically replaced.</summary>
 public sealed record ConversationSummarySnapshotReplaced(
     SessionId SessionId,
@@ -708,6 +737,9 @@ public static class DomainEventJson
             ["conversationMemoryPromoted"] = typeof(ConversationMemoryPromoted),
             ["conversationMemorySuperseded"] = typeof(ConversationMemorySuperseded),
             ["conversationMemoryInvalidated"] = typeof(ConversationMemoryInvalidated),
+            ["repositoryMemoryRemembered"] = typeof(RepositoryMemoryRemembered),
+            ["repositoryMemorySuperseded"] = typeof(RepositoryMemorySuperseded),
+            ["repositoryMemoryValidityChanged"] = typeof(RepositoryMemoryValidityChanged),
             ["conversationSummarySnapshotReplaced"] = typeof(ConversationSummarySnapshotReplaced),
             ["executionCheckpointWritten"] = typeof(ExecutionCheckpointWritten),
             ["executionSideEffectRecorded"] = typeof(ExecutionSideEffectRecorded),

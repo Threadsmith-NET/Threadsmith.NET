@@ -1,6 +1,6 @@
 # Implementation Plan 78: Repository-Scoped Cross-Session Memory
 
-**Status:** Planned
+**Status:** Complete
 
 **Delivery track:** M25 - Repository-Scoped Cross-Session Memory
 **Strategy source:** User-requested repository-level memory expansion using existing ignored repo SQLite persistence; ADR-31, ADR-42, plans 33-35, 53-56, and 74-75
@@ -27,8 +27,8 @@ This plan adds a separate repository-scoped memory source. It complements sessio
   - supersede/correct one item;
   - forget or reject one item without deleting audit metadata;
   - validate/recheck repository-dependent items.
-- Promote host-observed repository facts from accepted plans, completed execution/build/test results, and governed evidence when provenance is sufficient.
-- Permit optional model-proposed repository memory candidates only through bounded structured output and strict host validation.
+- Promote conservative host-observed repository facts from accepted plans and completed approved executions when provenance is sufficient.
+- Defer model-proposed repository memory candidates; assistant prose and model output are not durable memory authority in this implementation.
 - Retrieve active relevant repository memory during context assembly with deterministic ranking, budget accounting, sensitivity checks, and context-inspection rationale.
 - Invalidate repository-dependent memory at turn boundaries when supporting files, symbols, projects, solution state, or repository revision become stale.
 - Include backup/restoration, retention, diagnostics, and redaction behavior compatible with existing persistence and diagnostic-bundle boundaries.
@@ -97,11 +97,9 @@ Rows are keyed by repository identity and memory id. The store records schema ve
 Creation paths:
 
 1. Explicit user command, for example `/memory remember repo "Use src/Threadsmith.sln for full solution builds."`.
-2. Host-observed promotion from accepted plans, completed execution outcomes, builds, tests, and validated diagnostics.
-3. Evidence-backed repository fact promotion from current governed evidence with path/symbol/revision provenance.
-4. Optional compaction-like model proposal using a bounded structured request and schema-valid candidate output.
+2. Conservative host-observed promotion from accepted plans and completed approved execution outcomes.
 
-Assistant prose alone is never sufficient for host-observed completion, validation, repository state, or policy authority.
+Assistant prose alone is never sufficient for host-observed completion, validation, repository state, or policy authority. Model-proposed repository-memory candidates are disabled until a future opt-in implementation adds bounded structured candidate generation and strict validation.
 
 ### 6.4 Commands and headless contracts
 
@@ -179,8 +177,8 @@ Expected areas:
 2. Define Core contracts, commands, events, DTOs, categories, authority, validity, and provenance records.
 3. Add SQLite migration/store tables in the existing repository persistence path.
 4. Implement explicit user-authored remember/list/inspect/supersede/forget/validate commands and headless DTOs.
-5. Add deterministic host-observed promotion from accepted plan/execution/build/test/evidence outcomes.
-6. Add optional bounded model-proposed candidate generation and strict validation, or defer it behind a disabled feature flag if implementation risk is high.
+5. Add conservative host-observed promotion from accepted plan and completed approved-execution outcomes.
+6. Defer optional bounded model-proposed candidate generation behind the disabled first implementation.
 7. Implement repository memory retrieval, ranking, budgets, sensitivity checks, and context assembly integration.
 8. Add repository/semantic invalidation and validation flows.
 9. Extend `/context inspect` or add `/memory inspect` projections for inclusion, omission, staleness, and provenance rationale.
@@ -196,8 +194,8 @@ Automated coverage must verify:
 - `.threadsmith/threadsmith.db` remains the persistence boundary and tracked repository files cannot create or authorize memory;
 - list/inspect/supersede/forget/validate commands have TUI/headless parity and stable JSON output;
 - user corrections supersede older repository memory and demote conflicting lower-authority items;
-- host-observed facts require real host events and cannot be fabricated by assistant prose or model candidate output;
-- model-proposed candidates with bad schema, unsupported sources, excessive size, secret-like content, or invented outcomes are rejected;
+- host-observed facts require real host workflow boundaries and cannot be fabricated by assistant prose or model candidate output;
+- model-proposed candidates are disabled and therefore cannot create repository memory;
 - repository-dependent memory invalidates on relevant file/symbol/project/revision change and unrelated user preferences remain active;
 - retrieval is deterministic, bounded, phase-aware, sensitivity-compatible, and provenance-preserving;
 - context inspection reports included/omitted/stale/superseded/sensitivity-blocked repo memory and pressure reductions;
@@ -242,9 +240,9 @@ When implemented, update:
 - `docs/architecture/` with the repository-memory ADR;
 - applicable AGENTS.md files only if durable ownership/workflow contracts change.
 
-## 17. Open Decisions
+## 17. Closed Decisions
 
-- Final command names and whether `/memory` owns both session and repository memory operations.
-- Whether model-proposed repository memory candidates ship in the first implementation or remain disabled until explicit user opt-in.
-- Exact repository identity key when the Git remote, path, or `.git` directory changes.
-- Default repository-memory token/item budgets and retention policy.
+- `/memory` owns repository-scoped memory operations in the first implementation: `remember repo`, `list repo`, `inspect`, `supersede`, `forget`, and `validate repo`.
+- Model-proposed repository memory candidates remain disabled; explicit host-command input is the only creation path in this implementation, and assistant prose is never durable memory authority.
+- Repository memory uses the shared canonical repository identity derived from the platform-canonical repository path and persisted in `.threadsmith/threadsmith.db`.
+- Default repository-memory retrieval budgets are 12 items and 2,000 estimated tokens; active durable item capacity defaults to 512 with overflow retained as inactive audit state.

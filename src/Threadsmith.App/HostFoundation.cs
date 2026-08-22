@@ -569,13 +569,24 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Creates bounded tool limits from the effective configuration.</summary>
     private static ToolLimits CreateToolLimits(IConfiguration configuration)
     {
+        var readFileMaxLines = configuration.GetValue(
+            "tools:readFile:maxLines",
+            ToolLimits.ReadFileLineLimitCeiling);
+        var readFileDefaultLines = Math.Min(
+            configuration.GetValue(
+                "tools:readFile:defaultLines",
+                ToolLimits.ReadFileLineLimitCeiling),
+            readFileMaxLines);
         return new ToolLimits
         {
             ListFilesDefaultEntries = configuration.GetValue("tools:listFiles:defaultEntries", 200),
             ListFilesMaxEntries = configuration.GetValue("tools:listFiles:maxEntries", 2000),
             ReadFileMaximumBytes = configuration.GetValue("tools:readFile:maxBytes", 1024L * 1024L),
-            ReadFileDefaultLines = configuration.GetValue("tools:readFile:defaultLines", 200),
-            ReadFileMaxLines = configuration.GetValue("tools:readFile:maxLines", 1000),
+            ReadFileDefaultLines = readFileDefaultLines,
+            ReadFileMaxLines = readFileMaxLines,
+            ReadFileMaximumContentBytes = configuration.GetValue(
+                "tools:readFile:maxContentBytes",
+                ToolLimits.ReadFileContentByteLimitCeiling),
             SearchMaximumBytes = configuration.GetValue("tools:search:maxBytes", 1024L * 1024L),
             SearchDefaultMatches = configuration.GetValue("tools:search:defaultMatches", 100),
             SearchMaxMatches = configuration.GetValue("tools:search:maxMatches", 500),

@@ -1387,6 +1387,112 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>The default read window returns an ordinary source file in one complete result.</summary>
+    [Fact]
+    public static async Task ReadFileTool_DefaultWindow_ReturnsOrdinaryFileCompletely()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var lines = Enumerable.Range(1, 430).Select(index => $"line {index}").ToArray();
+            await File.WriteAllLinesAsync(Path.Combine(repository, "source.cs"), lines);
+            var tool = new ReadFileTool();
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new ReadFileInput { Path = "source.cs" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            Assert.Equal(1, result.Value.StartLine);
+            Assert.Equal(430, result.Value.EndLine);
+            Assert.Equal(430, result.Value.TotalLines);
+            Assert.Equal(lines, result.Value.Lines);
+            Assert.False(result.Value.IsTruncated);
+            Assert.Null(result.Value.NextStartLine);
+            Assert.Null(result.Value.TruncationReason);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>The default line ceiling returns deterministic continuation metadata.</summary>
+    [Fact]
+    public static async Task ReadFileTool_DefaultLineCeiling_ReturnsNextRange()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllLinesAsync(
+                Path.Combine(repository, "long.cs"),
+                Enumerable.Range(1, 2001).Select(static index => index.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)));
+            var tool = new ReadFileTool();
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new ReadFileInput { Path = "long.cs" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            Assert.Equal(2000, result.Value.Lines.Count);
+            Assert.Equal(2000, result.Value.EndLine);
+            Assert.Equal(2001, result.Value.TotalLines);
+            Assert.True(result.Value.IsTruncated);
+            Assert.Equal(2001, result.Value.NextStartLine);
+            Assert.Equal(ReadFileTruncationReason.LineLimit, result.Value.TruncationReason);
+            Assert.Throws<ToolArgumentValidationException>(() =>
+                tool.DeserializeInput("{\"path\":\"long.cs\",\"maximumLines\":2001}"));
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>The textual byte bound stops only between lines and identifies the exact continuation.</summary>
+    [Fact]
+    public static async Task ReadFileTool_ContentByteLimit_ReturnsNextRange()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllLinesAsync(Path.Combine(repository, "content.txt"), ["1234", "5678", "9"]);
+            var tool = new ReadFileTool(new ToolLimits
+            {
+                ReadFileMaximumContentBytes = 9,
+            });
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new ReadFileInput { Path = "content.txt" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            Assert.Equal(["1234", "5678"], result.Value.Lines);
+            Assert.Equal(2, result.Value.EndLine);
+            Assert.Equal(3, result.Value.TotalLines);
+            Assert.True(result.Value.IsTruncated);
+            Assert.Equal(3, result.Value.NextStartLine);
+            Assert.Equal(ReadFileTruncationReason.ContentByteLimit, result.Value.TruncationReason);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Injected tool limits override the compiled defaults for read_file and list_files.</summary>
     [Fact]
     public static async Task ConfiguredToolLimits_OverrideCompiledDefaults()
@@ -1437,6 +1543,10 @@ public static class ToolRuntimeTests
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
             Assert.Equal(4, defaultResult.Value.Lines.Count);
+            Assert.Equal(4, defaultResult.Value.EndLine);
+            Assert.Equal(8, defaultResult.Value.TotalLines);
+            Assert.Equal(5, defaultResult.Value.NextStartLine);
+            Assert.Equal(ReadFileTruncationReason.LineLimit, defaultResult.Value.TruncationReason);
         }
         finally
         {

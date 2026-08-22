@@ -182,8 +182,9 @@ public static class RepoConfigTests
         Assert.Equal(200, config.GetValue("tools:listFiles:defaultEntries", 0));
         Assert.Equal(2000, config.GetValue("tools:listFiles:maxEntries", 0));
         Assert.Equal(1_048_576L, config.GetValue<long>("tools:readFile:maxBytes", 0));
-        Assert.Equal(200, config.GetValue("tools:readFile:defaultLines", 0));
-        Assert.Equal(1000, config.GetValue("tools:readFile:maxLines", 0));
+        Assert.Equal(2000, config.GetValue("tools:readFile:defaultLines", 0));
+        Assert.Equal(2000, config.GetValue("tools:readFile:maxLines", 0));
+        Assert.Equal(51_200, config.GetValue("tools:readFile:maxContentBytes", 0));
         Assert.Equal(1_048_576L, config.GetValue<long>("tools:search:maxBytes", 0));
         Assert.Equal(100, config.GetValue("tools:search:defaultMatches", 0));
         Assert.Equal(500, config.GetValue("tools:search:maxMatches", 0));

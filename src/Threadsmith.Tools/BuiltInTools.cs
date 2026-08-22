@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.ComponentModel;
 using System.IO.Enumeration;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -154,25 +155,40 @@ public sealed record ReadFileInput
     public int MaximumLines { get; init; } = 0;
 }
 
-/// <summary>Bounded file content with an explicit range.</summary>
+/// <summary>Reason one bounded file read stopped before the end of the file.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ReadFileTruncationReason>))]
+public enum ReadFileTruncationReason
+{
+    /// <summary>The configured or requested line limit was reached.</summary>
+    LineLimit,
+
+    /// <summary>The host textual-content byte limit was reached.</summary>
+    ContentByteLimit,
+}
+
+/// <summary>Bounded file content with explicit range and continuation metadata.</summary>
 public sealed record ReadFileOutput(
     string Path,
     int StartLine,
+    int? EndLine,
+    int TotalLines,
     IReadOnlyList<string> Lines,
-    bool IsTruncated);
+    bool IsTruncated,
+    int? NextStartLine,
+    ReadFileTruncationReason? TruncationReason);
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
         "read_file",
-        "Reads a bounded range from an approved repository file. Prefer one sufficiently useful range over many adjacent tiny reads, and batch independent file reads in the same response when possible.",
+        "Reads an approved repository text file. Omit startLine and maximumLines to read from the beginning up to 2,000 lines or 50 KiB, whichever comes first. Set a narrower range only when exact relevant line numbers are already known. Do not paginate with adjacent small ranges; continue only when the result reports truncation and use nextStartLine. Batch independent file reads in one response.",
         ToolCategory.FileRead,
         RepositoryTrustLevel.TrustedRead,
         ApprovalLevel.None,
         ToolSideEffect.ReadOnly,
         TimeSpan.FromSeconds(10),
-        256 * 1024);
+        384 * 1024);
 
     private readonly ToolLimits _limits;
 
@@ -180,6 +196,19 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     public ReadFileTool(ToolLimits? limits = null)
     {
         _limits = limits ?? ToolLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaxLines,
+            ToolLimits.ReadFileLineLimitCeiling);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileDefaultLines,
+            _limits.ReadFileMaxLines);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumContentBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaximumContentBytes,
+            ToolLimits.ReadFileContentByteLimitCeiling);
     }
 
     /// <inheritdoc />
@@ -207,15 +236,53 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         var lines = await File.ReadAllLinesAsync(path, cancellationToken);
         var startIndex = Math.Min(input.StartLine - 1, lines.Length);
         var maximumLines = ResolveMaximumLines(input);
-        string[] selected = [.. lines.Skip(startIndex).Take(maximumLines)];
-        var truncated = startIndex + selected.Length < lines.Length;
+        var selected = new List<string>(Math.Min(maximumLines, lines.Length - startIndex));
+        var selectedContentBytes = 0;
+        var contentLimitReached = false;
+        for (var index = startIndex; index < lines.Length && selected.Count < maximumLines; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
+            var separatorBytes = selected.Count == 0 ? 0 : 1;
+            if (selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
+            {
+                if (selected.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Line {index + 1} exceeds the {_limits.ReadFileMaximumContentBytes}-byte read content limit.");
+                }
+
+                contentLimitReached = true;
+                break;
+            }
+
+            selected.Add(lines[index]);
+            selectedContentBytes += separatorBytes + lineBytes;
+        }
+
+        int? endLine = selected.Count == 0 ? null : input.StartLine + selected.Count - 1;
+        var truncated = startIndex + selected.Count < lines.Length;
+        ReadFileTruncationReason? truncationReason = truncated
+            ? contentLimitReached
+                ? ReadFileTruncationReason.ContentByteLimit
+                : ReadFileTruncationReason.LineLimit
+            : null;
+        int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
         var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
-        var source = new ToolProvenanceSource(
-            "file",
-            relative,
-            $"L{input.StartLine}-L{input.StartLine + Math.Max(0, selected.Length - 1)}");
+        var sourceLocation = endLine is null
+            ? $"L{input.StartLine}"
+            : $"L{input.StartLine}-L{endLine.Value}";
+        var source = new ToolProvenanceSource("file", relative, sourceLocation);
         return new ToolExecution<ReadFileOutput>(
-            new ReadFileOutput(relative, input.StartLine, selected, truncated),
+            new ReadFileOutput(
+                relative,
+                input.StartLine,
+                endLine,
+                lines.Length,
+                selected,
+                truncated,
+                nextStartLine,
+                truncationReason),
             [source],
             truncated);
     }

@@ -347,8 +347,9 @@
     },
     "readFile": {
       "maxBytes": 1048576,
-      "defaultLines": 200,
-      "maxLines": 1000
+      "defaultLines": 2000,
+      "maxLines": 2000,
+      "maxContentBytes": 51200
     },
     "search": {
       "maxBytes": 1048576,

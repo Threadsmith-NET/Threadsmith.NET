@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Execution;
+using Threadsmith.Tools;
 
 /// <summary>Resolves configuration locations and builds the bounded normal-layer configuration.</summary>
 internal static class ConfigurationBootstrap
@@ -179,8 +180,9 @@ internal static class ConfigurationBootstrap
             ["tools:listFiles:defaultEntries"] = "200",
             ["tools:listFiles:maxEntries"] = "2000",
             ["tools:readFile:maxBytes"] = (1024 * 1024).ToString(CultureInfo.InvariantCulture),
-            ["tools:readFile:defaultLines"] = "200",
-            ["tools:readFile:maxLines"] = "1000",
+            ["tools:readFile:defaultLines"] = ToolLimits.ReadFileLineLimitCeiling.ToString(CultureInfo.InvariantCulture),
+            ["tools:readFile:maxLines"] = ToolLimits.ReadFileLineLimitCeiling.ToString(CultureInfo.InvariantCulture),
+            ["tools:readFile:maxContentBytes"] = ToolLimits.ReadFileContentByteLimitCeiling.ToString(CultureInfo.InvariantCulture),
             ["tools:search:maxBytes"] = (1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["tools:search:defaultMatches"] = "100",
             ["tools:findSymbol:maxResults"] = "1000",

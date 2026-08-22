@@ -145,7 +145,7 @@ public static class Plan49ToolTimingTests
         ITool implementationsTool = new FindImplementationsTool(new UnusedSemanticEngineResolver());
         var implementationsInput = implementationsTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
 
-        Assert.Equal("lines 1-200, src/Program.cs", readTool.GetActivityDetail(readInput));
+        Assert.Equal("lines 1-2000, src/Program.cs", readTool.GetActivityDetail(readInput));
         Assert.Equal("dotnet test src/Threadsmith.sln", processTool.GetActivityDetail(processInput));
         Assert.Equal("SectorEntityStandardizer", symbolTool.GetActivityDetail(symbolInput));
         Assert.Equal("T:Demo.IRetriever", referencesTool.GetActivityDetail(referencesInput));

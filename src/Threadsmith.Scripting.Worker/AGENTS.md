@@ -26,7 +26,7 @@ Own the disposable Roslyn process used by the optional `csharp_script` built-in 
 ## Verification
 
 - `dotnet build src/Threadsmith.sln --no-restore`
-- `tests\Threadsmith.Milestone3.Tests\bin\Debug\net10.0\Threadsmith.Milestone3.Tests.exe --filter-method "*CSharpScript*"`
+- `tests\Threadsmith.ModelTooling.Tests\bin\Debug\net10.0\Threadsmith.ModelTooling.Tests.exe --filter-method "*CSharpScript*"`
 
 ## Child DOX Index
 

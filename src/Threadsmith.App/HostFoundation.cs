@@ -36,6 +36,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SecretOutputSanitizer sanitizer,
         SqliteRepositoryFactsStore repositoryFacts,
         SqliteConversationStore conversationStore,
+        SqliteRepositoryMemoryStore repositoryMemoryStore,
         SqliteSessionLifecycleStore sessionLifecycleStore,
         SessionRestorer sessionRestorer,
         ArtifactStore artifactStore,
@@ -76,6 +77,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         Sanitizer = sanitizer;
         RepositoryFacts = repositoryFacts;
         ConversationStore = conversationStore;
+        RepositoryMemoryStore = repositoryMemoryStore;
         SessionLifecycleStore = sessionLifecycleStore;
         SessionRestorer = sessionRestorer;
         ArtifactStore = artifactStore;
@@ -148,6 +150,9 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Gets the durable sanitized conversation archive and governed memory store.</summary>
     internal SqliteConversationStore ConversationStore { get; }
+
+    /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
+    internal SqliteRepositoryMemoryStore RepositoryMemoryStore { get; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal SqliteSessionLifecycleStore SessionLifecycleStore { get; }
@@ -232,8 +237,12 @@ internal sealed class HostFoundation : IAsyncDisposable
 
         var executionLimits = new ExecutionLimits
         {
-            MaxModelRounds = configuration.GetValue("execution:maxModelRounds", 16),
-            MaxPlanningToolRounds = configuration.GetValue("execution:maxPlanningToolRounds", 4),
+            MaxModelRounds = configuration.GetValue(
+                "execution:maxModelRounds",
+                ExecutionLimits.DefaultMaxModelRounds),
+            MaxPlanningToolRounds = configuration.GetValue(
+                "execution:maxPlanningToolRounds",
+                ExecutionLimits.DefaultMaxPlanningToolRounds),
             MaxPlanProposalRepairAttempts = configuration.GetValue(
                 "execution:maxPlanProposalRepairAttempts",
                 3),
@@ -305,7 +314,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             contextLifecycle = new ContextLifecycleObserver(
                 evidenceStore,
                 promptAppendLoader,
-                new ConversationMemoryInvalidator(persistence.ConversationStore, events: events));
+                new ConversationMemoryInvalidator(persistence.ConversationStore, events: events),
+                new RepositoryMemoryInvalidator(persistence.RepositoryMemoryStore, events: events));
             contextSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                     ? Task.CompletedTask
@@ -430,6 +440,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 sanitizer,
                 repositoryFacts,
                 persistence.ConversationStore,
+                persistence.RepositoryMemoryStore,
                 persistence.SessionLifecycleStore,
                 persistence.SessionRestorer,
                 persistence.ArtifactStore,
@@ -558,13 +569,24 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Creates bounded tool limits from the effective configuration.</summary>
     private static ToolLimits CreateToolLimits(IConfiguration configuration)
     {
+        var readFileMaxLines = configuration.GetValue(
+            "tools:readFile:maxLines",
+            ToolLimits.ReadFileLineLimitCeiling);
+        var readFileDefaultLines = Math.Min(
+            configuration.GetValue(
+                "tools:readFile:defaultLines",
+                ToolLimits.ReadFileLineLimitCeiling),
+            readFileMaxLines);
         return new ToolLimits
         {
             ListFilesDefaultEntries = configuration.GetValue("tools:listFiles:defaultEntries", 200),
             ListFilesMaxEntries = configuration.GetValue("tools:listFiles:maxEntries", 2000),
             ReadFileMaximumBytes = configuration.GetValue("tools:readFile:maxBytes", 1024L * 1024L),
-            ReadFileDefaultLines = configuration.GetValue("tools:readFile:defaultLines", 200),
-            ReadFileMaxLines = configuration.GetValue("tools:readFile:maxLines", 1000),
+            ReadFileDefaultLines = readFileDefaultLines,
+            ReadFileMaxLines = readFileMaxLines,
+            ReadFileMaximumContentBytes = configuration.GetValue(
+                "tools:readFile:maxContentBytes",
+                ToolLimits.ReadFileContentByteLimitCeiling),
             SearchMaximumBytes = configuration.GetValue("tools:search:maxBytes", 1024L * 1024L),
             SearchDefaultMatches = configuration.GetValue("tools:search:defaultMatches", 100),
             SearchMaxMatches = configuration.GetValue("tools:search:maxMatches", 500),
@@ -619,6 +641,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             sanitizer,
             events,
             configuration.GetValue("context:conversation:artifactThresholdCharacters", 16_384));
+        var repositoryMemoryStore = new SqliteRepositoryMemoryStore(connectionString, sanitizer);
         var sessionLifecycleStore = new SqliteSessionLifecycleStore(connectionString);
         var sessionRestorer = new SessionRestorer(
             eventStore,
@@ -653,6 +676,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         return new PersistenceServices(
             eventStore,
             conversationStore,
+            repositoryMemoryStore,
             sessionLifecycleStore,
             sessionRestorer,
             artifactStore,
@@ -908,6 +932,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     private sealed record PersistenceServices(
         SqliteEventStore EventStore,
         SqliteConversationStore ConversationStore,
+        SqliteRepositoryMemoryStore RepositoryMemoryStore,
         SqliteSessionLifecycleStore SessionLifecycleStore,
         SessionRestorer SessionRestorer,
         ArtifactStore ArtifactStore,

@@ -188,7 +188,7 @@ Expected implementation areas:
 - `src/Threadsmith.Configuration` or owning configuration layer: plan approval policy binding, precedence, defaults, and repository identity persistence.
 - `src/Threadsmith.Tui`: `/plan-policy` command, plan review/auto-approval projection, warnings, and headless parity plumbing where commands are shared.
 - `src/Threadsmith.App`: production composition of the policy/sanity services and command registration.
-- `tests/Threadsmith.Milestone4.Tests` and/or execution/TUI suites: schema/sanity/repair/auto-approval coverage.
+- `tests/Threadsmith.Planning.Tests` and/or execution/TUI suites: schema/sanity/repair/auto-approval coverage.
 - `.threadsmith/config.example`, `docs/user-guide.md`, `docs/operations/execution-resumption.md`, `docs/architecture/validation-pipeline.md`, `docs/implementation-plans/manual-test-plan.md`, and DOX files.
 
 ## 9. Ordered Tasks

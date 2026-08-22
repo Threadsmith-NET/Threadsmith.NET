@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Text.Json.Nodes;
 using Threadsmith.Core;
 
 /// <summary>Returns a bounded compiler-aware incoming/outgoing call hierarchy.</summary>
@@ -74,12 +75,10 @@ public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactRequest,
     }
 }
 
-/// <summary>Searches C# syntax with a closed inert versioned pattern schema.</summary>
+/// <summary>Searches C# syntax with a closed inert pattern schema.</summary>
 public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPatternSearchRequest, CSharpPatternSearchResult>
 {
-    private static readonly ToolDefinition _definition = CreateDefinition<CSharpPatternSearchRequest, CSharpPatternSearchResult>(
-        "csharp_pattern_search",
-        "Primary semantic tool for C# declaration and expression shapes when an exact symbol query is insufficient. MUST use before search and fall back only if this tool fails or reports incomplete evidence.");
+    private static readonly ToolDefinition _definition = CreatePatternDefinition();
 
     /// <summary>Initializes a new instance of the <see cref="CSharpPatternSearchTool"/> class.</summary>
     public CSharpPatternSearchTool(IAdvancedSemanticQueryService service)
@@ -108,7 +107,7 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
     protected override void ValidateInput(CSharpPatternSearchRequest input)
     {
         ArgumentNullException.ThrowIfNull(input.Pattern);
-        if (input.Pattern.Version != 1 || input.MaximumMatches is < 1 or > 1000
+        if ((input.Pattern.Version ?? 1) != 1 || input.MaximumMatches is < 1 or > 1000
             || input.TimeoutMilliseconds is < 1 or > 60_000)
         {
             throw new ToolArgumentValidationException("pattern version or result/time bounds are unsupported.");
@@ -121,6 +120,27 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
         ToolInvocationContext context)
     {
         return [input.Path ?? context.RepositoryPath];
+    }
+
+    private static ToolDefinition CreatePatternDefinition()
+    {
+        var definition = CreateDefinition<CSharpPatternSearchRequest, CSharpPatternSearchResult>(
+            "csharp_pattern_search",
+            "Primary semantic tool for C# declaration and expression shapes when an exact symbol query is insufficient. Arguments must use the nested shape {pattern:{kind,name?,containingType?,requiredModifiers?,requiredAttributes?,capture?},path?,maximumMatches?,timeoutMilliseconds?}. MUST use before search and fall back only if this tool fails or reports incomplete evidence.");
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)
+            ?? throw new InvalidOperationException("The generated pattern-search schema was empty.");
+        if (schema["properties"]?["pattern"]?["properties"] is JsonObject patternProperties)
+        {
+            patternProperties.Remove("version");
+        }
+
+        return definition with
+        {
+            InputSchema = definition.InputSchema with
+            {
+                JsonSchema = schema.ToJsonString(),
+            },
+        };
     }
 }
 

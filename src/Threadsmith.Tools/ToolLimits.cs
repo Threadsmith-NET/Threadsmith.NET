@@ -13,6 +13,12 @@ namespace Threadsmith.Tools;
 /// </remarks>
 public sealed record ToolLimits
 {
+    /// <summary>Hard ceiling for one <c>read_file</c> line window.</summary>
+    public const int ReadFileLineLimitCeiling = 2000;
+
+    /// <summary>Hard ceiling for textual content returned by one <c>read_file</c> invocation.</summary>
+    public const int ReadFileContentByteLimitCeiling = 50 * 1024;
+
     // ── list_files ───────────────────────────────────────────────────────
 
     /// <summary>Default <c>maximumEntries</c> when the model omits it. Historical default: 200.</summary>
@@ -26,11 +32,17 @@ public sealed record ToolLimits
     /// <summary>Maximum byte size of a single readable file. Historical default: 1 MiB.</summary>
     public long ReadFileMaximumBytes { get; init; } = 1024 * 1024;
 
-    /// <summary>Default <c>maximumLines</c> when the model omits it. Historical default: 200.</summary>
-    public int ReadFileDefaultLines { get; init; } = 200;
+    /// <summary>Default <c>maximumLines</c> when the model omits it.</summary>
+    public int ReadFileDefaultLines { get; init; } = ReadFileLineLimitCeiling;
 
-    /// <summary>Upper bound for <c>maximumLines</c>. Historical default: 1000.</summary>
-    public int ReadFileMaxLines { get; init; } = 1000;
+    /// <summary>Configured upper bound for <c>maximumLines</c>, capped by <see cref="ReadFileLineLimitCeiling"/>.</summary>
+    public int ReadFileMaxLines { get; init; } = ReadFileLineLimitCeiling;
+
+    /// <summary>
+    /// Configured textual-content bound for one result, capped by
+    /// <see cref="ReadFileContentByteLimitCeiling"/>.
+    /// </summary>
+    public int ReadFileMaximumContentBytes { get; init; } = ReadFileContentByteLimitCeiling;
 
     // ── search ───────────────────────────────────────────────────────────
 

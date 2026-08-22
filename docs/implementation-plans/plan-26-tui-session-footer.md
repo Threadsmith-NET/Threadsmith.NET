@@ -73,7 +73,7 @@ Startup prints a one-time status summary. The composer label follows the active 
 - `src/Threadsmith.Core/` and/or `src/Threadsmith.Execution/` — normalized usage identity/event/projection only if required by the inventory.
 - `src/Threadsmith.Tui/` — status snapshot builder, responsive layout, footer modes, refresh coalescing, and theme application.
 - `src/Threadsmith.App/Program.cs` — inject effective repository/model/context/usage projections and footer configuration.
-- `tests/Threadsmith.Milestone7_1.Tests/` — usage aggregation, status truth, layout widths, refresh bounds, and surface serialization.
+- `tests/Threadsmith.SessionStatus.Tests/` — usage aggregation, status truth, layout widths, refresh bounds, and surface serialization.
 - `spikes/` — only if a standalone pseudo-terminal prototype is needed; record results in `docs/architecture/spike-notes.md`.
 - `docs/architecture/` — add an ADR if the chosen pinned technique materially changes ADR-15's terminal ownership model.
 - `docs/operations/tui-themes.md` and `keyboard-shortcuts.md` — footer settings and displayed metrics.
@@ -121,7 +121,7 @@ No existing session needs migration unless a new durable usage event is introduc
 - Refresh is structurally bounded to one write immediately before each composer read. Streaming events never enqueue footer redraws, so no refresh queue exists to coalesce or drop; startup reports the selected composer-adjacent or disabled mode and fixed-footer fallback reason once.
 - `tui:footer:enabled=false` hides presentation without disabling accounting. `PrettyPromptConsoleSurface` emits no row for redirected output or when terminal width cannot be read.
 - Restored durable sessions intentionally do not restore usage totals: provider usage is a session-process presentation projection, not persisted execution/domain state.
-- Dedicated automated coverage lives in `tests/Threadsmith.Milestone7_1.Tests`; provider-boundary integration remains covered in Milestone 1 and Milestone 5 suites.
+- Dedicated automated coverage lives in `tests/Threadsmith.SessionStatus.Tests`; provider-boundary integration remains covered in Milestone 1 and Milestone 5 suites.
 
 ## 14. Acceptance Criteria
 

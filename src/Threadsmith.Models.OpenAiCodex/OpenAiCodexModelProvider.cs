@@ -136,7 +136,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
             ["input"] = CreateInput(request),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
-            ["parallel_tool_calls"] = true,
             ["reasoning"] = new JsonObject
             {
                 ["effort"] = ToProviderReasoning(request.ReasoningLevel),
@@ -145,16 +144,21 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["text"] = new JsonObject { ["verbosity"] = "medium" },
         };
 
+        if (request.AllowMultipleToolCalls is { } allowMultipleToolCalls)
+        {
+            body["parallel_tool_calls"] = allowMultipleToolCalls;
+        }
+
         if (request.Tools.Count > 0)
         {
-            var hasStrictTools = false;
             JsonArray tools = [];
             foreach (var tool in ModelToolCanonicalizer.Canonicalize(request.Tools))
             {
-                var strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-                    tool.Name,
-                    tool.ArgumentsJsonSchema);
-                hasStrictTools |= strictSchema is not null;
+                var strictSchema = tool.PreferStrictArguments
+                    ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                        tool.Name,
+                        tool.ArgumentsJsonSchema)
+                    : null;
                 tools.Add(new JsonObject
                 {
                     ["type"] = "function",
@@ -163,11 +167,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     ["parameters"] = JsonNode.Parse(strictSchema ?? tool.ArgumentsJsonSchema),
                     ["strict"] = strictSchema is not null,
                 });
-            }
-
-            if (hasStrictTools)
-            {
-                body["parallel_tool_calls"] = false;
             }
 
             body["tools"] = tools;

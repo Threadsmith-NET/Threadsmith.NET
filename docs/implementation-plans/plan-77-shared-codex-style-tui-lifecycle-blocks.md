@@ -240,7 +240,7 @@ Expected implementation areas:
   - transcript application for PLAN, auto-approval, semantic checks, tools, mutation status, and exact event-boundary spacing.
 - `src/Threadsmith.Tui/TuiEventSegments.cs`
   - role-aware segment routing for shared blocks, especially muted plan body/steps and outcome-specific statuses.
-- `tests/Threadsmith.Milestone1.Tests/`
+- `tests/Threadsmith.CoreRuntime.Tests/`
   - formatter, transcript, event-segment role, spacing, semantic-check phase, and visible-output regression coverage.
 - `docs/user-guide.md` and `docs/implementation-plans/manual-test-plan.md` if the implemented visible interaction contract changes user/operator procedures.
 - `src/Threadsmith.Tui/AGENTS.md` if the durable TUI rendering contract changes.

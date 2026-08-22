@@ -20,7 +20,7 @@ M12 is implemented through host-owned `Threadsmith.Core` contracts and the `Thre
 
 The safe schema subset rejects references, unknown keywords/types, excessive depth/count/size, undeclared values, and invalid input/output. Invocation revalidates phase, trust, host/tool/model compatibility before body loading; current-step assets are strict-UTF-8, hash-checked, sanitized, provenance-linked, and pressure-bounded. Procedure turns use configured models and only declared available tools through the central pipeline. Closed acyclic workflow steps can pause only on typed host-action proposals; they cannot approve, mutate, create agents, or schedule concurrency directly.
 
-SQLite migration 5 stores exact verification provenance, immutable pins, and versioned workflow checkpoints. Scope/id/version/digest, canonical input, selected model/tools, effective budgets, attempt/generation, completed steps, and next legal action remain pinned across cancellation/resume. Shared `/skills`, headless commands, and the central `invoke_skill` tool use the same application boundary. Maintained `fix-analyzer-warnings`, `upgrade-package`, and `review-pr` packages are copied to output and run through the same verification/schema/content/workflow path as third-party packages. `Threadsmith.Milestone12.Tests` provides adversarial package, schema, trust, archive, compatibility, content-pressure, workflow, and migration coverage.
+SQLite migration 5 stores exact verification provenance, immutable pins, and versioned workflow checkpoints. Scope/id/version/digest, canonical input, selected model/tools, effective budgets, attempt/generation, completed steps, and next legal action remain pinned across cancellation/resume. Shared `/skills`, headless commands, and the central `invoke_skill` tool use the same application boundary. Maintained `fix-analyzer-warnings`, `upgrade-package`, and `review-pr` packages are copied to output and run through the same verification/schema/content/workflow path as third-party packages. `Threadsmith.Skills.Tests` provides adversarial package, schema, trust, archive, compatibility, content-pressure, workflow, and migration coverage.
 
 ## 2 Architectural Context
 
@@ -202,7 +202,7 @@ No terminal-library, provider SDK, JSON implementation, extension implementation
 - `Threadsmith.Tui` / `Threadsmith.Cli` — `/skills` browse/inspect/verify/enable/invoke/provenance and headless equivalents.
 - `.threadsmith/config.example` — repository skill selection and limits only; no signer trust or self-allowlisting.
 - `skills/` or another documented non-project artifact location for maintained packages, with build metadata to copy assets to output when newer.
-- Dedicated `Threadsmith.Milestone12.Tests`, architecture tests, fixtures, documentation, and DOX.
+- Dedicated `Threadsmith.Skills.Tests`, architecture tests, fixtures, documentation, and DOX.
 
 ## 16 Ordered Tasks
 

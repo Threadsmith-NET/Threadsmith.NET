@@ -21,7 +21,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 - The provider reasserts the selected profile's sensitive-data policy before constructing or dispatching a request.
 - User-owned credential and model-metadata caches are fully validated before projection; malformed payloads recover as unauthenticated or cache-missing state.
 - A pre-stream 401/403 may force one generation-fenced credential refresh and safe replay. Transient 408/429/502/503/504 responses honor the selected profile's bounded attempt count and cancellation-aware delay.
-- Responses function tools use provider-neutral strict-schema projection when possible and send `strict: true` with the projected schema. Disable `parallel_tool_calls` whenever strict tools are present. Leave fallback non-strict only for schemas the shared projector rejects as unsafe or outside the supported Structured Outputs subset.
+- Responses function tools use canonical non-strict schemas by default, matching Codex's ordinary built-in tool policy. Definitions with an explicit strict preference use provider-neutral strict-schema projection and send `strict: true` when projection succeeds. Project `parallel_tool_calls` independently from the request's explicit multiple-call policy and omit it when the host leaves that policy unspecified. Leave preferred-tool fallback non-strict when the shared projector rejects an unsafe or unsupported schema.
 
 ## Work Guidance
 
@@ -31,7 +31,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 
 ## Verification
 
-- `Threadsmith.Milestone18.Tests` owns catalog, policy, OAuth, request, stream, and composition coverage.
+- `Threadsmith.CodexProvider.Tests` owns catalog, policy, OAuth, request, stream, and composition coverage.
 - `Threadsmith.Architecture.Tests` enforces dependency direction and provider isolation.
 
 ## Child DOX Index

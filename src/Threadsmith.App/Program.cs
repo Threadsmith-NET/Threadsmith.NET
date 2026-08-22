@@ -193,6 +193,7 @@ public static class Program
                 Persistence = new PersistenceCompositionInputs
                 {
                     ConversationStore = foundation.ConversationStore,
+                    RepositoryMemoryStore = foundation.RepositoryMemoryStore,
                     SessionLifecycleStore = foundation.SessionLifecycleStore,
                     SessionRestorer = foundation.SessionRestorer,
                     ArtifactStore = foundation.ArtifactStore,

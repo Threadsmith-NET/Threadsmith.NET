@@ -35,7 +35,7 @@ AR-05 is therefore evidence-gated performance work. A valid completed outcome is
 ## 5. Current State
 
 Implementation complete (evidence-gated; measured disposition). A deterministic allocation harness
-(`tests/Threadsmith.Milestone1.Tests/Plan68AllocationMeasurementTests.cs`) measures warm steady-state
+(`tests/Threadsmith.CoreRuntime.Tests/Plan68AllocationMeasurementTests.cs`) measures warm steady-state
 `GC.GetAllocatedBytesForCurrentThread` bytes per operation over 128–256 repeated samples for
 representative small, typical, and bounded-large inputs across every named candidate path. The
 declared materiality threshold is a repeatable ≥10% reduction in measured per-operation allocation

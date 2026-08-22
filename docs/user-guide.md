@@ -212,6 +212,12 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
 | `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
 | `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
+| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
+| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
+| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
+| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
+| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
 | `/help` | Display available commands. |
 | `/quit` | Exit cleanly. |
 
@@ -249,6 +255,16 @@ Conversation continuity is bounded and host-owned. Threadsmith archives only san
 - **Stateless**: current input and current-run governed state only. Mode changes preserve the archive for later use.
 
 Structured memory distinguishes user requirements, decisions, constraints, unresolved questions, repository findings, completed work, and rejected/superseded information. Explicit corrections supersede rather than erase prior items. Repository findings require current governed evidence and revision provenance; repository changes make dependent items stale before later retrieval.
+
+### Repository-scoped memory
+
+Repository-scoped memory is separate from session conversation memory. It is local to the current repository identity, stored in the ignored `.threadsmith/threadsmith.db` database, and is not shared or tracked by Git. A repository file, prompt append, skill, hook, or ordinary configuration cannot silently create, authorize, or elevate memory.
+
+Use `/memory remember repo <text>` only for facts you explicitly want retained for future sessions in this repository. Threadsmith sanitizes and bounds the text, records user-command provenance, and stores it as untrusted prompt data. `/memory list repo` includes active and inactive audit rows; `/memory inspect <memory-id>` shows the bounded content, validity, authority, hash, and provenance. Corrections use `/memory supersede <memory-id> <replacement-text>` so the old item becomes superseded while the replacement is preferred. `/memory forget <memory-id>` marks an item forgotten without deleting audit metadata.
+
+Repository-dependent memory with path, symbol, project, or revision support is conservatively marked stale when host-observed repository mutations affect that support. Stale, superseded, forgotten, and rejected memory is omitted from model context until explicit validation or correction changes the state. `/memory validate repo` can reactivate explicit user-authored memory that has no repository-dependent support; unverifiable path/symbol/project/revision-scoped items remain stale. `/context inspect` reports repository-memory inclusion, omission, staleness, and budget rationale alongside ordinary conversation context.
+
+Headless callers use the same host-owned repository-memory commands and JSON DTOs as the TUI. Model-proposed repository-memory candidates remain disabled in this implementation; assistant prose alone is never enough to create durable repository memory.
 
 #### How context optimization works
 
@@ -354,7 +370,8 @@ Mutation-related controls:
     "maxPlanProposalRepairAttempts": 3,
     "maxPlanRevisionRepairAttempts": 3,
     "maxMutationProposalRepairAttempts": 3,
-    "maxModelRounds": 16,
+    "maxModelRounds": 0,
+    "maxPlanningToolRounds": 0,
     "maxStructuredOutputCharacters": 8388608
   },
   "formatting": {
@@ -372,7 +389,7 @@ Mutation-related controls:
 - `execution:maxPlanProposalRepairAttempts` bounds malformed `propose_plan` argument repair attempts.
 - `execution:maxPlanRevisionRepairAttempts` bounds automatic plan-revision attempts after repairable sanity-check failures.
 - `execution:maxMutationProposalRepairAttempts` bounds mutation-proposal repair attempts after repairable schema, exact-text, or pre-mutation validation failures.
-- `execution:maxModelRounds` and `execution:maxStructuredOutputCharacters` bound model continuation and mutation proposal output.
+- `execution:maxModelRounds` optionally bounds total model continuation rounds for a request, and `0` disables that separate cutoff; `execution:maxPlanningToolRounds` optionally bounds the initial planning rounds that advertise inspection tools before only `propose_plan` remains, and `0` disables that separate cutoff so exploration can use the full model-round budget; `execution:maxStructuredOutputCharacters` bounds mutation proposal output.
 - `formatting:applyOnMutation` controls configured formatting around proposed mutations where formatting support is available; formatting does not bypass exact diff review.
 
 ### Plan approval policies

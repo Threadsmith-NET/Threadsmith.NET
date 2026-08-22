@@ -289,6 +289,13 @@
         "maximumInputTokens": 16000
       }
     },
+    // Local repository-scoped cross-session memory retrieval (plan-78). Items
+    // remain in the ignored .threadsmith/threadsmith.db repository database and
+    // are treated as untrusted prompt data when selected.
+    "repositoryMemory": {
+      "maximumItems": 12,
+      "maximumTokens": 2000
+    },
     // Phase-specific evidence inclusion toggles (plan-09 §14).
     "phases": {
       "RepositoryDiscovery": { "includeSemanticFacts": true },
@@ -340,8 +347,9 @@
     },
     "readFile": {
       "maxBytes": 1048576,
-      "defaultLines": 200,
-      "maxLines": 1000
+      "defaultLines": 2000,
+      "maxLines": 2000,
+      "maxContentBytes": 51200
     },
     "search": {
       "maxBytes": 1048576,
@@ -430,11 +438,11 @@
   // Host-owned operational limits for the execution subsystem. Override the
   // compiled defaults at the machine/user/repo/session layer as needed.
   "execution": {
-    // Maximum model continuation rounds within one plan-generation cycle.
-    "maxModelRounds": 16,
-    // Initial evidence-collection rounds that may advertise repository inspection
-    // tools. Later rounds retain propose_plan only so planning must converge.
-    "maxPlanningToolRounds": 4,
+    // Optional model continuation-round cutoff. 0 disables the separate cutoff.
+    "maxModelRounds": 0,
+    // Optional initial evidence-collection inspection-tool cutoff. 0 disables the
+    // separate cutoff so exploration can use the full model-round budget.
+    "maxPlanningToolRounds": 0,
     // Automatic malformed propose_plan argument repair attempts before the host
     // fails closed.
     "maxPlanProposalRepairAttempts": 3,

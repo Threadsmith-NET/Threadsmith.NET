@@ -28,7 +28,7 @@ Normalize model identity, capabilities, streaming output, tool requests, usage, 
 - `ModelStreamRequest.Tools` carries one host-canonicalized provider-neutral inventory. Canonicalization orders by stable group/id, preserves supported schema semantics (including explicit `null`), rejects duplicates/invalid schemas, and computes the identity reused by context and adapters. Native transport never also renders textual schemas.
 - `ModelStreamRequest.Messages` carries closed structured roles/content parts in chronological order; `Input` remains deterministic legacy compatibility only. Layout/wire/cache/continuation metadata is additive, host-owned, and contains no provider DTO or opaque remote reference.
 - Cache reads/writes are optional and unavailable when absent; never invent zero counters. Cache controls and stateful continuation are optimizations only, and canonical stateless requests remain recovery/audit authority. Explicit breakpoint plans are bounded across host, repository, native-tool, and phase boundaries; continuation reuse is bound independently to provider/profile, request or session generation, phase, trust/policy generation, layout version, instructions, tools, compaction, and canonical stateless request identity so every invalidation has a precise reason.
-- Concrete providers validate and map tool schemas through the shared strict-schema projector where supported; provider wire schemas may require optional properties as nullable while preserving the canonical host schema for validation, digesting, and audit. Strict-tool provider requests disable provider-side parallel tool-call mode, and fallback schemas omit strict-only wire members when the projector rejects an unsafe or unsupported schema. Tool arguments are valid JSON objects before a `ToolRequestModelOutput` crosses the provider boundary.
+- Canonical host schemas remain authoritative for validation, digesting, and audit. `ModelToolDefinition.PreferStrictArguments` opts only authority-bearing tools into the shared provider strict-schema projector; ordinary inspection tools default to canonical non-strict wire schemas, matching mainstream coding-agent behavior. Provider strict schemas may require optional properties as nullable. `ModelStreamRequest.AllowMultipleToolCalls` independently carries the host concurrency decision: `true` permits multiple calls in one model response, `false` requests one, and `null` preserves provider defaults. Strict projection does not implicitly disable multiple calls. Preferred schemas fall back without strict-only members when the projector rejects an unsafe or unsupported shape. Tool arguments are valid JSON objects before a `ToolRequestModelOutput` crosses the provider boundary.
 - Scripted model calls stop at the next tool request and resume deterministically from the request-owned `ToolContinuationRound`; never keep mutable cross-run cursor state in the fake provider.
 - Retry only classified transient statuses and preserve bounded attempts, observability, and caller cancellation.
 - A profile-owned request timeout becomes `ModelProviderTimeoutException`; only caller-token cancellation remains `OperationCanceledException`.
@@ -49,10 +49,10 @@ Normalize model identity, capabilities, streaming output, tool requests, usage, 
 
 ## Verification
 
-- `dotnet test tests/Threadsmith.Milestone3.Tests/` — profiles, selection, recorded SSE normalization, usage estimation, cost pause, retries, structured validation, and mid-stream cancellation pass.
-- `dotnet test tests/Threadsmith.Milestone4.Tests/` — per-request resolution and structured plan output pass.
-- `dotnet test tests/Threadsmith.Milestone5.Tests/` — structured mutation-set validation passes.
-- `dotnet test --project tests/Threadsmith.Milestone19.Tests/Threadsmith.Milestone19.Tests.csproj` — canonical tools, wire estimates, instruction bundles, structured ordering, and continuation bindings pass.
+- `dotnet test tests/Threadsmith.ModelTooling.Tests/` — profiles, selection, recorded SSE normalization, usage estimation, cost pause, retries, structured validation, and mid-stream cancellation pass.
+- `dotnet test tests/Threadsmith.Planning.Tests/` — per-request resolution and structured plan output pass.
+- `dotnet test tests/Threadsmith.Mutations.Tests/` — structured mutation-set validation passes.
+- `dotnet test --project tests/Threadsmith.ContextCaching.Tests/Threadsmith.ContextCaching.Tests.csproj` — canonical tools, wire estimates, instruction bundles, structured ordering, and continuation bindings pass.
 - `dotnet test tests/Threadsmith.Architecture.Tests/` — provider types and packages remain outside forbidden layers.
 
 ## Child DOX Index

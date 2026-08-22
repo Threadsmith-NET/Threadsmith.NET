@@ -1,7 +1,5 @@
 namespace Threadsmith.Execution;
 
-using System.Security.Cryptography;
-using System.Text;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Persistence;
@@ -582,8 +580,7 @@ public sealed class SessionLifecycleApplication :
     private static (string Identity, string DisplayName) CreateRepositoryBinding(string repositoryPath)
     {
         var canonicalRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        var identity = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
-            OperatingSystem.IsWindows() ? canonicalRepository.ToUpperInvariant() : canonicalRepository)));
+        var identity = RepositoryIdentity.Create(canonicalRepository);
         var displayName = Path.GetFileName(canonicalRepository);
         return (identity, string.IsNullOrWhiteSpace(displayName) ? canonicalRepository : displayName);
     }

@@ -1,4 +1,4 @@
-﻿# Implementation Plan 18: Persistence Completion and Session Restoration
+# Implementation Plan 18: Persistence Completion and Session Restoration
 
 **Milestone:** M8 — MCP, Persistence Completion, and Operational Hardening
 **Strategy source:** §19 (Persistence + Session Restoration), §9.4 (event model + `SchemaVersion` — gap #3), §10.2 (model output schema versions — gap #3), §19.5 (DB migrations), §19.6 (retention), §29 (ADR 6), §34 (scenarios B, H require inspectability across restart)
@@ -24,7 +24,7 @@ Parent: M8 (§28). This is `Threadsmith.Persistence`. It finalizes the plan-02 m
 - No MCP (plan-19). No operational hardening beyond retention/redaction (plan-20). No remote persistence.
 
 ## 5. Current State
-Complete. Ordered transactional migrations, content-addressed sanitized artifacts, tolerant event restoration, retention, startup redaction auditing, and conversation restoration are implemented and covered by `Threadsmith.Milestone8.Tests`. Startup now performs one configured retention pass and deletes both eligible artifact metadata and bodies.
+Complete. Ordered transactional migrations, content-addressed sanitized artifacts, tolerant event restoration, retention, startup redaction auditing, and conversation restoration are implemented and covered by `Threadsmith.PersistenceMcpHardening.Tests`. Startup now performs one configured retention pass and deletes both eligible artifact metadata and bodies.
 
 ## 6. Proposed Design
 - Schema per §19.2; one table per aggregate + a single append-only events table with `SchemaVersion`.

@@ -59,7 +59,7 @@ Plan 22 is implemented. `SdkHttpTransport` maps explicit SSE and streamable-HTTP
 - `src/Threadsmith.Mcp/McpProfileConfigurationLoader.cs`: bind `headers` and `oauth`.
 - `src/Threadsmith.Mcp/McpAdapter.cs`: reject `oauth.enabled` profiles fast with a clear message.
 - `src/Threadsmith.App/Program.cs`: transport factory selects `SdkHttpTransport` for SSE/HTTP.
-- `tests/Threadsmith.Milestone9.Tests/`: add SSE/HTTP integration tests (opt-in / external-endpoint-gated), a unit test for `HttpClientTransportOptions` mapping, a unit test for header secret-resolution, and a test that an `oauth.enabled` profile fails fast with the documented message.
+- `tests/Threadsmith.McpTransports.Tests/`: add SSE/HTTP integration tests (opt-in / external-endpoint-gated), a unit test for `HttpClientTransportOptions` mapping, a unit test for header secret-resolution, and a test that an `oauth.enabled` profile fails fast with the documented message.
 - `.threadsmith/config.example` + `.threadsmith/AGENTS.md`: document `mcp:profiles[].headers` (with a static-token SSO example), `mcp:profiles[].oauth` (parsed, not yet implemented — points at plan-23), and the `MCP_*` secret-store convention. Add `headers`/`oauth` rows to `RepoConfigTests`.
 - `docs/operations/mcp-connections.md`: complete, with an Authentication section (static-token SSO now; interactive OAuth planned).
 

@@ -108,7 +108,6 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 message.Headers.TryAddWithoutValidation(name, value);
             }
 
-            var hasStrictTools = false;
             var tools = new List<OpenAiTool>(canonicalTools.Count);
             foreach (var definition in canonicalTools)
             {
@@ -135,13 +134,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             $"Tool '{definition.Name}' argument schema must be a JSON object.");
                     }
 
-                    var strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-                        definition.Name,
-                        definition.ArgumentsJsonSchema);
+                    var strictSchema = definition.PreferStrictArguments
+                        ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                            definition.Name,
+                            definition.ArgumentsJsonSchema)
+                        : null;
                     using var providerSchema = strictSchema is null
                         ? schema
                         : JsonDocument.Parse(strictSchema);
-                    hasStrictTools |= strictSchema is not null;
                     tools.Add(new OpenAiTool
                     {
                         Function = new OpenAiFunction
@@ -172,7 +172,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     : null,
                 Tools = tools.Count == 0 ? null : tools,
                 ToolChoice = tools.Count == 0 ? null : "auto",
-                ParallelToolCalls = hasStrictTools ? false : null,
+                ParallelToolCalls = tools.Count == 0 ? null : request.AllowMultipleToolCalls,
             };
             var requestBody = JsonSerializer.SerializeToNode(body, _jsonOptions)?.AsObject()
                 ?? throw new InvalidOperationException("The model request could not be serialized.");
@@ -449,22 +449,17 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     break;
                 case ModelMessageRole.Assistant when message.ToolCallId is not null
                     && message.ToolName is not null:
-                    messages.Add(new OpenAiMessage
-                    {
-                        Role = "assistant",
-                        ToolCalls =
-                        [
-                            new OpenAiMessageToolCall
+                    AddAssistantToolCall(
+                        messages,
+                        new OpenAiMessageToolCall
+                        {
+                            Id = message.ToolCallId,
+                            Function = new OpenAiMessageFunctionCall
                             {
-                                Id = message.ToolCallId,
-                                Function = new OpenAiMessageFunctionCall
-                                {
-                                    Name = message.ToolName,
-                                    Arguments = content,
-                                },
+                                Name = message.ToolName,
+                                Arguments = content,
                             },
-                        ],
-                    });
+                        });
                     break;
                 case ModelMessageRole.Assistant:
                     messages.Add(new OpenAiMessage { Role = "assistant", Content = content });
@@ -484,6 +479,24 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         return messages;
+    }
+
+    private static void AddAssistantToolCall(
+        List<OpenAiMessage> messages,
+        OpenAiMessageToolCall toolCall)
+    {
+        if (messages.Count > 0
+            && messages[^1] is { Role: "assistant", Content: null, ToolCalls: not null } previous)
+        {
+            messages[^1] = previous with { ToolCalls = [.. previous.ToolCalls, toolCall] };
+            return;
+        }
+
+        messages.Add(new OpenAiMessage
+        {
+            Role = "assistant",
+            ToolCalls = [toolCall],
+        });
     }
 
     private static void AddUserMessage(List<OpenAiMessage> messages, string content)

@@ -518,7 +518,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     /// <inheritdoc />
     protected override string DescribeActivity(SearchTextInput input)
     {
-        return input.Query;
+        return $"{input.Query} in {input.Path ?? "."}";
     }
 
     /// <inheritdoc />

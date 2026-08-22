@@ -138,6 +138,9 @@ public static class Plan49ToolTimingTests
         var readInput = readTool.DeserializeInput("{\"path\":\"src/Program.cs\"}");
         ITool processTool = new RunProcessTool(new UnusedProcessManager());
         var processInput = processTool.DeserializeInput("{\"command\":\"dotnet test src/Threadsmith.sln\"}");
+        ITool searchTool = new SearchTextTool();
+        var searchInput = searchTool.DeserializeInput(
+            "{\"query\":\"resultScope\",\"path\":\"container/source/AI.Inference.Fusion\"}");
         ITool symbolTool = new FindSymbolTool(new UnusedSemanticEngineResolver());
         var symbolInput = symbolTool.DeserializeInput("{\"query\":\"SectorEntityStandardizer\"}");
         ITool referencesTool = new FindReferencesTool(new UnusedSemanticEngineResolver());
@@ -147,6 +150,9 @@ public static class Plan49ToolTimingTests
 
         Assert.Equal("lines 1-2000, src/Program.cs", readTool.GetActivityDetail(readInput));
         Assert.Equal("dotnet test src/Threadsmith.sln", processTool.GetActivityDetail(processInput));
+        Assert.Equal(
+            "resultScope in container/source/AI.Inference.Fusion",
+            searchTool.GetActivityDetail(searchInput));
         Assert.Equal("SectorEntityStandardizer", symbolTool.GetActivityDetail(symbolInput));
         Assert.Equal("T:Demo.IRetriever", referencesTool.GetActivityDetail(referencesInput));
         Assert.Equal("T:Demo.IRetriever", implementationsTool.GetActivityDetail(implementationsInput));

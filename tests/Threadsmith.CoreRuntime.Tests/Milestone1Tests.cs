@@ -2847,6 +2847,43 @@ public static class Milestone1Tests
         Assert.DoesNotContain("sources:", transcript.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Built-in search completion identifies its scope and bounded result count.</summary>
+    [Theory]
+    [InlineData("{\"Matches\":[]}", false, "0 matches")]
+    [InlineData("{\"Matches\":[{}]}", true, "1 match, truncated")]
+    public static void ConversationTranscript_SearchCompletion_RendersPathAndResultCount(
+        string resultJson,
+        bool isTruncated,
+        string expectedSummary)
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var source = new ToolActivitySource(ToolActivitySourceKind.BuiltIn);
+        var transcript = new ConversationTranscript(string.Empty);
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "search",
+            RunId.New(),
+            Source: source,
+            ActivityDetail: "resultScope in container/source/AI.Inference.Fusion")));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: resultJson,
+            IsTruncated: isTruncated,
+            Source: source)));
+
+        Assert.Contains(
+            $"\u2514 resultScope in container/source/AI.Inference.Fusion · {expectedSummary}",
+            transcript.Text,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Mutation proposal startup is visible before model-generated mutations arrive.</summary>
     [Fact]
     public static void ConversationTranscript_MutationProposalStarted_RendersPreparationStatus()

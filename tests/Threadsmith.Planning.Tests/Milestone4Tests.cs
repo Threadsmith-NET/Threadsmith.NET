@@ -321,6 +321,99 @@ public static class Milestone4Tests
         Assert.Contains("maximum retained tool-call count", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>A plan proposal cannot be mixed with an ordinary tool call in either response order.</summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public static async Task SessionApplication_MixedPlanAndToolOutputs_FailRegardlessOfOrder(
+        bool planFirst,
+        bool directPlanOutput)
+    {
+        await using var events = new DomainEventStream();
+        var implementationPlan = CreatePlan("exclusive plan", 1);
+        ModelOutput planOutput = directPlanOutput
+            ? new PlanModelOutput(implementationPlan)
+            : new ToolRequestModelOutput(
+                "propose_plan",
+                JsonSerializer.Serialize(new PlanModelOutput(implementationPlan)));
+        var plan = new ModelChunk { Output = planOutput };
+        var ordinaryTool = new ModelChunk
+        {
+            Output = new ToolRequestModelOutput("datetime", "{}"),
+        };
+        ModelChunk[] chunks = planFirst
+            ? [plan, ordinaryTool]
+            : [ordinaryTool, plan];
+        var application = new SessionApplication(
+            events,
+            new ChunkSequenceModelProvider(chunks),
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("exclusive plan output"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Two plan proposals in one model response fail instead of replacing one another.</summary>
+    [Fact]
+    public static async Task SessionApplication_DuplicatePlanProposals_FailClosed()
+    {
+        await using var events = new DomainEventStream();
+        var arguments = JsonSerializer.Serialize(new PlanModelOutput(CreatePlan("exclusive plan", 1)));
+        var application = new SessionApplication(
+            events,
+            new ChunkSequenceModelProvider(
+            [
+                new ModelChunk { Output = new ToolRequestModelOutput("propose_plan", arguments) },
+                new ModelChunk { Output = new ToolRequestModelOutput("propose_plan", arguments) },
+            ]),
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("duplicate plan output"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A malformed repairable plan proposal still excludes later tool output in the same response.</summary>
+    [Fact]
+    public static async Task SessionApplication_RepairablePlanThenTool_FailsClosed()
+    {
+        await using var events = new DomainEventStream();
+        var application = new SessionApplication(
+            events,
+            new ChunkSequenceModelProvider(
+            [
+                new ModelChunk { Output = new ToolRequestModelOutput("propose_plan", "not-json") },
+                new ModelChunk { Output = new ToolRequestModelOutput("datetime", "{}") },
+            ]),
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with { MaxPlanProposalRepairAttempts = 1 });
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("repairable exclusive plan output"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Ordinary conversation remains available after cumulative usage crosses execution limits.</summary>
     [Fact]
     public static async Task SessionApplication_ConversationBudget_IsUnbounded()
@@ -3310,6 +3403,29 @@ public static class Milestone4Tests
                 {
                     Output = new ToolRequestModelOutput("datetime", "{}"),
                 };
+            }
+        }
+    }
+
+    private sealed class ChunkSequenceModelProvider : IModelProvider
+    {
+        private readonly ModelChunk[] _chunks;
+
+        public ChunkSequenceModelProvider(IEnumerable<ModelChunk> chunks)
+        {
+            ArgumentNullException.ThrowIfNull(chunks);
+            _chunks = [.. chunks];
+        }
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            foreach (var chunk in _chunks)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return chunk;
             }
         }
     }

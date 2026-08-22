@@ -97,11 +97,13 @@ public sealed class ContextPolicy
         return phase switch
         {
             RunPhase.EvidenceCollection =>
-                "Respond naturally to conversation and read-only questions. Use approved read-only tools only "
-                + "when repository evidence is needed. For repository changes, gather enough evidence to identify "
-                + "the target, applicable instructions, and material impact. Once that evidence resolves the requested "
-                + "scope and no correctness ambiguity remains, stop calling tools and call the host-owned propose_plan "
-                + "tool; do not investigate unrelated patterns or references.",
+                "Respond naturally to conversation and read-only questions. Threadsmith has fast host-native "
+                + "repository inspection tools: use them when evidence is needed, batch independent inspections in the "
+                + "same response, and prefer structural/semantic/index tools before broad text search whenever they apply. "
+                + "Avoid serial one-search, one-file, or adjacent narrow read loops. For repository changes, gather enough "
+                + "evidence to identify target, instructions, and material impact. Once scope is resolved and no ambiguity "
+                + "remains, call the host-owned propose_plan tool; do not inspect unrelated patterns. For read-only audits, "
+                + "explanations, and diagnostics, answer directly once the evidence is sufficient.",
             RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval =>
                 "Produce exactly one schema-versioned implementation plan. Do not propose or perform mutations.",
             RunPhase.MutationPreparation
@@ -394,6 +396,7 @@ public sealed class ContextAssembler : IContextAssembler
                 Name = schema.Id,
                 Description = schema.Description,
                 ArgumentsJsonSchema = schema.JsonSchema,
+                PreferStrictArguments = schema.PreferStrictArguments,
             }));
         var toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
         var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
@@ -403,8 +406,10 @@ public sealed class ContextAssembler : IContextAssembler
         {
             RunPhase.EvidenceCollection =>
                 "Return ordinary assistant text for conversation, read-only exploration, audits, explanations, or diagnostics. "
-                + "Call propose_plan only when the user is asking Threadsmith to make actual repository changes; "
-                + "that schema-versioned plan must declare structured file intents and must not be printed as text.",
+                + "If more evidence is needed, batch independent read-only tool calls in one response, prefer "
+                + "structural/semantic/index tools before broad text search, and avoid repeated searches, serial single-file "
+                + "exploration, or adjacent narrow reads. Call propose_plan only when the user asks for actual repository "
+                + "changes; that plan must declare structured file intents and must not be printed as text.",
             RunPhase.MutationPreparation
                 or RunPhase.ImplementationPreparing
                 or RunPhase.ImplementationModelTurn
@@ -1336,11 +1341,11 @@ public sealed class ContextAssembler : IContextAssembler
         var messages = new List<ModelMessage>
         {
             CreateTextMessage(ModelMessageRole.System, "host-policy", _options.StableSystemPolicy),
+            CreateTextMessage(ModelMessageRole.System, "phase-policy", phaseInstructions),
             CreateTextMessage(
                 ModelMessageRole.Developer,
                 "repository-instructions",
                 repositoryInstructions),
-            CreateTextMessage(ModelMessageRole.Developer, "phase-policy", phaseInstructions),
         };
         if (!string.IsNullOrWhiteSpace(conversation.SummaryContent)
             || !string.IsNullOrWhiteSpace(conversation.RetrievedContent)

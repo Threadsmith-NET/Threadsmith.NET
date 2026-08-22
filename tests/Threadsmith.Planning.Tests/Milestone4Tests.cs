@@ -117,7 +117,27 @@ public static class Milestone4Tests
             request.Input,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Call propose_plan only when the user is asking Threadsmith to make actual repository changes",
+            "batch independent read-only tool calls in one response",
+            request.Input,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Threadsmith has fast host-native repository inspection tools",
+            request.Input,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "structural/semantic/index tools before broad text search",
+            request.Input,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Avoid serial one-search",
+            request.Input,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "answer directly once the evidence is sufficient",
+            request.Input,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Call propose_plan only when the user asks for actual repository changes",
             request.Input,
             StringComparison.Ordinal);
         var tool = Assert.Single(request.Tools);
@@ -366,7 +386,10 @@ public static class Milestone4Tests
         while (projection?.Phase != RunPhase.AwaitingPlanApproval);
 
         Assert.Equal("Governed tool plan", projection.Plan?.Plan.Summary);
-        Assert.Equal("propose_plan", Assert.Single(model.Requests).Tools.Last().Name);
+        var modelRequest = Assert.Single(model.Requests);
+        Assert.Equal("propose_plan", modelRequest.Tools.Last().Name);
+        Assert.True(modelRequest.Tools.Last().PreferStrictArguments);
+        Assert.Equal(true, modelRequest.AllowMultipleToolCalls);
         Assert.True(await dispatcher.DispatchAsync(
             new RejectPlanCommand(sessionId, runId, "test complete")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));

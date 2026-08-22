@@ -140,7 +140,11 @@ public interface IEvidenceStore
 }
 
 /// <summary>One model-visible tool contract included in governed context.</summary>
-public sealed record ContextToolSchema(string Id, string Description, string JsonSchema);
+public sealed record ContextToolSchema(
+    string Id,
+    string Description,
+    string JsonSchema,
+    bool PreferStrictArguments = false);
 
 /// <summary>Input state for one phase-specific context assembly.</summary>
 public sealed record ContextAssemblyRequest

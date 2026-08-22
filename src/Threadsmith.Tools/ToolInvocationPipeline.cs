@@ -466,8 +466,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     authoritativeElapsedMilliseconds);
             }
 
-            var resultJson = _sanitizer.Sanitize(
-                Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length));
+            var resultJson = JsonOutputSanitizer.Sanitize(
+                Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length),
+                _sanitizer);
             if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(

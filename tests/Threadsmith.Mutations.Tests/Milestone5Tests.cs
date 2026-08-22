@@ -375,7 +375,10 @@ public static class Milestone5Tests
         var contextRequest = Assert.Single(context.Requests);
         Assert.Equal(repository.PathOf("src"), contextRequest.WorkingScope);
         var modelRequest = Assert.Single(model.Requests);
+        Assert.Equal(false, modelRequest.AllowMultipleToolCalls);
+        Assert.True(Assert.Single(modelRequest.Tools).PreferStrictArguments);
         var contextTool = Assert.Single(contextRequest.ToolSchemas);
+        Assert.True(contextTool.PreferStrictArguments);
         var modelTool = Assert.Single(modelRequest.Tools);
         Assert.Equal(contextTool.Id, modelTool.Name);
         Assert.Equal(contextTool.Description, modelTool.Description);

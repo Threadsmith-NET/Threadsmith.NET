@@ -1,6 +1,7 @@
 namespace Threadsmith.Tui;
 
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
@@ -589,7 +590,16 @@ internal static class TuiPresentationFormatter
             detail.Append(source.DisplayName);
         }
 
-        AppendDetailPart(detail, started.ActivityDetail);
+        var activityDetail = started.ActivityDetail;
+        var resultDetail = GetBuiltInSearchResultDetail(started, completed, source);
+        if (resultDetail is not null)
+        {
+            activityDetail = string.IsNullOrWhiteSpace(activityDetail)
+                ? resultDetail
+                : $"{activityDetail} · {resultDetail}";
+        }
+
+        AppendDetailPart(detail, activityDetail);
         if (!completed.Succeeded)
         {
             AppendDetailPart(detail, completed.Error);
@@ -598,6 +608,39 @@ internal static class TuiPresentationFormatter
         return detail.Length == 0
             ? "no additional detail"
             : TruncateForDisplay(detail.ToString());
+    }
+
+    private static string? GetBuiltInSearchResultDetail(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        ToolActivitySource? source)
+    {
+        if (!completed.Succeeded
+            || string.IsNullOrWhiteSpace(completed.ResultJson)
+            || !string.Equals(started.ToolName, "search", StringComparison.Ordinal)
+            || source is { Kind: not ToolActivitySourceKind.BuiltIn })
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(completed.ResultJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("Matches", out var matches)
+                || matches.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var count = matches.GetArrayLength();
+            var summary = count == 1 ? "1 match" : $"{count} matches";
+            return completed.IsTruncated ? $"{summary}, truncated" : summary;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string GetSemanticOutcomeText(SemanticCheckOutcome outcome)

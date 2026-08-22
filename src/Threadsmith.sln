@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.8.12023.21 stable
@@ -37,61 +37,61 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Mcp", "Threadsm
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Architecture.Tests", "..\tests\Threadsmith.Architecture.Tests\Threadsmith.Architecture.Tests.csproj", "{3AE7D0D4-5F11-42FD-A14C-35597AD7E269}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone1.Tests", "..\tests\Threadsmith.Milestone1.Tests\Threadsmith.Milestone1.Tests.csproj", "{90348715-D8A6-4BB2-8FE5-5923EDA5385D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.CoreRuntime.Tests", "..\tests\Threadsmith.CoreRuntime.Tests\Threadsmith.CoreRuntime.Tests.csproj", "{90348715-D8A6-4BB2-8FE5-5923EDA5385D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone2.Tests", "..\tests\Threadsmith.Milestone2.Tests\Threadsmith.Milestone2.Tests.csproj", "{A2A09C4C-6D9F-42D5-B4F0-522601358668}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.RepositoryLifecycle.Tests", "..\tests\Threadsmith.RepositoryLifecycle.Tests\Threadsmith.RepositoryLifecycle.Tests.csproj", "{A2A09C4C-6D9F-42D5-B4F0-522601358668}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone3.Tests", "..\tests\Threadsmith.Milestone3.Tests\Threadsmith.Milestone3.Tests.csproj", "{6D74E84A-C78E-4DF2-95A4-D8B746E2C221}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ModelTooling.Tests", "..\tests\Threadsmith.ModelTooling.Tests\Threadsmith.ModelTooling.Tests.csproj", "{6D74E84A-C78E-4DF2-95A4-D8B746E2C221}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone4.Tests", "..\tests\Threadsmith.Milestone4.Tests\Threadsmith.Milestone4.Tests.csproj", "{255C3822-9ADB-46F4-AED8-388DE3BDD29C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Planning.Tests", "..\tests\Threadsmith.Planning.Tests\Threadsmith.Planning.Tests.csproj", "{255C3822-9ADB-46F4-AED8-388DE3BDD29C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone5.Tests", "..\tests\Threadsmith.Milestone5.Tests\Threadsmith.Milestone5.Tests.csproj", "{6C7709F4-73BD-4DE4-A573-D7714813A238}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Mutations.Tests", "..\tests\Threadsmith.Mutations.Tests\Threadsmith.Mutations.Tests.csproj", "{6C7709F4-73BD-4DE4-A573-D7714813A238}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone6.Tests", "..\tests\Threadsmith.Milestone6.Tests\Threadsmith.Milestone6.Tests.csproj", "{63D4CF51-855D-460B-95C7-23BA3093B069}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Validation.Tests", "..\tests\Threadsmith.Validation.Tests\Threadsmith.Validation.Tests.csproj", "{63D4CF51-855D-460B-95C7-23BA3093B069}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.SampleExtensions.MinimalTool", "..\samples\extensions\MinimalToolExtension\Threadsmith.SampleExtensions.MinimalTool.csproj", "{4E79E043-13B0-4535-A1C9-07205A8D0DD8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone7.Tests", "..\tests\Threadsmith.Milestone7.Tests\Threadsmith.Milestone7.Tests.csproj", "{8E64BB6E-4988-4730-8204-47769AD16FB2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Extensions.Tests", "..\tests\Threadsmith.Extensions.Tests\Threadsmith.Extensions.Tests.csproj", "{8E64BB6E-4988-4730-8204-47769AD16FB2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone8.Tests", "..\tests\Threadsmith.Milestone8.Tests\Threadsmith.Milestone8.Tests.csproj", "{E605E868-7EAF-46D2-9E6A-D89FC723A8B4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.PersistenceMcpHardening.Tests", "..\tests\Threadsmith.PersistenceMcpHardening.Tests\Threadsmith.PersistenceMcpHardening.Tests.csproj", "{E605E868-7EAF-46D2-9E6A-D89FC723A8B4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone7_1.Tests", "..\tests\Threadsmith.Milestone7_1.Tests\Threadsmith.Milestone7_1.Tests.csproj", "{F6C47359-9D26-4341-B72E-E6F9C945B996}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.SessionStatus.Tests", "..\tests\Threadsmith.SessionStatus.Tests\Threadsmith.SessionStatus.Tests.csproj", "{F6C47359-9D26-4341-B72E-E6F9C945B996}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Scripting.Worker", "Threadsmith.Scripting.Worker\Threadsmith.Scripting.Worker.csproj", "{A9AEE93C-D8A1-4317-A60E-CC33F1E400BF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCompatible\Threadsmith.Models.OpenAiCompatible.csproj", "{8228CF37-2E24-4D27-A19D-03639E6FA9E5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone7_4.Tests", "..\tests\Threadsmith.Milestone7_4.Tests\Threadsmith.Milestone7_4.Tests.csproj", "{081905EC-0665-4E2A-AE37-62D0A85C4AB8}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ConversationContext.Tests", "..\tests\Threadsmith.ConversationContext.Tests\Threadsmith.ConversationContext.Tests.csproj", "{081905EC-0665-4E2A-AE37-62D0A85C4AB8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone9.Tests", "..\tests\Threadsmith.Milestone9.Tests\Threadsmith.Milestone9.Tests.csproj", "{30133A46-0D05-43F6-AFF4-AEEA15C0350F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.McpTransports.Tests", "..\tests\Threadsmith.McpTransports.Tests\Threadsmith.McpTransports.Tests.csproj", "{30133A46-0D05-43F6-AFF4-AEEA15C0350F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone10.Tests", "..\tests\Threadsmith.Milestone10.Tests\Threadsmith.Milestone10.Tests.csproj", "{1E21708B-3782-4333-ABFA-2410ADC0F9E9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.McpOAuth.Tests", "..\tests\Threadsmith.McpOAuth.Tests\Threadsmith.McpOAuth.Tests.csproj", "{1E21708B-3782-4333-ABFA-2410ADC0F9E9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone11.Tests", "..\tests\Threadsmith.Milestone11.Tests\Threadsmith.Milestone11.Tests.csproj", "{5360354F-E1D6-416E-97F5-DC8BCC7AED67}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ExecutionOrchestration.Tests", "..\tests\Threadsmith.ExecutionOrchestration.Tests\Threadsmith.ExecutionOrchestration.Tests.csproj", "{5360354F-E1D6-416E-97F5-DC8BCC7AED67}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone11_1.Tests", "..\tests\Threadsmith.Milestone11_1.Tests\Threadsmith.Milestone11_1.Tests.csproj", "{1CE4187B-87D0-4255-AAB5-DD8EBD033512}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ParallelAgents.Tests", "..\tests\Threadsmith.ParallelAgents.Tests\Threadsmith.ParallelAgents.Tests.csproj", "{1CE4187B-87D0-4255-AAB5-DD8EBD033512}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Skills", "Threadsmith.Skills\Threadsmith.Skills.csproj", "{202FFDC4-4270-4D8A-A147-B13FC9773D0A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone12.Tests", "..\tests\Threadsmith.Milestone12.Tests\Threadsmith.Milestone12.Tests.csproj", "{C96004E5-B5F5-40A5-95C2-784706F8F66D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Skills.Tests", "..\tests\Threadsmith.Skills.Tests\Threadsmith.Skills.Tests.csproj", "{C96004E5-B5F5-40A5-95C2-784706F8F66D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Hooks", "Threadsmith.Hooks\Threadsmith.Hooks.csproj", "{7253F348-C6BB-4197-9750-738DFACB681D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone13.Tests", "..\tests\Threadsmith.Milestone13.Tests\Threadsmith.Milestone13.Tests.csproj", "{2F0C4D83-BD15-4499-ADEF-A5BEDFA8CE02}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.LifecycleHooks.Tests", "..\tests\Threadsmith.LifecycleHooks.Tests\Threadsmith.LifecycleHooks.Tests.csproj", "{2F0C4D83-BD15-4499-ADEF-A5BEDFA8CE02}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{D6A6484D-5446-4B1C-994A-D25C0C25A9EC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone14.Tests", "..\tests\Threadsmith.Milestone14.Tests\Threadsmith.Milestone14.Tests.csproj", "{7F233FB7-DDA0-42F3-B9F4-E135AAA524D3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.NativeTools.Tests", "..\tests\Threadsmith.NativeTools.Tests\Threadsmith.NativeTools.Tests.csproj", "{7F233FB7-DDA0-42F3-B9F4-E135AAA524D3}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Models.OpenAiCodex", "Threadsmith.Models.OpenAiCodex\Threadsmith.Models.OpenAiCodex.csproj", "{1A16CFAA-9113-4B7B-98C0-A904FAFE0599}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone18.Tests", "..\tests\Threadsmith.Milestone18.Tests\Threadsmith.Milestone18.Tests.csproj", "{80D445FD-BADF-43DC-8A43-7C3871DB8D47}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.CodexProvider.Tests", "..\tests\Threadsmith.CodexProvider.Tests\Threadsmith.CodexProvider.Tests.csproj", "{80D445FD-BADF-43DC-8A43-7C3871DB8D47}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone19.Tests", "..\tests\Threadsmith.Milestone19.Tests\Threadsmith.Milestone19.Tests.csproj", "{74F92F92-5EAE-47A2-98AC-3B8A3754D092}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ContextCaching.Tests", "..\tests\Threadsmith.ContextCaching.Tests\Threadsmith.ContextCaching.Tests.csproj", "{74F92F92-5EAE-47A2-98AC-3B8A3754D092}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone22_2.Tests", "..\tests\Threadsmith.Milestone22_2.Tests\Threadsmith.Milestone22_2.Tests.csproj", "{4E8E8757-B652-4D68-BABF-B0294A92641E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.SecretResolution.Tests", "..\tests\Threadsmith.SecretResolution.Tests\Threadsmith.SecretResolution.Tests.csproj", "{4E8E8757-B652-4D68-BABF-B0294A92641E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Milestone23.Tests", "..\tests\Threadsmith.Milestone23.Tests\Threadsmith.Milestone23.Tests.csproj", "{D8123055-29AF-4E32-91B0-9F8AEF004FAE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.McpLifecycle.Tests", "..\tests\Threadsmith.McpLifecycle.Tests\Threadsmith.McpLifecycle.Tests.csproj", "{D8123055-29AF-4E32-91B0-9F8AEF004FAE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

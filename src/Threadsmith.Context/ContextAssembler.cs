@@ -97,11 +97,13 @@ public sealed class ContextPolicy
         return phase switch
         {
             RunPhase.EvidenceCollection =>
-                "Respond naturally to conversation and read-only questions. Use approved read-only tools only "
-                + "when repository evidence is needed. For repository changes, gather enough evidence to identify "
-                + "the target, applicable instructions, and material impact. Once that evidence resolves the requested "
-                + "scope and no correctness ambiguity remains, stop calling tools and call the host-owned propose_plan "
-                + "tool; do not investigate unrelated patterns or references.",
+                "Respond naturally to conversation and read-only questions. Threadsmith has fast host-native "
+                + "repository inspection tools: use them when evidence is needed, batch independent inspections in the "
+                + "same response, and prefer structural/semantic/index tools before broad text search whenever they apply. "
+                + "Avoid serial one-search, one-file, or adjacent narrow read loops. For repository changes, gather enough "
+                + "evidence to identify target, instructions, and material impact. Once scope is resolved and no ambiguity "
+                + "remains, call the host-owned propose_plan tool; do not inspect unrelated patterns. For read-only audits, "
+                + "explanations, and diagnostics, answer directly once the evidence is sufficient.",
             RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval =>
                 "Produce exactly one schema-versioned implementation plan. Do not propose or perform mutations.",
             RunPhase.MutationPreparation
@@ -118,6 +120,23 @@ public sealed class ContextPolicy
                 "Analyze validation evidence without widening the approved change scope.",
             _ => "Use only the governed state supplied for the current phase.",
         };
+    }
+}
+
+/// <summary>Validated repository-memory retrieval budgets.</summary>
+public sealed record RepositoryMemoryContextPolicy
+{
+    /// <summary>Maximum repository-memory items considered for prompt assembly.</summary>
+    public int MaximumItems { get; init; } = 12;
+
+    /// <summary>Maximum estimated tokens used by repository memory.</summary>
+    public int MaximumTokens { get; init; } = 2_000;
+
+    /// <summary>Validates hard bounds before request assembly.</summary>
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumItems);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTokens);
     }
 }
 
@@ -196,6 +215,9 @@ public sealed record ContextAssemblerOptions
 
     /// <summary>Conversation mode, selection, retrieval, and pressure budgets.</summary>
     public ConversationContextPolicy Conversation { get; init; } = new();
+
+    /// <summary>Repository-scoped memory retrieval budgets.</summary>
+    public RepositoryMemoryContextPolicy RepositoryMemory { get; init; } = new();
 }
 
 /// <summary>Default governed context assembler with reduction, telemetry, and execution records.</summary>
@@ -223,6 +245,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly Dictionary<RunId, LinkedListNode<RunId>> _inspectionNodes = [];
     private readonly LinkedList<RunId> _inspectionOrder = [];
     private readonly IRepositoryInstructionResolver? _instructionResolver;
+    private readonly IRepositoryMemoryStore? _repositoryMemoryStore;
     private readonly IModelResolver? _modelResolver;
     private readonly ContextAssemblerOptions _options;
     private readonly ContextPolicy _policy;
@@ -242,7 +265,8 @@ public sealed class ContextAssembler : IContextAssembler
         IModelResolver? modelResolver = null,
         IConversationStore? conversationStore = null,
         IConversationMemoryRetriever? conversationRetriever = null,
-        IRepositoryInstructionResolver? instructionResolver = null)
+        IRepositoryInstructionResolver? instructionResolver = null,
+        IRepositoryMemoryStore? repositoryMemoryStore = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -252,6 +276,7 @@ public sealed class ContextAssembler : IContextAssembler
         ArgumentNullException.ThrowIfNull(events);
         _options = options ?? new ContextAssemblerOptions();
         _options.Conversation.Validate();
+        _options.RepositoryMemory.Validate();
         if (_options.MaximumTokens <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -273,6 +298,7 @@ public sealed class ContextAssembler : IContextAssembler
         _conversationStore = conversationStore;
         _conversationRetriever = conversationRetriever;
         _instructionResolver = instructionResolver;
+        _repositoryMemoryStore = repositoryMemoryStore;
     }
 
     /// <inheritdoc />
@@ -334,6 +360,10 @@ public sealed class ContextAssembler : IContextAssembler
             request,
             sanitizedTask,
             cancellationToken);
+        var repositoryMemory = await CreateRepositoryMemoryStateAsync(
+            request,
+            sanitizedTask,
+            cancellationToken);
         var affectedPaths = request.ApprovedPlan?.Steps
             .SelectMany(step => step.GetAffectedPaths())
             .Select(path => path.Replace('\\', '/'))
@@ -366,6 +396,7 @@ public sealed class ContextAssembler : IContextAssembler
                 Name = schema.Id,
                 Description = schema.Description,
                 ArgumentsJsonSchema = schema.JsonSchema,
+                PreferStrictArguments = schema.PreferStrictArguments,
             }));
         var toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
         var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
@@ -374,8 +405,11 @@ public sealed class ContextAssembler : IContextAssembler
         var outputSchema = request.Phase switch
         {
             RunPhase.EvidenceCollection =>
-                "Return ordinary assistant text for conversation or read-only answers. For a repository change "
-                + "request, call propose_plan with a schema-versioned plan that declares structured file intents; do not print plan JSON as text.",
+                "Return ordinary assistant text for conversation, read-only exploration, audits, explanations, or diagnostics. "
+                + "If more evidence is needed, batch independent read-only tool calls in one response, prefer "
+                + "structural/semantic/index tools before broad text search, and avoid repeated searches, serial single-file "
+                + "exploration, or adjacent narrow reads. Call propose_plan only when the user asks for actual repository "
+                + "changes; that plan must declare structured file intents and must not be printed as text.",
             RunPhase.MutationPreparation
                 or RunPhase.ImplementationPreparing
                 or RunPhase.ImplementationModelTurn
@@ -417,6 +451,7 @@ public sealed class ContextAssembler : IContextAssembler
             ["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent),
             ["conversationSummary"] = TokenEstimator.Estimate(conversation.SummaryContent),
             ["retrievedMemory"] = TokenEstimator.Estimate(conversation.RetrievedContent),
+            ["repositoryMemory"] = TokenEstimator.Estimate(repositoryMemory.Content),
             ["governedState"] = TokenEstimator.Estimate(governedState),
             ["toolSchemas"] = TokenEstimator.Estimate(toolSchemas),
             ["nativeToolSchemas"] = request.ToolTransportMode == ToolTransportMode.Native
@@ -428,7 +463,8 @@ public sealed class ContextAssembler : IContextAssembler
         var fixedTokens = tokensByCategory.Values.Sum();
         var optionalConversationTokens = tokensByCategory["recentTurns"]
             + tokensByCategory["conversationSummary"]
-            + tokensByCategory["retrievedMemory"];
+            + tokensByCategory["retrievedMemory"]
+            + tokensByCategory["repositoryMemory"];
         var allowedKinds = ContextPolicy.GetAllowedKinds(request.Phase);
         Evidence[] candidates = [.. _evidence.Snapshot(request.SessionId)
             .Where(item => item.RunId is null || item.RunId == request.RunId)
@@ -508,7 +544,8 @@ public sealed class ContextAssembler : IContextAssembler
         {
             ContainsSensitiveData = request.ModelConstraints.ContainsSensitiveData
                 || selected.Any(item => item.Sensitivity == EvidenceSensitivity.Sensitive)
-                || conversation.ContainsSensitiveData,
+                || conversation.ContainsSensitiveData
+                || repositoryMemory.ContainsSensitiveData,
         };
         var modelResolution = _modelResolver?.Resolve(
             workloadClass,
@@ -523,6 +560,7 @@ public sealed class ContextAssembler : IContextAssembler
             phaseInstructions,
             taskJson,
             conversation,
+            repositoryMemory,
             governedState,
             evidenceContent,
             toolSchemas,
@@ -532,15 +570,16 @@ public sealed class ContextAssembler : IContextAssembler
             tokensByCategory["nativeToolSchemas"],
             tokensByCategory["wireFraming"]);
         while (totalTokens > tokenBudget
-            && (conversation.CanReduce || selected.Count > 0))
+            && (conversation.CanReduce || repositoryMemory.CanReduce || selected.Count > 0))
         {
-            if (conversation.TryReduce())
+            if (conversation.TryReduce() || repositoryMemory.TryReduce())
             {
                 modelInput = BuildModelInput(
                     appendContent,
                     phaseInstructions,
                     taskJson,
                     conversation,
+                    repositoryMemory,
                     governedState,
                     evidenceContent,
                     toolSchemas,
@@ -573,6 +612,7 @@ public sealed class ContextAssembler : IContextAssembler
                 phaseInstructions,
                 taskJson,
                 conversation,
+                repositoryMemory,
                 governedState,
                 evidenceContent,
                 toolSchemas,
@@ -594,6 +634,7 @@ public sealed class ContextAssembler : IContextAssembler
         tokensByCategory["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent);
         tokensByCategory["conversationSummary"] = TokenEstimator.Estimate(conversation.SummaryContent);
         tokensByCategory["retrievedMemory"] = TokenEstimator.Estimate(conversation.RetrievedContent);
+        tokensByCategory["repositoryMemory"] = TokenEstimator.Estimate(repositoryMemory.Content);
         tokensByCategory["evidence"] = TokenEstimator.Estimate(evidenceContent);
         tokensByCategory["assemblyOverhead"] = Math.Max(
             0,
@@ -628,6 +669,7 @@ public sealed class ContextAssembler : IContextAssembler
             phaseInstructions,
             structuredTaskStateJson,
             conversation,
+            repositoryMemory,
             governedState,
             evidenceContent,
             toolSchemas,
@@ -676,13 +718,14 @@ public sealed class ContextAssembler : IContextAssembler
             PromptAssets = promptAssets,
             ModelProfileId = modelResolution?.ProfileId,
             ModelRationale = modelRationale,
-            Reductions = [.. conversation.Reductions, .. reductions],
+            Reductions = [.. conversation.Reductions, .. repositoryMemory.Reductions, .. reductions],
             ConversationMode = conversation.Mode,
             ConversationModeSource = conversation.ModeSource,
             CurrentMessageId = request.CurrentMessageId,
             ConversationSummaryVersion = conversation.SummaryVersion,
             CompactedThroughMessageSequence = conversation.CompactedThroughSequence,
             ConversationItems = conversation.CreateProjections(),
+            RepositoryMemoryItems = repositoryMemory.CreateProjections(),
             ContextPressurePercent = contextPressurePercent,
             CompactionRecommended = compactionRecommended,
             CompactionRationale = compactionRecommended
@@ -726,7 +769,7 @@ public sealed class ContextAssembler : IContextAssembler
         _evidenceCount.Record(selected.Count, new KeyValuePair<string, object?>(
             "threadsmith.context.phase",
             request.Phase.ToString()));
-        var reductionCount = reductions.Count + conversation.Reductions.Count;
+        var reductionCount = reductions.Count + conversation.Reductions.Count + repositoryMemory.Reductions.Count;
         if (reductionCount > 0)
         {
             _reductions.Add(reductionCount, new KeyValuePair<string, object?>(
@@ -784,6 +827,7 @@ public sealed class ContextAssembler : IContextAssembler
                         SourceRunIds = item.SourceRunIds.ToArray(),
                         SourceEvidenceIds = item.SourceEvidenceIds.ToArray(),
                     }).ToArray(),
+                    RepositoryMemoryItems = inspection.RepositoryMemoryItems.ToArray(),
                 }
                 : null;
         }
@@ -945,6 +989,68 @@ public sealed class ContextAssembler : IContextAssembler
         return assembly;
     }
 
+    private async Task<RepositoryMemoryAssemblyState> CreateRepositoryMemoryStateAsync(
+        ContextAssemblyRequest request,
+        TaskSpecification task,
+        CancellationToken cancellationToken)
+    {
+        var assembly = new RepositoryMemoryAssemblyState(_options.RepositoryMemory.MaximumTokens);
+        if (_repositoryMemoryStore is null)
+        {
+            return assembly;
+        }
+
+        var repositoryIdentity = string.IsNullOrWhiteSpace(request.RepositoryIdentity)
+            ? RepositoryIdentity.Create(request.RepositoryPath)
+            : request.RepositoryIdentity;
+        var snapshot = await _repositoryMemoryStore.GetSnapshotAsync(repositoryIdentity, cancellationToken);
+        foreach (var item in snapshot.Items.Where(item => item.Validity != RepositoryMemoryValidity.Active))
+        {
+            var reason = item.Validity == RepositoryMemoryValidity.Stale
+                ? "Repository-scoped memory is stale and excluded until validation reactivates it."
+                : $"Repository-scoped memory is {item.Validity}.";
+            assembly.AddExcluded(item, reason, TokenEstimator.Estimate(item.Content));
+        }
+
+        var taskTerms = CreateTaskTerms(task);
+        foreach (var scored in snapshot.Items
+            .Where(item => item.Validity == RepositoryMemoryValidity.Active)
+            .Select(item => (Item: item, Score: ScoreRepositoryMemory(item, taskTerms)))
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => RepositoryMemoryPreservationOrder(item.Item.Authority, item.Item.Kind))
+            .ThenByDescending(item => item.Item.UpdatedAt)
+            .ThenBy(item => item.Item.Id.Value))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var tokens = assembly.EstimateAddition(scored.Item, scored.Score);
+            if (assembly.IncludedCount >= _options.RepositoryMemory.MaximumItems)
+            {
+                assembly.AddExcluded(
+                    scored.Item,
+                    "Omitted because the repository-memory item budget was reached.",
+                    tokens,
+                    scored.Score);
+                continue;
+            }
+
+            if (!assembly.TryAdd(scored.Item, tokens, scored.Score))
+            {
+                assembly.AddExcluded(
+                    scored.Item,
+                    "Omitted to fit the repository-memory token budget.",
+                    tokens,
+                    scored.Score);
+            }
+        }
+
+        foreach (var warning in snapshot.Warnings)
+        {
+            assembly.Reductions.Add($"Repository memory restoration warning: {warning}");
+        }
+
+        return assembly;
+    }
+
     private static WorkloadClass ResolveWorkloadClass(RunPhase phase)
     {
         return phase switch
@@ -1043,6 +1149,66 @@ public sealed class ContextAssembler : IContextAssembler
             ConversationMemoryKind.RejectedOrSuperseded => 6,
             _ => 7,
         };
+    }
+
+    private static IReadOnlySet<string> CreateTaskTerms(TaskSpecification task)
+    {
+        var content = string.Join(
+            ' ',
+            new[]
+            {
+                task.Intent,
+                string.Join(' ', task.AcceptanceCriteria.Select(item => item.Description)),
+                string.Join(' ', task.UserConstraints ?? []),
+            });
+        return content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(term => term.Trim('.', ',', ':', ';', '"', '\'', '(', ')', '[', ']'))
+            .Where(term => term.Length >= 3)
+            .Select(term => term.ToUpperInvariant())
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static int RepositoryMemoryPreservationOrder(
+        RepositoryMemoryAuthority authority,
+        RepositoryMemoryKind kind)
+    {
+        var authorityOrder = authority switch
+        {
+            RepositoryMemoryAuthority.UserAuthored => 0,
+            RepositoryMemoryAuthority.HostObserved => 1,
+            RepositoryMemoryAuthority.EvidenceBacked => 2,
+            RepositoryMemoryAuthority.ModelProposedValidated => 3,
+            _ => 4,
+        };
+        var kindOrder = kind switch
+        {
+            RepositoryMemoryKind.UserConstraint => 0,
+            RepositoryMemoryKind.UserPreference => 1,
+            RepositoryMemoryKind.ArchitectureDecision => 2,
+            RepositoryMemoryKind.RepositoryConvention => 3,
+            RepositoryMemoryKind.WorkflowFact => 4,
+            RepositoryMemoryKind.KnownFailure => 5,
+            RepositoryMemoryKind.UnresolvedQuestion => 6,
+            RepositoryMemoryKind.EvidenceBackedRepositoryFact => 7,
+            _ => 8,
+        };
+        return (authorityOrder * 16) + kindOrder;
+    }
+
+    private static double ScoreRepositoryMemory(RepositoryMemoryItem item, IReadOnlySet<string> taskTerms)
+    {
+        var score = 1.0d;
+        score += (8 - Math.Min(8, RepositoryMemoryPreservationOrder(item.Authority, item.Kind))) * 0.05d;
+        var searchable = string.Join(
+            ' ',
+            [
+                item.Content,
+                .. item.Scope.Paths,
+                .. item.Scope.Symbols,
+                .. item.Scope.Projects,
+            ]).ToUpperInvariant();
+        var hits = taskTerms.Count(term => searchable.Contains(term, StringComparison.Ordinal));
+        return score + Math.Min(1.0d, hits * 0.1d);
     }
 
     private static PromptAssetReference CreateAssetReference(
@@ -1163,6 +1329,7 @@ public sealed class ContextAssembler : IContextAssembler
         string phaseInstructions,
         string taskStateJson,
         ConversationAssemblyState conversation,
+        RepositoryMemoryAssemblyState repositoryMemory,
         string governedState,
         string evidenceContent,
         string toolSchemas,
@@ -1174,21 +1341,22 @@ public sealed class ContextAssembler : IContextAssembler
         var messages = new List<ModelMessage>
         {
             CreateTextMessage(ModelMessageRole.System, "host-policy", _options.StableSystemPolicy),
+            CreateTextMessage(ModelMessageRole.System, "phase-policy", phaseInstructions),
             CreateTextMessage(
                 ModelMessageRole.Developer,
                 "repository-instructions",
                 repositoryInstructions),
-            CreateTextMessage(ModelMessageRole.Developer, "phase-policy", phaseInstructions),
         };
         if (!string.IsNullOrWhiteSpace(conversation.SummaryContent)
-            || !string.IsNullOrWhiteSpace(conversation.RetrievedContent))
+            || !string.IsNullOrWhiteSpace(conversation.RetrievedContent)
+            || !string.IsNullOrWhiteSpace(repositoryMemory.Content))
         {
             messages.Add(CreateTextMessage(
                 ModelMessageRole.Developer,
                 "conversation-summary",
                 string.Join(
                     "\n",
-                    new[] { conversation.SummaryContent, conversation.RetrievedContent }
+                    new[] { conversation.SummaryContent, conversation.RetrievedContent, repositoryMemory.Content }
                         .Where(content => !string.IsNullOrWhiteSpace(content)))));
         }
 
@@ -1235,6 +1403,7 @@ public sealed class ContextAssembler : IContextAssembler
         string phaseInstructions,
         string taskJson,
         ConversationAssemblyState conversation,
+        RepositoryMemoryAssemblyState repositoryMemory,
         string governedState,
         string evidenceContent,
         string toolSchemas,
@@ -1252,6 +1421,7 @@ public sealed class ContextAssembler : IContextAssembler
                 conversation.RecentTurnsContent,
                 conversation.SummaryContent,
                 conversation.RetrievedContent,
+                repositoryMemory.Content,
                 $"<governed_state>{Escape(governedState)}</governed_state>",
                 $"<evidence_set>{evidenceContent}</evidence_set>",
                 string.IsNullOrWhiteSpace(toolSchemas)
@@ -1259,6 +1429,125 @@ public sealed class ContextAssembler : IContextAssembler
                     : $"<available_tools>{toolSchemas}</available_tools>",
                 $"<required_output>{Escape(outputSchema)}</required_output>",
             }.Where(section => !string.IsNullOrWhiteSpace(section)));
+    }
+
+    private sealed class RepositoryMemoryAssemblyState
+    {
+        private readonly List<(RepositoryMemoryItem Item, int Tokens, double Score)> _included = [];
+        private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
+        private readonly int _maximumTokens;
+        private int _includedTokens;
+
+        public RepositoryMemoryAssemblyState(int maximumTokens)
+        {
+            _maximumTokens = maximumTokens;
+        }
+
+        public bool CanReduce => _included.Count > 0;
+
+        public bool ContainsSensitiveData => _included.Any(item =>
+            item.Item.Sensitivity == ConversationSensitivity.Sensitive);
+
+        public string Content => _included.Count == 0
+            ? string.Empty
+            : Render(_included.Select(item => (item.Item, item.Score)));
+
+        public int IncludedCount => _included.Count;
+
+        public List<string> Reductions { get; } = [];
+
+        public void AddExcluded(
+            RepositoryMemoryItem item,
+            string reason,
+            int tokens,
+            double? score = null)
+        {
+            if (_excluded.Any(projection => projection.Id == item.Id))
+            {
+                return;
+            }
+
+            _excluded.Add(CreateProjection(item, included: false, reason, tokens, score));
+        }
+
+        public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections()
+        {
+            var included = _included.Select(item => CreateProjection(
+                item.Item,
+                included: true,
+                "Included by repository-memory relevance, authority, validity, and budget policy.",
+                item.Tokens,
+                item.Score));
+            return [.. included, .. _excluded];
+        }
+
+        public int EstimateAddition(RepositoryMemoryItem item, double score)
+        {
+            var candidate = Render(
+                _included.Select(included => (included.Item, included.Score))
+                    .Append((item, score)));
+            return TokenEstimator.Estimate(candidate) - _includedTokens;
+        }
+
+        public bool TryAdd(RepositoryMemoryItem item, int tokens, double score)
+        {
+            if (_includedTokens + tokens > _maximumTokens)
+            {
+                return false;
+            }
+
+            _included.Add((item, tokens, score));
+            _includedTokens += tokens;
+            return true;
+        }
+
+        public bool TryReduce()
+        {
+            if (_included.Count == 0)
+            {
+                return false;
+            }
+
+            var removed = _included[^1];
+            _included.RemoveAt(_included.Count - 1);
+            _includedTokens -= removed.Tokens;
+            const string reason = "Omitted lowest-ranked repository memory during final context reduction.";
+            AddExcluded(removed.Item, reason, removed.Tokens, removed.Score);
+            Reductions.Add(reason);
+            return true;
+        }
+
+        private static string Render(IEnumerable<(RepositoryMemoryItem Item, double Score)> items)
+        {
+            return "<repository_memory>\n"
+                + string.Join(
+                    '\n',
+                    items.Select(item =>
+                        $"<memory id=\"{item.Item.Id.Value:D}\" kind=\"{item.Item.Kind}\" "
+                        + $"authority=\"{item.Item.Authority}\" score=\"{item.Score.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}\" untrusted=\"true\">"
+                        + $"{Escape(item.Item.Content)}</memory>"))
+                + "\n</repository_memory>";
+        }
+
+        private static RepositoryMemoryContextItemProjection CreateProjection(
+            RepositoryMemoryItem item,
+            bool included,
+            string reason,
+            int tokens,
+            double? score)
+        {
+            return new RepositoryMemoryContextItemProjection
+            {
+                Id = item.Id,
+                Kind = item.Kind,
+                Authority = item.Authority,
+                Validity = item.Validity,
+                Included = included,
+                Rationale = reason,
+                EstimatedTokens = tokens,
+                Score = score,
+            };
+        }
     }
 
     private sealed class ConversationAssemblyState

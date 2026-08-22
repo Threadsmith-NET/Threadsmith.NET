@@ -561,9 +561,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static void ValidatePattern(CSharpPatternSearchRequest request)
     {
-        if (request.Pattern.Version != 1)
+        var patternVersion = request.Pattern.Version ?? 1;
+        if (patternVersion != 1)
         {
-            throw new NotSupportedException($"C# pattern version {request.Pattern.Version} is not supported.");
+            throw new NotSupportedException($"C# pattern version {patternVersion} is not supported.");
         }
 
         if (request.MaximumMatches is < 1 or > 1000 || request.TimeoutMilliseconds is < 1 or > 60_000)
@@ -571,7 +572,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern-search bounds are outside host limits.");
         }
 
-        foreach (var value in request.Pattern.RequiredModifiers)
+        var requiredModifiers = request.Pattern.RequiredModifiers ?? [];
+        var requiredAttributes = request.Pattern.RequiredAttributes ?? [];
+        foreach (var value in requiredModifiers)
         {
             if (!AllowedModifiers.Contains(value))
             {
@@ -580,7 +583,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         foreach (var value in new[] { request.Pattern.Name, request.Pattern.ContainingType, request.Pattern.Capture }
-            .Concat(request.Pattern.RequiredAttributes))
+            .Concat(requiredAttributes))
         {
             if (value is { Length: > 256 } || (value is not null && !IsSafeName(value)))
             {
@@ -588,7 +591,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        if (request.Pattern.RequiredModifiers.Count > 16 || request.Pattern.RequiredAttributes.Count > 16)
+        if (requiredModifiers.Count > 16 || requiredAttributes.Count > 16)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern predicate counts exceed host limits.");
         }
@@ -869,13 +872,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var modifiers = GetModifiers(node);
-        if (pattern.RequiredModifiers.Any(required => !modifiers.Any(token => token.ValueText == required)))
+        var requiredModifiers = pattern.RequiredModifiers ?? [];
+        if (requiredModifiers.Any(required => !modifiers.Any(token => token.ValueText == required)))
         {
             return false;
         }
 
         var attributes = GetAttributes(node);
-        return pattern.RequiredAttributes.All(required => attributes.Any(actual => AttributeNamesEqual(required, actual)));
+        var requiredAttributes = pattern.RequiredAttributes ?? [];
+        return requiredAttributes.All(required => attributes.Any(actual => AttributeNamesEqual(required, actual)));
     }
 
     private static string? GetSimpleName(SyntaxNode node)

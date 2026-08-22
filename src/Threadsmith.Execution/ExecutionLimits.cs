@@ -7,18 +7,25 @@ namespace Threadsmith.Execution;
 /// </summary>
 public sealed record ExecutionLimits
 {
-    /// <summary>
-    /// Maximum number of model continuation rounds within one plan-generation cycle before
-    /// the host stops the model (strategy §11). Historical default: 16.
-    /// </summary>
-    public int MaxModelRounds { get; init; } = 16;
+    /// <summary>Default model continuation-round limit. Zero means disabled.</summary>
+    public const int DefaultMaxModelRounds = 0;
+
+    /// <summary>Default separate evidence-collection inspection-tool cutoff. Zero means disabled.</summary>
+    public const int DefaultMaxPlanningToolRounds = 0;
 
     /// <summary>
-    /// Maximum initial evidence-collection rounds that advertise repository inspection tools.
-    /// Later rounds retain only <c>propose_plan</c> so planning converges instead of exhausting
-    /// the complete continuation budget. Default: 4.
+    /// Optional maximum number of model continuation rounds within one plan-generation cycle.
+    /// A value of zero or less disables the separate continuation-round cutoff so cancellation,
+    /// tool policy, output accounting, and user-controlled budgets govern the run. Default: 0.
     /// </summary>
-    public int MaxPlanningToolRounds { get; init; } = 4;
+    public int MaxModelRounds { get; init; } = DefaultMaxModelRounds;
+
+    /// <summary>
+    /// Optional maximum initial evidence-collection rounds that advertise repository inspection tools.
+    /// A value of zero or less disables the separate cutoff so read-only exploration can use the
+    /// full continuation budget. Default: 0.
+    /// </summary>
+    public int MaxPlanningToolRounds { get; init; } = DefaultMaxPlanningToolRounds;
 
     /// <summary>
     /// Maximum malformed <c>propose_plan</c> argument repair attempts before the host fails closed.

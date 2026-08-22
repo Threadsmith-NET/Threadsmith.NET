@@ -117,6 +117,7 @@ public sealed class MutationProposalApplication :
                 Name = ProposeMutationsToolName,
                 Description = "Submit one plan-scoped mutation proposal using the exact schema fields. Required envelope fields are schemaVersion, planRevision, planStepIds, and mutationSet. mutationSet requires rationale and mutations. Each mutation item requires type and relativePath; use baselineSha256 for baseline hashes. Do not use plan file-intent or legacy names kind, path, baselineHash, or per-item rationale/risk/validation fields. For C# symbol renames, prefer RenameSymbol with relatedSymbolId and replacementText set to the new identifier; optional MoveFile may rename the declaration file. ReplaceText requires exact expectedText; the host may correct an inaccurate offset only when that text has one match. The host validates the proposal and this call never writes files.",
                 ArgumentsJsonSchema = ProposeMutationsArgumentsSchema,
+                PreferStrictArguments = true,
             },
         ])[0];
 
@@ -288,7 +289,8 @@ public sealed class MutationProposalApplication :
                     new ContextToolSchema(
                         ProposeMutationsTool.Name,
                         ProposeMutationsTool.Description,
-                        ProposeMutationsTool.ArgumentsJsonSchema),
+                        ProposeMutationsTool.ArgumentsJsonSchema,
+                        ProposeMutationsTool.PreferStrictArguments),
                 ],
             },
             cancellationToken);
@@ -321,6 +323,7 @@ public sealed class MutationProposalApplication :
                 ReasoningLevel = _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId)
                     ?? ReasoningLevel.None,
                 Tools = modelTools,
+                AllowMultipleToolCalls = false,
                 Messages = context.Messages ?? [],
                 Layout = context.Layout,
                 ToolTransportMode = ToolTransportMode.Native,

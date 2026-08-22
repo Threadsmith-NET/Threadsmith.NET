@@ -115,6 +115,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 77 | `plan-77-shared-codex-style-tui-lifecycle-blocks.md` | Shared Codex-style TUI lifecycle blocks for tools, plans, and semantic checks |
 | 78 | `plan-78-repository-scoped-cross-session-memory.md` | Repository-scoped cross-session memory in the existing ignored repo SQLite store |
 | 79 | `plan-79-packaged-local-documentation-help-skill.md` | Packaged local documentation bundle and maintained natural Q&A skill |
+| 80 | `plan-80-active-turn-tool-continuation-compaction.md` | Token-aware active-turn tool continuation compaction |
 
 ## Update discipline
 

@@ -53,11 +53,14 @@ internal static class ApplicationComposition
                     .GetSection("prompt append files")
                     .Get<string[]>() ?? [],
                 Conversation = conversationPolicy,
+                RepositoryMemory = host.Configuration.GetSection("context:repositoryMemory")
+                    .Get<RepositoryMemoryContextPolicy>() ?? new RepositoryMemoryContextPolicy(),
             },
             modelResolver,
             persistence.ConversationStore,
             conversationRetriever,
-            new RepositoryInstructionResolver(host.Sanitizer));
+            new RepositoryInstructionResolver(host.Sanitizer),
+            persistence.RepositoryMemoryStore);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -70,6 +73,13 @@ internal static class ApplicationComposition
             persistence.ConversationStore,
             host.Sanitizer,
             compactionPolicy);
+        var repositoryMemoryGovernor = new RepositoryMemoryGovernor(
+            persistence.RepositoryMemoryStore,
+            host.Sanitizer,
+            host.Configuration.GetSection("context:repositoryMemory").Get<RepositoryMemoryPolicy>());
+        var repositoryMemoryApplication = new RepositoryMemoryApplication(
+            repositoryMemoryGovernor,
+            host.Events);
         var conversationCompactor = new ConversationCompactor(
             persistence.ConversationStore,
             new DeterministicConversationSummaryCandidateProvider(),
@@ -209,7 +219,8 @@ internal static class ApplicationComposition
 
                 var invocationContext = CreateToolInvocationContext(host, state);
                 return CreatePlanSanityCheckRequest(plan, invocationContext, baseline);
-            });
+            },
+            repositoryMemoryGovernor: repositoryMemoryGovernor);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -482,6 +493,7 @@ internal static class ApplicationComposition
                 delegationCoordinator,
                 skillApplication,
                 conversationContextApplication,
+                repositoryMemoryApplication,
                 repositoryLifecycle,
                 mutationProposals,
                 semantic.SemanticMutations,
@@ -714,6 +726,9 @@ internal sealed record PersistenceCompositionInputs
 {
     /// <summary>Gets durable conversation archive and governed memory storage.</summary>
     internal required SqliteConversationStore ConversationStore { get; init; }
+
+    /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
+    internal required SqliteRepositoryMemoryStore RepositoryMemoryStore { get; init; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal required SqliteSessionLifecycleStore SessionLifecycleStore { get; init; }

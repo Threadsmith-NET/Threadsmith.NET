@@ -40,8 +40,8 @@ Own .NET SDK, MSBuild, Roslyn workspace, confidence-aware semantic discovery, an
 
 ## Verification
 
-- `dotnet test tests/Threadsmith.Milestone3.Tests/`
-- `dotnet test tests/Threadsmith.Milestone5.Tests/ --filter "FullyQualifiedName~SemanticMutation"`
+- `dotnet test tests/Threadsmith.ModelTooling.Tests/`
+- `dotnet test tests/Threadsmith.Mutations.Tests/ --filter "FullyQualifiedName~SemanticMutation"`
 
 ## Child DOX Index
 

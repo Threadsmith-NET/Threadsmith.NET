@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.ComponentModel;
 using System.IO.Enumeration;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -39,7 +40,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
         "list_files",
-        "Lists repository files under a bounded approved root.",
+        "Fast repository file inventory under a bounded approved root. Use for directory/file discovery before reading files, and batch with other independent read-only inspections when possible.",
         ToolCategory.RepositoryInspection,
         RepositoryTrustLevel.UntrustedInspection,
         ApprovalLevel.None,
@@ -154,25 +155,40 @@ public sealed record ReadFileInput
     public int MaximumLines { get; init; } = 0;
 }
 
-/// <summary>Bounded file content with an explicit range.</summary>
+/// <summary>Reason one bounded file read stopped before the end of the file.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ReadFileTruncationReason>))]
+public enum ReadFileTruncationReason
+{
+    /// <summary>The configured or requested line limit was reached.</summary>
+    LineLimit,
+
+    /// <summary>The host textual-content byte limit was reached.</summary>
+    ContentByteLimit,
+}
+
+/// <summary>Bounded file content with explicit range and continuation metadata.</summary>
 public sealed record ReadFileOutput(
     string Path,
     int StartLine,
+    int? EndLine,
+    int TotalLines,
     IReadOnlyList<string> Lines,
-    bool IsTruncated);
+    bool IsTruncated,
+    int? NextStartLine,
+    ReadFileTruncationReason? TruncationReason);
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
         "read_file",
-        "Reads a bounded range from an approved repository file.",
+        "Reads an approved repository text file. Omit startLine and maximumLines to read from the beginning up to 2,000 lines or 50 KiB, whichever comes first. Set a narrower range only when exact relevant line numbers are already known. Do not paginate with adjacent small ranges; continue only when the result reports truncation and use nextStartLine. Batch independent file reads in one response.",
         ToolCategory.FileRead,
         RepositoryTrustLevel.TrustedRead,
         ApprovalLevel.None,
         ToolSideEffect.ReadOnly,
         TimeSpan.FromSeconds(10),
-        256 * 1024);
+        384 * 1024);
 
     private readonly ToolLimits _limits;
 
@@ -180,6 +196,19 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     public ReadFileTool(ToolLimits? limits = null)
     {
         _limits = limits ?? ToolLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaxLines,
+            ToolLimits.ReadFileLineLimitCeiling);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileDefaultLines,
+            _limits.ReadFileMaxLines);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumContentBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaximumContentBytes,
+            ToolLimits.ReadFileContentByteLimitCeiling);
     }
 
     /// <inheritdoc />
@@ -207,15 +236,53 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         var lines = await File.ReadAllLinesAsync(path, cancellationToken);
         var startIndex = Math.Min(input.StartLine - 1, lines.Length);
         var maximumLines = ResolveMaximumLines(input);
-        string[] selected = [.. lines.Skip(startIndex).Take(maximumLines)];
-        var truncated = startIndex + selected.Length < lines.Length;
+        var selected = new List<string>(Math.Min(maximumLines, lines.Length - startIndex));
+        var selectedContentBytes = 0;
+        var contentLimitReached = false;
+        for (var index = startIndex; index < lines.Length && selected.Count < maximumLines; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
+            var separatorBytes = selected.Count == 0 ? 0 : 1;
+            if (selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
+            {
+                if (selected.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Line {index + 1} exceeds the {_limits.ReadFileMaximumContentBytes}-byte read content limit.");
+                }
+
+                contentLimitReached = true;
+                break;
+            }
+
+            selected.Add(lines[index]);
+            selectedContentBytes += separatorBytes + lineBytes;
+        }
+
+        int? endLine = selected.Count == 0 ? null : input.StartLine + selected.Count - 1;
+        var truncated = startIndex + selected.Count < lines.Length;
+        ReadFileTruncationReason? truncationReason = truncated
+            ? contentLimitReached
+                ? ReadFileTruncationReason.ContentByteLimit
+                : ReadFileTruncationReason.LineLimit
+            : null;
+        int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
         var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
-        var source = new ToolProvenanceSource(
-            "file",
-            relative,
-            $"L{input.StartLine}-L{input.StartLine + Math.Max(0, selected.Length - 1)}");
+        var sourceLocation = endLine is null
+            ? $"L{input.StartLine}"
+            : $"L{input.StartLine}-L{endLine.Value}";
+        var source = new ToolProvenanceSource("file", relative, sourceLocation);
         return new ToolExecution<ReadFileOutput>(
-            new ReadFileOutput(relative, input.StartLine, selected, truncated),
+            new ReadFileOutput(
+                relative,
+                input.StartLine,
+                endLine,
+                lines.Length,
+                selected,
+                truncated,
+                nextStartLine,
+                truncationReason),
             [source],
             truncated);
     }
@@ -259,6 +326,9 @@ public sealed record SearchTextInput
     /// <summary>Text or regex pattern.</summary>
     public required string Query { get; init; }
 
+    /// <summary>Repository-relative file or directory to search; defaults to the repository root.</summary>
+    public string? Path { get; init; }
+
     /// <summary>Simple repository-relative glob.</summary>
     public string Glob { get; init; } = "*";
 
@@ -286,7 +356,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
         "search",
-        "Fallback repository text search for exact literals, configuration keys, routes, log messages, comments, and docs. MUST NOT replace an advertised semantic tool: use semantic tools first for C# symbols, references, implementations, call relationships, impact, syntax shapes, and generated code; use search only when no semantic tool applies or the attempted semantic tool fails or explicitly reports incomplete evidence.",
+        "Search file contents for exact literals, configuration keys, routes, log messages, comments, and docs. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
         ToolCategory.FileSearch,
         RepositoryTrustLevel.TrustedRead,
         ApprovalLevel.None,
@@ -342,11 +412,18 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 TimeSpan.FromMilliseconds(250))
             : null;
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
+        var searchPath = ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context.Invocation);
+        if (!File.Exists(searchPath) && !Directory.Exists(searchPath))
+        {
+            throw new FileNotFoundException("The search path does not exist.", searchPath);
+        }
+
         var maximumMatches = ResolveMaximumMatches(input);
         var ripgrepAttempt = await TryExecuteRipgrepAsync(
             input,
             context,
             repositoryPath,
+            searchPath,
             maximumMatches,
             cancellationToken);
         if (ripgrepAttempt.Execution is not null)
@@ -356,6 +433,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         var fileSet = await GetManagedSearchFilesAsync(
             repositoryPath,
+            searchPath,
             context,
             cancellationToken);
         truncated = fileSet.IsTruncated;
@@ -368,10 +446,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative)
                 || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths)
                 || IsUnsupportedSearchFile(path)
-                || !FileSystemName.MatchesSimpleExpression(
-                    input.Glob,
-                    relative,
-                    ignoreCase: OperatingSystem.IsWindows()))
+                || !MatchesSearchGlob(input.Glob, relative))
             {
                 continue;
             }
@@ -443,7 +518,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     /// <inheritdoc />
     protected override string DescribeActivity(SearchTextInput input)
     {
-        return input.Query;
+        return $"{input.Query} in {input.Path ?? "."}";
     }
 
     /// <inheritdoc />
@@ -451,6 +526,11 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Glob);
+        if (input.Path is not null && string.IsNullOrWhiteSpace(input.Path))
+        {
+            throw new ToolArgumentValidationException("path cannot be empty when supplied.");
+        }
+
         if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(
@@ -475,7 +555,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         SearchTextInput input,
         ToolInvocationContext context)
     {
-        return [context.RepositoryPath];
+        return [ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context)];
     }
 
     private int ResolveMaximumMatches(SearchTextInput input)
@@ -487,6 +567,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         SearchTextInput input,
         ToolExecutionContext context,
         string repositoryPath,
+        string searchPath,
         int maximumMatches,
         CancellationToken cancellationToken)
     {
@@ -497,18 +578,15 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 "Ripgrep process execution is unavailable; used the managed text-search fallback.");
         }
 
-        if (context.Invocation.ProhibitedPaths.Count > 0 || input.Glob.StartsWith('!'))
+        if (input.Glob.StartsWith('!'))
         {
-            return new RipgrepSearchAttempt(null, null);
+            throw new ToolArgumentValidationException("glob must be an inclusion pattern, not an exclusion pattern.");
         }
 
         var arguments = new List<string>
         {
-            "--line-number",
-            "--column",
-            "--no-heading",
+            "--json",
             "--color=never",
-            "--null",
             "--hidden",
             $"--max-filesize={_limits.SearchMaximumBytes}",
             $"--max-count={maximumMatches}",
@@ -521,6 +599,14 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         foreach (var excludedDirectory in _searchExcludedDirectories)
         {
             arguments.Add($"--iglob=!**/{excludedDirectory}/**");
+        }
+
+        foreach (var prohibitedPath in context.Invocation.ProhibitedPaths)
+        {
+            if (TryCreateRipgrepExclusionGlob(prohibitedPath, out var exclusionGlob))
+            {
+                arguments.Add($"--iglob=!{exclusionGlob}");
+            }
         }
 
         if (!input.UseRegularExpression)
@@ -536,7 +622,8 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         arguments.Add("--regexp");
         arguments.Add(input.Query);
-        arguments.Add(".");
+        arguments.Add("--");
+        arguments.Add(Path.GetRelativePath(repositoryPath, searchPath));
 
         ProcessExecutionResult result;
         try
@@ -551,6 +638,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                     WorkingDirectory = repositoryPath,
                     Timeout = TimeSpan.FromSeconds(25),
                     MaximumOutputCharacters = Definition.MaximumOutputBytes,
+                    StandardOutputFormat = ProcessStandardOutputFormat.RipgrepJsonLines,
                     Origin = ProcessRequestOrigin.Host,
                 },
                 cancellationToken);
@@ -575,56 +663,86 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         if (result.ExitCode is not 0 and not 1)
         {
-            return new RipgrepSearchAttempt(
-                null,
-                "Ripgrep could not execute the requested pattern; used the managed text-search fallback.");
+            throw new InvalidOperationException(
+                $"Ripgrep exited with code {result.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}.");
         }
 
         var matches = new List<TextSearchMatch>();
         var sources = new List<ToolProvenanceSource>();
         var truncated = result.StandardOutputTruncated;
-        foreach (var record in result.StandardOutput.Split('\n'))
+        var records = result.StandardOutput.Split('\n');
+        for (var index = 0; index < records.Length; index++)
         {
-            var pathTerminator = record.IndexOf('\0');
-            if (pathTerminator <= 0)
+            var trimmed = records[index].TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(trimmed))
             {
                 continue;
             }
 
-            var relative = record[..pathTerminator];
-            if (relative.StartsWith("./", StringComparison.Ordinal)
-                || relative.StartsWith(".\\", StringComparison.Ordinal))
+            JsonDocument document;
+            try
             {
-                relative = relative[2..];
+                document = JsonDocument.Parse(trimmed);
             }
-
-            relative = relative.Replace('\\', '/');
-            var locationAndText = record.AsSpan(pathTerminator + 1).TrimEnd('\r');
-            var lineSeparator = locationAndText.IndexOf(':');
-            var columnSeparator = lineSeparator < 0
-                ? -1
-                : locationAndText[(lineSeparator + 1)..].IndexOf(':');
-            if (lineSeparator <= 0 || columnSeparator < 0)
+            catch (JsonException) when (result.StandardOutputTruncated
+                && index == records.Length - 1
+                && !result.StandardOutput.EndsWith('\n'))
             {
-                continue;
-            }
-
-            columnSeparator += lineSeparator + 1;
-            if (!int.TryParse(locationAndText[..lineSeparator], out var line)
-                || !int.TryParse(locationAndText[(lineSeparator + 1)..columnSeparator], out var column))
-            {
-                continue;
-            }
-
-            if (matches.Count == maximumMatches)
-            {
-                truncated = true;
                 break;
             }
 
-            var text = locationAndText[(columnSeparator + 1)..].ToString();
-            matches.Add(new TextSearchMatch(relative, line, column, text));
-            sources.Add(new ToolProvenanceSource("file", relative, $"L{line}"));
+            using (document)
+            {
+                var root = document.RootElement;
+                if (!root.TryGetProperty("type", out var type)
+                    || !string.Equals(type.GetString(), "match", StringComparison.Ordinal)
+                    || !root.TryGetProperty("data", out var data)
+                    || !TryReadRipgrepText(data, "path", out var relative)
+                    || !TryReadRipgrepSanitizedPath(data, out var projectedRelative)
+                    || !TryReadRipgrepText(data, "lines", out var text)
+                    || !data.TryGetProperty("line_number", out var lineNumber)
+                    || !lineNumber.TryGetInt32(out var line)
+                    || !TryReadRipgrepColumn(data, out var column))
+                {
+                    continue;
+                }
+
+                if (relative.StartsWith("./", StringComparison.Ordinal)
+                    || relative.StartsWith(".\\", StringComparison.Ordinal))
+                {
+                    relative = relative[2..];
+                }
+
+                relative = relative.Replace('\\', '/');
+                string matchedPath;
+                try
+                {
+                    matchedPath = ToolPathRules.NormalizeAndValidate(relative, context.Invocation);
+                }
+                catch (Exception exception) when (
+                    exception is ToolArgumentValidationException
+                        or UnauthorizedAccessException
+                        or IOException)
+                {
+                    continue;
+                }
+
+                if (!IsWithinSearchPath(matchedPath, searchPath))
+                {
+                    continue;
+                }
+
+                relative = Path.GetRelativePath(repositoryPath, matchedPath).Replace('\\', '/');
+                projectedRelative = NormalizeProjectedRipgrepPath(projectedRelative);
+                if (matches.Count == maximumMatches)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                matches.Add(new TextSearchMatch(projectedRelative, line, column, text.TrimEnd('\r', '\n')));
+                sources.Add(new ToolProvenanceSource("file", projectedRelative, $"L{line}"));
+            }
         }
 
         return new RipgrepSearchAttempt(
@@ -635,8 +753,80 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             null);
     }
 
+    private static bool TryReadRipgrepText(JsonElement data, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!data.TryGetProperty(propertyName, out var container)
+            || !container.TryGetProperty("text", out var text)
+            || text.GetString() is not { } textValue)
+        {
+            return false;
+        }
+
+        value = textValue;
+        return true;
+    }
+
+    private static bool TryReadRipgrepSanitizedPath(JsonElement data, out string value)
+    {
+        value = string.Empty;
+        if (!data.TryGetProperty("path", out var container))
+        {
+            return false;
+        }
+
+        if (container.TryGetProperty("sanitizedText", out var sanitizedText)
+            && sanitizedText.GetString() is { } sanitizedValue)
+        {
+            value = sanitizedValue;
+            return true;
+        }
+
+        if (container.TryGetProperty("text", out var text)
+            && text.GetString() is { } textValue)
+        {
+            value = textValue;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeProjectedRipgrepPath(string relative)
+    {
+        if (relative.StartsWith("./", StringComparison.Ordinal)
+            || relative.StartsWith(".\\", StringComparison.Ordinal))
+        {
+            relative = relative[2..];
+        }
+
+        return relative.Replace('\\', '/');
+    }
+
+    private static bool TryReadRipgrepColumn(JsonElement data, out int column)
+    {
+        column = 1;
+        if (!data.TryGetProperty("submatches", out var submatches)
+            || submatches.ValueKind != JsonValueKind.Array
+            || submatches.GetArrayLength() == 0)
+        {
+            return true;
+        }
+
+        var first = submatches[0];
+        if (!first.TryGetProperty("start", out var start)
+            || !start.TryGetInt32(out var zeroBasedColumn))
+        {
+            return false;
+        }
+
+        column = zeroBasedColumn + 1;
+        return true;
+    }
+
     private async Task<SearchFileSet> GetManagedSearchFilesAsync(
         string repositoryPath,
+        string searchPath,
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
@@ -644,7 +834,16 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             repositoryPath,
             context,
             cancellationToken);
-        return gitFileSet ?? new SearchFileSet(EnumerateSearchFiles(repositoryPath), false);
+        if (gitFileSet is not null)
+        {
+            return new SearchFileSet(
+                [.. gitFileSet.Paths.Where(path => IsWithinSearchPath(path, searchPath))],
+                gitFileSet.IsTruncated);
+        }
+
+        return new SearchFileSet(
+            File.Exists(searchPath) ? [searchPath] : EnumerateSearchFiles(searchPath),
+            false);
     }
 
     private async Task<SearchFileSet?> TryEnumerateGitSearchFilesAsync(
@@ -747,6 +946,67 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         return new SearchFileSet(paths, result.StandardOutputTruncated);
     }
 
+    private static bool IsWithinSearchPath(string path, string searchPath)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (File.Exists(searchPath))
+        {
+            return path.Equals(searchPath, comparison);
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(searchPath);
+        return path.Equals(root, comparison)
+            || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+    }
+
+    private static bool TryCreateRipgrepExclusionGlob(
+        string prohibitedPattern,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? exclusionGlob)
+    {
+        exclusionGlob = null;
+        var pattern = prohibitedPattern.Replace('\\', '/').Trim().TrimStart('/');
+        if (pattern.Length == 0 || ContainsRipgrepOnlyGlobSyntax(pattern))
+        {
+            return false;
+        }
+
+        if (pattern.EndsWith('/'))
+        {
+            pattern += "**";
+        }
+
+        exclusionGlob = pattern;
+        return true;
+    }
+
+    private static bool ContainsRipgrepOnlyGlobSyntax(string pattern)
+    {
+        return pattern.Contains('[')
+            || pattern.Contains(']')
+            || pattern.Contains('{')
+            || pattern.Contains('}')
+            || pattern.Contains('!');
+    }
+
+    private static bool MatchesSearchGlob(string glob, string relativePath)
+    {
+        var ignoreCase = OperatingSystem.IsWindows();
+        if (FileSystemName.MatchesSimpleExpression(glob, relativePath, ignoreCase))
+        {
+            return true;
+        }
+
+        if (glob.Contains('/') || glob.Contains('\\'))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(relativePath);
+        return FileSystemName.MatchesSimpleExpression(glob, fileName, ignoreCase);
+    }
+
     private static bool IsManagedSearchLinkOrReparsePoint(string path)
     {
         var file = new FileInfo(path);
@@ -773,7 +1033,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         var files = new FileSystemEnumerable<string>(
             repositoryPath,
-            static (ref FileSystemEntry entry) => entry.ToFullPath(),
+            static (ref entry) => entry.ToFullPath(),
             new EnumerationOptions
             {
                 RecurseSubdirectories = true,
@@ -781,8 +1041,8 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 AttributesToSkip = FileAttributes.ReparsePoint,
             })
         {
-            ShouldIncludePredicate = static (ref FileSystemEntry entry) => !entry.IsDirectory,
-            ShouldRecursePredicate = static (ref FileSystemEntry entry) =>
+            ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory,
+            ShouldRecursePredicate = static (ref entry) =>
             {
                 var name = entry.FileName.ToString();
                 return !IsManagedSearchExcludedDirectory(name)
@@ -1350,8 +1610,7 @@ internal static class ToolDefinitionFactory
         TimeSpan timeout,
         int maximumOutputBytes)
     {
-        var inputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
-            _schemaOptions,
+        var inputSchema = _schemaOptions.GetJsonSchemaAsNode(
             typeof(TInput),
             new JsonSchemaExporterOptions
             {
@@ -1363,11 +1622,11 @@ internal static class ToolDefinitionFactory
             && inputSchema is JsonObject inputObject)
         {
             inputObject["properties"] = new JsonObject();
-            inputObject["additionalProperties"] = false;
         }
 
-        var outputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
-            _schemaOptions,
+        SealObjectSchemas(inputSchema);
+
+        var outputSchema = _schemaOptions.GetJsonSchemaAsNode(
             typeof(TOutput));
         return new()
         {
@@ -1395,6 +1654,50 @@ internal static class ToolDefinitionFactory
             MaximumOutputBytes = maximumOutputBytes,
             RequiresWorkspace = category == ToolCategory.SemanticSearch,
             Scheduling = CreateSchedulingDescriptor(category, sideEffect),
+        };
+    }
+
+    private static void SealObjectSchemas(JsonNode? schema)
+    {
+        switch (schema)
+        {
+            case JsonObject schemaObject:
+                if (IsObjectSchema(schemaObject))
+                {
+                    schemaObject["additionalProperties"] ??= false;
+                }
+
+                foreach (var property in schemaObject.ToArray())
+                {
+                    SealObjectSchemas(property.Value);
+                }
+
+                break;
+            case JsonArray schemaArray:
+                foreach (var item in schemaArray)
+                {
+                    SealObjectSchemas(item);
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsObjectSchema(JsonObject schemaObject)
+    {
+        if (schemaObject.ContainsKey("properties"))
+        {
+            return true;
+        }
+
+        return schemaObject["type"] switch
+        {
+            JsonValue typeValue when typeValue.TryGetValue<string>(out var type) =>
+                string.Equals(type, "object", StringComparison.Ordinal),
+            JsonArray typeArray => typeArray.OfType<JsonValue>()
+                .Any(value => value.TryGetValue<string>(out var type)
+                    && string.Equals(type, "object", StringComparison.Ordinal)),
+            _ => false,
         };
     }
 

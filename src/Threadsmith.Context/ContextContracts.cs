@@ -140,7 +140,11 @@ public interface IEvidenceStore
 }
 
 /// <summary>One model-visible tool contract included in governed context.</summary>
-public sealed record ContextToolSchema(string Id, string Description, string JsonSchema);
+public sealed record ContextToolSchema(
+    string Id,
+    string Description,
+    string JsonSchema,
+    bool PreferStrictArguments = false);
 
 /// <summary>Input state for one phase-specific context assembly.</summary>
 public sealed record ContextAssemblyRequest
@@ -159,6 +163,9 @@ public sealed record ContextAssemblyRequest
 
     /// <summary>Normalized repository root used to resolve append files.</summary>
     public required string RepositoryPath { get; init; }
+
+    /// <summary>Stable repository identity used for repository-scoped local memory.</summary>
+    public string? RepositoryIdentity { get; init; }
 
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];

@@ -13,7 +13,7 @@ using Threadsmith.Models;
 using Threadsmith.Tools;
 
 /// <summary>Coordinates scripted sessions through application commands.</summary>
-public sealed class SessionApplication :
+public sealed partial class SessionApplication :
     ICommandHandler<CreateSessionCommand, SessionId>,
     ICommandHandler<SubmitRequestCommand, RunId>,
     ICommandHandler<WaitForRunCommand, bool>,
@@ -93,6 +93,7 @@ public sealed class SessionApplication :
     private readonly IHookCoordinator? _hooks;
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IPlanSanityChecker? _planSanityChecker;
+    private readonly IRepositoryMemoryGovernor? _repositoryMemoryGovernor;
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
 
@@ -170,7 +171,8 @@ public sealed class SessionApplication :
         IPlanSanityChecker? planSanityChecker = null,
         IPlanApprovalPolicy? planApprovalPolicy = null,
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
-            planSanityRequestFactory = null)
+            planSanityRequestFactory = null,
+        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -206,6 +208,7 @@ public sealed class SessionApplication :
         _planSanityChecker = planSanityChecker;
         _planApprovalPolicy = planApprovalPolicy;
         _planSanityRequestFactory = planSanityRequestFactory;
+        _repositoryMemoryGovernor = repositoryMemoryGovernor;
         _userUrlIntake = userUrlIntake;
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
@@ -679,6 +682,7 @@ public sealed class SessionApplication :
                 "scripted activity completed",
                 registration.Cancellation.Token);
             await PromoteHostObservedMemoryAsync(
+                runId,
                 registration,
                 completedWork: [$"Completed request: {registration.Task.Intent}"],
                 cancellationToken: registration.Cancellation.Token);
@@ -745,6 +749,15 @@ public sealed class SessionApplication :
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
                 CancellationToken.None);
+            if (succeeded)
+            {
+                await PromoteHostObservedMemoryAsync(
+                    runId,
+                    registration,
+                    completedWork: [$"Completed approved execution: {registration.Task.Intent}"],
+                    cancellationToken: CancellationToken.None);
+            }
+
             await _events.PublishAsync(
                 new RunCompleted(
                     registration.SessionId,
@@ -825,29 +838,123 @@ public sealed class SessionApplication :
     }
 
     private async Task PromoteHostObservedMemoryAsync(
+        RunId runId,
         RunRegistration registration,
         IReadOnlyList<string>? decisions = null,
         IReadOnlyList<string>? unresolvedQuestions = null,
         IReadOnlyList<string>? completedWork = null,
         CancellationToken cancellationToken = default)
     {
-        if (_conversationGovernor is null || registration.SourceMessage is not { } sourceMessage)
+        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
+        if (_conversationGovernor is not null && registration.SourceMessage is { } sourceMessage)
+        {
+            await _conversationGovernor.PromoteAsync(
+                new ConversationPromotionRequest
+                {
+                    SessionId = registration.SessionId,
+                    SourceMessage = sourceMessage,
+                    Decisions = decisions ?? [],
+                    UnresolvedQuestions = unresolvedQuestions ?? [],
+                    CompletedWork = completedWork ?? [],
+                    RepositoryEvidence = repositoryEvidence,
+                },
+                cancellationToken);
+        }
+
+        try
+        {
+            await PromoteHostObservedRepositoryMemoryAsync(
+                runId,
+                registration,
+                decisions ?? [],
+                unresolvedQuestions ?? [],
+                completedWork ?? [],
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Repository-memory promotion failed for run {RunId}; the authoritative run outcome is unchanged.",
+                runId.Value);
+        }
+    }
+
+    private async Task PromoteHostObservedRepositoryMemoryAsync(
+        RunId runId,
+        RunRegistration registration,
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork,
+        CancellationToken cancellationToken)
+    {
+        if (_repositoryMemoryGovernor is null
+            || string.IsNullOrWhiteSpace(registration.RepositoryIdentity))
         {
             return;
         }
 
-        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
-        await _conversationGovernor.PromoteAsync(
-            new ConversationPromotionRequest
+        var repositoryIdentity = RepositoryIdentity.Create(registration.RepositoryIdentity);
+        foreach (var (kind, content) in CreateRepositoryMemoryCandidates(
+            decisions,
+            unresolvedQuestions,
+            completedWork))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(content))
             {
-                SessionId = registration.SessionId,
-                SourceMessage = sourceMessage,
-                Decisions = decisions ?? [],
-                UnresolvedQuestions = unresolvedQuestions ?? [],
-                CompletedWork = completedWork ?? [],
-                RepositoryEvidence = repositoryEvidence,
-            },
-            cancellationToken);
+                continue;
+            }
+
+            var result = await _repositoryMemoryGovernor.PromoteHostObservedAsync(
+                new HostObservedRepositoryMemoryPromotion(
+                    registration.SessionId,
+                    runId,
+                    repositoryIdentity,
+                    kind,
+                    content),
+                cancellationToken);
+            foreach (var change in result.StateUpdates.Where(change => change.PreviousValidity != change.Validity))
+            {
+                await _events.PublishAsync(
+                    new RepositoryMemoryValidityChanged(
+                        registration.SessionId,
+                        DateTimeOffset.UtcNow,
+                        repositoryIdentity,
+                        change.MemoryId,
+                        change.Validity,
+                        change.Reason),
+                    cancellationToken);
+            }
+
+            if (!result.WasInserted)
+            {
+                continue;
+            }
+
+            await _events.PublishAsync(
+                new RepositoryMemoryRemembered(
+                    registration.SessionId,
+                    DateTimeOffset.UtcNow,
+                    repositoryIdentity,
+                    result.Item.Id,
+                    result.Item.Kind,
+                    result.Item.Authority),
+                cancellationToken);
+        }
+    }
+
+    private static IReadOnlyList<(RepositoryMemoryKind Kind, string Content)> CreateRepositoryMemoryCandidates(
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork)
+    {
+        return
+        [
+            .. decisions.Select(content => (RepositoryMemoryKind.ArchitectureDecision, content)),
+            .. unresolvedQuestions.Select(content => (RepositoryMemoryKind.UnresolvedQuestion, content)),
+            .. completedWork.Select(content => (RepositoryMemoryKind.WorkflowFact, content)),
+        ];
     }
 
     private static string RenderLegacyContinuation(
@@ -1165,594 +1272,6 @@ public sealed class SessionApplication :
         ModelProfileId? resolvedProfileId)
     {
         return preference?.ResolveFor(resolvedProfileId) ?? ReasoningLevel.None;
-    }
-
-    private async Task<ImplementationPlan?> GeneratePlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        RunPhase phase,
-        CancellationToken cancellationToken)
-    {
-        var maximumModelRounds = _limits.MaxModelRounds;
-        var maximumPlanningToolRounds = Math.Clamp(
-            _limits.MaxPlanningToolRounds,
-            1,
-            Math.Max(1, maximumModelRounds - 1));
-        ToolInvocationContext? invocationContext = null;
-        if (_toolContextFactory is not null)
-        {
-            invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
-            registration.RepositoryIdentity = invocationContext?.RepositoryPath;
-        }
-
-        var workspaceAvailable = invocationContext?.WorkspaceId is not null;
-        var invokedToolKeys = new HashSet<string>(StringComparer.Ordinal);
-        var continuationMessages = new List<ModelMessage>();
-        ContextAssemblyResult? frozenContext = null;
-        const int maximumRetainedToolCalls = 256;
-        var maximumOutputCharacters = _limits.MaxStructuredOutputCharacters;
-        var retainedOutputCharacters = 0;
-        var retainedToolCalls = 0;
-        var semanticToolAttempted = false;
-        var planProposalRepairAttempts = 0;
-        var maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
-        for (var modelRound = 1; modelRound <= maximumModelRounds; modelRound++)
-        {
-            var planningToolsWithheld = phase == RunPhase.EvidenceCollection
-                && modelRound > maximumPlanningToolRounds;
-            ToolDefinition[] conversationDefinitions = !planningToolsWithheld
-                && _toolPipeline is not null
-                && _toolRegistry is not null
-                ? [.. _toolRegistry.GetDefinitions(registration.SessionId, runId)
-                    .Where(definition => definition.SideEffect == ToolSideEffect.ReadOnly
-                        || definition.ConversationAvailable)
-                    .Where(definition => IsAdvertisedToModel(definition, invocationContext))]
-                : [];
-            IEnumerable<ToolDefinition> availableDefinitions = conversationDefinitions;
-            if (!workspaceAvailable)
-            {
-                availableDefinitions = conversationDefinitions
-                    .Where(definition => !definition.RequiresWorkspace);
-            }
-
-            List<ModelToolDefinition> modelTools = [.. availableDefinitions.Select(definition => new ModelToolDefinition
-            {
-                Name = definition.Id,
-                Description = definition.Description,
-                ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
-            })];
-            if (phase == RunPhase.EvidenceCollection)
-            {
-                modelTools.Add(new ModelToolDefinition
-                {
-                    Name = ProposePlanToolName,
-                    Description = "Propose a governed implementation plan when the user requests repository changes. Calling this tool never mutates files.",
-                    ArgumentsJsonSchema = ProposePlanArgumentsSchema,
-                });
-            }
-
-            modelTools = [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
-            var modelPreference = _sessionPreferences?.Capture();
-            var context = frozenContext;
-            if (_contextAssembler is not null && context is null)
-            {
-                ContextToolSchema[] toolSchemas = [.. modelTools.Select(definition =>
-                    new ContextToolSchema(
-                        definition.Name,
-                        definition.Description,
-                        definition.ArgumentsJsonSchema))];
-                context = await _contextAssembler.AssembleAsync(
-                    new ContextAssemblyRequest
-                    {
-                        SessionId = registration.SessionId,
-                        RunId = runId,
-                        Phase = phase,
-                        Task = registration.Task,
-                        RepositoryPath = invocationContext?.RepositoryPath
-                            ?? Directory.GetCurrentDirectory(),
-                        WorkingScope = RepositoryWorkingScope.Resolve(
-                            invocationContext?.RepositoryPath ?? Directory.GetCurrentDirectory(),
-                            registration.PendingPlan?.Steps.SelectMany(step => step.GetAffectedPaths()),
-                            Directory.GetCurrentDirectory()),
-                        ProhibitedPaths = invocationContext?.ProhibitedPaths ?? [],
-                        ToolSchemas = toolSchemas,
-                        RequiredCapabilities = new ModelCapabilitySet
-                        {
-                            Streaming = true,
-                            StructuredOutput = phase != RunPhase.EvidenceCollection,
-                            ToolCalls = modelTools.Count > 0,
-                        },
-                        DefaultModelProfileId = modelPreference?.ProfileId
-                            ?? _defaultModelProfileId,
-                        PlanUnderRevision = phase == RunPhase.AwaitingPlanApproval
-                            ? registration.PendingPlan
-                            : null,
-                        CurrentTurnHostContext = registration.CurrentTurnHostContext,
-                        CurrentMessageId = registration.CurrentMessageId,
-                        ConversationModeOverride = registration.ConversationMode,
-                        ConversationModeSource = "session-state",
-                    },
-                    cancellationToken);
-                frozenContext = context;
-            }
-
-            var textOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
-            ImplementationPlan? plan = null;
-            var toolInvoked = false;
-            var usageRequestId = new ModelRequestUsageId(
-                runId,
-                "conversation",
-                modelRound - 1,
-                Guid.NewGuid());
-            ModelUsage? reportedUsage = null;
-            var modelSucceeded = false;
-            IReadOnlyList<ModelMessage> requestMessages =
-            [
-                .. context?.Messages ?? [],
-                .. continuationMessages,
-            ];
-            var wireEstimate = context?.WireEstimate;
-            if (context?.Layout is { } requestLayout)
-            {
-                BoundContinuationMessages(
-                    continuationMessages,
-                    context,
-                    modelTools,
-                    requestLayout);
-                requestMessages =
-                [
-                    .. context.Messages ?? [],
-                    .. continuationMessages,
-                ];
-                wireEstimate = ModelWireEstimator.Estimate(
-                    requestMessages,
-                    modelTools,
-                    ToolTransportMode.Native,
-                    requestLayout.StablePrefixMessageCount,
-                    context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
-            }
-
-            var modelRequest = new ModelStreamRequest
-            {
-                RunId = runId,
-                Input = RenderLegacyContinuation(
-                    context?.ModelInput ?? registration.Task.Intent,
-                    continuationMessages),
-                Seed = 42,
-                ToolContinuationRound = modelRound - 1,
-                WorkloadClass = context?.WorkloadClass ?? WorkloadClass.General,
-                ContainsSensitiveData = context?.ModelConstraints.ContainsSensitiveData
-                    ?? false,
-                RequiredCapabilities = context?.RequiredCapabilities
-                    ?? new ModelCapabilitySet
-                    {
-                        Streaming = true,
-                        StructuredOutput = phase != RunPhase.EvidenceCollection,
-                        ToolCalls = modelTools.Count > 0,
-                    },
-                SelectionConstraints = context?.ModelConstraints ?? new ModelSelectionConstraints(),
-                ResolvedProfileId = context?.ModelResolution?.ProfileId,
-                ReasoningLevel = ResolveRequestReasoning(
-                    modelPreference,
-                    context?.ModelResolution?.ProfileId),
-                Tools = modelTools,
-                Messages = requestMessages,
-                Layout = context?.Layout,
-                ToolTransportMode = ToolTransportMode.Native,
-                WireEstimate = wireEstimate,
-            };
-            var modelOperationId = usageRequestId.InvocationId;
-            if (_hooks is not null)
-            {
-                var hookDecision = await _hooks.InvokeAsync(
-                    HookPoint.BeforeModelRequest,
-                    registration.SessionId,
-                    runId,
-                    invocationContext?.RepositoryPath,
-                    modelOperationId,
-                    modelRound - 1,
-                    new Dictionary<string, string>
-                    {
-                        ["workload"] = modelRequest.WorkloadClass.ToString(),
-                        ["containsSensitiveData"] = modelRequest.ContainsSensitiveData.ToString(),
-                        ["toolCount"] = modelRequest.Tools.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    },
-                    cancellationToken: cancellationToken);
-                if (hookDecision.Decision == HookDecisionKind.Block)
-                {
-                    throw new UnauthorizedAccessException("A trusted managed lifecycle policy blocked the model request.");
-                }
-            }
-
-            try
-            {
-                var toolCallOrdinal = 0;
-                var pendingToolCalls = new List<ToolBatchRequest>();
-                await foreach (var chunk in _model.StreamAsync(modelRequest, cancellationToken))
-                {
-                    if (chunk.Reasoning is not null)
-                    {
-                        AddRetainedOutputCharacters(
-                            chunk.Reasoning.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        await _events.PublishAsync(
-                            new ModelReasoningObserved(
-                                registration.SessionId,
-                                DateTimeOffset.UtcNow,
-                                _sanitizer.Sanitize(chunk.Reasoning)),
-                            cancellationToken);
-                    }
-
-                    if (chunk.Text is not null)
-                    {
-                        AddRetainedOutputCharacters(
-                            chunk.Text.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        textOutput.Append(chunk.Text);
-                        await _events.PublishAsync(
-                            new ModelOutputObserved(
-                                registration.SessionId,
-                                DateTimeOffset.UtcNow,
-                                _sanitizer.Sanitize(chunk.Text)),
-                            cancellationToken);
-                    }
-
-                    if (chunk.Output is PlanModelOutput planOutput)
-                    {
-                        ModelOutputValidator.Validate(planOutput);
-                        AddRetainedPlanOutputCharacters(
-                            planOutput.Plan,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        plan = planOutput.Plan;
-                    }
-
-                    if (chunk.Output is ToolRequestModelOutput tool)
-                    {
-                        AddRetainedOutputCharacters(
-                            tool.ToolName.Length + tool.ArgumentsJson.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        retainedToolCalls++;
-                        if (retainedToolCalls > maximumRetainedToolCalls)
-                        {
-                            throw new MalformedModelOutputException(
-                                "The model exceeded the host's maximum retained tool-call count.");
-                        }
-
-                        var suppressPipelineInvocation = false;
-                        var isProposePlanTool = string.Equals(
-                            tool.ToolName,
-                            ProposePlanToolName,
-                            StringComparison.OrdinalIgnoreCase);
-                        if (isProposePlanTool)
-                        {
-                            if (phase != RunPhase.EvidenceCollection)
-                            {
-                                throw new MalformedModelOutputException(
-                                    "The model requested propose_plan outside the initial conversational turn.");
-                            }
-
-                            try
-                            {
-                                ModelOutputValidator.Validate(tool);
-                                plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson).Plan;
-                            }
-                            catch (MalformedModelOutputException)
-                                when (modelRound < maximumModelRounds
-                                    && planProposalRepairAttempts < maximumPlanProposalRepairAttempts)
-                            {
-                                planProposalRepairAttempts++;
-                                toolCallOrdinal++;
-                                var toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
-                                    + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                                continuationMessages.Add(CreateToolCallMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    tool.ArgumentsJson));
-                                const string repairContent =
-                                    "The propose_plan arguments did not match the required plan schema. Do not return a text plan. "
-                                    + "Call propose_plan again with strict JSON: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. "
-                                    + "Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
-                                continuationMessages.Add(CreateToolResultMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    repairContent));
-                                toolInvoked = true;
-                                suppressPipelineInvocation = true;
-                            }
-                        }
-                        else
-                        {
-                            ModelOutputValidator.Validate(tool);
-                            if (IsSemanticInspectionTool(tool.ToolName))
-                            {
-                                semanticToolAttempted = true;
-                            }
-
-                            // Tool activity is published by the pipeline via ToolInvocationStarted /
-                            // ToolInvocationCompleted; no transcript answer text is emitted here.
-                        }
-
-                        if (!suppressPipelineInvocation
-                            && plan is null
-                            && _toolPipeline is not null
-                            && invocationContext is not null)
-                        {
-                            toolCallOrdinal++;
-                            var toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
-                                + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                            continuationMessages.Add(CreateToolCallMessage(
-                                toolCallId,
-                                tool.ToolName,
-                                tool.ArgumentsJson));
-                            if (planningToolsWithheld)
-                            {
-                                const string convergenceContent =
-                                    "The host planning-exploration limit was reached, so this inspection tool was not invoked. "
-                                    + "Use the gathered evidence and call propose_plan now, or answer directly if no repository change is needed.";
-                                continuationMessages.Add(CreateToolResultMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    convergenceContent));
-                                toolInvoked = true;
-                            }
-                            else
-                            {
-                                var toolKey = $"{tool.ToolName}|{tool.ArgumentsJson}";
-                                if (TryCreateSemanticFirstSearchCorrection(
-                                    tool,
-                                    workspaceAvailable,
-                                    semanticToolAttempted,
-                                    modelTools,
-                                    out var semanticFirstContent))
-                                {
-                                    if (_evidenceStore is not null)
-                                    {
-                                        await _evidenceStore.AddAsync(
-                                            new Evidence
-                                            {
-                                                EvidenceId = EvidenceId.New(),
-                                                SessionId = registration.SessionId,
-                                                RunId = runId,
-                                                Kind = EvidenceKind.Failure,
-                                                Content = semanticFirstContent,
-                                                Provenance = new EvidenceProvenance
-                                                {
-                                                    Source = "tool:search:semantic-first",
-                                                    SemanticConfidence = SemanticConfidenceLevel.FullSemantic,
-                                                },
-                                                CollectedAt = DateTimeOffset.UtcNow,
-                                                Relevance = 1,
-                                                EstimatedTokens = Math.Max(1, (semanticFirstContent.Length + 3) / 4),
-                                                InvalidationKeys = ["repository", "semantic"],
-                                            },
-                                            cancellationToken);
-                                    }
-
-                                    continuationMessages.Add(CreateToolResultMessage(
-                                        toolCallId,
-                                        tool.ToolName,
-                                        semanticFirstContent));
-                                    toolInvoked = _contextAssembler is not null;
-                                }
-                                else if (invokedToolKeys.Contains(toolKey))
-                                {
-                                    if (_evidenceStore is not null)
-                                    {
-                                        var repeatContent =
-                                            $"Tool '{tool.ToolName}' was already called with these arguments. "
-                                            + "Do not repeat it; use the earlier result or answer the user directly.";
-                                        await _evidenceStore.AddAsync(
-                                            new Evidence
-                                            {
-                                                EvidenceId = EvidenceId.New(),
-                                                SessionId = registration.SessionId,
-                                                RunId = runId,
-                                                Kind = EvidenceKind.Failure,
-                                                Content = repeatContent,
-                                                Provenance = new EvidenceProvenance
-                                                {
-                                                    Source = $"tool:{tool.ToolName}:duplicate",
-                                                    SemanticConfidence = SemanticConfidenceLevel.None,
-                                                },
-                                                CollectedAt = DateTimeOffset.UtcNow,
-                                                Relevance = 1,
-                                                EstimatedTokens = Math.Max(1, (repeatContent.Length + 3) / 4),
-                                                InvalidationKeys = ["repository"],
-                                            },
-                                            cancellationToken);
-                                        continuationMessages.Add(CreateToolResultMessage(
-                                            toolCallId,
-                                            tool.ToolName,
-                                            repeatContent));
-                                        toolInvoked = _contextAssembler is not null;
-                                    }
-                                }
-                                else
-                                {
-                                    invokedToolKeys.Add(toolKey);
-                                    pendingToolCalls.Add(new ToolBatchRequest(
-                                        toolCallOrdinal,
-                                        toolCallId,
-                                        new ToolInvocationRequest
-                                        {
-                                            SessionId = registration.SessionId,
-                                            RunId = runId,
-                                            Phase = phase,
-                                            ToolId = tool.ToolName,
-                                            ArgumentsJson = tool.ArgumentsJson,
-                                            Context = invocationContext,
-                                        }));
-                                }
-                            }
-                        }
-                    }
-
-                    if (chunk.Usage is not null)
-                    {
-                        reportedUsage = chunk.Usage;
-                        _sessionUsage?.Observe(
-                            registration.SessionId,
-                            usageRequestId,
-                            chunk.Usage);
-                        var usage = registration.Budget.Accrue(new BudgetDimensions(
-                            chunk.Usage.InputTokens + chunk.Usage.OutputTokens,
-                            1,
-                            TimeSpan.Zero,
-                            chunk.Usage.EstimatedCost));
-                        if (usage.IsExhausted)
-                        {
-                            throw new BudgetExceededException(
-                                usage.Reason ?? "Execution budget exhausted.");
-                        }
-                    }
-                }
-
-                if (pendingToolCalls.Count > 0 && _toolPipeline is not null)
-                {
-                    var batchResults = await _toolPipeline.InvokeBatchAsync(
-                        pendingToolCalls,
-                        cancellationToken);
-                    foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
-                    {
-                        var result = batchResult.Result;
-                        var content = result.ResultJson ?? result.Error ?? "Tool completed.";
-                        if (_evidenceStore is not null)
-                        {
-                            var source = result.Sources.FirstOrDefault();
-                            await _evidenceStore.AddAsync(
-                                new Evidence
-                                {
-                                    EvidenceId = EvidenceId.New(),
-                                    SessionId = registration.SessionId,
-                                    RunId = runId,
-                                    Kind = result.Succeeded ? EvidenceKind.ToolResult : EvidenceKind.Failure,
-                                    Content = content,
-                                    Provenance = new EvidenceProvenance
-                                    {
-                                        SourcePath = source?.Identifier,
-                                        ToolInvocationId = result.ToolInvocationId,
-                                        SemanticConfidence = SemanticConfidenceLevel.None,
-                                        Source = $"tool:{result.ToolId}",
-                                    },
-                                    CollectedAt = DateTimeOffset.UtcNow,
-                                    Relevance = result.Succeeded ? 0.8 : 1,
-                                    EstimatedTokens = Math.Max(1, (content.Length + 3) / 4),
-                                    InvalidationKeys = result.ToolId is "find_symbol"
-                                        or "find_references"
-                                        or "find_implementations"
-                                        ? ["repository", "semantic"]
-                                        : ["repository"],
-                                },
-                                cancellationToken);
-                        }
-
-                        continuationMessages.Add(CreateToolResultMessage(
-                            batchResult.CorrelationId,
-                            result.ToolId,
-                            content));
-                    }
-
-                    toolInvoked = _contextAssembler is not null;
-                }
-
-                modelSucceeded = true;
-            }
-            finally
-            {
-                if (_hooks is not null)
-                {
-                    _ = await _hooks.InvokeAsync(
-                        HookPoint.AfterModelRequest,
-                        registration.SessionId,
-                        runId,
-                        invocationContext?.RepositoryPath,
-                        modelOperationId,
-                        modelRound - 1,
-                        new Dictionary<string, string>
-                        {
-                            ["succeeded"] = modelSucceeded.ToString(),
-                            ["usageReported"] = (reportedUsage is not null).ToString(),
-                        },
-                        cancellationToken: CancellationToken.None);
-                }
-
-                if (reportedUsage is null)
-                {
-                    _sessionUsage?.ObserveMissing(registration.SessionId, usageRequestId);
-                }
-            }
-
-            if (plan is null && context is not null && phase != RunPhase.EvidenceCollection)
-            {
-                var candidate = textOutput.ToString().Trim();
-                if (candidate.StartsWith('{'))
-                {
-                    plan = ModelOutputValidator.ParsePlan(candidate).Plan;
-                }
-            }
-
-            if (plan is not null)
-            {
-                plan = plan with
-                {
-                    Summary = _sanitizer.Sanitize(plan.Summary),
-                    Steps = plan.Steps.Select(step => step with
-                    {
-                        Title = _sanitizer.Sanitize(step.Title),
-                        Description = _sanitizer.Sanitize(step.Description),
-                        FileIntents = step.FileIntents.Select(intent => intent with
-                        {
-                            Path = intent.Path,
-                            DestinationPath = intent.DestinationPath,
-                        }).ToArray(),
-                        ExpectedOutcome = _sanitizer.Sanitize(step.ExpectedOutcome),
-                        Validation = step.Validation
-                            .Select(_sanitizer.Sanitize)
-                            .ToArray(),
-                    }).ToArray(),
-                    Risks = plan.Risks.Select(_sanitizer.Sanitize).ToArray(),
-                    OutstandingQuestions = plan.OutstandingQuestions
-                        .Select(_sanitizer.Sanitize)
-                        .ToArray(),
-                };
-                ModelOutputValidator.Validate(new PlanModelOutput(plan));
-
-                if (registration.PendingPlan is { } previousPlan)
-                {
-                    plan = plan with { Revision = previousPlan.Revision + 1 };
-                }
-
-                return plan;
-            }
-
-            if (!toolInvoked)
-            {
-                var finalResponse = textOutput.ToString();
-                if (!string.IsNullOrWhiteSpace(finalResponse))
-                {
-                    await ArchiveVisibleMessageAsync(
-                        registration.SessionId,
-                        runId,
-                        ConversationRole.Assistant,
-                        finalResponse,
-                        cancellationToken);
-                }
-
-                return null;
-            }
-
-            if (modelRound == maximumModelRounds)
-            {
-                throw new InvalidOperationException(
-                    $"The model exceeded the limit of {maximumModelRounds} tool continuation rounds.");
-            }
-        }
-
-        throw new UnreachableException();
     }
 
     private async Task<ConversationMessage?> ArchiveVisibleMessageAsync(
@@ -2140,6 +1659,7 @@ public sealed class SessionApplication :
                     registration.Cancellation.Token);
                 _ = CompleteExecutionAsync(runId, registration);
                 await PromoteHostObservedMemoryAsync(
+                    runId,
                     registration,
                     decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
                     unresolvedQuestions: approvedPlan.OutstandingQuestions,
@@ -2192,6 +1712,7 @@ public sealed class SessionApplication :
             "plan approved in compatibility planning mode",
             cancellationToken);
         await PromoteHostObservedMemoryAsync(
+            runId,
             registration,
             decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
             unresolvedQuestions: approvedPlan.OutstandingQuestions,

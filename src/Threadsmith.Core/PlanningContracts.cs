@@ -168,6 +168,34 @@ public sealed record ConversationContextItemProjection
     public double? Score { get; init; }
 }
 
+/// <summary>One repository-scoped memory inclusion or omission decision.</summary>
+public sealed record RepositoryMemoryContextItemProjection
+{
+    /// <summary>Stable repository-memory identifier.</summary>
+    public required RepositoryMemoryId Id { get; init; }
+
+    /// <summary>Repository-memory category.</summary>
+    public required RepositoryMemoryKind Kind { get; init; }
+
+    /// <summary>Authority supporting the memory item.</summary>
+    public required RepositoryMemoryAuthority Authority { get; init; }
+
+    /// <summary>Current validity state.</summary>
+    public required RepositoryMemoryValidity Validity { get; init; }
+
+    /// <summary>Whether the item entered the assembled request.</summary>
+    public required bool Included { get; init; }
+
+    /// <summary>Host-owned inclusion or omission rationale.</summary>
+    public required string Rationale { get; init; }
+
+    /// <summary>Estimated tokens charged to repository-memory context.</summary>
+    public required int EstimatedTokens { get; init; }
+
+    /// <summary>Deterministic retrieval score when eligible.</summary>
+    public double? Score { get; init; }
+}
+
 /// <summary>Inspectable record of one governed context assembly.</summary>
 public sealed record ContextInspectionProjection
 {
@@ -220,6 +248,9 @@ public sealed record ContextInspectionProjection
 
     /// <summary>Recent-message, summary, retrieval, stale, superseded, and mode decisions.</summary>
     public IReadOnlyList<ConversationContextItemProjection> ConversationItems { get; init; } = [];
+
+    /// <summary>Repository-scoped memory inclusion, omission, staleness, and pressure decisions.</summary>
+    public IReadOnlyList<RepositoryMemoryContextItemProjection> RepositoryMemoryItems { get; init; } = [];
 
     /// <summary>Estimated percentage of the selected model context window used.</summary>
     public double ContextPressurePercent { get; init; }

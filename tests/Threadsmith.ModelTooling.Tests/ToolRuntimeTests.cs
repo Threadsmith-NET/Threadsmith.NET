@@ -11,6 +11,7 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Threadsmith.Tui;
 using Xunit;
@@ -233,6 +234,45 @@ public static class ToolRuntimeTests
         finally
         {
             Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    /// <summary>Structured tool-result redaction preserves the JSON envelope returned to the model.</summary>
+    [Fact]
+    public static async Task ToolPipeline_SanitizesStructuredValuesWithoutCorruptingJson()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(repository, "source.cs"),
+                "Call(cancellationToken: cancellationToken);\n");
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(
+                events,
+                [new ReadFileTool()],
+                sanitizer: new SecretOutputSanitizer());
+
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "read_file",
+                ArgumentsJson = "{\"path\":\"source.cs\",\"startLine\":1,\"maximumLines\":10}",
+                Context = CreateContext(repository) with
+                {
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                },
+            });
+
+            Assert.True(result.Succeeded, result.Error);
+            using var document = JsonDocument.Parse(Assert.IsType<string>(result.ResultJson));
+            var line = Assert.Single(document.RootElement.GetProperty("Lines").EnumerateArray()).GetString();
+            Assert.Contains("[REDACTED]", line, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
         }
     }
 
@@ -472,7 +512,8 @@ public static class ToolRuntimeTests
             var processManager = new StubProcessManager(new ProcessExecutionResult(
                 42,
                 0,
-                "./.hidden/endpoint.cs\0" + "12:8:route needle\n./second.cs\0" + "4:2:needle\n",
+                "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./.hidden/endpoint.cs\"},\"lines\":{\"text\":\"route needle\\n\"},\"line_number\":12,\"submatches\":[{\"start\":7}]}}\n"
+                    + "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./second.cs\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":4,\"submatches\":[{\"start\":1}]}}\n",
                 string.Empty,
                 false,
                 false,
@@ -501,6 +542,9 @@ public static class ToolRuntimeTests
             var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.Equal(bundledRipgrep, request.FileName);
             Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
+            Assert.Equal(ProcessStandardOutputFormat.RipgrepJsonLines, request.StandardOutputFormat);
+            Assert.Contains("--json", request.Arguments);
+            Assert.DoesNotContain("--null", request.Arguments);
             Assert.Contains("--fixed-strings", request.Arguments);
             Assert.Contains("--ignore-case", request.Arguments);
             Assert.Contains("--max-filesize=1048576", request.Arguments);
@@ -530,6 +574,135 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Host-truncated ripgrep output retains complete JSON records before an incomplete final record.</summary>
+    [Fact]
+    public static async Task SearchTextTool_TruncatedRipgrepJson_PreservesCompleteMatches()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            const string completeRecord = "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./first.cs\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":3,\"submatches\":[{\"start\":0}]}}\n";
+            var processManager = new StubProcessManager(new ProcessExecutionResult(
+                42,
+                0,
+                completeRecord + "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./second.cs\"}",
+                string.Empty,
+                StandardOutputTruncated: true,
+                StandardErrorTruncated: false,
+                TimedOut: false,
+                Duration: TimeSpan.FromMilliseconds(10)));
+            var tool = new SearchTextTool(processManager: processManager);
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new SearchTextInput { Query = "needle" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            var match = Assert.Single(result.Value.Matches);
+            Assert.Equal("first.cs", match.Path);
+            Assert.Equal(3, match.Line);
+            Assert.True(result.Value.IsTruncated);
+            Assert.True(result.IsTruncated);
+            Assert.Contains(result.Sources, source => source.Identifier == "first.cs");
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Real ripgrep output remains parseable after the process sanitizer removes unsafe controls.</summary>
+    [Fact]
+    public static async Task SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization()
+    {
+        if (!IsExecutableAvailable("rg"))
+        {
+            Assert.Skip("ripgrep is not available on PATH.");
+        }
+
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var sourceDirectory = Directory.CreateDirectory(Path.Combine(repository, "src")).FullName;
+            await File.WriteAllTextAsync(
+                Path.Combine(sourceDirectory, "Nested.cs"),
+                "// token: abc\npublic static class Nested;\n");
+            var processManager = new ProcessManager(
+                new SecretOutputSanitizer(),
+                NullLogger<ProcessManager>.Instance);
+            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new SearchTextInput
+                {
+                    Query = "token",
+                    Glob = "*.cs",
+                    MaximumMatches = 5,
+                },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            var match = Assert.Single(result.Value.Matches);
+            Assert.Equal("src/Nested.cs", match.Path);
+            Assert.Equal(1, match.Line);
+            Assert.Contains("[REDACTED]", match.Text, StringComparison.Ordinal);
+            Assert.Null(result.Value.Warning);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>A real host-truncated ripgrep JSON record does not discard preceding complete matches.</summary>
+    [Fact]
+    public static async Task SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches()
+    {
+        if (!IsExecutableAvailable("rg"))
+        {
+            Assert.Skip("ripgrep is not available on PATH.");
+        }
+
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(repository, "large.txt"),
+                "needle small\nneedle " + new string('x', 300_000) + "\n");
+            var processManager = new ProcessManager(
+                new SecretOutputSanitizer(),
+                NullLogger<ProcessManager>.Instance);
+            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new SearchTextInput { Query = "needle", MaximumMatches = 5 },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            var match = Assert.Single(result.Value.Matches);
+            Assert.Equal("large.txt", match.Path);
+            Assert.Equal("needle small", match.Text);
+            Assert.True(result.Value.IsTruncated);
+            Assert.True(result.IsTruncated);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Regex and narrowed-glob searches use ripgrep without literal-mode projection.</summary>
     [Fact]
     public static async Task SearchTextTool_RegexAndGlob_UseRipgrepFastPath()
@@ -540,7 +713,7 @@ public static class ToolRuntimeTests
             var processManager = new StubProcessManager(new ProcessExecutionResult(
                 42,
                 0,
-                "src/Retriever.cs\0" + "7:14:internal sealed class Retriever : IRetriever\n",
+                "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"src/Retriever.cs\"},\"lines\":{\"text\":\"internal sealed class Retriever : IRetriever\\n\"},\"line_number\":7,\"submatches\":[{\"start\":13}]}}\n",
                 string.Empty,
                 false,
                 false,
@@ -571,6 +744,47 @@ public static class ToolRuntimeTests
             Assert.Contains("--iglob=*.cs", request.Arguments);
             Assert.Contains("--regexp", request.Arguments);
             Assert.Contains(@"class\s+\w+\s*:\s*IRetriever", request.Arguments);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Ripgrep exclusion dialect differences cannot bypass authoritative prohibited-path filtering.</summary>
+    [Fact]
+    public static async Task SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively()
+    {
+        if (!IsExecutableAvailable("rg"))
+        {
+            Assert.Skip("ripgrep is not available on PATH.");
+        }
+
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var docs = Directory.CreateDirectory(Path.Combine(repository, "docs")).FullName;
+            const string prohibitedName = "[token=abc].md";
+            await File.WriteAllTextAsync(Path.Combine(docs, prohibitedName), "needle prohibited\n");
+            await File.WriteAllTextAsync(Path.Combine(docs, "final.md"), "needle allowed\n");
+            var processManager = new ProcessManager(
+                new SecretOutputSanitizer(),
+                NullLogger<ProcessManager>.Instance);
+            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                ProhibitedPaths = [$"docs/{prohibitedName}"],
+            };
+
+            var result = await tool.ExecuteAsync(
+                new SearchTextInput { Query = "needle", Glob = "*.md" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+
+            var match = Assert.Single(result.Value.Matches);
+            Assert.Equal("docs/final.md", match.Path);
+            Assert.DoesNotContain(result.Sources, source => source.Identifier == $"docs/{prohibitedName}");
         }
         finally
         {
@@ -613,18 +827,13 @@ public static class ToolRuntimeTests
         }
     }
 
-    /// <summary>Failed ripgrep uses Git's ignore-aware file inventory and reports the fallback.</summary>
+    /// <summary>Failed ripgrep execution fails visibly instead of silently using a slower fallback.</summary>
     [Fact]
-    public static async Task SearchTextTool_RipgrepFailure_UsesGitIgnoreAwareFallbackAndWarns()
+    public static async Task SearchTextTool_RipgrepFailure_FailsVisibly()
     {
         var repository = CreateTemporaryDirectory();
         try
         {
-            var sourceDirectory = Directory.CreateDirectory(Path.Combine(repository, "src")).FullName;
-            await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "visible.txt"), "needle");
-            var ignoredDirectory = Directory.CreateDirectory(Path.Combine(repository, "ignored")).FullName;
-            await File.WriteAllTextAsync(Path.Combine(ignoredDirectory, "hidden.txt"), "needle");
-            await File.WriteAllTextAsync(Path.Combine(repository, ".gitignore"), "ignored/\n");
             var processManager = new RoutingProcessManager(request =>
                 request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase)
                     ? CreateProcessResult("src/visible.txt\0")
@@ -635,24 +844,52 @@ public static class ToolRuntimeTests
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
 
-            var result = await tool.ExecuteAsync(
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(
                 new SearchTextInput { Query = "needle" },
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None));
+
+            Assert.Contains("Ripgrep exited with code 2", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                processManager.Requests,
+                request => request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>The managed fallback treats simple extension globs like ripgrep and matches nested files.</summary>
+    [Fact]
+    public static async Task SearchTextTool_ManagedSimpleGlob_MatchesNestedFiles()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var sourceDirectory = Directory.CreateDirectory(Path.Combine(repository, "src", "nested")).FullName;
+            await File.WriteAllTextAsync(
+                Path.Combine(sourceDirectory, "Marker.cs"),
+                "public const string Marker = \"transparency\";\n");
+            var tool = new SearchTextTool();
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+            };
+
+            var result = await tool.ExecuteAsync(
+                new SearchTextInput
+                {
+                    Query = "transparency",
+                    Glob = "*.cs",
+                    MaximumMatches = 5,
+                },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
                 CancellationToken.None);
 
             var match = Assert.Single(result.Value.Matches);
-            Assert.Equal("src/visible.txt", match.Path);
-            Assert.Contains("Ripgrep could not execute", result.Value.Warning, StringComparison.Ordinal);
-            var gitRequest = Assert.Single(
-                processManager.Requests,
-                request => request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase));
-            Assert.Equal(
-                ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-                gitRequest.Arguments.TakeLast(5));
-            Assert.Contains("core.fsmonitor=false", gitRequest.Arguments);
-            Assert.Equal("0", gitRequest.EnvironmentVariables["GIT_OPTIONAL_LOCKS"]);
-            Assert.Equal("0", gitRequest.EnvironmentVariables["GIT_TERMINAL_PROMPT"]);
-            Assert.Equal("1", gitRequest.EnvironmentVariables["GIT_CONFIG_NOSYSTEM"]);
+            Assert.Equal("src/nested/Marker.cs", match.Path);
+            Assert.Contains("transparency", match.Text, StringComparison.Ordinal);
         }
         finally
         {
@@ -684,9 +921,14 @@ public static class ToolRuntimeTests
             }
 
             var processManager = new RoutingProcessManager(request =>
-                request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase)
-                    ? CreateProcessResult("linked.txt\0")
-                    : CreateProcessResult(string.Empty, exitCode: 2));
+            {
+                if (request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase))
+                {
+                    return CreateProcessResult("linked.txt\0");
+                }
+
+                throw new Win32Exception(2);
+            });
             var tool = new SearchTextTool(processManager: processManager);
             var context = CreateContext(repository) with
             {
@@ -1765,14 +2007,15 @@ public static class ToolRuntimeTests
     private static ToolInvocationPipeline CreatePipeline(
         IDomainEventStream events,
         IEnumerable<ITool> tools,
-        ToolParallelOptions? parallelOptions = null)
+        ToolParallelOptions? parallelOptions = null,
+        IOutputSanitizer? sanitizer = null)
     {
         return new(
                 new ToolRegistry(tools),
                 new DefaultPolicyEngine(),
                 new DenyApprovalPolicy(),
                 events,
-                new TestSanitizer(),
+                sanitizer ?? new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
                 CreateBudget(),
                 parallelOptions: parallelOptions);
@@ -1837,6 +2080,23 @@ public static class ToolRuntimeTests
             Timeout = TimeSpan.FromMinutes(1),
             Origin = ProcessRequestOrigin.Host,
         };
+    }
+
+    private static bool IsExecutableAvailable(string fileName)
+    {
+        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var pathExtensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            : [string.Empty];
+        string[] candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(fileName)
+            ? [.. pathExtensions.Select(extension => fileName + extension)]
+            : [fileName];
+        return pathValue
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(directory => directory.Trim('"'))
+            .Where(Path.IsPathFullyQualified)
+            .Any(directory => candidateNames.Any(candidate => File.Exists(Path.Combine(directory, candidate))));
     }
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)

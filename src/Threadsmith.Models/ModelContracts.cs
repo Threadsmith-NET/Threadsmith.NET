@@ -35,6 +35,10 @@ public sealed record ModelToolDefinition
 
     /// <summary>JSON object schema for the tool arguments.</summary>
     public required string ArgumentsJsonSchema { get; init; }
+
+    /// <summary>Whether providers should use strict argument generation when their wire protocol supports it.</summary>
+    /// <remarks>Canonical host validation remains authoritative regardless of this preference.</remarks>
+    public bool PreferStrictArguments { get; init; }
 }
 
 /// <summary>Request passed to a host-owned model provider.</summary>
@@ -72,6 +76,12 @@ public sealed record ModelStreamRequest
 
     /// <summary>Host-authorized tools available during this request.</summary>
     public IReadOnlyList<ModelToolDefinition> Tools { get; init; } = [];
+
+    /// <summary>
+    /// Whether the provider may return multiple tool calls in one response; <see langword="null"/> preserves its default.
+    /// </summary>
+    /// <remarks>This does not authorize tool execution or require the host to execute accepted calls concurrently.</remarks>
+    public bool? AllowMultipleToolCalls { get; init; }
 
     /// <summary>Structured chronological messages; empty retains legacy <see cref="Input"/> behavior.</summary>
     public IReadOnlyList<ModelMessage> Messages { get; init; } = [];

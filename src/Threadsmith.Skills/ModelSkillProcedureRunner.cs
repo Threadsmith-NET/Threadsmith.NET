@@ -90,6 +90,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     },
                     ResolvedProfileId = plan.ModelProfileId,
                     Tools = BuildToolDefinitions(plan.AvailableToolIds),
+                    AllowMultipleToolCalls = false,
                 },
                 cancellationToken))
             {

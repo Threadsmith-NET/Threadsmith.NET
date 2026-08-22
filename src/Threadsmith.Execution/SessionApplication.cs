@@ -1300,6 +1300,7 @@ public sealed class SessionApplication :
         var semanticToolAttempted = false;
         var planProposalRepairAttempts = 0;
         var maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
+
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
             var planningToolsWithheld = phase == RunPhase.EvidenceCollection
@@ -1309,9 +1310,8 @@ public sealed class SessionApplication :
                 && _toolPipeline is not null
                 && _toolRegistry is not null
                 ? [.. _toolRegistry.GetDefinitions(registration.SessionId, runId)
-                    .Where(definition => definition.SideEffect == ToolSideEffect.ReadOnly
-                        || definition.ConversationAvailable)
-                    .Where(definition => IsAdvertisedToModel(definition, invocationContext))]
+                    .Where(definition => (definition.SideEffect == ToolSideEffect.ReadOnly
+                        || definition.ConversationAvailable) && IsAdvertisedToModel(definition, invocationContext))]
                 : [];
             IEnumerable<ToolDefinition> availableDefinitions = conversationDefinitions;
             if (!workspaceAvailable)
@@ -1333,19 +1333,22 @@ public sealed class SessionApplication :
                     Name = ProposePlanToolName,
                     Description = "Propose a governed implementation plan only when the user requests actual repository changes. Do not call for read-only exploration, audits, explanations, or diagnostics. Calling this tool never mutates files.",
                     ArgumentsJsonSchema = ProposePlanArgumentsSchema,
+                    PreferStrictArguments = true,
                 });
             }
 
             modelTools = [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
             var modelPreference = _sessionPreferences?.Capture();
             var context = frozenContext;
+
             if (_contextAssembler is not null && context is null)
             {
                 ContextToolSchema[] toolSchemas = [.. modelTools.Select(definition =>
                     new ContextToolSchema(
                         definition.Name,
                         definition.Description,
-                        definition.ArgumentsJsonSchema))];
+                        definition.ArgumentsJsonSchema,
+                        definition.PreferStrictArguments))];
                 context = await _contextAssembler.AssembleAsync(
                     new ContextAssemblyRequest
                     {
@@ -1397,6 +1400,7 @@ public sealed class SessionApplication :
                 .. continuationMessages,
             ];
             var wireEstimate = context?.WireEstimate;
+
             if (context?.Layout is { } requestLayout)
             {
                 BoundContinuationMessages(
@@ -1441,12 +1445,15 @@ public sealed class SessionApplication :
                     modelPreference,
                     context?.ModelResolution?.ProfileId),
                 Tools = modelTools,
+                AllowMultipleToolCalls = phase == RunPhase.EvidenceCollection,
                 Messages = requestMessages,
                 Layout = context?.Layout,
                 ToolTransportMode = ToolTransportMode.Native,
                 WireEstimate = wireEstimate,
             };
+
             var modelOperationId = usageRequestId.InvocationId;
+
             if (_hooks is not null)
             {
                 var hookDecision = await _hooks.InvokeAsync(
@@ -1725,10 +1732,12 @@ public sealed class SessionApplication :
                     foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
                     {
                         var result = batchResult.Result;
-                        var content = result.ResultJson ?? result.Error ?? "Tool completed.";
+                        var v = result.ResultJson ?? result.Error ?? "Tool completed.";
+                        var content = v;
                         if (_evidenceStore is not null)
                         {
                             var source = result.Sources.FirstOrDefault();
+
                             await _evidenceStore.AddAsync(
                                 new Evidence
                                 {

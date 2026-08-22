@@ -19,6 +19,16 @@ public enum ProcessRequestOrigin
     Host,
 }
 
+/// <summary>Expected structure of captured standard output.</summary>
+public enum ProcessStandardOutputFormat
+{
+    /// <summary>Ordinary unstructured text.</summary>
+    Text,
+
+    /// <summary>Ripgrep JSON events whose raw path metadata remains available for host authorization.</summary>
+    RipgrepJsonLines,
+}
+
 /// <summary>Bounded child-process execution request.</summary>
 public sealed record ProcessExecutionRequest
 {
@@ -49,6 +59,9 @@ public sealed record ProcessExecutionRequest
 
     /// <summary>Optional bounded content written to standard input after process start.</summary>
     public string? StandardInput { get; init; }
+
+    /// <summary>Expected standard-output structure used for sanitizer-safe projection.</summary>
+    public ProcessStandardOutputFormat StandardOutputFormat { get; init; }
 
     /// <summary>Who or what requested execution.</summary>
     public ProcessRequestOrigin Origin { get; init; }
@@ -294,10 +307,22 @@ public sealed class ProcessManager : IProcessManager
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
+            var sanitizedStandardOutput = request.StandardOutputFormat switch
+            {
+                ProcessStandardOutputFormat.Text => _sanitizer.Sanitize(stdout.Text),
+                ProcessStandardOutputFormat.RipgrepJsonLines => JsonOutputSanitizer.SanitizeRipgrepLines(
+                    stdout.Text,
+                    stdout.IsTruncated,
+                    _sanitizer),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(request),
+                    request.StandardOutputFormat,
+                    "The process standard-output format is unsupported."),
+            };
             return new ProcessExecutionResult(
                 processId,
                 process.HasExited ? process.ExitCode : null,
-                _sanitizer.Sanitize(stdout.Text),
+                sanitizedStandardOutput,
                 _sanitizer.Sanitize(stderr.Text),
                 stdout.IsTruncated,
                 stderr.IsTruncated,

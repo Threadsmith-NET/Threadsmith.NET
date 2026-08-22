@@ -230,6 +230,7 @@ public sealed class Plan50OpenAiCodexTests
             RunId = RunId.New(),
             Input = "hello",
             ReasoningLevel = ReasoningLevel.High,
+            AllowMultipleToolCalls = true,
             Tools =
             [
                 new ModelToolDefinition
@@ -237,6 +238,7 @@ public sealed class Plan50OpenAiCodexTests
                     Name = "read",
                     Description = "Read",
                     ArgumentsJsonSchema = "{\"type\":\"object\"}",
+                    PreferStrictArguments = true,
                 },
             ],
         };
@@ -258,8 +260,34 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("\"model\":\"dynamic\"", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"effort\":\"high\"", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"strict\":true", requestBody, StringComparison.Ordinal);
-        Assert.Contains("\"parallel_tool_calls\":false", requestBody, StringComparison.Ordinal);
+        Assert.Contains("\"parallel_tool_calls\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"additionalProperties\":false", requestBody, StringComparison.Ordinal);
+
+        var ordinaryTool = Assert.Single(streamRequest.Tools) with { PreferStrictArguments = false };
+        _ = await provider.StreamAsync(
+            streamRequest with { Tools = [ordinaryTool] },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"strict\":false", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"strict\":true", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
+
+        _ = await provider.StreamAsync(
+            streamRequest with { AllowMultipleToolCalls = false },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "\"parallel_tool_calls\":false",
+            handler.RequestBody ?? string.Empty,
+            StringComparison.Ordinal);
+
+        _ = await provider.StreamAsync(
+            streamRequest with { AllowMultipleToolCalls = null },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(
+            "\"parallel_tool_calls\"",
+            handler.RequestBody ?? string.Empty,
+            StringComparison.Ordinal);
     }
 
     /// <summary>A pre-stream authentication rejection refreshes and safely replays exactly once.</summary>

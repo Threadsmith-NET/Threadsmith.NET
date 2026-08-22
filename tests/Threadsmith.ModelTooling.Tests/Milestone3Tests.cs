@@ -1119,6 +1119,7 @@ public static class Milestone3Tests
                 Streaming = true,
                 ToolCalls = true,
             },
+            AllowMultipleToolCalls = false,
             Tools =
             [
                 new ModelToolDefinition
@@ -1126,6 +1127,7 @@ public static class Milestone3Tests
                     Name = "propose_plan",
                     Description = "Propose governed work.",
                     ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"object\"}}}",
+                    PreferStrictArguments = true,
                 },
             ],
         });
@@ -1150,7 +1152,56 @@ public static class Milestone3Tests
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
     }
 
-    /// <summary>Real Git tool schemas are sent as strict string-enum function definitions.</summary>
+    /// <summary>Ordinary inspection tools retain canonical schemas without strict wire enforcement.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_OrdinaryToolSchema_OmitsStrictAndAllowsMultipleCalls()
+    {
+        string? requestBody = null;
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return Response(HttpStatusCode.OK, "data: [DONE]\n");
+        });
+        var profile = CreateProfile(
+            _capableProfileId,
+            "tools",
+            toolCalls: true,
+            combinedCost: 1);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+
+        await CollectAsync(provider, new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            RequiredCapabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+            },
+            AllowMultipleToolCalls = true,
+            Tools =
+            [
+                new ModelToolDefinition
+                {
+                    Name = "read_file",
+                    Description = "Read one bounded file range.",
+                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"maximumLines\":{\"type\":\"integer\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
+                },
+            ],
+        });
+
+        Assert.NotNull(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
+        Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
+        var function = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray())
+            .GetProperty("function");
+        Assert.False(function.TryGetProperty("strict", out _));
+        var parameters = function.GetProperty("parameters");
+        Assert.Equal(["path"], parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal("integer", parameters.GetProperty("properties").GetProperty("maximumLines").GetProperty("type").GetString());
+    }
+
+    /// <summary>Real Git tool schemas are sent as strict string-enum function definitions when requested.</summary>
     [Fact]
     public static async Task OpenAiAdapter_GitToolSchemas_AreStrictStringEnumDefinitions()
     {
@@ -1182,17 +1233,19 @@ public static class Milestone3Tests
                 Streaming = true,
                 ToolCalls = true,
             },
+            AllowMultipleToolCalls = true,
             Tools = [.. definitions.Select(definition => new ModelToolDefinition
             {
                 Name = definition.Id,
                 Description = definition.Description,
                 ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
+                PreferStrictArguments = true,
             })],
         });
 
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
-        Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
+        Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         JsonElement[] tools = [.. document.RootElement.GetProperty("tools").EnumerateArray()];
         Assert.Equal(2, tools.Length);
         var gitLog = tools.Single(tool => tool.GetProperty("function").GetProperty("name").GetString() == "git_log")
@@ -1250,6 +1303,7 @@ public static class Milestone3Tests
                     Name = "dynamic_tool",
                     Description = "Use a dynamic object schema.",
                     ArgumentsJsonSchema = "{\"type\":\"object\",\"additionalProperties\":true}",
+                    PreferStrictArguments = true,
                 },
             ],
         });

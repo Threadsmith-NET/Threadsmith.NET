@@ -631,6 +631,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                     || !string.Equals(type.GetString(), "match", StringComparison.Ordinal)
                     || !root.TryGetProperty("data", out var data)
                     || !TryReadRipgrepText(data, "path", out var relative)
+                    || !TryReadRipgrepSanitizedPath(data, out var projectedRelative)
                     || !TryReadRipgrepText(data, "lines", out var text)
                     || !data.TryGetProperty("line_number", out var lineNumber)
                     || !lineNumber.TryGetInt32(out var line)
@@ -665,14 +666,15 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 }
 
                 relative = Path.GetRelativePath(repositoryPath, matchedPath).Replace('\\', '/');
+                projectedRelative = NormalizeProjectedRipgrepPath(projectedRelative);
                 if (matches.Count == maximumMatches)
                 {
                     truncated = true;
                     break;
                 }
 
-                matches.Add(new TextSearchMatch(relative, line, column, text.TrimEnd('\r', '\n')));
-                sources.Add(new ToolProvenanceSource("file", relative, $"L{line}"));
+                matches.Add(new TextSearchMatch(projectedRelative, line, column, text.TrimEnd('\r', '\n')));
+                sources.Add(new ToolProvenanceSource("file", projectedRelative, $"L{line}"));
             }
         }
 
@@ -696,6 +698,42 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         value = textValue;
         return true;
+    }
+
+    private static bool TryReadRipgrepSanitizedPath(JsonElement data, out string value)
+    {
+        value = string.Empty;
+        if (!data.TryGetProperty("path", out var container))
+        {
+            return false;
+        }
+
+        if (container.TryGetProperty("sanitizedText", out var sanitizedText)
+            && sanitizedText.GetString() is { } sanitizedValue)
+        {
+            value = sanitizedValue;
+            return true;
+        }
+
+        if (container.TryGetProperty("text", out var text)
+            && text.GetString() is { } textValue)
+        {
+            value = textValue;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeProjectedRipgrepPath(string relative)
+    {
+        if (relative.StartsWith("./", StringComparison.Ordinal)
+            || relative.StartsWith(".\\", StringComparison.Ordinal))
+        {
+            relative = relative[2..];
+        }
+
+        return relative.Replace('\\', '/');
     }
 
     private static bool TryReadRipgrepColumn(JsonElement data, out int column)
@@ -862,7 +900,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         exclusionGlob = null;
         var pattern = prohibitedPattern.Replace('\\', '/').Trim().TrimStart('/');
-        if (pattern.Length == 0)
+        if (pattern.Length == 0 || ContainsRipgrepOnlyGlobSyntax(pattern))
         {
             return false;
         }
@@ -874,6 +912,15 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         exclusionGlob = pattern;
         return true;
+    }
+
+    private static bool ContainsRipgrepOnlyGlobSyntax(string pattern)
+    {
+        return pattern.Contains('[')
+            || pattern.Contains(']')
+            || pattern.Contains('{')
+            || pattern.Contains('}')
+            || pattern.Contains('!');
     }
 
     private static bool MatchesSearchGlob(string glob, string relativePath)

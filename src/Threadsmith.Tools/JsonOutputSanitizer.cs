@@ -74,13 +74,15 @@ internal static class JsonOutputSanitizer
             && root["data"] is JsonObject data
             && data["path"] is JsonObject path)
         {
+            var sanitizedPath = path["text"]?.GetValue<string>() ?? rawPath;
+            path["sanitizedText"] = sanitizedPath;
             path["text"] = rawPath;
         }
 
         return sanitized?.ToJsonString() ?? "null";
     }
 
-    private static JsonNode? SanitizeNode(JsonNode? node, IOutputSanitizer sanitizer)
+    private static JsonNode? SanitizeNode(JsonNode? node, IOutputSanitizer sanitizer, string? propertyName = null)
     {
         if (node is null)
         {
@@ -90,7 +92,7 @@ internal static class JsonOutputSanitizer
         if (node is JsonValue value)
         {
             return value.TryGetValue<string>(out var text)
-                ? JsonValue.Create(sanitizer.Sanitize(text))
+                ? JsonValue.Create(SanitizeStringValue(text, propertyName, sanitizer))
                 : value.DeepClone();
         }
 
@@ -99,7 +101,7 @@ internal static class JsonOutputSanitizer
             var sanitized = new JsonArray();
             foreach (var item in array)
             {
-                sanitized.Add(SanitizeNode(item, sanitizer));
+                sanitized.Add(SanitizeNode(item, sanitizer, propertyName));
             }
 
             return sanitized;
@@ -108,9 +110,29 @@ internal static class JsonOutputSanitizer
         var result = new JsonObject();
         foreach ((var key, var child) in node.AsObject())
         {
-            result[key] = SanitizeNode(child, sanitizer);
+            var sanitizedKey = sanitizer.Sanitize(key);
+            result[sanitizedKey] = SanitizeNode(child, sanitizer, key);
         }
 
         return result;
+    }
+
+    private static string SanitizeStringValue(
+        string value,
+        string? propertyName,
+        IOutputSanitizer sanitizer)
+    {
+        var sanitizedValue = sanitizer.Sanitize(value);
+        if (propertyName is null)
+        {
+            return sanitizedValue;
+        }
+
+        var sanitizedKey = sanitizer.Sanitize(propertyName);
+        var contextual = propertyName + ": " + value;
+        var independentlySanitized = sanitizedKey + ": " + sanitizedValue;
+        return string.Equals(sanitizer.Sanitize(contextual), independentlySanitized, StringComparison.Ordinal)
+            ? sanitizedValue
+            : "[REDACTED]";
     }
 }

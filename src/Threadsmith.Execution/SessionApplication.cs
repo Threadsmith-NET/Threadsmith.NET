@@ -102,6 +102,7 @@ public sealed partial class SessionApplication :
 
     private readonly IActiveTurnCompactor? _activeTurnCompactor;
     private readonly ActiveTurnCompactionPolicy _activeTurnCompactionPolicy;
+    private readonly ActiveTurnCompactionCandidateProfile? _activeTurnCompactionProfile;
     private readonly IDomainEventStream _events;
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
@@ -176,7 +177,8 @@ public sealed partial class SessionApplication :
             planSanityRequestFactory = null,
         IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
         IActiveTurnCompactor? activeTurnCompactor = null,
-        ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null)
+        ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
+        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -216,6 +218,7 @@ public sealed partial class SessionApplication :
         _activeTurnCompactor = activeTurnCompactor;
         _activeTurnCompactionPolicy = activeTurnCompactionPolicy ?? new ActiveTurnCompactionPolicy();
         _activeTurnCompactionPolicy.Validate();
+        _activeTurnCompactionProfile = activeTurnCompactionProfile;
         _userUrlIntake = userUrlIntake;
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;

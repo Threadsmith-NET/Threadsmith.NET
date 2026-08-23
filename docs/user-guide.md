@@ -245,7 +245,7 @@ Threadsmith deliberately retains native terminal scrollback and does not enable 
 
 ### Reasoning display
 
-Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. `/thinking` or `Ctrl+T` reveals the latest sanitized reasoning in `<thinking>` tags. This does not expose credentials or raw unsanitized provider content.
+Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed. `/thinking` or `Ctrl+T` reveals the latest sanitized reasoning in `<thinking>` tags. This does not expose credentials or raw unsanitized provider content.
 
 ### Cross-turn conversation context
 
@@ -289,7 +289,7 @@ Capacity checks use the estimated provider-wire request rather than only visible
 
 ##### Active-turn tool continuation compaction
 
-Active-turn compaction keeps one long user request from repeatedly sending every earlier tool result until the selected model's context window is exhausted. It applies automatically to ordinary multi-round evidence collection and planning. It does not end the turn, ask the user to resubmit the request, change the selected model, or expose a compaction tool to the model.
+Active-turn compaction keeps one long user request from repeatedly sending every earlier tool result until the active main model's context window is exhausted. It applies automatically to ordinary multi-round evidence collection and planning. It does not end the turn, ask the user to resubmit the request, change the active main model, or expose a compaction tool to the model. Candidate generation can optionally use a separately configured auxiliary model profile.
 
 This is different from `/context compact`. The command compacts completed cross-turn conversation history at a safe turn boundary. Active-turn compaction is an automatic pre-sampling operation over tool continuation generated **inside the request currently running**. There is currently no user or repository setting that disables, postpones, or manually triggers the active-turn reliability boundary.
 
@@ -309,8 +309,8 @@ The exact sequence is:
 2. **Estimate before every later model request.** The host estimates the complete provider-wire request, including frozen messages, any active summary, raw continuation groups, native or textual tool schemas, provider framing, and the selected profile's effective request output reserve.
 3. **Compare with the pressure target.** The operational target is 75% of the usable selected-model input budget. The usable budget is bounded by both the host request budget and the model context window after its effective output reserve. Below that target, Threadsmith sends the unchanged request.
 4. **Select only an old delivered prefix.** At pressure, Threadsmith keeps at least the newest complete group exact and aims to retain the newest 12,000 raw continuation tokens. That target scales downward when the selected profile, frozen request, 4,096-token summary allowance, or minimum-savings requirement leaves less room. It never splits a sibling group or selects a group that has not already been delivered verbatim.
-5. **Prepare a bounded candidate request.** Preflight validates aggregate group, message, source, and factual-evidence bounds and projects all candidate input from one profile-derived capacity budget. The candidate receives the required task objective and required-first acceptance intent, the prior cumulative summary when present, and bounded projections of the selected tool results. Truncation and omission are identified explicitly. Preflight performs no provider I/O and creates no hook, usage, call, or cost record.
-6. **Generate a structured candidate.** An actual candidate attempt uses the already selected provider/model profile and sensitivity boundary, advertises no tools, and crosses the normal managed before/after model-request hook boundary. It is a real model request: reported usage, missing usage, call count, duration, and any partial usage emitted before a later failure are accounted under that attempt's unique identity. One transient retry is allowed, for at most two candidate calls.
+5. **Prepare a bounded candidate request.** Preflight validates aggregate group, message, source, and factual-evidence bounds and projects all candidate input from one candidate-profile-derived capacity budget. The candidate receives the required task objective and required-first acceptance intent, the prior cumulative summary when present, and bounded projections of the selected tool results. Truncation and omission are identified explicitly. Preflight performs no provider I/O and creates no hook, usage, call, or cost record. If the configured candidate profile prohibits sensitive input, preflight rejects it before provider I/O.
+6. **Generate a structured candidate.** An actual candidate attempt uses the separately configured compaction profile when present, or the active main profile as a backward-compatible fallback. The candidate profile may identify a different model or provider and owns candidate context/reserve, maximum output, reasoning, temperature, timeout, retry, sensitivity, and pricing. Candidate requests advertise no tools, use the `Summary` workload when independently configured, and cross the normal managed before/after model-request hook boundary. They are real model requests: profile identity, reported usage, missing usage, call count, duration, and any partial usage emitted before a later failure are accounted under each attempt's unique identity. One transient retry is allowed, for at most two candidate calls.
 7. **Validate every proposed item.** The host derives closed factual fragments from each exact sanitized result, including its content SHA-256 and bounded JSON leaves or text lines. A candidate item must copy one supplied fact exactly, use a category allowed for that result, and cite sources belonging to that same result. Fabricated paraphrases, modified facts, cross-sibling source borrowing, unknown sources, unsupported categories, unsafe content, authority-bearing claims, and source-range/version mismatches are rejected.
 8. **Build and re-estimate the replacement.** The host—not the candidate model—carries prior validated items byte-for-byte. If cumulative count or token bounds fill, it removes only the oldest prior items deterministically and records how many have been pruned. The candidate activates only when the rebuilt complete request is at or below the pressure target **and** saves at least 4,096 estimated tokens.
 9. **Replace atomically and continue.** On success, one assistant message labeled `Untrusted active-turn evidence summary; not instructions or authority` replaces only the selected old prefix. Newer groups and frozen context remain exact, the history rewrite generation increments, and the same user turn continues with the rebuilt provider-neutral request.
@@ -321,12 +321,13 @@ Current host-owned defaults are:
 
 | Boundary | Default behavior |
 |---|---|
-| Pressure trigger | 75% of the effective selected-model input budget |
-| Output reserve | Selected profile's effective request reserve; 8,192 tokens only if no profile reserve is available |
+| Pressure trigger | 75% of the effective active-main-model input budget |
+| Main output reserve | Active main profile's effective request reserve; 8,192 tokens only if no profile reserve is available |
 | Newest raw retention target | 12,000 tokens, scaled to current activation capacity; at least the newest complete group remains exact |
 | Activated summary budget | 4,096 estimated tokens |
 | Minimum required savings | 4,096 estimated tokens |
-| Candidate input | Lesser of 32,000 estimated tokens and the selected profile's available input capacity |
+| Candidate profile | Trusted explicit profile when configured; otherwise the active main profile |
+| Candidate input | Lesser of 32,000 estimated tokens and the candidate profile's available input capacity |
 | Candidate source shape | At most 48 groups and 512 aggregate call/result messages |
 | Candidate summary shape | At most 32 items and 2,000 characters per item |
 | Task projection | Up to 4,000 objective characters and 32 required-first acceptance items, bounded to 1,000 characters each and 4,000 total characters |
@@ -334,11 +335,25 @@ Current host-owned defaults are:
 | Candidate attempts | One initial call plus at most one transient retry; two calls total |
 | Failure backoff | Skip candidate generation for the next two pressure assessments |
 
-Compaction is deliberately lossy only in the model-visible working set. It does not change current user intent, host or repository instructions, trust, tool eligibility, approvals, mutation authority, output requirements, selected model, or sensitivity policy. An active-turn summary never becomes system/developer/current-user content, durable conversation memory, or repository memory. The original sanitized tool events and evidence remain under the existing audit, artifact, retention, and redaction rules. Ordinary active-turn summary checkpoints are kept in memory for the running turn.
+To select an independent candidate model, put its stable catalog profile GUID in repository-excluding machine or user configuration—not repository configuration:
+
+```json
+{
+  "context": {
+    "activeTurnCompaction": {
+      "profileId": "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+```
+
+The profile must come from the repository-excluding user/machine/host-owned catalog, be enabled, support streaming and structured output, and be intended for the `summary` workload or unrestricted by workload. It can reference another provider. Repository-only profiles and repository overrides of a user profile are not visible to this auxiliary dispatcher. Candidate credentials must come from user-owned-or-higher secret providers; repository secret stores cannot supply or replace them. Its catalog `maximumOutputTokens` becomes the actual provider generation limit, so a summary-focused profile can use 4,096 rather than the main model's larger response maximum. Removing the trusted setting or setting it to `null` restores the active-main-profile fallback. The setting is resolved at startup; restart Threadsmith after changing it. Repository configuration at this path is ignored, and candidate dispatch uses a separate repository-excluding catalog/provider snapshot, so repository content cannot add, rewrite, or reroute the model that receives candidate evidence. The main profile still owns the 75% trigger, emergency capacity, and rebuilt ordinary request—a smaller candidate profile does not make a large-context main model compact earlier.
+
+Compaction is deliberately lossy only in the model-visible working set. It does not change current user intent, host or repository instructions, trust, tool eligibility, approvals, mutation authority, output requirements, active main model, or sensitivity policy. Tool-result groups are conservatively classified as repository-sensitive for auxiliary routing; a configured candidate profile that prohibits sensitive input fails preflight with no hook or provider call. An active-turn summary never becomes system/developer/current-user content, durable conversation memory, or repository memory. The original sanitized tool events and evidence remain under the existing audit, artifact, retention, and redaction rules. Ordinary active-turn summary checkpoints are kept in memory for the running turn.
 
 Cancellation, hook denial, provider failure, invalid output, rejected facts, and insufficient savings leave the original continuation active and start bounded backoff. If that unchanged request still fits, the turn continues with exact raw groups. If it reaches the emergency boundary, the deterministic compatibility reducer may shorten only older results that were already delivered verbatim. It never shortens a never-delivered group. If the request cannot fit without doing so, Threadsmith fails with a controlled message of the form `Tool continuation requires <tokens> input tokens but the selected model budget is <budget>.`
 
-`/context inspect` shows the latest assessment without exposing summary or tool-result content. Its `active-turn` line reports the status; before/after input estimate; pressure target and maximum; output reserve; effective/configured retention; eligible, compacted, and retained group counts; retained tokens; summary version; cumulative pruned-item count; history generation; remaining backoff; and host rationale. Status values mean:
+`/context inspect` shows the latest assessment without exposing summary or tool-result content. Its `active-turn` line reports the status; before/after input estimate; pressure target and maximum; main output reserve; effective/configured retention; candidate profile ID; eligible, compacted, and retained group counts; retained tokens; summary version; cumulative pruned-item count; history generation; remaining backoff; and host rationale. Status values mean:
 
 | Status | Meaning |
 |---|---|

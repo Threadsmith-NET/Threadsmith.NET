@@ -76,7 +76,7 @@ Model-proposed repository-memory candidates are disabled in this implementation.
 - deterministic retrieval score and rationale;
 - category token accounting and exact pressure reductions;
 - context-window pressure and the next completed-turn compaction recommendation;
-- the latest active-turn pre-sampling estimate, pressure target, output reserve, configured/effective retention, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
+- the latest active-turn pre-sampling estimate, pressure target, main-profile output reserve, configured/effective retention, candidate profile identity, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
 
 Inspection contains metadata, bounded sanitized memory content only in the assembled prompt, and no secret/provider/tool payloads.
 
@@ -84,9 +84,11 @@ Inspection contains metadata, bounded sanitized memory content only in the assem
 
 Every ordinary multi-round evidence/planning request is estimated with the canonical provider-wire estimator before sampling. Tool calls and matching results are retained as complete chronological groups. A newly completed group must reach the model exactly in a later completed request before it can enter an eligible oldest prefix. Current user input, host/repository instructions, output contracts, tool definitions, and the initially assembled prefix remain unchanged.
 
-At 75% of the selected profile's effective input budget, after honoring that profile's effective request output reserve, the host may replace an older delivered prefix with one validated cumulative summary. The configured 12,000-token newest-raw target scales down when the selected profile, frozen request cost, summary reserve, or minimum-savings gate leaves less capacity; at least the newest complete group remains exact. Activation still requires at least 4,096 estimated tokens of savings and bounds summaries to 4,096 estimated tokens. Candidate input is bounded by both the 32,000-token host ceiling and the selected profile's context window minus its effective output reserve, with one global projection budget across at most 48 source groups, 512 call/result messages, 32 items, 2,000 characters per item, one retry, and two provider calls. These are compiled host reliability defaults in the current implementation; repository content and `.threadsmith/config.*` cannot disable or delay this boundary.
+At 75% of the active main profile's effective input budget, after honoring that profile's effective request output reserve, the host may replace an older delivered prefix with one validated cumulative summary. The configured 12,000-token newest-raw target scales down when the main profile, frozen request cost, summary reserve, or minimum-savings gate leaves less capacity; at least the newest complete group remains exact. Activation still requires at least 4,096 estimated tokens of savings and bounds summaries to 4,096 estimated tokens. Candidate input is bounded by both the 32,000-token host ceiling and the candidate profile's context window minus its effective output reserve, with one global projection budget across at most 48 source groups, 512 call/result messages, 32 items, 2,000 characters per item, one retry, and two provider calls. When no separate candidate profile is configured, the active main profile remains the fallback. Repository content cannot disable, delay, or lower the pressure boundary.
 
-The candidate call uses the already selected model profile and sensitivity constraints, advertises no tools, and receives a required-first bounded task objective/acceptance intent plus source-preserving result projections. Task, prior-summary context, fact, and message projections all shrink under the same selected-profile capacity loop with explicit truncation/omission metadata. Every candidate item must select an exact host-derived fact tied to one exact tool-result hash and that result's own invocation/evidence/provenance sources. The host carries prior validated items unchanged; if cumulative bounds fill, it deterministically removes oldest prior items and records the cumulative pruned count in checkpoint/inspection metadata. Fabricated prose, cross-sibling source borrowing, altered prior facts, unknown sources, unsupported categories, oversized or unsanitized content, authority-bearing claims, and cumulative range/cut mismatches are rejected. Preflight completes before lifecycle/accounting; every actual candidate attempt, including retries, crosses the managed model-request hook boundary and independently records reported-or-missing usage, call count, and duration. Activated summaries are historical assistant evidence explicitly labeled as untrusted and non-authoritative; they never become durable conversation or repository memory automatically.
+An optional repository-excluding trusted setting may route candidate calls to a different configured model profile or provider. Resolution and dispatch use a repository-excluding user/machine/host-owned catalog/provider snapshot, so repository-only profiles and repository overrides cannot add, rewrite, or reroute the selected auxiliary model. Candidate credentials require user-owned-or-higher secret authority; repository secret stores cannot satisfy or replace them. That profile owns candidate routing, context/reserve, hard output maximum, default reasoning, temperature, timeout, retry, sensitivity, and cost; it must support streaming and structured `Summary` work. The active main profile still owns pressure, emergency capacity, and the rebuilt ordinary request. Candidate calls advertise no tools and receive a required-first bounded task objective/acceptance intent plus source-preserving result projections. Task, prior-summary context, fact, and message projections all shrink under the candidate-profile capacity loop with explicit truncation/omission metadata. Every candidate item must select an exact host-derived fact tied to one exact tool-result hash and that result's own invocation/evidence/provenance sources. The host carries prior validated items unchanged; if cumulative bounds fill, it deterministically removes oldest prior items and records the cumulative pruned count in checkpoint/inspection metadata. Fabricated prose, cross-sibling source borrowing, altered prior facts, unknown sources, unsupported categories, oversized or unsanitized content, authority-bearing claims, and cumulative range/cut mismatches are rejected. Every unclassified tool-result group is conservatively repository-sensitive at the auxiliary boundary. Sensitive candidate input and request-specific cost-ceiling incompatibility are rejected during preflight when the configured candidate profile cannot receive them, before hooks or provider I/O. Preflight completes before lifecycle/accounting; every actual candidate attempt, including retries, crosses the managed model-request hook boundary and independently records reported-or-missing usage, call count, duration, and its true profile identity. Activated summaries are historical assistant evidence explicitly labeled as untrusted and non-authoritative; they never become durable conversation or repository memory automatically.
+
+Interactive candidate execution temporarily projects `COMPACTING CONTEXT` with before/target tokens, candidate profile, and live elapsed duration. Completion emits one content-free line with the closed outcome plus actual model-visible before/after/savings/profile/duration and then resumes ordinary `THINKING`. The shared started/completed events contain no summary, rationale, source, prompt, or tool-result content; headless consumers receive those structured facts without terminal text.
 
 A successful replacement increments a provider-neutral history generation. Compiled providers receive the complete rebuilt stateless request and therefore do not reuse an opaque response/conversation identity from the prior generation; the unchanged frozen prefix and canonical tools still permit safe provider prefix-cache reuse. Ordinary conversational runs keep the bounded summary checkpoint in memory, while original sanitized tool events and evidence remain durable under existing retention policy.
 
@@ -103,6 +105,20 @@ Compaction never deletes archived messages. Full bodies have an independent rete
 ## Configuration
 
 Configure repository overrides under `context:conversation` in `.threadsmith/config.*`. The complete schema is in `.threadsmith/config.example`.
+
+To select an independent active-turn candidate model, set the following only in machine configuration, user configuration (`~/.threadsmith/config.json`), or the trusted `THREADSMITH_` environment layer:
+
+```json
+{
+  "context": {
+    "activeTurnCompaction": {
+      "profileId": "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+```
+
+The GUID must identify one enabled profile in the repository-excluding immutable user/machine/host-owned provider catalog. The profile must support streaming and structured output and either declare `summary` in `intendedWorkloadClasses` or leave that list empty. Repository `config.json` values at this key are ignored, and repository provider-catalog additions/overrides are excluded from both candidate resolution and dispatch. Removing or setting the trusted value to `null` restores the active-main-profile fallback. Changing the compaction profile requires restart because provider catalogs and composition are immutable for the process lifetime.
 
 Compiled defaults:
 
@@ -129,7 +145,7 @@ Compiled defaults:
 | `context:repositoryMemory:maximumItems` | 12 |
 | `context:repositoryMemory:maximumTokens` | 2,000 |
 
-Invalid enum values, non-positive budgets, pressure outside 1–100%, or retries exceeding the provider-call cap fail before model invocation. Active-turn defaults are host-owned and are not repository configuration keys.
+Invalid enum values, non-positive budgets, pressure outside 1–100%, retries exceeding the provider-call cap, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults are host-owned; only the trusted optional candidate profile ID is configurable.
 
 ## Retention and restoration
 

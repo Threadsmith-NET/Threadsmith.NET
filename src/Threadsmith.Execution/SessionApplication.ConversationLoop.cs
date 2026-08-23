@@ -801,6 +801,11 @@ public sealed partial class SessionApplication
         var configuredPressureTarget = checked(
             (pressureInputBudget * _activeTurnCompactionPolicy.PressureTargetPercent) / 100);
         var pressureTargetTokens = Math.Max(1, configuredPressureTarget);
+        var ordinaryProfileId = context.ModelResolution?.ProfileId;
+        var candidateProfileId = _activeTurnCompactionProfile?.ProfileId ?? ordinaryProfileId;
+        var compactionActivityActive = false;
+        var compactionActivityDuration = default(TimeSpan?);
+        var compactionActivityProfileId = default(ModelProfileId?);
         var visible = loopState.CreateModelVisibleContinuation();
         var beforeEstimate = EstimateCompleteRequest(
             context,
@@ -821,6 +826,36 @@ public sealed partial class SessionApplication
                 fixedRequestEstimate.WireInputTokens,
                 pressureTargetTokens);
 
+        async Task CompleteActivityAsync(
+            ActiveTurnCompactionInspectionStatus status,
+            int? afterInputTokens)
+        {
+            if (!compactionActivityActive || compactionActivityProfileId is not { } activityProfileId)
+            {
+                return;
+            }
+
+            compactionActivityActive = false;
+            long? durationMilliseconds = compactionActivityDuration is { } duration
+                && duration >= TimeSpan.Zero
+                    ? duration.Ticks / TimeSpan.TicksPerMillisecond
+                    : null;
+            var visibleAfterInputTokens = status == ActiveTurnCompactionInspectionStatus.Completed
+                ? afterInputTokens ?? beforeEstimate.WireInputTokens
+                : beforeEstimate.WireInputTokens;
+            await _events.PublishAsync(
+                new ActiveTurnCompactionCompleted(
+                    registration.SessionId,
+                    DateTimeOffset.UtcNow,
+                    runId,
+                    activityProfileId,
+                    status,
+                    beforeEstimate.WireInputTokens,
+                    visibleAfterInputTokens,
+                    durationMilliseconds),
+                CancellationToken.None);
+        }
+
         async Task RecordAsync(
             ActiveTurnCompactionInspectionStatus status,
             string rationale,
@@ -829,42 +864,49 @@ public sealed partial class SessionApplication
             long? compactedFrom = null,
             long? compactedThrough = null)
         {
-            if (_contextAssembler is null)
+            try
             {
-                return;
-            }
-
-            await _contextAssembler.UpdateActiveTurnInspectionAsync(
-                registration.SessionId,
-                runId,
-                new ActiveTurnCompactionInspectionProjection
+                if (_contextAssembler is null)
                 {
-                    AssessmentSequence = loopState.AssessmentSequence,
-                    Status = status,
-                    BeforeInputTokens = beforeEstimate.WireInputTokens,
-                    AfterInputTokens = afterInputTokens,
-                    MaximumInputTokens = maximumInputTokens,
-                    PressureTargetTokens = pressureTargetTokens,
-                    OutputReserveTokens = outputReserve,
-                    ConfiguredRetentionTargetTokens =
-                        _activeTurnCompactionPolicy.RetainedRecentTokens,
-                    EffectiveRetentionTargetTokens = effectiveRetentionTargetTokens,
-                    EligibleGroupCount = eligibleGroupCount,
-                    CompactedGroupCount = compactedGroupCount,
-                    RetainedGroupCount = loopState.RawGroupCount,
-                    RetainedGroupTokens = loopState.RawGroupTokens,
-                    SummaryVersion = loopState.CompactionSummary?.Version ?? 0,
-                    PrunedPriorItemCount =
-                        loopState.CompactionSummary?.PrunedPriorItemCount ?? 0,
-                    HistoryRewriteGeneration = loopState.HistoryRewriteGeneration,
-                    SummaryContentHash = loopState.LastCheckpoint?.SummaryContentHash,
-                    CandidateProfileId = loopState.LastCheckpoint?.CandidateProfileId.Value,
-                    CompactedFromGroupSequence = compactedFrom,
-                    CompactedThroughGroupSequence = compactedThrough,
-                    BackoffRoundsRemaining = loopState.BackoffRoundsRemaining,
-                    Rationale = rationale,
-                },
-                cancellationToken);
+                    return;
+                }
+
+                await _contextAssembler.UpdateActiveTurnInspectionAsync(
+                    registration.SessionId,
+                    runId,
+                    new ActiveTurnCompactionInspectionProjection
+                    {
+                        AssessmentSequence = loopState.AssessmentSequence,
+                        Status = status,
+                        BeforeInputTokens = beforeEstimate.WireInputTokens,
+                        AfterInputTokens = afterInputTokens,
+                        MaximumInputTokens = maximumInputTokens,
+                        PressureTargetTokens = pressureTargetTokens,
+                        OutputReserveTokens = outputReserve,
+                        ConfiguredRetentionTargetTokens =
+                            _activeTurnCompactionPolicy.RetainedRecentTokens,
+                        EffectiveRetentionTargetTokens = effectiveRetentionTargetTokens,
+                        EligibleGroupCount = eligibleGroupCount,
+                        CompactedGroupCount = compactedGroupCount,
+                        RetainedGroupCount = loopState.RawGroupCount,
+                        RetainedGroupTokens = loopState.RawGroupTokens,
+                        SummaryVersion = loopState.CompactionSummary?.Version ?? 0,
+                        PrunedPriorItemCount =
+                            loopState.CompactionSummary?.PrunedPriorItemCount ?? 0,
+                        HistoryRewriteGeneration = loopState.HistoryRewriteGeneration,
+                        SummaryContentHash = loopState.LastCheckpoint?.SummaryContentHash,
+                        CandidateProfileId = candidateProfileId?.Value,
+                        CompactedFromGroupSequence = compactedFrom,
+                        CompactedThroughGroupSequence = compactedThrough,
+                        BackoffRoundsRemaining = loopState.BackoffRoundsRemaining,
+                        Rationale = rationale,
+                    },
+                    cancellationToken);
+            }
+            finally
+            {
+                await CompleteActivityAsync(status, afterInputTokens);
+            }
         }
 
         if (!_activeTurnCompactionPolicy.Enabled || _activeTurnCompactor is null)
@@ -895,7 +937,7 @@ public sealed partial class SessionApplication
             loopState.Groups,
             _activeTurnCompactionPolicy,
             effectiveRetentionTargetTokens);
-        if (eligiblePrefix.Count == 0 || context.ModelResolution?.ProfileId is not { } profileId)
+        if (eligiblePrefix.Count == 0 || context.ModelResolution is not { } ordinaryProfile)
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.NoEligiblePrefix,
@@ -903,6 +945,7 @@ public sealed partial class SessionApplication
             return;
         }
 
+        var profileId = ordinaryProfile.ProfileId;
         var taskContext = ActiveTurnTaskContextProjector.Project(
             registration.Task,
             _activeTurnCompactionPolicy);
@@ -910,6 +953,8 @@ public sealed partial class SessionApplication
         {
             RunId = runId,
             ProfileId = profileId,
+            CandidateProfile = _activeTurnCompactionProfile,
+            ToolContinuationRound = modelRound - 1,
             FrozenContextIdentity = string.Join(
                 '|',
                 context.Layout.StablePrefixDigest,
@@ -922,8 +967,11 @@ public sealed partial class SessionApplication
             PriorSummary = loopState.CompactionSummary,
             EligiblePrefix = eligiblePrefix,
             SelectionConstraints = context.ModelConstraints,
-            ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
-            ProfileContextWindowTokens = context.ModelResolution.ContextWindow,
+            ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData
+                || (_activeTurnCompactionProfile is not null
+                    && eligiblePrefix.Any(group =>
+                        group.Sensitivity == ConversationSensitivity.Sensitive)),
+            ProfileContextWindowTokens = ordinaryProfile.ContextWindow,
             ProfileOutputReserveTokens = outputReserve,
             BeforeInputTokens = beforeEstimate.WireInputTokens,
             PressureTargetTokens = pressureTargetTokens,
@@ -933,87 +981,134 @@ public sealed partial class SessionApplication
             registration,
             modelRound,
             registration.RepositoryIdentity);
-        var result = await _activeTurnCompactor.CompactAsync(
-            request,
-            attemptObserver,
+        compactionActivityProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId;
+        await _events.PublishAsync(
+            new ActiveTurnCompactionStarted(
+                registration.SessionId,
+                DateTimeOffset.UtcNow,
+                runId,
+                compactionActivityProfileId.Value,
+                beforeEstimate.WireInputTokens,
+                pressureTargetTokens),
             cancellationToken);
-
-        if (result.Outcome == ActiveTurnCompactionOutcome.Completed
-            && result.Summary is { } summary)
+        compactionActivityActive = true;
+        ActiveTurnCompactionResult result;
+        try
         {
-            var preview = loopState.CreatePreviewContinuation(summary, eligiblePrefix.Count);
-            var afterEstimate = EstimateCompleteRequest(
-                context,
-                modelTools,
-                layout,
-                preview.Messages,
-                outputReserve);
-            var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
-            if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens
-                && afterEstimate.WireInputTokens <= pressureTargetTokens)
+            result = await _activeTurnCompactor.CompactAsync(
+                request,
+                attemptObserver,
+                cancellationToken);
+            compactionActivityDuration = result.Duration;
+        }
+        catch (OperationCanceledException)
+        {
+            await CompleteActivityAsync(
+                ActiveTurnCompactionInspectionStatus.Cancelled,
+                afterInputTokens: null);
+            throw;
+        }
+        catch
+        {
+            await CompleteActivityAsync(
+                ActiveTurnCompactionInspectionStatus.ProviderFailure,
+                afterInputTokens: null);
+            throw;
+        }
+
+        try
+        {
+            if (result.Outcome == ActiveTurnCompactionOutcome.Completed
+                && result.Summary is { } summary)
             {
-                var checkpoint = new ActiveTurnCompactionCheckpoint
+                var preview = loopState.CreatePreviewContinuation(summary, eligiblePrefix.Count);
+                var afterEstimate = EstimateCompleteRequest(
+                    context,
+                    modelTools,
+                    layout,
+                    preview.Messages,
+                    outputReserve);
+                var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
+                if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens
+                    && afterEstimate.WireInputTokens <= pressureTargetTokens)
                 {
-                    RunId = runId,
-                    SummaryVersion = summary.Version,
-                    CompactedFromGroupSequence = eligiblePrefix[0].Sequence,
-                    CompactedThroughGroupSequence = eligiblePrefix[^1].Sequence,
-                    Sources = eligiblePrefix
-                        .SelectMany(group => group.Sources)
-                        .Distinct()
-                        .ToArray(),
-                    FrozenContextIdentity = request.FrozenContextIdentity,
-                    BeforeInputTokens = beforeEstimate.WireInputTokens,
-                    AfterInputTokens = afterEstimate.WireInputTokens,
-                    RetainedGroupCount = loopState.RawGroupCount - eligiblePrefix.Count,
-                    RetainedGroupTokens = loopState.RawGroupTokens
-                        - eligiblePrefix.Sum(group => group.EstimatedTokens),
-                    CandidateProfileId = profileId,
-                    SummaryContentHash = summary.ContentHash,
-                    PrunedPriorItemCount = summary.PrunedPriorItemCount,
-                    HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
-                    Duration = result.Duration,
-                };
-                loopState.ActivateSummary(summary, eligiblePrefix, checkpoint);
-                _logger.LogInformation(
-                    "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
-                    eligiblePrefix.Count,
-                    runId.Value,
-                    beforeEstimate.WireInputTokens,
-                    afterEstimate.WireInputTokens,
-                    summary.Version);
+                    var checkpoint = new ActiveTurnCompactionCheckpoint
+                    {
+                        RunId = runId,
+                        SummaryVersion = summary.Version,
+                        CompactedFromGroupSequence = eligiblePrefix[0].Sequence,
+                        CompactedThroughGroupSequence = eligiblePrefix[^1].Sequence,
+                        Sources = eligiblePrefix
+                            .SelectMany(group => group.Sources)
+                            .Distinct()
+                            .ToArray(),
+                        FrozenContextIdentity = request.FrozenContextIdentity,
+                        BeforeInputTokens = beforeEstimate.WireInputTokens,
+                        AfterInputTokens = afterEstimate.WireInputTokens,
+                        RetainedGroupCount = loopState.RawGroupCount - eligiblePrefix.Count,
+                        RetainedGroupTokens = loopState.RawGroupTokens
+                            - eligiblePrefix.Sum(group => group.EstimatedTokens),
+                        CandidateProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId,
+                        SummaryContentHash = summary.ContentHash,
+                        PrunedPriorItemCount = summary.PrunedPriorItemCount,
+                        HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
+                        Duration = result.Duration,
+                    };
+                    loopState.ActivateSummary(summary, eligiblePrefix, checkpoint);
+                    _logger.LogInformation(
+                        "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
+                        eligiblePrefix.Count,
+                        runId.Value,
+                        beforeEstimate.WireInputTokens,
+                        afterEstimate.WireInputTokens,
+                        summary.Version);
+                    await RecordAsync(
+                        ActiveTurnCompactionInspectionStatus.Completed,
+                        "A validated cumulative summary replaced the exact eligible prefix.",
+                        eligiblePrefix.Count,
+                        afterEstimate.WireInputTokens,
+                        eligiblePrefix[0].Sequence,
+                        eligiblePrefix[^1].Sequence);
+                    return;
+                }
+
+                loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
                 await RecordAsync(
-                    ActiveTurnCompactionInspectionStatus.Completed,
-                    "A validated cumulative summary replaced the exact eligible prefix.",
-                    eligiblePrefix.Count,
-                    afterEstimate.WireInputTokens,
-                    eligiblePrefix[0].Sequence,
-                    eligiblePrefix[^1].Sequence);
+                    ActiveTurnCompactionInspectionStatus.InsufficientSavings,
+                    "The validated candidate did not meet the configured target and minimum savings.",
+                    afterInputTokens: afterEstimate.WireInputTokens);
                 return;
             }
 
             loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
-            await RecordAsync(
-                ActiveTurnCompactionInspectionStatus.InsufficientSavings,
-                "The validated candidate did not meet the configured target and minimum savings.",
-                afterInputTokens: afterEstimate.WireInputTokens);
-            return;
+            var status = result.Outcome switch
+            {
+                ActiveTurnCompactionOutcome.ValidationRejected =>
+                    ActiveTurnCompactionInspectionStatus.ValidationRejected,
+                ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
+                _ => ActiveTurnCompactionInspectionStatus.ProviderFailure,
+            };
+            _logger.LogWarning(
+                "Active-turn continuation compaction did not activate for run {RunId}: {Outcome} after {ProviderCalls} provider calls.",
+                runId.Value,
+                result.Outcome,
+                result.ProviderCalls);
+            await RecordAsync(status, result.Rationale);
         }
-
-        loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
-        var status = result.Outcome switch
+        catch (OperationCanceledException)
         {
-            ActiveTurnCompactionOutcome.ValidationRejected =>
-                ActiveTurnCompactionInspectionStatus.ValidationRejected,
-            ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
-            _ => ActiveTurnCompactionInspectionStatus.ProviderFailure,
-        };
-        _logger.LogWarning(
-            "Active-turn continuation compaction did not activate for run {RunId}: {Outcome} after {ProviderCalls} provider calls.",
-            runId.Value,
-            result.Outcome,
-            result.ProviderCalls);
-        await RecordAsync(status, result.Rationale);
+            await CompleteActivityAsync(
+                ActiveTurnCompactionInspectionStatus.Cancelled,
+                afterInputTokens: null);
+            throw;
+        }
+        catch
+        {
+            await CompleteActivityAsync(
+                ActiveTurnCompactionInspectionStatus.ProviderFailure,
+                afterInputTokens: null);
+            throw;
+        }
     }
 
     private async Task UpdateFallbackInspectionAsync(
@@ -1342,6 +1437,9 @@ public sealed partial class SessionApplication
             int attempt,
             Guid invocationId)
         {
+            var workloadClass = request.CandidateProfile is null
+                ? WorkloadClass.General
+                : WorkloadClass.Summary;
             return new ModelRequestHookBoundary(
                 _registration.SessionId,
                 request.RunId,
@@ -1349,7 +1447,7 @@ public sealed partial class SessionApplication
                 invocationId,
                 attempt - 1,
                 "active-turn-compaction",
-                WorkloadClass.General,
+                workloadClass,
                 request.ContainsSensitiveData,
                 0);
         }
@@ -1643,6 +1741,7 @@ public sealed partial class SessionApplication
                 Sources = boundedSources,
                 FactualEvidence = factualEvidence,
                 EstimatedTokens = estimate.WireInputTokens,
+                Sensitivity = ConversationSensitivity.Sensitive,
                 WasDeliveredVerbatim = false,
             });
             _currentCalls.Clear();

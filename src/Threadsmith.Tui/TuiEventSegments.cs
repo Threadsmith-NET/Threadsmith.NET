@@ -9,10 +9,12 @@ internal static class TuiEventSegments
     /// <param name="segments">Destination segment list.</param>
     /// <param name="domainEvent">Rendered domain event.</param>
     /// <param name="transcriptDelta">Text appended through the conversation transcript boundary.</param>
+    /// <param name="showOperationDurations">Whether authoritative completion duration is displayed.</param>
     internal static void Append(
         IList<TuiTextSegment> segments,
         IDomainEvent domainEvent,
-        string transcriptDelta)
+        string transcriptDelta,
+        bool showOperationDurations = true)
     {
         ArgumentNullException.ThrowIfNull(segments);
         ArgumentNullException.ThrowIfNull(domainEvent);
@@ -25,6 +27,22 @@ internal static class TuiEventSegments
 
         switch (domainEvent)
         {
+            case ActiveTurnCompactionCompleted completed:
+                var compactionRole = completed.Status switch
+                {
+                    ActiveTurnCompactionInspectionStatus.Completed => TuiTextRole.Success,
+                    ActiveTurnCompactionInspectionStatus.ProviderFailure
+                        or ActiveTurnCompactionInspectionStatus.Cancelled
+                        or ActiveTurnCompactionInspectionStatus.CapacityExceeded => TuiTextRole.Error,
+                    _ => TuiTextRole.Warning,
+                };
+                Add(
+                    segments,
+                    ConversationalShell.FormatActiveTurnCompactionCompletion(
+                        completed,
+                        showOperationDurations),
+                    compactionRole);
+                break;
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {

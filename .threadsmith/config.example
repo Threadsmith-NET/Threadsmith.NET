@@ -265,6 +265,14 @@
   "context": {
     // Maximum tokens per request before the governor trims evidence.
     "maxTokensPerRequest": 32000,
+    // Optional active-turn summary model. This setting is honored only from
+    // repository-excluding machine/user/environment configuration; repository
+    // configuration and repository provider-catalog overrides cannot choose,
+    // rewrite, or reroute the model that receives candidate evidence.
+    // Null preserves the active main profile as the candidate fallback.
+    "activeTurnCompaction": {
+      "profileId": null
+    },
     // Bounded cross-turn continuity (plans 33-35). Historical content remains
     // untrusted, sanitized, provenance-linked, and subject to these hard bounds.
     "conversation": {

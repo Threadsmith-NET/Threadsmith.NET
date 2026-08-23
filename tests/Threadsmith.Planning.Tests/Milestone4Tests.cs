@@ -2075,7 +2075,7 @@ public static class Milestone4Tests
                 budget);
             var model = new ToolThenTextModelProvider(
                 "{\"path\":\".\",\"maximumEntries\":200}");
-            var assembler = CreateAssembler(events, evidence, maximumTokens: 1500);
+            var assembler = CreateAssembler(events, evidence, maximumTokens: 1700);
             var application = new SessionApplication(
                 events,
                 model,

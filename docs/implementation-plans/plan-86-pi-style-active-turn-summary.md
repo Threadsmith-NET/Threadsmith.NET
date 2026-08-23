@@ -1,6 +1,6 @@
 # Implementation Plan 86: Pi-Style Active-Turn Summary
 
-**Status:** Planned — functionality requires user signoff before tests or product documentation are changed
+**Status:** Complete — Pi-style active-turn summary compaction, tests, and documentation are in place
 
 **Delivery track:** Maintenance — replace the ineffective Plan 80 fact-list summary
 **Strategy source:** Shared Context §A.2; Pi coding-agent compaction behavior reviewed from installed version 0.84.2
@@ -59,10 +59,9 @@ This plan changes the summary step. It does not rebuild the rest of Plan 80.
 - No categories or source objects in the model response.
 - No database-backed working-set manager.
 - No second summary model or multi-step summary debate.
-- No new configuration options unless the first real run proves one is needed.
+- No additional configuration options beyond trusted summary budget and model-output percentage.
 - No changes to tool execution, approvals, mutation behavior, or the current user request.
-- No test rewrite before functionality signoff.
-- No user-guide, operations, architecture, acceptance-scenario, manual-test, README-index, or DOX rewrite before functionality signoff.
+- No acceptance-scenario or manual-test rewrite unless observable user/operator workflows change.
 
 ## 5. Current State
 
@@ -117,9 +116,9 @@ Accept a response only when it:
 
 - completed normally;
 - is not empty;
-- fits the existing summary-size limit;
-- leaves the rebuilt main request below the required pressure target;
-- saves at least the existing minimum number of tokens.
+- fits the configured total summary budget;
+- respects the request-specific model-output ceiling;
+- reduces the rebuilt main request.
 
 On success:
 
@@ -144,7 +143,7 @@ Do not add a more elaborate relevance system initially. The model can decide whi
 
 ### 6.5 Failure behavior
 
-If the summary request fails, is cancelled, returns nothing, is cut off, is too large, or does not save enough space, keep the existing conversation unchanged.
+If the summary request fails, is cancelled, returns nothing, is cut off, is too large, or does not reduce the rebuilt request, keep the existing conversation unchanged.
 
 Do not add a correction conversation or multiple summary passes initially. A later normal compaction attempt may try again using the existing delay/backoff behavior.
 
@@ -205,8 +204,6 @@ Do not commit the functionality trial as complete before the deferred tests and 
 
 ## 10. Testing
 
-**Do not create, delete, or update tests until the user signs off on the functionality.**
-
 After signoff, add or update tests for these specific cases.
 
 ### Summary input
@@ -236,8 +233,8 @@ After signoff, add or update tests for these specific cases.
 17. **Oversized summary leaves the conversation unchanged.**
 18. **Provider failure leaves the conversation unchanged.**
 19. **Cancellation leaves the conversation unchanged.**
-20. **Insufficient token savings leaves the conversation unchanged.**
-21. **A rebuilt request above the pressure target leaves the conversation unchanged.**
+20. **Zero or negative token savings leaves the conversation unchanged.**
+21. **A rebuilt request above the pressure target still activates when it reduces the request.**
 22. **A successful summary increments the history-rewrite generation once.**
 23. **A failed summary does not increment the generation.**
 
@@ -272,7 +269,7 @@ Keep the existing compacting activity and completion message. Continue recording
 - before and after token counts;
 - tokens and percentage saved;
 - duration;
-- completed, failed, cancelled, or insufficient-savings outcome;
+- completed, failed, cancelled, or zero-savings outcome;
 - summary version and covered group range for context inspection.
 
 Do not put summary text or tool-result text in normal logs or the TUI completion message. The existing explicit raw model log remains available for user-requested diagnosis.
@@ -297,21 +294,19 @@ The existing fact-ID implementation remains available in Git history and in roll
 - Failed or unhelpful compaction leaves the current conversation unchanged.
 - Three real-provider compactions preserve the current task, working files/symbols, important findings, and next steps.
 - The real-provider comparison produces at least 50% fewer exact post-compaction rereads than the recorded baseline without making the final answer worse.
-- No tests or product documentation are written before explicit functionality signoff.
-- After signoff, the listed tests, required documentation, affected builds, formatting, and repository checks pass.
+- Functionality signoff precedes the deferred tests and product documentation.
+- The listed tests, required documentation, affected builds, formatting, and repository checks pass.
 
 ## 15. Risks
 
 - **The model writes a poor summary:** keep recent raw groups, use a clear fixed prompt, and evaluate one real run before writing tests or docs.
 - **The summary forgets an important detail:** the next prompt includes the full previous summary and asks the model to keep what still matters; the real-run reread comparison is the deciding check.
-- **The 4,096-token summary limit is too small:** measure first; change the limit only if the trial proves it is necessary.
+- **The summary limit is too small:** default to the approved 16,384-token total budget with an 80% model-output partition; change only with trusted configuration evidence.
 - **The files list becomes too large:** count it inside the existing summary limit and add a simple bound only if the trial requires one.
 - **Old tests describe the fact-ID behavior:** do not rewrite them during the trial; replace them only after the user approves the new behavior.
 - **Scope expands again:** do not add scoring, ranking, retrieval, correction loops, or new settings during the first implementation.
 
 ## 16. Documentation
-
-**Do not update product documentation until the user signs off on the functionality.**
 
 After signoff, update only what the approved behavior requires:
 
@@ -329,6 +324,6 @@ Do not rewrite unrelated architecture or historical planning documents.
 Resolve these at the functionality-signoff checkpoint, not before implementation:
 
 - Whether the proposed Markdown sections need a small wording change after seeing the first real summary.
-- Whether the existing 4,096-token summary limit is enough.
+- Whether the 16,384-token default total summary budget and 80% model-output partition remain sufficient across more real runs.
 - Whether the Pi-style files-read/files-changed lists need a simple maximum.
 - Whether the 50% reread-reduction target should be raised after the first successful comparison.

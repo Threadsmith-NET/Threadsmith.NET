@@ -426,13 +426,13 @@ public static class AppBootstrapTests
         Assert.Contains("missing or disabled", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>An explicitly configured profile fails startup when it cannot produce structured summaries.</summary>
+    /// <summary>An explicitly configured profile fails startup when it cannot stream summary text.</summary>
     [Fact]
     public static void ModelComposition_CompactionProfile_RejectsIncompatibleProfile()
     {
         var profile = CreateCompactionProfile() with
         {
-            Capabilities = new ModelCapabilitySet { Streaming = true },
+            Capabilities = new ModelCapabilitySet(),
         };
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -723,7 +723,6 @@ public static class AppBootstrapTests
             Capabilities = new ModelCapabilitySet
             {
                 Streaming = true,
-                StructuredOutput = true,
             },
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             IntendedWorkloadClasses = [WorkloadClass.Summary],

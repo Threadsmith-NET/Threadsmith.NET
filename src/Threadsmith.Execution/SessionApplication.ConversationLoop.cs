@@ -26,9 +26,7 @@ public sealed partial class SessionApplication
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
-            _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
-            _activeTurnCompactionPolicy.MaximumFactualFactsPerResult,
-            _activeTurnCompactionPolicy.MaximumFactualFactCharacters);
+            _activeTurnCompactionPolicy.MaximumSourcesPerGroup);
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
@@ -566,7 +564,6 @@ public sealed partial class SessionApplication
         {
             var result = batchResult.Result;
             var content = result.ResultJson ?? result.Error ?? "Tool completed.";
-            loopState.AddCurrentResultOutcome(batchResult.CorrelationId, result.Succeeded);
             loopState.AddCurrentSource(
                 batchResult.CorrelationId,
                 ActiveTurnSourceKind.ToolInvocation,
@@ -577,6 +574,12 @@ public sealed partial class SessionApplication
                     batchResult.CorrelationId,
                     ActiveTurnSourceKind.ToolProvenance,
                     JsonSerializer.Serialize(source));
+                if (result.Succeeded
+                    && string.Equals(source.Kind, "file", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(source.Identifier))
+                {
+                    loopState.AddCurrentFileRead(source.Identifier);
+                }
             }
 
             if (_evidenceStore is not null)
@@ -891,8 +894,7 @@ public sealed partial class SessionApplication
                         RetainedGroupCount = loopState.RawGroupCount,
                         RetainedGroupTokens = loopState.RawGroupTokens,
                         SummaryVersion = loopState.CompactionSummary?.Version ?? 0,
-                        PrunedPriorItemCount =
-                            loopState.CompactionSummary?.PrunedPriorItemCount ?? 0,
+                        PrunedPriorItemCount = 0,
                         HistoryRewriteGeneration = loopState.HistoryRewriteGeneration,
                         SummaryContentHash = loopState.LastCheckpoint?.SummaryContentHash,
                         CandidateProfileId = candidateProfileId?.Value,
@@ -1021,7 +1023,16 @@ public sealed partial class SessionApplication
             if (result.Outcome == ActiveTurnCompactionOutcome.Completed
                 && result.Summary is { } summary)
             {
-                var preview = loopState.CreatePreviewContinuation(summary, eligiblePrefix.Count);
+                var priorGroupCount = request.PriorSummary?.CoveredGroupSequences.Count ?? 0;
+                var compactedGroupCount = summary.CoveredGroupSequences.Count - priorGroupCount;
+                if (compactedGroupCount is < 1 || compactedGroupCount > eligiblePrefix.Count)
+                {
+                    throw new InvalidOperationException(
+                        "The active-turn summary does not cover an exact non-empty eligible prefix.");
+                }
+
+                var compactedPrefix = eligiblePrefix.Take(compactedGroupCount).ToArray();
+                var preview = loopState.CreatePreviewContinuation(summary, compactedGroupCount);
                 var afterEstimate = EstimateCompleteRequest(
                     context,
                     modelTools,
@@ -1029,53 +1040,52 @@ public sealed partial class SessionApplication
                     preview.Messages,
                     outputReserve);
                 var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
-                if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens
-                    && afterEstimate.WireInputTokens <= pressureTargetTokens)
+                if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens)
                 {
                     var checkpoint = new ActiveTurnCompactionCheckpoint
                     {
                         RunId = runId,
                         SummaryVersion = summary.Version,
-                        CompactedFromGroupSequence = eligiblePrefix[0].Sequence,
-                        CompactedThroughGroupSequence = eligiblePrefix[^1].Sequence,
-                        Sources = eligiblePrefix
+                        CompactedFromGroupSequence = compactedPrefix[0].Sequence,
+                        CompactedThroughGroupSequence = compactedPrefix[^1].Sequence,
+                        Sources = compactedPrefix
                             .SelectMany(group => group.Sources)
                             .Distinct()
                             .ToArray(),
                         FrozenContextIdentity = request.FrozenContextIdentity,
                         BeforeInputTokens = beforeEstimate.WireInputTokens,
                         AfterInputTokens = afterEstimate.WireInputTokens,
-                        RetainedGroupCount = loopState.RawGroupCount - eligiblePrefix.Count,
+                        RetainedGroupCount = loopState.RawGroupCount - compactedGroupCount,
                         RetainedGroupTokens = loopState.RawGroupTokens
-                            - eligiblePrefix.Sum(group => group.EstimatedTokens),
+                            - compactedPrefix.Sum(group => group.EstimatedTokens),
                         CandidateProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId,
                         SummaryContentHash = summary.ContentHash,
-                        PrunedPriorItemCount = summary.PrunedPriorItemCount,
+                        PrunedPriorItemCount = 0,
                         HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
                         Duration = result.Duration,
                     };
-                    loopState.ActivateSummary(summary, eligiblePrefix, checkpoint);
+                    loopState.ActivateSummary(summary, compactedPrefix, checkpoint);
                     _logger.LogInformation(
                         "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
-                        eligiblePrefix.Count,
+                        compactedGroupCount,
                         runId.Value,
                         beforeEstimate.WireInputTokens,
                         afterEstimate.WireInputTokens,
                         summary.Version);
                     await RecordAsync(
                         ActiveTurnCompactionInspectionStatus.Completed,
-                        "A validated cumulative summary replaced the exact eligible prefix.",
-                        eligiblePrefix.Count,
+                        "An updated summary replaced the exact eligible prefix.",
+                        compactedGroupCount,
                         afterEstimate.WireInputTokens,
-                        eligiblePrefix[0].Sequence,
-                        eligiblePrefix[^1].Sequence);
+                        compactedPrefix[0].Sequence,
+                        compactedPrefix[^1].Sequence);
                     return;
                 }
 
                 loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
                 await RecordAsync(
                     ActiveTurnCompactionInspectionStatus.InsufficientSavings,
-                    "The validated candidate did not meet the configured target and minimum savings.",
+                    "The validated candidate did not reduce the canonical request.",
                     afterInputTokens: afterEstimate.WireInputTokens);
                 return;
             }
@@ -1461,12 +1471,8 @@ public sealed partial class SessionApplication
             new(StringComparer.Ordinal);
 
         private readonly List<ActiveTurnContinuationGroup> _groups = [];
-        private readonly int _maximumFactualFactCharacters;
-        private readonly int _maximumFactualFactsPerResult;
         private readonly int _maximumSourcesPerGroup;
-        private readonly Dictionary<string, bool> _pendingResultOutcomes =
-            new(StringComparer.Ordinal);
-
+        private readonly List<string> _pendingFilesRead = [];
         private readonly List<PendingActiveTurnSource> _pendingSources = [];
         private int _retainedOutputCharacters;
         private int _retainedToolCalls;
@@ -1474,17 +1480,11 @@ public sealed partial class SessionApplication
 
         public ConversationLoopState(
             int maximumOutputCharacters,
-            int maximumSourcesPerGroup,
-            int maximumFactualFactsPerResult,
-            int maximumFactualFactCharacters)
+            int maximumSourcesPerGroup)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSourcesPerGroup);
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFactualFactsPerResult);
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFactualFactCharacters);
             MaximumOutputCharacters = maximumOutputCharacters;
             _maximumSourcesPerGroup = maximumSourcesPerGroup;
-            _maximumFactualFactsPerResult = maximumFactualFactsPerResult;
-            _maximumFactualFactCharacters = maximumFactualFactCharacters;
         }
 
         public int AssessmentSequence { get; private set; }
@@ -1591,10 +1591,14 @@ public sealed partial class SessionApplication
             }
         }
 
-        public void AddCurrentResultOutcome(string toolCallId, bool succeeded)
+        public void AddCurrentFileRead(string path)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(toolCallId);
-            _pendingResultOutcomes[toolCallId] = succeeded;
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            if (_pendingFilesRead.Count < _maximumSourcesPerGroup
+                && !_pendingFilesRead.Contains(path, StringComparer.Ordinal))
+            {
+                _pendingFilesRead.Add(path);
+            }
         }
 
         public void AddRetainedOutputCharacters(int additionalCharacters)
@@ -1618,7 +1622,7 @@ public sealed partial class SessionApplication
             if (_currentCalls.Count > 0
                 || _currentResults.Count > 0
                 || _pendingSources.Count > 0
-                || _pendingResultOutcomes.Count > 0)
+                || _pendingFilesRead.Count > 0)
             {
                 throw new InvalidOperationException(
                     "The prior active-turn tool group was not completed atomically.");
@@ -1631,7 +1635,7 @@ public sealed partial class SessionApplication
             {
                 if (_currentResults.Count > 0
                     || _pendingSources.Count > 0
-                    || _pendingResultOutcomes.Count > 0)
+                    || _pendingFilesRead.Count > 0)
                 {
                     throw new MalformedModelOutputException(
                         "The active-turn group contains result state without assistant tool calls.");
@@ -1681,51 +1685,6 @@ public sealed partial class SessionApplication
                 .Distinct()
                 .Take(_maximumSourcesPerGroup)
                 .ToArray();
-            var boundedSourceSet = boundedSources.ToHashSet();
-            var factualEvidence = results.Select(result =>
-            {
-                var toolCallId = result.ToolCallId ?? throw new UnreachableException();
-                var resultSources = _pendingSources
-                    .Where(source => string.Equals(
-                        source.ToolCallId,
-                        toolCallId,
-                        StringComparison.Ordinal))
-                    .Select(source => new ActiveTurnSourceReference(
-                        source.Kind,
-                        source.Id,
-                        sequence))
-                    .Where(boundedSourceSet.Contains)
-                    .Distinct()
-                    .ToArray();
-                if (resultSources.Length == 0)
-                {
-                    var callSource = new ActiveTurnSourceReference(
-                        ActiveTurnSourceKind.ToolCall,
-                        toolCallId,
-                        sequence);
-                    resultSources = boundedSourceSet.Contains(callSource)
-                        ? [callSource]
-                        : [];
-                }
-
-                var content = string.Concat(result.Content.Select(part => part.Content));
-                bool? succeeded = _pendingResultOutcomes.TryGetValue(
-                    toolCallId,
-                    out var resultSucceeded)
-                    ? resultSucceeded
-                    : null;
-                return new ActiveTurnFactualEvidence
-                {
-                    ToolCallId = toolCallId,
-                    Sources = resultSources,
-                    AllowedKinds = ResolveAllowedKinds(resultSources, succeeded),
-                    SupportedFacts = ActiveTurnFactualEvidenceBuilder.CreateSupportedFacts(
-                        content,
-                        _maximumFactualFactsPerResult,
-                        _maximumFactualFactCharacters),
-                    ContentHash = ActiveTurnFactualEvidenceBuilder.ComputeContentHash(content),
-                };
-            }).Where(evidence => evidence.Sources.Count > 0).ToArray();
             ModelMessage[] messages = [.. _currentCalls, .. results];
             var estimate = ModelWireEstimator.Estimate(
                 messages,
@@ -1739,7 +1698,8 @@ public sealed partial class SessionApplication
                 CompletedModelRound = modelRound,
                 Messages = messages,
                 Sources = boundedSources,
-                FactualEvidence = factualEvidence,
+                FilesRead = _pendingFilesRead.ToArray(),
+                FilesChanged = [],
                 EstimatedTokens = estimate.WireInputTokens,
                 Sensitivity = ConversationSensitivity.Sensitive,
                 WasDeliveredVerbatim = false,
@@ -1747,7 +1707,7 @@ public sealed partial class SessionApplication
             _currentCalls.Clear();
             _currentResults.Clear();
             _pendingSources.Clear();
-            _pendingResultOutcomes.Clear();
+            _pendingFilesRead.Clear();
         }
 
         public bool ConsumeBackoffRound()
@@ -1768,7 +1728,7 @@ public sealed partial class SessionApplication
             {
                 messages.Add(ActiveTurnSummaryFormatter.CreateMessage(
                     summary.Version,
-                    ActiveTurnSummaryFormatter.RenderItems(summary.Items)));
+                    summary.Content));
             }
 
             int? firstNeverDeliveredMessageIndex = null;
@@ -1795,7 +1755,7 @@ public sealed partial class SessionApplication
             {
                 ActiveTurnSummaryFormatter.CreateMessage(
                     summary.Version,
-                    ActiveTurnSummaryFormatter.RenderItems(summary.Items)),
+                    summary.Content),
             };
             int? firstNeverDeliveredMessageIndex = null;
             foreach (var group in _groups.Skip(compactedGroupCount))
@@ -1856,60 +1816,6 @@ public sealed partial class SessionApplication
         {
             ArgumentOutOfRangeException.ThrowIfNegative(rounds);
             BackoffRoundsRemaining = rounds;
-        }
-
-        private static IReadOnlyList<ActiveTurnSummaryItemKind> ResolveAllowedKinds(
-            IReadOnlyList<ActiveTurnSourceReference> sources,
-            bool? succeeded)
-        {
-            var kinds = new HashSet<ActiveTurnSummaryItemKind>
-            {
-                ActiveTurnSummaryItemKind.ToolOutcome,
-            };
-            if (succeeded == false)
-            {
-                kinds.Add(ActiveTurnSummaryItemKind.FailedInvestigation);
-            }
-
-            foreach (var source in sources.Where(source =>
-                source.Kind == ActiveTurnSourceKind.ToolProvenance))
-            {
-                try
-                {
-                    var provenance = JsonSerializer.Deserialize<ToolProvenanceSource>(source.Id);
-                    var kind = provenance?.Kind.ToLowerInvariant();
-                    if (kind is "file"
-                        or "directory"
-                        or "semantic-workspace"
-                        or "git"
-                        or "git-object"
-                        or "git-blame"
-                        or "git-comparison"
-                        or "solution"
-                        or "nuget"
-                        or "diagnostic-index"
-                        or "validation"
-                        or "test-discovery"
-                        or "test")
-                    {
-                        kinds.Add(ActiveTurnSummaryItemKind.RepositoryFinding);
-                    }
-
-                    if (kind is "diagnostic-index"
-                        or "validation"
-                        or "test-discovery"
-                        or "test")
-                    {
-                        kinds.Add(ActiveTurnSummaryItemKind.Diagnostic);
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Malformed provenance remains audit metadata but grants no factual category.
-                }
-            }
-
-            return kinds.OrderBy(kind => kind).ToArray();
         }
     }
 

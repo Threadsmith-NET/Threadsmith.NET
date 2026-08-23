@@ -100,6 +100,9 @@ public sealed partial class SessionApplication :
     private readonly Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
         _planSanityRequestFactory;
 
+    private readonly IActiveTurnCompactor? _activeTurnCompactor;
+    private readonly ActiveTurnCompactionPolicy _activeTurnCompactionPolicy;
+    private readonly ActiveTurnCompactionCandidateProfile? _activeTurnCompactionProfile;
     private readonly IDomainEventStream _events;
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
@@ -172,7 +175,10 @@ public sealed partial class SessionApplication :
         IPlanApprovalPolicy? planApprovalPolicy = null,
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
             planSanityRequestFactory = null,
-        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null)
+        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
+        IActiveTurnCompactor? activeTurnCompactor = null,
+        ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
+        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -209,6 +215,10 @@ public sealed partial class SessionApplication :
         _planApprovalPolicy = planApprovalPolicy;
         _planSanityRequestFactory = planSanityRequestFactory;
         _repositoryMemoryGovernor = repositoryMemoryGovernor;
+        _activeTurnCompactor = activeTurnCompactor;
+        _activeTurnCompactionPolicy = activeTurnCompactionPolicy ?? new ActiveTurnCompactionPolicy();
+        _activeTurnCompactionPolicy.Validate();
+        _activeTurnCompactionProfile = activeTurnCompactionProfile;
         _userUrlIntake = userUrlIntake;
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
@@ -974,18 +984,20 @@ public sealed partial class SessionApplication :
                 + "</continuation>"));
     }
 
-    private static void BoundContinuationMessages(
+    private static bool BoundContinuationMessages(
         List<ModelMessage> continuationMessages,
         ContextAssemblyResult context,
         IReadOnlyList<ModelToolDefinition> tools,
-        ModelRequestLayout layout)
+        ModelRequestLayout layout,
+        int? firstNeverDeliveredMessageIndex)
     {
         if (continuationMessages.Count == 0)
         {
-            return;
+            return false;
         }
 
         var tokenBudget = context.Inspection.TokenBudget;
+        var reductionApplied = false;
         ModelWireEstimate Estimate() => ModelWireEstimator.Estimate(
             [.. context.Messages ?? [], .. continuationMessages],
             tools,
@@ -996,12 +1008,14 @@ public sealed partial class SessionApplication :
         foreach (var index in continuationMessages
             .Select((message, index) => (message, index))
             .Where(item => item.message.Role == ModelMessageRole.Tool)
+            .Where(item => firstNeverDeliveredMessageIndex is null
+                || item.index < firstNeverDeliveredMessageIndex.Value)
             .OrderByDescending(item => item.message.Content.Sum(part => part.Content.Length))
             .Select(item => item.index))
         {
             if (estimate.WireInputTokens <= tokenBudget)
             {
-                return;
+                return reductionApplied;
             }
 
             var original = continuationMessages[index];
@@ -1010,6 +1024,7 @@ public sealed partial class SessionApplication :
             var high = Math.Max(0, content.Length - 1);
             var smallest = CreateReducedToolResultMessage(original, content, 0);
             continuationMessages[index] = smallest;
+            reductionApplied = true;
             estimate = Estimate();
             if (estimate.WireInputTokens > tokenBudget)
             {
@@ -1035,7 +1050,7 @@ public sealed partial class SessionApplication :
             }
 
             continuationMessages[index] = best;
-            return;
+            return true;
         }
 
         if (estimate.WireInputTokens > tokenBudget)
@@ -1043,6 +1058,8 @@ public sealed partial class SessionApplication :
             throw new BudgetExceededException(
                 $"Tool continuation requires {estimate.WireInputTokens} input tokens but the selected model budget is {tokenBudget}.");
         }
+
+        return reductionApplied;
     }
 
     private static ModelMessage CreateReducedToolResultMessage(

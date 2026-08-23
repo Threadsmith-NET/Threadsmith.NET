@@ -116,6 +116,11 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 78 | `plan-78-repository-scoped-cross-session-memory.md` | Repository-scoped cross-session memory in the existing ignored repo SQLite store |
 | 79 | `plan-79-packaged-local-documentation-help-skill.md` | Packaged local documentation bundle and maintained natural Q&A skill |
 | 80 | `plan-80-active-turn-tool-continuation-compaction.md` | Token-aware active-turn tool continuation compaction |
+| 81 | `plan-81-roslyn-code-explore-exact-anchors-and-source.md` | Exact symbol/path exploration with source-bearing Roslyn results |
+| 82 | `plan-82-roslyn-code-explore-multi-anchor-flow.md` | Multi-anchor semantic flow, dispatch branches, and blast radius |
+| 83 | `plan-83-roslyn-code-explore-natural-language-ranking.md` | Natural-language anchor discovery and structural source allocation |
+| 84 | `plan-84-context-aware-code-explore-source-deduplication.md` | Context-proven cross-call source-range deduplication |
+| 85 | `plan-85-code-explore-associated-non-csharp-artifacts.md` | Bounded associated prompt, configuration, and project artifacts |
 
 ## Update discipline
 

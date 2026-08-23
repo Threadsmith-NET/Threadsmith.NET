@@ -17,6 +17,8 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(PlanApprovalPolicyChanged), "planApprovalPolicyChanged")]
 [JsonDerivedType(typeof(PlanRevisionRequested), "planRevisionRequested")]
 [JsonDerivedType(typeof(ContextAssembled), "contextAssembled")]
+[JsonDerivedType(typeof(ActiveTurnCompactionStarted), "activeTurnCompactionStarted")]
+[JsonDerivedType(typeof(ActiveTurnCompactionCompleted), "activeTurnCompactionCompleted")]
 [JsonDerivedType(typeof(ApprovalRequested), "approvalRequested")]
 [JsonDerivedType(typeof(ApprovalGranted), "approvalGranted")]
 [JsonDerivedType(typeof(ApprovalDenied), "approvalDenied")]
@@ -181,6 +183,26 @@ public sealed record ContextAssembled(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
     ContextInspectionProjection Inspection) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active-turn candidate operation began under host-owned pressure policy.</summary>
+public sealed record ActiveTurnCompactionStarted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId CandidateProfileId,
+    int BeforeInputTokens,
+    int PressureTargetTokens) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active-turn candidate operation ended without exposing summary or tool content.</summary>
+public sealed record ActiveTurnCompactionCompleted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId CandidateProfileId,
+    ActiveTurnCompactionInspectionStatus Status,
+    int BeforeInputTokens,
+    int AfterInputTokens,
+    long? DurationMilliseconds) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>Identifies the host-owned boundary requesting approval.</summary>
 public enum ApprovalRequestKind
@@ -703,6 +725,8 @@ public static class DomainEventJson
             ["planApprovalPolicyChanged"] = typeof(PlanApprovalPolicyChanged),
             ["planRevisionRequested"] = typeof(PlanRevisionRequested),
             ["contextAssembled"] = typeof(ContextAssembled),
+            ["activeTurnCompactionStarted"] = typeof(ActiveTurnCompactionStarted),
+            ["activeTurnCompactionCompleted"] = typeof(ActiveTurnCompactionCompleted),
             ["approvalRequested"] = typeof(ApprovalRequested),
             ["approvalGranted"] = typeof(ApprovalGranted),
             ["approvalDenied"] = typeof(ApprovalDenied),

@@ -134,6 +134,16 @@ public static class RepoConfigTests
         Assert.True(config.GetValue("tui:showOperationDurations", false));
     }
 
+    /// <summary>The optional active-turn compaction profile is documented as a trusted null fallback.</summary>
+    [Fact]
+    public static void ActiveTurnCompactionProfileDefaultsToActiveModelFallback()
+    {
+        var config = LoadConfigExample();
+
+        Assert.Null(config["context:activeTurnCompaction:profileId"]);
+        Assert.True(config.GetSection("context:activeTurnCompaction").Exists());
+    }
+
     /// <summary>Plan-08 policy and plan-27 availability lists bind to explicit arrays.</summary>
     [Fact]
     public static void ToolPolicyKeysResolveToLists()

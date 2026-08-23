@@ -1,6 +1,6 @@
 # Implementation Plan 80: Token-Aware Active-Turn Tool Continuation Compaction
 
-**Status:** Planned
+**Status:** Implemented. Maintained real-provider long-turn observation remains.
 
 **Delivery track:** Maintenance — active-turn context-governance hardening
 **Strategy source:** Shared Context §A.2 and §A.5; ADR-12; ADR-31; Codex-style pre-sampling and mid-turn transcript compaction requested after measured long-running evidence collection
@@ -32,7 +32,7 @@ Codex is an implementation reference, not a compatibility authority. Threadsmith
 - Ensure every newly completed tool group is shown verbatim to the model in at least one subsequent round before it becomes eligible for compaction.
 - Retain the newest eligible groups verbatim according to a configured token target and compact only an older completed prefix.
 - Reuse the existing bounded structured conversation-compaction infrastructure where its contracts fit; add a separate active-turn entry point and candidate schema where lifecycle or validation differs.
-- Generate a structured model summary of the eligible prefix, then validate schema, size, source references, authority, sensitivity, and cut-point correspondence before activation.
+- Generate a structured model summary of the eligible prefix using an optional repository-excluding trusted `Summary` profile, with the active main profile as fallback, then validate schema, size, source references, authority, sensitivity, and cut-point correspondence before activation.
 - Replace only the model-visible eligible prefix with one bounded low-authority active-turn summary while retaining newer messages unchanged.
 - Preserve the complete original sanitized tool execution in existing run/evidence/audit boundaries according to current retention and redaction policy.
 - Continue the same run and turn after successful compaction without requiring user input or emitting a model-visible compaction tool call.
@@ -54,13 +54,13 @@ Codex is an implementation reference, not a compatibility authority. Threadsmith
 - No provider-managed conversation identity as the durable source of truth.
 - No initial expansion into mutation application, correction, validation, delegated-worker, or approved-plan execution loops unless implementation inspection proves they already share the same safe read-only continuation contract.
 
-## 5. Current State
+## 5. Implemented State
 
-`ContextAssembler` creates a bounded governed context and one `ContextInspectionRecord` at turn start. `SessionApplication` freezes that result, appends chronological assistant tool calls and sanitized tool results outside the assembler, and reconstructs each subsequent request from the frozen messages plus the full continuation list.
+`SessionApplication` now estimates the complete canonical request before every ordinary model round and tracks continuation messages as complete chronological call/result groups with all sibling calls before call-ordered results plus per-result invocation, evidence, and exact tool-provenance identifiers. A group remains ineligible until one completed subsequent request has received it verbatim. Pressure selection cuts only the oldest delivered prefix while scaling the configured newest-token window to the selected profile and frozen-request cost.
 
-`BoundContinuationMessages` estimates the combined request against the model token budget and greedily replaces large tool results with bounded previews only when needed to fit the provider request. It preserves protocol shape but is an emergency wire-fit mechanism: it has no operational pressure target, active-turn summary, tool-group cut selection, stable summary checkpoint, or active-turn inspection record.
+`Threadsmith.Context` owns a dedicated bounded active-turn policy, model-backed Pi-style Markdown candidate provider, cumulative summary contracts, strict range/file-list/authority/sensitivity validator, deterministic low-authority historical-assistant projection, and in-memory checkpoint contract. Plan 86 superseded the original fact-id/FIFO summary shape: candidate input includes required-first bounded task/acceptance intent, the complete previous active-turn summary when present, newly selected raw tool activity, and host-observed file lists. The model returns one bounded Markdown checkpoint rather than fact ids; the host validates schema, exact cumulative group range, host file lists, sanitization, authority markers, and total rendered summary budget, strips model-emitted file-list sections, and appends host-owned file lists. An optional repository-excluding trusted profile selection routes the `Summary` candidate through a separate repository-excluding catalog/provider snapshot to any compatible user/machine/host-owned model/provider and gives that profile authority over candidate context/reserve, maximum output, reasoning, timeout, retry, cost, and sensitivity; repository additions/overrides are excluded and omission preserves the active main profile fallback. Main-profile pressure and emergency capacity remain independent. Every unclassified tool-result group is conservatively repository-sensitive at the auxiliary boundary. Preflight, including explicit-profile sensitive-data and request-specific cost-ceiling rejection, occurs outside the provider boundary. One frozen candidate-profile descriptor on the request owns dispatch, hooks, telemetry, inspection, and activity identity; every actual provider attempt crosses lifecycle hooks and records its profile, triggering continuation round, partial/reported-or-missing usage, call count, and duration independently. Activation requires positive rebuilt-request savings and need not reach the pressure target in one pass. Failed generation/validation, zero-or-negative savings, and cancellation leave the prior continuation unchanged; bounded backoff and the older-delivered-only emergency compatibility reducer remain explicit fallbacks.
 
-Cross-turn `ConversationCompactor` already provides bounded candidate generation, validation, provenance, cancellation, idempotence, and failure preservation for archived visible conversation. Raw tool results are intentionally excluded from the durable conversation archive, so the cross-turn entry point cannot simply be invoked unchanged over active continuation messages.
+`ContextAssembler` updates the latest host-owned inspection projection at each pre-sampling assessment. Inspection exposes estimates, target/reserve, candidate profile, group counts, cut range, summary/hash/history generation, backoff, and closed outcome without source content. Candidate execution publishes content-free `ActiveTurnCompactionStarted`/`ActiveTurnCompactionCompleted` lifecycle events. The interactive TUI temporarily replaces `THINKING` with duration-bearing `COMPACTING CONTEXT`, then renders actual model-visible before/after/savings/profile/status/duration metadata before resuming `THINKING`; headless/event consumers receive the same host-owned facts without terminal types. A successful rewrite increments `ModelStreamRequest.HistoryRewriteGeneration`; both compiled provider families already dispatch complete stateless requests and therefore cannot reuse an incompatible opaque remote continuation identity. Original tool events/evidence remain the durable audit authority, while ordinary active-turn summary checkpoints remain bounded in memory.
 
 ## 6. Proposed Design
 
@@ -102,7 +102,7 @@ Build a bounded candidate request from the eligible prefix. Reuse the existing c
 - recommended next evidence step without granting authority;
 - source references to host-known message, tool invocation, or evidence identifiers.
 
-The compaction request may use bounded tool-result projections to fit its own budget, but must retain identifiers and source metadata. It must not include hidden reasoning or unsanitized/raw provider payloads.
+The compaction request may use bounded tool-result projections to fit its own budget, but must retain identifiers and source metadata. A repository-excluding trusted profile ID may select an independently configured model or provider; that candidate profile owns its request capacity, maximum output, default reasoning, temperature, timeout, retry, pricing, and sensitivity, while the active main profile continues to own pressure and emergency capacity. Omission preserves the active main profile fallback. The request must not include hidden reasoning or unsanitized/raw provider payloads.
 
 ### 6.4 Validation and authority
 
@@ -174,7 +174,7 @@ Expected host-owned contracts include:
 - `ActiveTurnCompactionValidationResult` — accepted candidate or closed rejection reasons;
 - `ActiveTurnCompactionCheckpoint` — summary version, source boundary, estimates, hashes, and outcome;
 - inspection DTO additions for active-turn pressure, retained/compacted groups, summary version, and failure/backoff state;
-- lifecycle events such as active-turn compaction started/completed/failed if existing generic context events cannot express the boundary safely.
+- content-free active-turn compaction started/completed lifecycle events for transient TUI activity, headless/event parity, and durable replay.
 
 Contracts remain provider-neutral and serializable. No model-provider SDK, terminal, extension, Roslyn, or persistence implementation types cross subsystem boundaries. Any new public domain event requires event-catalog and schema-version updates.
 
@@ -221,7 +221,8 @@ Automated coverage must verify:
 - sibling tool calls and every matching result remain paired, ordered, and unsplit across cut selection and provider projection;
 - newest retained groups remain byte-for-byte unchanged;
 - candidate summaries satisfy schema/item/token bounds and cumulative version/source-range rules;
-- fabricated, missing, stale, mismatched, sensitive, oversized, or authority-bearing candidate content is rejected without replacing the original continuation;
+- an independent trusted summary profile resolves and dispatches through a repository-excluding catalog/provider snapshot with its own capacity/output/reasoning/sensitivity/cost settings, while omission preserves main-profile fallback and repository configuration cannot add, override, or reroute it;
+- fabricated, missing, stale, mismatched, sensitive, request-cost-incompatible, oversized, or authority-bearing candidate content is rejected without replacing the original continuation or entering hooks/provider I/O for preflight failures;
 - successful compaction reduces the estimated request below target and the same turn continues to an answer or next legal tool round;
 - repeated compaction is cumulative, bounded, deterministic for fixed candidates, and does not duplicate summaries or groups;
 - complete original sanitized tool events/evidence remain available to audit and retention paths;
@@ -239,7 +240,7 @@ Focused verification should precede broad solution gates. Do not use a full-solu
 
 Active-turn summaries are untrusted historical context. They cannot alter current host policy, user authority, tool eligibility, path safety, approval, mutation scope, hook/skill/MCP/extension authority, output schema, or sensitive-data routing.
 
-Candidate generation must use only a model/profile allowed to receive the selected prefix's sensitivity. Never route sensitive results to an incompatible cheaper compaction model. Validate source references against host-owned messages, tool invocations, evidence, repository identity/revision, and invalidation state where applicable.
+Candidate generation must use only a model/profile allowed to receive the selected prefix's sensitivity. Never route sensitive results to an incompatible cheaper compaction model. The optional candidate profile ID is accepted only from repository-excluding machine/user/environment configuration, resolves and dispatches through a repository-excluding immutable user/machine/host-owned catalog/provider snapshot, and must statically support streaming structured `Summary` work. Repository-only profiles, inherited model overrides, and no-secret endpoint overrides are excluded; candidate credentials require user-owned-or-higher secret authority and cannot resolve from repository secret providers. Unclassified tool results are sensitive at this boundary; runtime sensitive-data and request-specific cost incompatibility fail preflight before hooks or provider I/O. Repository configuration cannot choose, rewrite, or reroute this selection. Validate source references against host-owned messages, tool invocations, evidence, repository identity/revision, and invalidation state where applicable.
 
 Compaction grants no new filesystem, process, network, Git, mutation, or persistence permission. Active-turn pressure, reserve, candidate-model, and failure policy are host/user-owned reliability settings; repository configuration and repository content cannot disable, delay, force, or weaken compaction or select a less-capable sensitivity boundary. Raw provider payloads, hidden reasoning, credentials, secret values, and unsanitized tool content remain excluded. Audit retention follows existing repository/session privacy and deletion contracts.
 
@@ -270,7 +271,9 @@ Any persistent checkpoint addition requires an additive schema migration, restor
 - Active-turn compaction triggers at configured pressure below the provider emergency maximum and only when a complete eligible prefix exists.
 - Frozen authority, current user input, repository instructions, output contracts, and tool definitions are preserved exactly.
 - Every new tool group reaches the model verbatim once; cuts preserve complete sibling call/result groups.
-- A validated bounded structured summary replaces only the eligible older prefix, newest groups remain verbatim, and the same turn continues.
+- A validated bounded Markdown summary replaces only the eligible older prefix, newest groups remain verbatim, and the same turn continues.
+- Candidate output is one bounded Markdown checkpoint; the host validates exact cumulative coverage, host-observed file lists, sanitization, authority markers, and rendered summary size, strips model-emitted file-list sections, and appends host-owned file lists.
+- Candidate preflight creates no provider lifecycle/accounting record; every actual provider attempt crosses managed before/after model-request hooks and records call/time plus partial, reported, or unknown usage independently.
 - Invalid, unsupported, sensitive-incompatible, oversized, or authority-bearing candidates leave the original continuation active and produce a controlled classified outcome.
 - Rewritten history resets/re-establishes provider cache and stateful continuation safely for every compiled provider.
 - Complete original sanitized tool execution remains auditable under existing retention/redaction policy; active summaries do not become durable memory automatically.
@@ -281,11 +284,11 @@ Any persistent checkpoint addition requires an additive schema migration, restor
 
 ## 15. Risks
 
-- **Loss of task-critical detail:** show every result verbatim once, retain a recent raw window, require attributable structured summaries, and keep original evidence auditable.
+- **Loss of task-critical detail:** show every result verbatim once, retain a recent raw window, use clear update-summary prompts and host file lists, and keep original evidence auditable.
 - **Summary authority escalation:** project summaries as low-authority context and reject policy, permission, approval, mutation, or output-contract claims.
 - **Broken provider chronology:** cut only complete groups and test every provider's call/result projection.
 - **Cache/stateful continuation corruption:** reset continuation identity whenever history is rewritten; prefer a full compatible request over unsafe cache reuse.
-- **Compaction recursion or oscillation:** use cumulative versions, stable source boundaries, minimum savings, and bounded failure/backoff policy.
+- **Compaction recursion or oscillation:** use cumulative versions, stable source boundaries, positive-savings activation, and bounded failure/backoff policy.
 - **Compactor request itself becomes oversized:** bound candidate input using group-aware selection and source-preserving projections.
 - **Sensitive-data exposure:** require model compatibility with the prefix's sensitivity and preserve sanitization/redaction boundaries.
 - **Cancellation leaves mixed state:** activate a summary only after generation, validation, optional persistence, and rebuild complete atomically.
@@ -295,7 +298,7 @@ Any persistent checkpoint addition requires an additive schema migration, restor
 
 ## 16. Documentation
 
-Planning adds this implementation document and one navigation row in `docs/implementation-plans/README.md`. It does not change milestone status, the completed Milestone 25 detail, dependency DAG, acceptance scenarios, manual procedures, or DOX ownership.
+Planning adds this implementation document and its navigation row. Implementation updates the maintained acceptance/manual procedures and applicable DOX contracts, but does not rewrite completed Milestone 25 detail or change DOX ownership.
 
 When implemented, update:
 
@@ -306,13 +309,11 @@ When implemented, update:
 - acceptance scenarios or manual tests only if their owned observable behavior/procedure changes;
 - source/test DOX only when durable ownership or contracts change.
 
-## 17. Open Decisions
+## 17. Resolved Decisions
 
-Resolve before implementation code begins:
-
-- Exact default pressure, output-reserve, minimum-savings, summary-budget, and retained-recent token values, including whether existing Plan 35 settings can be reused without changing their meaning.
-- Whether the existing conversation compaction candidate provider can accept active-turn tool groups safely or needs a dedicated provider-neutral candidate contract.
-- The precise low-authority message/content kind used to project an active-turn summary without masquerading as current user or system policy.
-- Whether active-turn checkpoints must be durable for ordinary run recovery or can remain in memory while original events/evidence stay durable.
-- The provider-specific boundary for abandoning OpenAI-compatible cache families and native Codex response continuation after history replacement.
-- The minimum reproducible materiality and usefulness gate for any optional per-tool result projection reduction.
+- Compiled active-turn defaults are 75% main-profile pressure, the main profile's effective request output reserve (with an 8,192-token fallback only when no profile reserve is available), 16,384-token total summary budget, 80% model-output partition, positive-savings activation, and a 12,000-token newest-raw retention target that scales to the selected ordinary request's remaining activation capacity. Candidate generation is bounded to the lesser of 65,536 estimated input tokens and the candidate profile's context window minus the resolved model-output ceiling, with one aggregate projection budget across 48 groups and 512 call/result messages, one retry, and two calls. `context:activeTurnCompaction:profileId`, `summaryBudgetTokens`, and `modelOutputBudgetPercent` may be set only from repository-excluding trusted configuration; omission uses the active main profile and defaults. Plan 35 completed-turn settings retain their existing meaning.
+- Active-turn tool groups use a dedicated provider-neutral candidate/validator contract because completed-turn archive candidates intentionally exclude raw tool output and have different lifecycle/source rules.
+- An activated summary is one historical `Assistant` message in the `active-turn-summary` section with host-authored untrusted-history framing. It is never a system/developer/current-user message. Update attempts receive the complete prior summary and newly old raw groups, then return one replacement checkpoint; there is no FIFO fact merge.
+- Ordinary non-resumable conversational turns keep the active summary/checkpoint in memory. Existing sanitized tool events/evidence remain durable, and active summaries do not become conversation or repository memory automatically.
+- Every rewrite increments a provider-neutral history generation. Current OpenAI-compatible and native Codex adapters send complete stateless requests and hold no opaque response/conversation continuation id, so rebuilding from the compacted message list is the safe reset boundary while unchanged stable prefixes remain cache-eligible.
+- No per-tool projection limit changed. The deterministic emergency reducer remains limited to older groups already delivered verbatim; any future per-tool reduction still requires separate measured materiality and usefulness evidence.

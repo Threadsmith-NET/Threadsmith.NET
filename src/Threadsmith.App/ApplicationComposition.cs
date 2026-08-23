@@ -85,6 +85,32 @@ internal static class ApplicationComposition
             new DeterministicConversationSummaryCandidateProvider(),
             new ConversationSummaryValidator(compactionPolicy, host.Sanitizer),
             compactionPolicy);
+        var activeTurnCompactionPolicy = CreateActiveTurnCompactionPolicy(
+            host.TrustedConfiguration);
+        var activeTurnCompactionModelProfile = ModelComposition.ResolveActiveTurnCompactionProfile(
+            host.TrustedConfiguration,
+            integration.Models.TrustedCatalog);
+        var activeTurnCompactionProfile = activeTurnCompactionModelProfile is null
+            ? null
+            : new ActiveTurnCompactionCandidateProfile
+            {
+                ProfileId = activeTurnCompactionModelProfile.Id,
+                ContextWindowTokens = activeTurnCompactionModelProfile.ContextWindow,
+                OutputReserveTokens =
+                    activeTurnCompactionModelProfile.EffectiveRequestOutputTokenReserve,
+                ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
+                SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
+                Cost = activeTurnCompactionModelProfile.Cost,
+            };
+        var activeTurnCandidateProvider = activeTurnCompactionModelProfile is null
+            ? integration.Models.Provider
+            : integration.Models.TrustedProvider;
+        var activeTurnCompactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(
+                activeTurnCandidateProvider,
+                activeTurnCompactionPolicy),
+            new ActiveTurnCompactionValidator(activeTurnCompactionPolicy, host.Sanitizer),
+            activeTurnCompactionPolicy);
         var conversationContextApplication = new ConversationContextApplication(
             contextAssembler,
             conversationCompactor,
@@ -220,7 +246,10 @@ internal static class ApplicationComposition
                 var invocationContext = CreateToolInvocationContext(host, state);
                 return CreatePlanSanityCheckRequest(plan, invocationContext, baseline);
             },
-            repositoryMemoryGovernor: repositoryMemoryGovernor);
+            repositoryMemoryGovernor: repositoryMemoryGovernor,
+            activeTurnCompactor: activeTurnCompactor,
+            activeTurnCompactionPolicy: activeTurnCompactionPolicy,
+            activeTurnCompactionProfile: activeTurnCompactionProfile);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -591,6 +620,26 @@ internal static class ApplicationComposition
             TrustLevel = baseline?.TrustLevel ?? invocationContext.TrustLevel,
             ProhibitedPaths = baseline?.ProhibitedPaths ?? invocationContext.ProhibitedPaths,
         };
+    }
+
+    /// <summary>Loads trusted active-turn summary bounds while keeping repository configuration excluded.</summary>
+    private static ActiveTurnCompactionPolicy CreateActiveTurnCompactionPolicy(
+        IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        var defaults = new ActiveTurnCompactionPolicy();
+        var section = trustedConfiguration.GetSection("context:activeTurnCompaction");
+        var policy = defaults with
+        {
+            SummaryBudgetTokens = section.GetValue(
+                "summaryBudgetTokens",
+                defaults.SummaryBudgetTokens),
+            ModelOutputBudgetPercent = section.GetValue(
+                "modelOutputBudgetPercent",
+                defaults.ModelOutputBudgetPercent),
+        };
+        policy.Validate();
+        return policy;
     }
 
     /// <summary>Resolves configured validation stages or the compiled default set.</summary>

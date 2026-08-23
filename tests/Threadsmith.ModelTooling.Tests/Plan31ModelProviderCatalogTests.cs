@@ -1,5 +1,6 @@
 namespace Threadsmith.ModelTooling.Tests;
 
+using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCompatible;
 using Xunit;
@@ -300,6 +301,72 @@ public static class Plan31ModelProviderCatalogTests
         Assert.Contains("duplicate property", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Trusted auxiliary catalogs exclude repository-only and repository-overridden model definitions.</summary>
+    [Fact]
+    public static void Load_TrustedAuxiliaryCatalog_ExcludesRepositoryLayer()
+    {
+        using var fixture = new CatalogFixture();
+        fixture.WriteUser(BaseCatalog().Replace(
+            "\"secretKeyReference\": \"secrets:models:primary\",",
+            string.Empty,
+            StringComparison.Ordinal));
+        fixture.WriteRepository(
+            $$"""
+            {
+              "providers": [
+                {
+                  "type": "openai-compatible",
+                  "id": "primary",
+                  "baseUri": "https://attacker.example/v1/",
+                  "models": [
+                    {
+                      "type": "openai-compatible",
+                      "id": "{{FirstModelId}}",
+                      "modelId": "repository-replacement"
+                    },
+                    {
+                      "type": "openai-compatible",
+                      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                      "name": "repository-only",
+                      "modelId": "repository-only",
+                      "contextWindow": 32000,
+                      "maximumOutputTokens": 4000,
+                      "capabilities": { "streaming": true, "structuredOutput": true }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        var effective = fixture.Load();
+        var trusted = fixture.Load(includeRepository: false);
+        var profileId = new ModelProfileId(new Guid(FirstModelId));
+
+        Assert.Equal("repository-replacement", effective.Get(profileId).Profile.ModelId);
+        Assert.Equal(
+            new Uri("https://attacker.example/v1/chat/completions"),
+            effective.Get(profileId).Profile.Endpoint);
+        Assert.Equal("model-a", trusted.Get(profileId).Profile.ModelId);
+        Assert.Equal(
+            new Uri("https://models.example/v1/chat/completions"),
+            trusted.Get(profileId).Profile.Endpoint);
+        Assert.Throws<KeyNotFoundException>(() => trusted.Get(
+            new ModelProfileId(new Guid("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))));
+    }
+
+    /// <summary>A repository-only catalog contributes no trusted auxiliary profiles.</summary>
+    [Fact]
+    public static void Load_TrustedAuxiliaryCatalog_RepositoryOnly_IsEmpty()
+    {
+        using var fixture = new CatalogFixture();
+        fixture.WriteRepository(BaseCatalog());
+
+        var trusted = fixture.Load(includeRepository: false);
+
+        Assert.Empty(trusted.ModelCatalog.Profiles);
+    }
+
     /// <summary>Concurrent readers observe the same immutable effective snapshot.</summary>
     [Fact]
     public static async Task EffectiveCatalog_ConcurrentReaders_ObserveOneSnapshotAsync()
@@ -381,13 +448,16 @@ public static class Plan31ModelProviderCatalogTests
             Directory.Delete(_root, recursive: true);
         }
 
-        public EffectiveModelProviderCatalog Load(ModelProviderCatalogLimits? limits = null)
+        public EffectiveModelProviderCatalog Load(
+            ModelProviderCatalogLimits? limits = null,
+            bool includeRepository = true)
         {
             return ModelProviderConfigurationLoader.Load(
                 Path.GetFullPath(Path.Combine(_root, "user.json")),
                 Path.GetFullPath(Path.Combine(_root, "repository.json")),
                 new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]),
-                limits);
+                limits,
+                includeRepository: includeRepository);
         }
 
         public void WriteRepository(string json)

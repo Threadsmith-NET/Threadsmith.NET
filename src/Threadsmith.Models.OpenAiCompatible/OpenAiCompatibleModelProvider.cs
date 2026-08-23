@@ -91,6 +91,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
+        var maximumOutputTokens = request.MaximumOutputTokens ?? _profile.MaximumOutputTokens;
+        if (maximumOutputTokens <= 0 || maximumOutputTokens > _profile.MaximumOutputTokens)
+        {
+            throw new ModelProviderException(
+                $"The requested output ceiling must be between 1 and the resolved profile maximum of "
+                + $"{_profile.MaximumOutputTokens} tokens.");
+        }
+
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCancellation.CancelAfter(_profile.Timeout);
@@ -161,7 +169,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 Messages = CreateMessages(request),
                 Stream = true,
                 StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
-                MaximumOutputTokens = _profile.MaximumOutputTokens,
+                MaximumOutputTokens = maximumOutputTokens,
                 Temperature = _profile.Temperature,
                 Seed = request.Seed,
                 ResponseFormat = request.RequiredCapabilities.StructuredOutput

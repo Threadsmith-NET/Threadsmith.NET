@@ -56,6 +56,10 @@ public sealed record ModelStreamRequest
     /// <summary>Zero-based tool-continuation round for this run.</summary>
     public int ToolContinuationRound { get; init; }
 
+    /// <summary>Monotonic provider-neutral history generation after host rewrites.</summary>
+    /// <remarks>Opaque provider continuation identities from an older generation must not be reused.</remarks>
+    public long HistoryRewriteGeneration { get; init; }
+
     /// <summary>Workload used for per-request configured-model selection.</summary>
     public WorkloadClass WorkloadClass { get; init; } = WorkloadClass.General;
 
@@ -70,6 +74,9 @@ public sealed record ModelStreamRequest
 
     /// <summary>Profile resolved by host policy before provider invocation.</summary>
     public ModelProfileId? ResolvedProfileId { get; init; }
+
+    /// <summary>Optional per-request output ceiling; providers reject values above the resolved profile limit.</summary>
+    public int? MaximumOutputTokens { get; init; }
 
     /// <summary>Reasoning effort level for this request; defaults to <see cref="ReasoningLevel.None"/>.</summary>
     public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.None;

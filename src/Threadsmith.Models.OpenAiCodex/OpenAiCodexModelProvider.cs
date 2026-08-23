@@ -47,6 +47,15 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
+        var profileOutputLimit = _profile.EffectiveRequestOutputTokenReserve;
+        var maximumOutputTokens = request.MaximumOutputTokens ?? profileOutputLimit;
+        if (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit)
+        {
+            throw new ModelProviderException(
+                $"The requested output ceiling must be between 1 and the resolved profile request reserve of "
+                + $"{profileOutputLimit} tokens.");
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_profile.Timeout);
         var accessToken = AccessToken;
@@ -55,7 +64,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         while (true)
         {
             attempt++;
-            using var message = CreateRequest(request, accessToken);
+            using var message = CreateRequest(request, accessToken, maximumOutputTokens);
             HttpResponseMessage response;
             try
             {
@@ -125,14 +134,17 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
     }
 
-    private HttpRequestMessage CreateRequest(ModelStreamRequest request, string accessToken)
+    private HttpRequestMessage CreateRequest(
+        ModelStreamRequest request,
+        string accessToken,
+        int maximumOutputTokens)
     {
         JsonObject body = new()
         {
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
-            ["max_output_tokens"] = _profile.EffectiveRequestOutputTokenReserve,
+            ["max_output_tokens"] = maximumOutputTokens,
             ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
             ["input"] = CreateInput(request),
             ["include"] = new JsonArray("reasoning.encrypted_content"),

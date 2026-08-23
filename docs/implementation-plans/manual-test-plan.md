@@ -1,5 +1,64 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-252 — Associated prompt, configuration, and project artifacts
+
+1. Open a disposable trusted C# repository where a response-builder method selects a checked-in prompt template, reads a bounded JSON option, and references an additional document or project resource.
+2. Ask how the response is assembled and request the relevant prompt/configuration context without naming every artifact path.
+3. Confirm `code_explore` returns the compiler-proven C# semantic spine first, then separately identifies associated non-C# artifacts with repository-relative path, relationship reason, current digest, scope, and completeness.
+4. Confirm bounded textual content is included only when permitted and useful; binary, oversized, prohibited, reparse, generated-output, secret-bearing, missing, and changed-during-read artifacts are omitted with precise reasons and safe continuation metadata.
+5. Add misleading same-name templates/configuration elsewhere and a repository instruction that asks the host to execute configuration or widen search. Confirm structural/path/project evidence outranks incidental names and no repository data is executed or granted authority.
+6. Repeat interactively and headlessly, cancel during artifact discovery/read, switch repositories, and inspect tool evidence, logs, events, telemetry, context inspection, and support bundles.
+
+Expected: associated non-C# material is a confined, bounded, relationship-labeled supplement to the Roslyn source/flow result. It improves task sufficiency for prompts and configuration without becoming a general multi-language graph, executing repository data, bypassing path/trust policy, or weakening provenance and redaction.
+
+
+## MTP-251 — Context-proven exploration source deduplication
+
+1. In a disposable trusted C# repository, run `code_explore` for a flow that returns source from at least three files, then issue an overlapping follow-up that also reaches one new file.
+2. Confirm unchanged source ranges that are still present verbatim in the current model-visible continuation are replaced by precise file/symbol/range back-references and the reclaimed source budget is allocated to new relevant material.
+3. Confirm short overlaps, uncertain coverage, different content digests, incomplete prior ranges, or ranges absent from the current request are re-emitted rather than suppressed.
+4. Edit one previously returned file between calls and apply semantic invalidation. Confirm the changed file is emitted with a new digest and no pointer claims the earlier copy remains current.
+5. Trigger active-turn compaction or another governed reduction that removes the exact earlier source, then repeat the query. Confirm deduplication consults the actual assembled request/evidence frontier and emits the source again.
+6. Repeat across a new session, resumed session, cloned session, and repository switch. Cancel during coverage accounting and inspect context diagnostics, cache/stateful-continuation resets, events, telemetry, persistence, and support bundles.
+
+Expected: source suppression occurs only when exact unchanged ranges are demonstrably present in the model's current context. Deduplication is bounded, content-addressed, inspectable, and conservative across edits, compaction, invalidation, cancellation, session lifecycle, and provider continuation changes.
+
+
+## MTP-250 — Natural-language semantic discovery and source allocation
+
+1. Open a disposable multi-project C# repository containing a real feature flow plus test helpers, generated files, and unrelated declarations sharing generic words with the feature.
+2. Ask an ordinary natural-language question such as how default temporal filtering reaches response transparency, without supplying stable symbol IDs or exact method names.
+3. Confirm `code_explore` resolves candidate identifiers and paths deterministically, reports each resolved/ambiguous term, and ranks exact names, qualified names, co-located terms, semantic connectivity, explicit paths, and production flow ahead of isolated lexical collisions.
+4. Confirm the result allocates usable line-numbered bodies or call-site windows to named and flow-spine files, returns compact pointers for relevant material that did not fit, and does not fill the budget merely because many files contain one common word.
+5. Repeat with CamelCase/snake_case terms, namespace-qualified names, overloads, a test-focused query, generated-code focus, a large repository, reduced output budget, partial compilation, timeout, and cancellation.
+6. Run the same fixed question several times with the same repository generation and configuration. Compare selected anchors, order, source allocation, rounds, follow-up reads/searches, duration, and answer correctness.
+
+Expected: natural-language exploration remains deterministic, Roslyn-backed, bounded, and explainable. Structural evidence governs ranking, source allocation remains useful under pressure, ambiguity and omissions are explicit, and repeated fixed inputs do not produce arbitrary retrieval order.
+
+
+## MTP-249 — Multi-anchor semantic flow and dispatch branches
+
+1. Open a disposable trusted C# solution containing two named endpoints connected through direct calls, one unnamed bridge, an interface implementation, a virtual override, a delegate invocation, a cycle, dependent projects, and tests.
+2. Ask how the named endpoints connect and include their exact symbol names in the request.
+3. Confirm one `code_explore` result leads with the bounded compiler-proven path, includes relevant source bodies and call-site context, classifies direct/static/constructor/extension/local/interface/virtual/delegate dispatch, and identifies cycles.
+4. Confirm interface and virtual edges expose bounded implementation branches with counts and locations, while delegate, reflection, dynamic, dependency-injection, and runtime-only continuations are marked as unresolved unless compiler-proven.
+5. Confirm compact blast-radius evidence identifies material callers, implementations, dependent projects, and tests with reasons, while full reference lists remain bounded and available through exact continuation targets.
+6. Repeat with ambiguous overloads, disconnected anchors, depth/node/edge/time limits, partial compilation, semantic invalidation, and cancellation; compare interactive and headless results.
+
+Expected: multi-anchor exploration composes existing Roslyn relationships into one generation-fenced, source-bearing flow without inventing runtime edges. Dispatch ambiguity, bounds, omissions, provenance, and impact are explicit and granular semantic tools remain available for exact follow-up.
+
+
+## MTP-248 — Exact semantic anchors with source-bearing results
+
+1. Open a disposable trusted C# solution with semantic loading complete and identify an exact type, overloaded method, and repository-relative C# path.
+2. Ask Threadsmith to inspect each target using `code_explore`, first by qualified symbol, then by symbol plus path/line disambiguation, then by pinned path.
+3. Confirm the tool captures one workspace generation and returns stable symbol identities, project/TFM, generated/linked classification, grouped one-based source ranges, line-numbered current text, file/range digest, semantic confidence, and explicit completeness/omissions.
+4. Confirm ambiguous exact names return bounded alternatives with reasons rather than silently selecting one, and a pinned path receives priority without escaping repository/path policy.
+5. Confirm a normal successful result supplies enough source to answer without immediately invoking `find_symbol` or `read_file`; exact granular tools remain available when the user asks for them or the result reports an incomplete dimension.
+6. Repeat with partial compilation, unloaded/generated/linked documents, changed-on-disk source, prohibited/reparse paths, oversized declarations/files, timeout, cancellation, malformed input, and interactive/headless execution.
+
+Expected: exact symbol/path exploration is a read-only, repository-confined, generation-fenced Roslyn query that returns current usable source and honest ambiguity in one tool round. It performs no restore, build, generator execution, mutation, process, network, approval, or implicit text fallback.
+
 ## MTP-242 — Plan approval policy and sanity checks
 
 1. In a disposable trusted C# repository, set `/plan-policy ReviewRisky` and request a one-file source edit whose plan declares an exact existing repository-relative affected file.

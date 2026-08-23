@@ -2267,6 +2267,25 @@ public sealed class ConversationalShell
         }
     }
 
+    /// <summary>Formats bounded active-turn inspection metadata without summary or tool content.</summary>
+    internal static string FormatActiveTurnInspection(
+        ActiveTurnCompactionInspectionProjection? activeTurn)
+    {
+        return activeTurn is null
+            ? string.Empty
+            : $"  active-turn {activeTurn.Status}: input {activeTurn.BeforeInputTokens}"
+                + (activeTurn.AfterInputTokens is { } afterTokens ? $" -> {afterTokens}" : string.Empty)
+                + $"; target/max {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
+                + $"reserve {activeTurn.OutputReserveTokens}; retention target effective/configured "
+                + $"{activeTurn.EffectiveRetentionTargetTokens}/{activeTurn.ConfiguredRetentionTargetTokens}; "
+                + "groups eligible/compacted/retained "
+                + $"{activeTurn.EligibleGroupCount}/{activeTurn.CompactedGroupCount}/{activeTurn.RetainedGroupCount}; "
+                + $"retained tokens {activeTurn.RetainedGroupTokens}; summary/pruned/generation "
+                + $"{activeTurn.SummaryVersion}/{activeTurn.PrunedPriorItemCount}/"
+                + $"{activeTurn.HistoryRewriteGeneration}; "
+                + $"backoff {activeTurn.BackoffRoundsRemaining}: {activeTurn.Rationale}\n";
+    }
+
     private async Task EnsureCurrentUserUrlConsentAsync(
         string rawMessage,
         CancellationToken cancellationToken)
@@ -3438,11 +3457,13 @@ public sealed class ConversationalShell
                 return;
             }
 
+            var activeTurnOutput = FormatActiveTurnInspection(inspection.ActiveTurnCompaction);
             var output = $"Context logical {inspection.LogicalTokens}, wire "
                 + $"{inspection.WireInputTokens}/{inspection.TokenBudget} tokens; "
                 + $"stable prefix {inspection.StablePrefixTokens}; tools {inspection.ToolTransportMode}; "
                 + $"mode {FormatConversationMode(inspection.ConversationMode)} ({inspection.ConversationModeSource}); "
                 + $"pressure {inspection.ContextPressurePercent:F1}%\n"
+                + activeTurnOutput
                 + string.Join(
                     string.Empty,
                     inspection.ConversationItems.Select(item =>

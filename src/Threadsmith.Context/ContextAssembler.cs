@@ -834,6 +834,38 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     /// <inheritdoc />
+    public async Task UpdateActiveTurnInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        ActiveTurnCompactionInspectionProjection activeTurn,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(activeTurn);
+        cancellationToken.ThrowIfCancellationRequested();
+        ContextInspectionProjection? updated = null;
+        lock (_gate)
+        {
+            if (_inspections.TryGetValue(runId, out var inspection))
+            {
+                updated = inspection with { ActiveTurnCompaction = activeTurn };
+                _inspections[runId] = updated;
+                if (_inspectionNodes.TryGetValue(runId, out var node))
+                {
+                    _inspectionOrder.Remove(node);
+                    _inspectionNodes[runId] = _inspectionOrder.AddLast(runId);
+                }
+            }
+        }
+
+        if (updated is not null)
+        {
+            await _events.PublishAsync(
+                new ContextAssembled(sessionId, DateTimeOffset.UtcNow, updated),
+                cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
     public void InvalidateInspections()
     {
         lock (_gate)

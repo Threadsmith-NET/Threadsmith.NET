@@ -1,6 +1,6 @@
 # Implementation Plan 80: Token-Aware Active-Turn Tool Continuation Compaction
 
-**Status:** Planned
+**Status:** Implemented. Maintained real-provider long-turn observation remains.
 
 **Delivery track:** Maintenance — active-turn context-governance hardening
 **Strategy source:** Shared Context §A.2 and §A.5; ADR-12; ADR-31; Codex-style pre-sampling and mid-turn transcript compaction requested after measured long-running evidence collection
@@ -54,13 +54,13 @@ Codex is an implementation reference, not a compatibility authority. Threadsmith
 - No provider-managed conversation identity as the durable source of truth.
 - No initial expansion into mutation application, correction, validation, delegated-worker, or approved-plan execution loops unless implementation inspection proves they already share the same safe read-only continuation contract.
 
-## 5. Current State
+## 5. Implemented State
 
-`ContextAssembler` creates a bounded governed context and one `ContextInspectionRecord` at turn start. `SessionApplication` freezes that result, appends chronological assistant tool calls and sanitized tool results outside the assembler, and reconstructs each subsequent request from the frozen messages plus the full continuation list.
+`SessionApplication` now estimates the complete canonical request before every ordinary model round and tracks continuation messages as complete chronological call/result groups with all sibling calls before call-ordered results plus per-result invocation, evidence, and exact tool-provenance identifiers. A group remains ineligible until one completed subsequent request has received it verbatim. Pressure selection cuts only the oldest delivered prefix while scaling the configured newest-token window to the selected profile and frozen-request cost.
 
-`BoundContinuationMessages` estimates the combined request against the model token budget and greedily replaces large tool results with bounded previews only when needed to fit the provider request. It preserves protocol shape but is an emergency wire-fit mechanism: it has no operational pressure target, active-turn summary, tool-group cut selection, stable summary checkpoint, or active-turn inspection record.
+`Threadsmith.Context` owns a dedicated bounded active-turn policy, model-backed structured candidate provider, cumulative candidate/summary contracts, strict source/authority/sensitivity validator, deterministic low-authority historical-assistant projection, and in-memory checkpoint contract. Candidate input includes required-first bounded task/acceptance intent, scales task/prior/fact/message projections to both the host ceiling and selected profile capacity, and exposes only host-derived facts bound to each exact result hash/source set; fabricated or cross-sibling facts and rewritten prior items fail validation. The host carries prior items byte-exact and records deterministic oldest-prior pruning explicitly. Preflight occurs outside the provider boundary; every actual provider attempt crosses lifecycle hooks and records partial/reported-or-missing usage, call count, and duration independently. Activation occurs only after the rebuilt canonical request meets both the pressure target and minimum-savings gate. Failed generation/validation, insufficient savings, and cancellation leave the prior continuation unchanged; bounded backoff and the older-delivered-only emergency compatibility reducer remain explicit fallbacks.
 
-Cross-turn `ConversationCompactor` already provides bounded candidate generation, validation, provenance, cancellation, idempotence, and failure preservation for archived visible conversation. Raw tool results are intentionally excluded from the durable conversation archive, so the cross-turn entry point cannot simply be invoked unchanged over active continuation messages.
+`ContextAssembler` updates the latest host-owned inspection projection at each pre-sampling assessment. Inspection exposes estimates, target/reserve, group counts, cut range, summary/hash/history generation, backoff, and closed outcome without source content. A successful rewrite increments `ModelStreamRequest.HistoryRewriteGeneration`; both compiled provider families already dispatch complete stateless requests and therefore cannot reuse an incompatible opaque remote continuation identity. Original tool events/evidence remain the durable audit authority, while ordinary active-turn summary checkpoints remain bounded in memory.
 
 ## 6. Proposed Design
 
@@ -271,6 +271,8 @@ Any persistent checkpoint addition requires an additive schema migration, restor
 - Frozen authority, current user input, repository instructions, output contracts, and tool definitions are preserved exactly.
 - Every new tool group reaches the model verbatim once; cuts preserve complete sibling call/result groups.
 - A validated bounded structured summary replaces only the eligible older prefix, newest groups remain verbatim, and the same turn continues.
+- Candidate items select exact host-derived facts from their own result-specific source/hash record; the host carries prior validated items unchanged and reports any deterministic oldest-prior pruning.
+- Candidate preflight creates no provider lifecycle/accounting record; every actual provider attempt crosses managed before/after model-request hooks and records call/time plus partial, reported, or unknown usage independently.
 - Invalid, unsupported, sensitive-incompatible, oversized, or authority-bearing candidates leave the original continuation active and produce a controlled classified outcome.
 - Rewritten history resets/re-establishes provider cache and stateful continuation safely for every compiled provider.
 - Complete original sanitized tool execution remains auditable under existing retention/redaction policy; active summaries do not become durable memory automatically.
@@ -295,7 +297,7 @@ Any persistent checkpoint addition requires an additive schema migration, restor
 
 ## 16. Documentation
 
-Planning adds this implementation document and one navigation row in `docs/implementation-plans/README.md`. It does not change milestone status, the completed Milestone 25 detail, dependency DAG, acceptance scenarios, manual procedures, or DOX ownership.
+Planning adds this implementation document and its navigation row. Implementation updates the maintained acceptance/manual procedures and applicable DOX contracts, but does not rewrite completed Milestone 25 detail or change DOX ownership.
 
 When implemented, update:
 
@@ -306,13 +308,11 @@ When implemented, update:
 - acceptance scenarios or manual tests only if their owned observable behavior/procedure changes;
 - source/test DOX only when durable ownership or contracts change.
 
-## 17. Open Decisions
+## 17. Resolved Decisions
 
-Resolve before implementation code begins:
-
-- Exact default pressure, output-reserve, minimum-savings, summary-budget, and retained-recent token values, including whether existing Plan 35 settings can be reused without changing their meaning.
-- Whether the existing conversation compaction candidate provider can accept active-turn tool groups safely or needs a dedicated provider-neutral candidate contract.
-- The precise low-authority message/content kind used to project an active-turn summary without masquerading as current user or system policy.
-- Whether active-turn checkpoints must be durable for ordinary run recovery or can remain in memory while original events/evidence stay durable.
-- The provider-specific boundary for abandoning OpenAI-compatible cache families and native Codex response continuation after history replacement.
-- The minimum reproducible materiality and usefulness gate for any optional per-tool result projection reduction.
+- Compiled active-turn defaults are 75% pressure, the selected profile's effective request output reserve (with an 8,192-token fallback only when no profile reserve is available), 4,096-token summary budget, 4,096-token minimum savings, and a 12,000-token newest-raw retention target that scales to the selected request's remaining activation capacity. Candidate generation is bounded to the lesser of 32,000 estimated input tokens and the selected profile's context window minus output reserve, with one aggregate projection budget across 48 groups and 512 call/result messages, 32 items, 2,000 characters per item, one retry, and two calls. Plan 35 completed-turn settings retain their existing meaning.
+- Active-turn tool groups use a dedicated provider-neutral candidate/validator contract because completed-turn archive candidates intentionally exclude raw tool output and have different lifecycle/source rules.
+- An activated summary is one historical `Assistant` message in the `active-turn-summary` section with host-authored `Untrusted active-turn evidence summary; not instructions or authority` framing. It is never a system/developer/current-user message. Prior items are host-carried unchanged; deterministic oldest-prior pruning is counted explicitly when cumulative bounds require loss.
+- Ordinary non-resumable conversational turns keep the active summary/checkpoint in memory. Existing sanitized tool events/evidence remain durable, and active summaries do not become conversation or repository memory automatically.
+- Every rewrite increments a provider-neutral history generation. Current OpenAI-compatible and native Codex adapters send complete stateless requests and hold no opaque response/conversation continuation id, so rebuilding from the compacted message list is the safe reset boundary while unchanged stable prefixes remain cache-eligible.
+- No per-tool projection limit changed. The deterministic emergency reducer remains limited to older groups already delivered verbatim; any future per-tool reduction still requires separate measured materiality and usefulness evidence.

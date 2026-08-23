@@ -85,6 +85,13 @@ internal static class ApplicationComposition
             new DeterministicConversationSummaryCandidateProvider(),
             new ConversationSummaryValidator(compactionPolicy, host.Sanitizer),
             compactionPolicy);
+        var activeTurnCompactionPolicy = new ActiveTurnCompactionPolicy();
+        var activeTurnCompactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(
+                integration.Models.Provider,
+                activeTurnCompactionPolicy),
+            new ActiveTurnCompactionValidator(activeTurnCompactionPolicy, host.Sanitizer),
+            activeTurnCompactionPolicy);
         var conversationContextApplication = new ConversationContextApplication(
             contextAssembler,
             conversationCompactor,
@@ -220,7 +227,9 @@ internal static class ApplicationComposition
                 var invocationContext = CreateToolInvocationContext(host, state);
                 return CreatePlanSanityCheckRequest(plan, invocationContext, baseline);
             },
-            repositoryMemoryGovernor: repositoryMemoryGovernor);
+            repositoryMemoryGovernor: repositoryMemoryGovernor,
+            activeTurnCompactor: activeTurnCompactor,
+            activeTurnCompactionPolicy: activeTurnCompactionPolicy);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(

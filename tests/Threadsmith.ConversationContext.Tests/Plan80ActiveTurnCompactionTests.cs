@@ -394,6 +394,70 @@ public static class Plan80ActiveTurnCompactionTests
             StringComparison.Ordinal);
         Assert.Equal(ModelMessageRole.System, dispatched.Messages[0].Role);
         Assert.Equal(ModelMessageRole.User, dispatched.Messages[1].Role);
+        using var input = JsonDocument.Parse(dispatched.Input);
+        var evidence = input.RootElement.GetProperty("groups")[0]
+            .GetProperty("factualEvidence")[0];
+        Assert.True(evidence.TryGetProperty("facts", out var facts));
+        Assert.False(evidence.TryGetProperty("sources", out _));
+        Assert.False(evidence.TryGetProperty("supportedFacts", out _));
+        Assert.All(facts.EnumerateArray(), fact =>
+        {
+            Assert.True(fact.TryGetProperty("factId", out _));
+            Assert.True(fact.TryGetProperty("content", out _));
+        });
+        var outputItem = input.RootElement.GetProperty("requiredOutput")
+            .GetProperty("items")[0];
+        Assert.True(outputItem.TryGetProperty("factId", out _));
+        Assert.False(outputItem.TryGetProperty("content", out _));
+        Assert.False(outputItem.TryGetProperty("sources", out _));
+        Assert.DoesNotContain(candidate.Items[0].Content, model.LastResponse, StringComparison.Ordinal);
+        var selectedSource = Assert.Single(generation.Candidate.Items[0].Sources);
+        Assert.Equal(ActiveTurnSourceKind.Evidence, selectedSource.Kind);
+    }
+
+    /// <summary>An unknown model-selected fact id cannot manufacture candidate content or sources.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_rejects_unknown_fact_selector()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate, "unknown-fact-id");
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
+            policy);
+
+        var result = await CompactWithNoOpObserverAsync(compactor, CreateRequest([group]));
+
+        Assert.Equal(ActiveTurnCompactionOutcome.ValidationRejected, result.Outcome);
+        Assert.Null(result.Summary);
+        Assert.Equal(1, result.ProviderCalls);
+    }
+
+    /// <summary>One malformed selector response is retried and each provider attempt remains accounted.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_retries_malformed_selector_once()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate, malformedResponseCount: 1);
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
+            policy);
+        var observer = new RecordingAttemptObserver();
+
+        var result = await compactor.CompactAsync(CreateRequest([group]), observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, result.Outcome);
+        Assert.Equal(2, result.ProviderCalls);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Equal(
+            ["before:1", "after:1:Failed", "before:2", "after:2:Completed"],
+            observer.Order);
+        Assert.Equal(2, observer.Usages.Count);
     }
 
     /// <summary>An explicit compaction profile independently owns routing, capacity, reasoning, and workload.</summary>
@@ -1285,11 +1349,20 @@ public static class Plan80ActiveTurnCompactionTests
         };
 
         private readonly ActiveTurnCompactionCandidate _candidate;
+        private readonly string? _factIdOverride;
+        private int _remainingMalformedResponses;
 
-        public CandidateModelProvider(ActiveTurnCompactionCandidate candidate)
+        public CandidateModelProvider(
+            ActiveTurnCompactionCandidate candidate,
+            string? factIdOverride = null,
+            int malformedResponseCount = 0)
         {
             _candidate = candidate;
+            _factIdOverride = factIdOverride;
+            _remainingMalformedResponses = malformedResponseCount;
         }
+
+        public string LastResponse { get; private set; } = string.Empty;
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1299,10 +1372,50 @@ public static class Plan80ActiveTurnCompactionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
+            if (_remainingMalformedResponses > 0)
+            {
+                _remainingMalformedResponses--;
+                await Task.Yield();
+                yield return new ModelChunk
+                {
+                    Text = "{",
+                    Usage = new ModelUsage(100, 1, IsEstimate: false),
+                    FinishReason = ModelFinishReason.Stop,
+                };
+                yield break;
+            }
+
+            using var input = JsonDocument.Parse(request.Input);
+            var facts = input.RootElement.GetProperty("groups")
+                .EnumerateArray()
+                .SelectMany(group => group.GetProperty("factualEvidence").EnumerateArray())
+                .SelectMany(evidence => evidence.GetProperty("facts").EnumerateArray())
+                .Select(fact => new
+                {
+                    FactId = fact.GetProperty("factId").GetString(),
+                    Content = fact.GetProperty("content").GetString(),
+                })
+                .ToArray();
+            var response = new
+            {
+                _candidate.SchemaVersion,
+                _candidate.PriorSummaryVersion,
+                _candidate.ThroughGroupSequence,
+                _candidate.CoveredGroupSequences,
+                Items = _candidate.Items.Select(item => new
+                {
+                    Kind = item.Kind.ToString(),
+                    FactId = _factIdOverride ?? facts.First(fact => string.Equals(
+                        fact.Content,
+                        item.Content,
+                        StringComparison.Ordinal)).FactId,
+                }),
+            };
+            LastResponse = JsonSerializer.Serialize(response, JsonOptions);
             await Task.Yield();
             yield return new ModelChunk
             {
-                Text = JsonSerializer.Serialize(_candidate, JsonOptions),
+                Text = LastResponse,
                 Usage = new ModelUsage(100, 20, IsEstimate: false),
                 FinishReason = ModelFinishReason.Stop,
             };

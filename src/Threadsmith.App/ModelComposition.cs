@@ -280,11 +280,7 @@ internal static class ModelComposition
             new ModelSelectionRequest
             {
                 WorkloadClass = WorkloadClass.Summary,
-                RequiredCapabilities = new ModelCapabilitySet
-                {
-                    Streaming = true,
-                    StructuredOutput = true,
-                },
+                RequiredCapabilities = new ModelCapabilitySet { Streaming = true },
             });
         if (!negotiation.IsCompatible)
         {

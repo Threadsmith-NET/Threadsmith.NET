@@ -13,9 +13,9 @@ using Xunit;
 /// <summary>Plan 80 ordinary-loop grouping, eligibility, replacement, and inspection tests.</summary>
 public static class Plan80ActiveTurnContinuationTests
 {
-    /// <summary>An older delivered group is compacted while the newest group and frozen prefix remain exact.</summary>
+    /// <summary>An older delivered group is compacted on positive savings while the newest group and frozen prefix remain exact.</summary>
     [Fact]
-    public static async Task Long_turn_compacts_only_delivered_complete_prefix()
+    public static async Task Long_turn_compacts_delivered_prefix_even_when_request_remains_above_pressure()
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan80-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -52,10 +52,10 @@ public static class Plan80ActiveTurnContinuationTests
             var model = new TwoToolsThenTextProvider();
             var policy = new ActiveTurnCompactionPolicy
             {
-                PressureTargetPercent = 75,
+                PressureTargetPercent = 1,
                 OutputReserveTokens = 500,
                 SummaryBudgetTokens = 500,
-                MinimumSavingsTokens = 100,
+                MinimumSavingsTokens = 1,
                 RetainedRecentTokens = 1_000,
             };
             var candidateProvider = new RequestCandidateProvider();
@@ -161,7 +161,7 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.Equal(1, activeTurn.CompactedGroupCount);
             Assert.Equal(1, activeTurn.RetainedGroupCount);
             Assert.True(activeTurn.AfterInputTokens < activeTurn.BeforeInputTokens);
-            Assert.True(activeTurn.AfterInputTokens <= activeTurn.PressureTargetTokens);
+            Assert.True(activeTurn.AfterInputTokens > activeTurn.PressureTargetTokens);
             Assert.Equal(1, activeTurn.HistoryRewriteGeneration);
             Assert.Equal(compactionProfileId.Value, activeTurn.CandidateProfileId);
             Assert.StartsWith("sha256:", activeTurn.SummaryContentHash, StringComparison.Ordinal);
@@ -508,25 +508,25 @@ public static class Plan80ActiveTurnContinuationTests
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _owner.Requests.Add(_request);
-                var factualEvidence = _request.EligiblePrefix[0].FactualEvidence[0];
-                var source = factualEvidence.Sources[0];
                 var covered = (_request.PriorSummary?.CoveredGroupSequences ?? [])
                     .Concat(_request.EligiblePrefix.Select(group => group.Sequence))
+                    .ToArray();
+                var filesRead = (_request.PriorSummary?.FilesRead ?? [])
+                    .Concat(_request.EligiblePrefix.SelectMany(group => group.FilesRead))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                var filesChanged = (_request.PriorSummary?.FilesChanged ?? [])
+                    .Concat(_request.EligiblePrefix.SelectMany(group => group.FilesChanged))
+                    .Distinct(StringComparer.Ordinal)
                     .ToArray();
                 var candidate = new ActiveTurnCompactionCandidate
                 {
                     PriorSummaryVersion = _request.PriorSummary?.Version ?? 0,
                     ThroughGroupSequence = _request.EligiblePrefix[^1].Sequence,
                     CoveredGroupSequences = covered,
-                    Items =
-                    [
-                        new ActiveTurnSummaryItem
-                        {
-                            Kind = ActiveTurnSummaryItemKind.ToolOutcome,
-                            Content = factualEvidence.SupportedFacts[0],
-                            Sources = [source],
-                        },
-                    ],
+                    SummaryText = "## Goal\nContinue the active repository inspection.\n\n## Progress\n### Done\n- Summarized earlier delivered tool activity.\n\n### In Progress\n- Continue with retained raw tool activity.\n\n### Blocked\n- None.",
+                    FilesRead = filesRead,
+                    FilesChanged = filesChanged,
                 };
                 return Task.FromResult(new ActiveTurnCandidateGeneration(candidate, null));
             }

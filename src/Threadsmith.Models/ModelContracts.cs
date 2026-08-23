@@ -75,6 +75,9 @@ public sealed record ModelStreamRequest
     /// <summary>Profile resolved by host policy before provider invocation.</summary>
     public ModelProfileId? ResolvedProfileId { get; init; }
 
+    /// <summary>Optional per-request output ceiling; providers reject values above the resolved profile limit.</summary>
+    public int? MaximumOutputTokens { get; init; }
+
     /// <summary>Reasoning effort level for this request; defaults to <see cref="ReasoningLevel.None"/>.</summary>
     public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.None;
 

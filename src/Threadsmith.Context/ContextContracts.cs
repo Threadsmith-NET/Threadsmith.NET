@@ -238,6 +238,17 @@ public interface IContextAssembler
     /// <summary>Gets the most recent detached inspection record for a run.</summary>
     ContextInspectionProjection? GetInspection(RunId runId);
 
+    /// <summary>Records one bounded pre-sampling active-turn assessment.</summary>
+    Task UpdateActiveTurnInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        ActiveTurnCompactionInspectionProjection activeTurn,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
     /// <summary>Invalidates every cached inspection after a shared model-selection change.</summary>
     void InvalidateInspections();
 }

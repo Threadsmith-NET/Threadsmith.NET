@@ -2,6 +2,7 @@ namespace Threadsmith.Tui;
 
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -1221,6 +1222,11 @@ public sealed class ConversationalShell
                                     turnStart,
                                     _displayOptions.ShowOperationDurations,
                                     _timeProvider),
+                            ActiveTurnCompactionStarted started => new TuiActivity(
+                                FormatActiveTurnCompactionActivity(started),
+                                _timeProvider.GetTimestamp(),
+                                _displayOptions.ShowOperationDurations,
+                                _timeProvider),
                             ToolInvocationStarted started => new TuiActivity(
                                 FormatActiveToolLabel(started),
                                 _timeProvider.GetTimestamp(),
@@ -1263,7 +1269,11 @@ public sealed class ConversationalShell
                         }
 
                         var eventSegments = new List<TuiTextSegment>();
-                        TuiEventSegments.Append(eventSegments, domainEvent, transcriptDelta);
+                        TuiEventSegments.Append(
+                            eventSegments,
+                            domainEvent,
+                            transcriptDelta,
+                            _displayOptions.ShowOperationDurations);
                         if (eventSegments.Count > 0)
                         {
                             output.Add(new TuiSegmentOutput(eventSegments));
@@ -1274,7 +1284,8 @@ public sealed class ConversationalShell
                             domainEvent,
                             emittedModelOutput)
                         || directFetchApprovalRequested
-                        || directFetchApprovalDenied;
+                        || directFetchApprovalDenied
+                        || domainEvent is ActiveTurnCompactionCompleted;
                     if (incomingActivity is not null)
                     {
                         nextActivity = incomingActivity;
@@ -1305,7 +1316,8 @@ public sealed class ConversationalShell
                             }
                         }
                     }
-                    else if (domainEvent is ToolInvocationCompleted && turnStartedTimestamp is { } continuationStart)
+                    else if ((domainEvent is ToolInvocationCompleted or ActiveTurnCompactionCompleted)
+                        && turnStartedTimestamp is { } continuationStart)
                     {
                         nextActivity = new TuiActivity(
                             "THINKING",
@@ -2265,6 +2277,74 @@ public sealed class ConversationalShell
                 TuiTextRole.Error,
                 cancellationToken);
         }
+    }
+
+    /// <summary>Formats bounded transient active-turn candidate activity.</summary>
+    internal static string FormatActiveTurnCompactionActivity(ActiveTurnCompactionStarted started)
+    {
+        ArgumentNullException.ThrowIfNull(started);
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "COMPACTING CONTEXT: {0:N0} tokens; target {1:N0}; profile {2:D}",
+            started.BeforeInputTokens,
+            started.PressureTargetTokens,
+            started.CandidateProfileId.Value);
+    }
+
+    /// <summary>Formats one bounded active-turn completion notice with no summary or tool content.</summary>
+    /// <param name="completed">Host-owned completed operation metadata.</param>
+    /// <param name="showOperationDuration">Whether authoritative elapsed duration is displayed.</param>
+    /// <returns>One terminal-neutral completion line.</returns>
+    internal static string FormatActiveTurnCompactionCompletion(
+        ActiveTurnCompactionCompleted completed,
+        bool showOperationDuration = true)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var savings = Math.Max(0, completed.BeforeInputTokens - completed.AfterInputTokens);
+        var percentage = completed.BeforeInputTokens == 0
+            ? 0
+            : savings * 100d / completed.BeforeInputTokens;
+        var label = completed.Status == ActiveTurnCompactionInspectionStatus.Completed
+            ? "CONTEXT COMPACTED"
+            : $"CONTEXT COMPACTION {completed.Status}";
+        var duration = showOperationDuration
+            && completed.DurationMilliseconds is { } milliseconds
+            && OperationDurationFormatter.TryFormat(milliseconds, out var formatted)
+                ? $"; {formatted}"
+                : string.Empty;
+        return Environment.NewLine + string.Format(
+            CultureInfo.InvariantCulture,
+            "{0}: {1:N0} → {2:N0} tokens; saved {3:N0} ({4:0.0}%); profile {5:D}{6}{7}",
+            label,
+            completed.BeforeInputTokens,
+            completed.AfterInputTokens,
+            savings,
+            percentage,
+            completed.CandidateProfileId.Value,
+            duration,
+            Environment.NewLine);
+    }
+
+    /// <summary>Formats bounded active-turn inspection metadata without summary or tool content.</summary>
+    internal static string FormatActiveTurnInspection(
+        ActiveTurnCompactionInspectionProjection? activeTurn)
+    {
+        return activeTurn is null
+            ? string.Empty
+            : $"  active-turn {activeTurn.Status}: input {activeTurn.BeforeInputTokens}"
+                + (activeTurn.AfterInputTokens is { } afterTokens ? $" -> {afterTokens}" : string.Empty)
+                + $"; target/max {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
+                + $"reserve {activeTurn.OutputReserveTokens}; retention target effective/configured "
+                + $"{activeTurn.EffectiveRetentionTargetTokens}/{activeTurn.ConfiguredRetentionTargetTokens}; "
+                + "groups eligible/compacted/retained "
+                + $"{activeTurn.EligibleGroupCount}/{activeTurn.CompactedGroupCount}/{activeTurn.RetainedGroupCount}; "
+                + $"retained tokens {activeTurn.RetainedGroupTokens}; summary/pruned/generation "
+                + $"{activeTurn.SummaryVersion}/{activeTurn.PrunedPriorItemCount}/"
+                + $"{activeTurn.HistoryRewriteGeneration}; "
+                + (activeTurn.CandidateProfileId is { } candidateProfileId
+                    ? $"candidate profile {candidateProfileId:D}; "
+                    : string.Empty)
+                + $"backoff {activeTurn.BackoffRoundsRemaining}: {activeTurn.Rationale}\n";
     }
 
     private async Task EnsureCurrentUserUrlConsentAsync(
@@ -3438,11 +3518,13 @@ public sealed class ConversationalShell
                 return;
             }
 
+            var activeTurnOutput = FormatActiveTurnInspection(inspection.ActiveTurnCompaction);
             var output = $"Context logical {inspection.LogicalTokens}, wire "
                 + $"{inspection.WireInputTokens}/{inspection.TokenBudget} tokens; "
                 + $"stable prefix {inspection.StablePrefixTokens}; tools {inspection.ToolTransportMode}; "
                 + $"mode {FormatConversationMode(inspection.ConversationMode)} ({inspection.ConversationModeSource}); "
                 + $"pressure {inspection.ContextPressurePercent:F1}%\n"
+                + activeTurnOutput
                 + string.Join(
                     string.Empty,
                     inspection.ConversationItems.Select(item =>

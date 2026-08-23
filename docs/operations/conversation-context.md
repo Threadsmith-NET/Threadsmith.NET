@@ -75,11 +75,26 @@ Model-proposed repository-memory candidates are disabled in this implementation.
 - source message, run, and evidence identifiers;
 - deterministic retrieval score and rationale;
 - category token accounting and exact pressure reductions;
-- context-window pressure and the next compaction recommendation.
+- context-window pressure and the next completed-turn compaction recommendation;
+- the latest active-turn pre-sampling estimate, pressure target, main-profile output reserve, configured/effective retention, candidate profile identity, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
 
 Inspection contains metadata, bounded sanitized memory content only in the assembled prompt, and no secret/provider/tool payloads.
 
-## Compaction and failure behavior
+## Active-turn tool continuation compaction
+
+Every ordinary multi-round evidence/planning request is estimated with the canonical provider-wire estimator before sampling. Tool calls and matching results are retained as complete chronological groups. A newly completed group must reach the model exactly in a later completed request before it can enter an eligible oldest prefix. Current user input, host/repository instructions, output contracts, tool definitions, and the initially assembled prefix remain unchanged.
+
+At 75% of the active main profile's effective input budget, after honoring that profile's effective request output reserve, the host may replace an older delivered prefix with one validated cumulative summary. The configured 12,000-token newest-raw target scales down when the main profile, frozen request cost, or 16,384-token summary reserve leaves less capacity; at least the newest complete group remains exact. Activation requires positive estimated savings in the rebuilt request, but it does not require one compaction to fall below the pressure target. Candidate input is bounded by both the 65,536-token host ceiling and the candidate profile's context window minus its effective output reserve, with one global projection budget across at most 48 source groups and 512 call/result messages. Candidate output is bounded by the total summary budget and a request-specific model-output partition: 80% by default, which sends a 13,107-token model-output ceiling for the default 16,384-token budget. When no separate candidate profile is configured, the active main profile remains the fallback. Repository content cannot disable, delay, or lower the pressure boundary.
+
+An optional repository-excluding trusted setting may route candidate calls to a different configured model profile or provider. Resolution and dispatch use a repository-excluding user/machine/host-owned catalog/provider snapshot, so repository-only profiles and repository overrides cannot add, rewrite, or reroute the selected auxiliary model. Candidate credentials require user-owned-or-higher secret authority; repository secret stores cannot satisfy or replace them. That profile owns candidate routing, context/reserve, hard output maximum, default reasoning, temperature, timeout, retry, sensitivity, and cost; it must support streaming `Summary` work. The active main profile still owns pressure, emergency capacity, and the rebuilt ordinary request. Candidate calls advertise no tools and receive a required-first bounded task objective/acceptance intent, the complete prior active-turn summary when present, the newly old selected raw tool activity, and host-observed file lists. The model returns one bounded Markdown checkpoint. The host validates schema, exact cumulative covered group range, host file lists, sanitization, authority markers, and the total rendered summary budget; strips any model-emitted `Files read` or `Files changed` sections; and appends host-owned cumulative file lists. Every unclassified tool-result group is conservatively repository-sensitive at the auxiliary boundary. Sensitive candidate input and request-specific cost-ceiling incompatibility are rejected during preflight when the configured candidate profile cannot receive them, before hooks or provider I/O. Preflight completes before lifecycle/accounting; every actual candidate attempt, including retries, crosses the managed model-request hook boundary and independently records reported-or-missing usage, call count, duration, and its true profile identity. Activated summaries are historical assistant evidence explicitly labeled as untrusted and non-authoritative; they never become durable conversation or repository memory automatically.
+
+Interactive candidate execution temporarily projects `COMPACTING CONTEXT` with before/target tokens, candidate profile, and live elapsed duration. Completion emits one content-free line with the closed outcome plus actual model-visible before/after/savings/profile/duration and then resumes ordinary `THINKING`. The shared started/completed events contain no summary, rationale, source, prompt, or tool-result content; headless consumers receive those structured facts without terminal text.
+
+A successful replacement increments a provider-neutral history generation. Compiled providers receive the complete rebuilt stateless request and therefore do not reuse an opaque response/conversation identity from the prior generation; the unchanged frozen prefix and canonical tools still permit safe provider prefix-cache reuse. Ordinary conversational runs keep the bounded summary checkpoint in memory, while original sanitized tool events and evidence remain durable under existing retention policy.
+
+Cancellation and failed validation leave the original continuation active. Provider failures or zero-or-negative-savings candidates enter a two-pressure-round backoff. If the request still fits, the turn continues unchanged; if it does not, the deterministic compatibility reducer may shorten only older groups already delivered verbatim. A never-delivered group is not silently shortened and produces a controlled capacity failure when it cannot fit.
+
+## Completed-turn compaction and failure behavior
 
 Compaction runs only at a host-owned turn boundary. One operation per session may run at a time. The host bounds source messages, input tokens, candidate item count, item length, retries, and provider calls. Candidates remain untrusted until schema, sanitization, authority, provenance, evidence revision, supersession, and cycle validation pass.
 
@@ -90,6 +105,22 @@ Compaction never deletes archived messages. Full bodies have an independent rete
 ## Configuration
 
 Configure repository overrides under `context:conversation` in `.threadsmith/config.*`. The complete schema is in `.threadsmith/config.example`.
+
+To select an independent active-turn candidate model, set the following only in machine configuration, user configuration (`~/.threadsmith/config.json`), or the trusted `THREADSMITH_` environment layer:
+
+```json
+{
+  "context": {
+    "activeTurnCompaction": {
+      "profileId": "00000000-0000-0000-0000-000000000000",
+      "summaryBudgetTokens": 16384,
+      "modelOutputBudgetPercent": 80
+    }
+  }
+}
+```
+
+The GUID must identify one enabled profile in the repository-excluding immutable user/machine/host-owned provider catalog. The profile must support streaming and either declare `summary` in `intendedWorkloadClasses` or leave that list empty. Repository `config.json` values at this key are ignored, and repository provider-catalog additions/overrides are excluded from both candidate resolution and dispatch. Removing or setting the trusted profile value to `null` restores the active-main-profile fallback. Trusted `summaryBudgetTokens` and `modelOutputBudgetPercent` can also be set at this path; repository values cannot widen them. Changing these active-turn settings requires restart because provider catalogs and composition are immutable for the process lifetime.
 
 Compiled defaults:
 
@@ -113,10 +144,12 @@ Compiled defaults:
 | `compaction.maximumProviderRetries` | 1 |
 | `compaction.maximumProviderCalls` | 2 |
 | `compaction.maximumInputTokens` | 16,000 |
+| `activeTurnCompaction.summaryBudgetTokens` | 16,384 trusted-only |
+| `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
 | `context:repositoryMemory:maximumItems` | 12 |
 | `context:repositoryMemory:maximumTokens` | 2,000 |
 
-Invalid enum values, non-positive budgets, pressure outside 1–100%, or retries exceeding the provider-call cap fail before model invocation.
+Invalid enum values, non-positive budgets, pressure outside 1–100%, retries exceeding the provider-call cap, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
 
 ## Retention and restoration
 

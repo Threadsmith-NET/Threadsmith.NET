@@ -99,8 +99,10 @@ public sealed class ContextPolicy
             RunPhase.EvidenceCollection =>
                 "Respond naturally to conversation and read-only questions. Threadsmith has fast host-native "
                 + "repository inspection tools: use them when evidence is needed, batch independent inspections in the "
-                + "same response, and prefer structural/semantic/index tools before broad text search whenever they apply. "
-                + "Avoid serial one-search, one-file, or adjacent narrow read loops. For repository changes, gather enough "
+                + "same response, and prefer structural/semantic/index tools before broad text search or raw line slices "
+                + "whenever they apply. Batch independent symbol/source lookups, and when raw file reads are necessary, "
+                + "merge adjacent ranges for the same file into the fewest reads that preserve relevance. Avoid serial "
+                + "one-search, one-symbol, one-file, or adjacent narrow read loops. For repository changes, gather enough "
                 + "evidence to identify target, instructions, and material impact. Once scope is resolved and no ambiguity "
                 + "remains, call the host-owned propose_plan tool; do not inspect unrelated patterns. For read-only audits, "
                 + "explanations, and diagnostics, answer directly once the evidence is sufficient.",
@@ -206,7 +208,9 @@ public sealed record ContextAssemblerOptions
         + "or coding guardrails. Tool selection is mandatory: MUST use an advertised semantic tool whenever "
         + "it covers the repository question. Text search is allowed only when no applicable semantic tool is "
         + "advertised or after the applicable semantic tool fails or explicitly reports incomplete or degraded "
-        + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Once evidence resolves "
+        + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Prefer semantic/source "
+        + "inspection over raw line slices when it can answer the question, batch independent lookups, and merge adjacent "
+        + "ranges for the same file into the fewest raw reads. Once evidence resolves "
         + "the requested change and no correctness ambiguity remains, stop calling tools and propose the plan rather "
         + "than investigating unrelated patterns or references. Never perform mutations during governed planning.";
 
@@ -407,9 +411,11 @@ public sealed class ContextAssembler : IContextAssembler
             RunPhase.EvidenceCollection =>
                 "Return ordinary assistant text for conversation, read-only exploration, audits, explanations, or diagnostics. "
                 + "If more evidence is needed, batch independent read-only tool calls in one response, prefer "
-                + "structural/semantic/index tools before broad text search, and avoid repeated searches, serial single-file "
-                + "exploration, or adjacent narrow reads. Call propose_plan only when the user asks for actual repository "
-                + "changes; that plan must declare structured file intents and must not be printed as text.",
+                + "structural/semantic/index tools before broad text search or raw line slices, batch independent symbol/source "
+                + "lookups, and merge adjacent ranges for the same file into the fewest reads that preserve relevance. Avoid "
+                + "repeated searches, serial single-file exploration, or adjacent narrow reads. Call propose_plan only when "
+                + "the user asks for actual repository changes; that plan must declare structured file intents and must not "
+                + "be printed as text.",
             RunPhase.MutationPreparation
                 or RunPhase.ImplementationPreparing
                 or RunPhase.ImplementationModelTurn
@@ -830,6 +836,38 @@ public sealed class ContextAssembler : IContextAssembler
                     RepositoryMemoryItems = inspection.RepositoryMemoryItems.ToArray(),
                 }
                 : null;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task UpdateActiveTurnInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        ActiveTurnCompactionInspectionProjection activeTurn,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(activeTurn);
+        cancellationToken.ThrowIfCancellationRequested();
+        ContextInspectionProjection? updated = null;
+        lock (_gate)
+        {
+            if (_inspections.TryGetValue(runId, out var inspection))
+            {
+                updated = inspection with { ActiveTurnCompaction = activeTurn };
+                _inspections[runId] = updated;
+                if (_inspectionNodes.TryGetValue(runId, out var node))
+                {
+                    _inspectionOrder.Remove(node);
+                    _inspectionNodes[runId] = _inspectionOrder.AddLast(runId);
+                }
+            }
+        }
+
+        if (updated is not null)
+        {
+            await _events.PublishAsync(
+                new ContextAssembled(sessionId, DateTimeOffset.UtcNow, updated),
+                cancellationToken);
         }
     }
 

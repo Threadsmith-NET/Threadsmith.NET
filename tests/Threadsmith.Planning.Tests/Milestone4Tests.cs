@@ -2045,9 +2045,9 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>Large tool results are reduced before a continuation crosses the selected input budget.</summary>
+    /// <summary>A never-delivered oversized tool group fails capacity rather than silently truncating its first delivery.</summary>
     [Fact]
-    public static async Task LargeToolResult_IsReducedBeforeContinuationDispatch()
+    public static async Task NeverDeliveredLargeToolResult_FailsBeforeContinuationDispatch()
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-budget-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -2075,6 +2075,7 @@ public static class Milestone4Tests
                 budget);
             var model = new ToolThenTextModelProvider(
                 "{\"path\":\".\",\"maximumEntries\":200}");
+            var assembler = CreateAssembler(events, evidence, maximumTokens: 1700);
             var application = new SessionApplication(
                 events,
                 model,
@@ -2088,7 +2089,7 @@ public static class Milestone4Tests
                     TrustLevel = RepositoryTrustLevel.TrustedRead,
                     RequestedBy = "model",
                 }),
-                CreateAssembler(events, evidence, maximumTokens: 1500),
+                assembler,
                 evidence,
                 registry);
             var dispatcher = new CommandDispatcher([application]);
@@ -2096,14 +2097,15 @@ public static class Milestone4Tests
             var runId = await dispatcher.DispatchAsync(
                 new SubmitRequestCommand(sessionId, "Inspect a large listing then plan"));
 
-            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-            Assert.Equal(2, model.Requests.Count);
-            var continuation = model.Requests[1];
-            Assert.True(continuation.WireEstimate?.WireInputTokens <= 1500);
-            var result = Assert.Single(
-                continuation.Messages,
-                message => message.Role == ModelMessageRole.Tool);
-            Assert.Contains("\"isTruncated\":true", result.Content[0].Content, StringComparison.Ordinal);
+            var exception = await Assert.ThrowsAsync<BudgetExceededException>(() =>
+                dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Contains("Tool continuation requires", exception.Message, StringComparison.Ordinal);
+            Assert.Single(model.Requests);
+            var fullEvidence = Assert.Single(evidence.Snapshot(sessionId));
+            Assert.Contains("long-result-file", fullEvidence.Content, StringComparison.Ordinal);
+            Assert.Equal(
+                ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
         }
         finally
         {

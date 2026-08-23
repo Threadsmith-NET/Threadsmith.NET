@@ -133,7 +133,8 @@ public static class Program
                 paths,
                 foundation.SecretResolver,
                 loggerFactory,
-                commandLine.RawModelLogPath);
+                commandLine.RawModelLogPath,
+                trustedConfiguration);
         }
         catch (InvalidOperationException exception) when (!string.IsNullOrWhiteSpace(commandLine.RawModelLogPath))
         {

@@ -59,6 +59,19 @@ public static class Plan80ActiveTurnContinuationTests
                 RetainedRecentTokens = 1_000,
             };
             var candidateProvider = new RequestCandidateProvider();
+            var compactionProfileId = ModelProfileId.New();
+            var compactionProfile = CreateCompactionCandidateProfile(compactionProfileId);
+            var activityEvents = new List<IDomainEvent>();
+            await using var activitySubscription = events.Subscribe(
+                (domainEvent, _) =>
+                {
+                    if (domainEvent is ActiveTurnCompactionStarted or ActiveTurnCompactionCompleted)
+                    {
+                        activityEvents.Add(domainEvent);
+                    }
+
+                    return Task.CompletedTask;
+                });
             var compactor = new ActiveTurnCompactor(
                 candidateProvider,
                 new ActiveTurnCompactionValidator(policy, sanitizer),
@@ -86,7 +99,8 @@ public static class Plan80ActiveTurnContinuationTests
                 sessionUsage: usage,
                 hooks: hooks,
                 activeTurnCompactor: compactor,
-                activeTurnCompactionPolicy: policy);
+                activeTurnCompactionPolicy: policy,
+                activeTurnCompactionProfile: compactionProfile);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-80"));
             var runId = await dispatcher.DispatchAsync(
@@ -104,6 +118,7 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.Empty(compactionRequest.AcceptanceIntent);
             Assert.Equal(16_000, compactionRequest.ProfileContextWindowTokens);
             Assert.Equal(500, compactionRequest.ProfileOutputReserveTokens);
+            Assert.Equal(2, compactionRequest.ToolContinuationRound);
             var compactedGroup = Assert.Single(compactionRequest.EligiblePrefix);
             Assert.True(compactedGroup.WasDeliveredVerbatim);
             Assert.Equal(1, compactedGroup.Sequence);
@@ -148,6 +163,7 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.True(activeTurn.AfterInputTokens < activeTurn.BeforeInputTokens);
             Assert.True(activeTurn.AfterInputTokens <= activeTurn.PressureTargetTokens);
             Assert.Equal(1, activeTurn.HistoryRewriteGeneration);
+            Assert.Equal(compactionProfileId.Value, activeTurn.CandidateProfileId);
             Assert.StartsWith("sha256:", activeTurn.SummaryContentHash, StringComparison.Ordinal);
             Assert.Equal(2, evidence.Snapshot(sessionId).Count);
 
@@ -162,10 +178,31 @@ public static class Plan80ActiveTurnContinuationTests
                 invocation => Assert.Equal(HookPoint.BeforeModelRequest, invocation.Point),
                 invocation => Assert.Equal(HookPoint.AfterModelRequest, invocation.Point));
             Assert.Equal(compactionHooks[0].OperationId, compactionHooks[1].OperationId);
+            Assert.Equal(
+                WorkloadClass.Summary.ToString(),
+                compactionHooks[0].Payload?["workload"]);
             Assert.Equal(4, hooks.Invocations.Count(invocation =>
                 invocation.Point == HookPoint.BeforeModelRequest));
             Assert.Equal(4, hooks.Invocations.Count(invocation =>
                 invocation.Point == HookPoint.AfterModelRequest));
+            Assert.Collection(
+                activityEvents,
+                domainEvent =>
+                {
+                    var started = Assert.IsType<ActiveTurnCompactionStarted>(domainEvent);
+                    Assert.Equal(compactionProfileId, started.CandidateProfileId);
+                    Assert.Equal(activeTurn.BeforeInputTokens, started.BeforeInputTokens);
+                    Assert.Equal(activeTurn.PressureTargetTokens, started.PressureTargetTokens);
+                },
+                domainEvent =>
+                {
+                    var completed = Assert.IsType<ActiveTurnCompactionCompleted>(domainEvent);
+                    Assert.Equal(compactionProfileId, completed.CandidateProfileId);
+                    Assert.Equal(ActiveTurnCompactionInspectionStatus.Completed, completed.Status);
+                    Assert.Equal(activeTurn.BeforeInputTokens, completed.BeforeInputTokens);
+                    Assert.Equal(activeTurn.AfterInputTokens, completed.AfterInputTokens);
+                    Assert.NotNull(completed.DurationMilliseconds);
+                });
             var usageSnapshot = usage.GetSnapshot(sessionId);
             Assert.True(usageSnapshot.HasUnknownUsage);
             Assert.Equal(45, usageSnapshot.TotalTokens);
@@ -225,6 +262,17 @@ public static class Plan80ActiveTurnContinuationTests
                 RetainedRecentTokens = 1_000,
             };
             var candidateProvider = new RequestCandidateProvider();
+            var activityEvents = new List<IDomainEvent>();
+            await using var activitySubscription = events.Subscribe(
+                (domainEvent, _) =>
+                {
+                    if (domainEvent is ActiveTurnCompactionStarted or ActiveTurnCompactionCompleted)
+                    {
+                        activityEvents.Add(domainEvent);
+                    }
+
+                    return Task.CompletedTask;
+                });
             var compactor = new ActiveTurnCompactor(
                 candidateProvider,
                 new ActiveTurnCompactionValidator(policy, sanitizer),
@@ -261,6 +309,12 @@ public static class Plan80ActiveTurnContinuationTests
 
             Assert.Equal(2, model.Requests.Count);
             Assert.Empty(candidateProvider.Requests);
+            Assert.Collection(
+                activityEvents,
+                domainEvent => Assert.IsType<ActiveTurnCompactionStarted>(domainEvent),
+                domainEvent => Assert.Equal(
+                    ActiveTurnCompactionInspectionStatus.ProviderFailure,
+                    Assert.IsType<ActiveTurnCompactionCompleted>(domainEvent).Status));
             var candidateHookInvocations = hooks.Invocations
                 .Where(invocation => string.Equals(
                     invocation.Payload?["stage"],
@@ -385,6 +439,20 @@ public static class Plan80ActiveTurnContinuationTests
             events,
             new ContextAssemblerOptions { MaximumTokens = 32_000 },
             resolver);
+    }
+
+    private static ActiveTurnCompactionCandidateProfile CreateCompactionCandidateProfile(
+        ModelProfileId profileId)
+    {
+        return new ActiveTurnCompactionCandidateProfile
+        {
+            ProfileId = profileId,
+            ContextWindowTokens = 8_000,
+            OutputReserveTokens = 500,
+            ReasoningLevel = ReasoningLevel.None,
+            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
+            Cost = new ModelCostMetadata(),
+        };
     }
 
     private static ModelProfile CreateProfile()

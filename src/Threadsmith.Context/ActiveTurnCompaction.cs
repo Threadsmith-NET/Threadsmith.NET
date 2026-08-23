@@ -310,6 +310,9 @@ public sealed record ActiveTurnContinuationGroup
     /// <summary>Canonical group estimate excluding frozen context and tool definitions.</summary>
     public required int EstimatedTokens { get; init; }
 
+    /// <summary>Conservative post-sanitization sensitivity of the tool-result group.</summary>
+    public ConversationSensitivity Sensitivity { get; init; } = ConversationSensitivity.Sensitive;
+
     /// <summary>Whether a completed later request received this exact group.</summary>
     public bool WasDeliveredVerbatim { get; init; }
 }
@@ -618,14 +621,42 @@ public sealed record ActiveTurnAcceptanceIntent
     public bool WasTruncated { get; init; }
 }
 
+/// <summary>Repository-excluding candidate profile facts frozen into one compaction request.</summary>
+public sealed record ActiveTurnCompactionCandidateProfile
+{
+    /// <summary>Stable profile dispatched by the configured model provider.</summary>
+    public required ModelProfileId ProfileId { get; init; }
+
+    /// <summary>Candidate profile context window.</summary>
+    public required int ContextWindowTokens { get; init; }
+
+    /// <summary>Candidate profile effective request output reserve.</summary>
+    public required int OutputReserveTokens { get; init; }
+
+    /// <summary>Candidate profile default reasoning level.</summary>
+    public required ReasoningLevel ReasoningLevel { get; init; }
+
+    /// <summary>Whether the candidate profile may receive sensitive input.</summary>
+    public required ModelSensitiveDataPolicy SensitiveDataPolicy { get; init; }
+
+    /// <summary>Candidate profile pricing used by request-specific cost constraints.</summary>
+    public required ModelCostMetadata Cost { get; init; }
+}
+
 /// <summary>Bounded provider-neutral active-turn candidate input.</summary>
 public sealed record ActiveTurnCompactionRequest
 {
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 
-    /// <summary>Selected profile used for the ordinary request and candidate call.</summary>
+    /// <summary>Selected profile used for the ordinary request and candidate fallback.</summary>
     public required ModelProfileId ProfileId { get; init; }
+
+    /// <summary>Optional repository-excluding candidate profile frozen by composition.</summary>
+    public ActiveTurnCompactionCandidateProfile? CandidateProfile { get; init; }
+
+    /// <summary>Zero-based ordinary tool-continuation round that triggered this candidate assessment.</summary>
+    public int ToolContinuationRound { get; init; }
 
     /// <summary>Digest of the frozen initial context.</summary>
     public required string FrozenContextIdentity { get; init; }
@@ -654,10 +685,10 @@ public sealed record ActiveTurnCompactionRequest
     /// <summary>Whether source content is sensitive.</summary>
     public bool ContainsSensitiveData { get; init; }
 
-    /// <summary>Selected profile's complete context window.</summary>
+    /// <summary>Ordinary selected profile's complete context window, used by the candidate fallback.</summary>
     public required int ProfileContextWindowTokens { get; init; }
 
-    /// <summary>Selected profile's effective output reserve for the candidate request.</summary>
+    /// <summary>Ordinary selected profile's effective output reserve, used by the candidate fallback.</summary>
     public required int ProfileOutputReserveTokens { get; init; }
 
     /// <summary>Complete request estimate before replacement.</summary>
@@ -1184,10 +1215,30 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         ActiveTurnCompactionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateProfileCapacity(request);
+        var containsSensitiveData = request.ContainsSensitiveData
+            || (request.CandidateProfile is not null
+                && request.EligiblePrefix.Any(group =>
+                    group.Sensitivity == ConversationSensitivity.Sensitive));
+        var profile = ResolveCandidateProfile(request, containsSensitiveData);
+        ValidateProfileCapacity(profile.ContextWindowTokens, profile.OutputReserveTokens);
+        if (containsSensitiveData
+            && profile.SensitiveDataPolicy == ModelSensitiveDataPolicy.Prohibited)
+        {
+            throw new ModelProviderException(
+                "The configured active-turn compaction profile prohibits sensitive candidate input.");
+        }
+
+        if (request.SelectionConstraints.MaximumCombinedCostPerMillionTokens is { } maximumCost
+            && profile.Cost is { } cost
+            && cost.InputPerMillionTokens + cost.OutputPerMillionTokens > maximumCost)
+        {
+            throw new ModelProviderException(
+                "The configured active-turn compaction profile exceeds the request cost ceiling.");
+        }
+
         ValidateTaskContext(request);
         ValidateRequestShape(request);
-        var input = CreateInput(request);
+        var input = CreateInput(request, profile);
         ModelMessage[] messages =
         [
             new ModelMessage
@@ -1208,7 +1259,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             [],
             ToolTransportMode.Native,
             0,
-            request.ProfileOutputReserveTokens);
+            profile.OutputReserveTokens);
         return new ModelCandidateAttempt(
             _model,
             new ModelStreamRequest
@@ -1216,21 +1267,25 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 RunId = request.RunId,
                 Input = input,
                 Seed = 42,
-                WorkloadClass = WorkloadClass.General,
-                ContainsSensitiveData = request.ContainsSensitiveData,
-                RequiredCapabilities = new ModelCapabilitySet { Streaming = true },
-                SelectionConstraints = request.SelectionConstraints,
-                ResolvedProfileId = request.ProfileId,
+                ToolContinuationRound = request.ToolContinuationRound,
+                WorkloadClass = profile.WorkloadClass,
+                ContainsSensitiveData = containsSensitiveData,
+                RequiredCapabilities = profile.RequiredCapabilities,
+                SelectionConstraints = profile.SelectionConstraints,
+                ResolvedProfileId = profile.ProfileId,
+                ReasoningLevel = profile.ReasoningLevel,
                 Messages = messages,
                 WireEstimate = wireEstimate,
             },
             checked(_policy.MaximumCandidateItems * _policy.MaximumItemCharacters * 2));
     }
 
-    private string CreateInput(ActiveTurnCompactionRequest request)
+    private string CreateInput(
+        ActiveTurnCompactionRequest request,
+        CandidateProfileSelection profile)
     {
         var profileInputCapacity = checked(
-            request.ProfileContextWindowTokens - request.ProfileOutputReserveTokens);
+            profile.ContextWindowTokens - profile.OutputReserveTokens);
         var maximumCandidateInputTokens = Math.Min(
             _policy.MaximumInputTokens,
             profileInputCapacity);
@@ -1266,7 +1321,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 [],
                 ToolTransportMode.Native,
                 0,
-                request.ProfileOutputReserveTokens);
+                profile.OutputReserveTokens);
             if (estimate.WireInputTokens <= maximumCandidateInputTokens)
             {
                 return input;
@@ -1384,15 +1439,55 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         }
     }
 
-    private static void ValidateProfileCapacity(ActiveTurnCompactionRequest request)
+    private static CandidateProfileSelection ResolveCandidateProfile(
+        ActiveTurnCompactionRequest request,
+        bool containsSensitiveData)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(request.ProfileContextWindowTokens);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(request.ProfileOutputReserveTokens);
-        if (request.ProfileOutputReserveTokens >= request.ProfileContextWindowTokens)
+        if (request.CandidateProfile is not { } profile)
+        {
+            return new CandidateProfileSelection(
+                request.ProfileId,
+                request.ProfileContextWindowTokens,
+                request.ProfileOutputReserveTokens,
+                ReasoningLevel.None,
+                WorkloadClass.General,
+                new ModelCapabilitySet { Streaming = true },
+                request.SelectionConstraints with { ContainsSensitiveData = containsSensitiveData },
+                null,
+                null);
+        }
+
+        return new CandidateProfileSelection(
+            profile.ProfileId,
+            profile.ContextWindowTokens,
+            profile.OutputReserveTokens,
+            profile.ReasoningLevel,
+            WorkloadClass.Summary,
+            new ModelCapabilitySet
+            {
+                Streaming = true,
+                StructuredOutput = true,
+            },
+            new ModelSelectionConstraints
+            {
+                ContainsSensitiveData = containsSensitiveData,
+                MaximumCombinedCostPerMillionTokens =
+                    request.SelectionConstraints.MaximumCombinedCostPerMillionTokens,
+            },
+            profile.SensitiveDataPolicy,
+            profile.Cost);
+    }
+
+    private static void ValidateProfileCapacity(
+        int contextWindowTokens,
+        int outputReserveTokens)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(contextWindowTokens);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(outputReserveTokens);
+        if (outputReserveTokens >= contextWindowTokens)
         {
             throw new ArgumentException(
-                "The selected profile output reserve must remain below its context window.",
-                nameof(request));
+                "The selected candidate profile output reserve must remain below its context window.");
         }
     }
 
@@ -1612,6 +1707,17 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             : projection.ToString();
     }
 
+    private sealed record CandidateProfileSelection(
+        ModelProfileId ProfileId,
+        int ContextWindowTokens,
+        int OutputReserveTokens,
+        ReasoningLevel ReasoningLevel,
+        WorkloadClass WorkloadClass,
+        ModelCapabilitySet RequiredCapabilities,
+        ModelSelectionConstraints SelectionConstraints,
+        ModelSensitiveDataPolicy? SensitiveDataPolicy,
+        ModelCostMetadata? Cost);
+
     private sealed record ProjectedText(string Text, bool WasTruncated);
 
     private sealed record ProjectedAcceptanceItem(
@@ -1739,7 +1845,8 @@ public sealed class ActiveTurnCompactor : IActiveTurnCompactor
         var startedAt = _timeProvider.GetTimestamp();
         using var activity = ActivitySource.StartActivity("active_turn.compact");
         activity?.SetTag("threadsmith.run.id", request.RunId.Value.ToString("D"));
-        activity?.SetTag("threadsmith.model.profile_id", request.ProfileId.Value.ToString("D"));
+        var candidateProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId;
+        activity?.SetTag("threadsmith.model.profile_id", candidateProfileId.Value.ToString("D"));
         activity?.SetTag("threadsmith.active_turn.source_groups", request.EligiblePrefix.Count);
         activity?.SetTag("threadsmith.active_turn.before_input_tokens", request.BeforeInputTokens);
         activity?.SetTag("threadsmith.active_turn.pressure_target_tokens", request.PressureTargetTokens);

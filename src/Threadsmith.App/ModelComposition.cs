@@ -33,17 +33,22 @@ internal static class ModelComposition
         ConfigurationPaths paths,
         ISecretResolver secretResolver,
         ILoggerFactory loggerFactory,
-        string? rawModelLogPath = null)
+        string? rawModelLogPath = null,
+        IConfiguration? trustedConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        trustedConfiguration ??= configuration;
 
         var validatedRawModelLogPath = await ValidateRawModelLogPathAsync(
             paths.RepositoryRoot,
             rawModelLogPath,
             CancellationToken.None).ConfigureAwait(false);
+        var modelExchangeLog = string.IsNullOrWhiteSpace(validatedRawModelLogPath)
+            ? null
+            : new JsonlModelExchangeLog(validatedRawModelLogPath);
 
         // One application-lifetime pool follows Microsoft's HttpClient guidance. Profile cancellation owns
         // request deadlines, while bounded handler settings refresh DNS and constrain connection resources.
@@ -72,6 +77,12 @@ internal static class ModelComposition
                 openAiRegistration,
                 registry,
                 loggerFactory);
+            var trustedCatalog = LoadTrustedCatalog(
+                trustedConfiguration,
+                paths,
+                openAiRegistration,
+                registry,
+                loggerFactory);
             if (effectiveCatalog?.Configuration.Providers.Any(
                 provider => provider is OpenAiCodexProviderConfiguration) == true)
             {
@@ -96,27 +107,17 @@ internal static class ModelComposition
                 : await codexCache.LoadAsync(codexStartupToken.Token).ConfigureAwait(false);
             if (codexConfiguration is not null)
             {
-                var baseConfiguration = effectiveCatalog?.Configuration
-                    ?? new ModelProviderCatalogConfiguration();
-                if (baseConfiguration.Providers.Any(provider => string.Equals(
-                    provider.Id,
-                    codexConfiguration.Id,
-                    StringComparison.OrdinalIgnoreCase)))
-                {
-                    throw new InvalidOperationException(
-                        "The authenticated Codex provider is host-owned and may not be overridden by provider catalogs.");
-                }
-
-                ModelProviderConfiguration[] providers = [.. baseConfiguration.Providers, codexConfiguration];
-                effectiveCatalog = new EffectiveModelProviderCatalog(
-                    baseConfiguration with
-                    {
-                        Providers = providers,
-                        DefaultProviderId = baseConfiguration.DefaultProviderId ?? codexConfiguration.Id,
-                        DefaultModelId = baseConfiguration.DefaultModelId ?? codexConfiguration.Models[0].Id,
-                    },
+                var enforceHttps = configuration.GetValue("model:enforceModelEndpointHttps", true);
+                effectiveCatalog = AddHostOwnedCodexProvider(
+                    effectiveCatalog,
+                    codexConfiguration,
                     registry,
-                    configuration.GetValue("model:enforceModelEndpointHttps", true));
+                    enforceHttps);
+                trustedCatalog = AddHostOwnedCodexProvider(
+                    trustedCatalog,
+                    codexConfiguration,
+                    registry,
+                    enforceHttps);
             }
 
             var catalog = effectiveCatalog?.ModelCatalog
@@ -146,35 +147,62 @@ internal static class ModelComposition
                     configuredProviders,
                     preferences,
                     paths.RepositoryConfiguration);
+
+                ConfiguredModelProvider CreateConfiguredProvider(
+                    EffectiveModelProviderCatalog providerCatalog,
+                    Func<ModelProfileId?> selectCurrentProfile,
+                    SecretProviderTrust minimumSecretTrust) =>
+                    new(
+                        httpClient,
+                        providerCatalog,
+                        async (secretReference, cancellationToken) => string.Equals(
+                            secretReference,
+                            OpenAiCodexProviderRegistration.OAuthSecretReference,
+                            StringComparison.Ordinal)
+                                ? await codexOAuth.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false)
+                                : await ResolveModelSecretAsync(
+                                    secretResolver,
+                                    secretReference,
+                                    minimumSecretTrust,
+                                    cancellationToken).ConfigureAwait(false),
+                        selectCurrentProfile,
+                        async (secretReference, rejectedSecret, cancellationToken) => string.Equals(
+                            secretReference,
+                            OpenAiCodexProviderRegistration.OAuthSecretReference,
+                            StringComparison.Ordinal)
+                                ? await codexOAuth.RefreshAccessTokenAsync(
+                                    rejectedSecret,
+                                    cancellationToken).ConfigureAwait(false)
+                                : null);
+
+                var provider = CreateOptionalLoggingProvider(
+                    CreateConfiguredProvider(
+                        configuredProviders,
+                        () => preferences.CurrentProfileId,
+                        SecretProviderTrust.RepositoryOwned),
+                    modelExchangeLog);
+                var trustedModelCatalog = trustedCatalog?.ModelCatalog
+                    ?? new ConfiguredModelCatalog([]);
+                var trustedProvider = trustedCatalog is null
+                    ? provider
+                    : CreateOptionalLoggingProvider(
+                        CreateConfiguredProvider(
+                            trustedCatalog,
+                            static () => null,
+                            SecretProviderTrust.UserOwned),
+                        modelExchangeLog);
                 return new ModelServices(
                     httpClient,
                     catalog,
-                    CreateOptionalLoggingProvider(
-                        new ConfiguredModelProvider(
-                            httpClient,
-                            configuredProviders,
-                            async (secretReference, cancellationToken) => string.Equals(
-                                secretReference,
-                                OpenAiCodexProviderRegistration.OAuthSecretReference,
-                                StringComparison.Ordinal)
-                                    ? await codexOAuth.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false)
-                                    : await ResolveModelSecretAsync(secretResolver, secretReference, cancellationToken).ConfigureAwait(false),
-                            () => preferences.CurrentProfileId,
-                            async (secretReference, rejectedSecret, cancellationToken) => string.Equals(
-                                secretReference,
-                                OpenAiCodexProviderRegistration.OAuthSecretReference,
-                                StringComparison.Ordinal)
-                                    ? await codexOAuth.RefreshAccessTokenAsync(
-                                        rejectedSecret,
-                                        cancellationToken).ConfigureAwait(false)
-                                    : null),
-                        validatedRawModelLogPath),
+                    provider,
                     activeModels.Current.Profile,
                     effectiveCatalog?.DefaultModelId,
                     activeModels.Current.Profile.Name,
                     preferences,
                     activeModels,
-                    codexOAuth);
+                    codexOAuth,
+                    trustedModelCatalog,
+                    trustedProvider);
             }
 
             var script = new ScriptedSession
@@ -199,7 +227,7 @@ internal static class ModelComposition
                 catalog,
                 CreateOptionalLoggingProvider(
                     new FakeModelProvider(script, TimeSpan.FromMilliseconds(25)),
-                    validatedRawModelLogPath),
+                    modelExchangeLog),
                 startupProfile: null,
                 preferredProfileId: null,
                 "Scripted demo (offline)",
@@ -213,6 +241,59 @@ internal static class ModelComposition
             httpClient.Dispose();
             throw;
         }
+    }
+
+    /// <summary>Resolves the optional trusted active-turn compaction profile and validates its static workload contract.</summary>
+    internal static ModelProfile? ResolveActiveTurnCompactionProfile(
+        IConfiguration trustedConfiguration,
+        ConfiguredModelCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        ArgumentNullException.ThrowIfNull(catalog);
+        var configuredProfileId = trustedConfiguration["context:activeTurnCompaction:profileId"];
+        if (configuredProfileId is null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(configuredProfileId)
+            || !Guid.TryParse(configuredProfileId, out var profileGuid))
+        {
+            throw new InvalidOperationException(
+                "Trusted context:activeTurnCompaction:profileId must be a valid model profile GUID.");
+        }
+
+        ModelProfile profile;
+        try
+        {
+            profile = catalog.Get(new ModelProfileId(profileGuid));
+        }
+        catch (KeyNotFoundException exception)
+        {
+            throw new InvalidOperationException(
+                "Trusted active-turn compaction configuration refers to a missing or disabled model profile.",
+                exception);
+        }
+
+        var negotiation = ModelCapabilityNegotiator.Negotiate(
+            profile,
+            new ModelSelectionRequest
+            {
+                WorkloadClass = WorkloadClass.Summary,
+                RequiredCapabilities = new ModelCapabilitySet
+                {
+                    Streaming = true,
+                    StructuredOutput = true,
+                },
+            });
+        if (!negotiation.IsCompatible)
+        {
+            throw new InvalidOperationException(
+                $"Active-turn compaction profile '{profile.Name}' is incompatible: "
+                + string.Join("; ", negotiation.RejectionReasons) + ".");
+        }
+
+        return profile;
     }
 
     /// <summary>Validates an explicit raw model exchange log path before any request content can be persisted.</summary>
@@ -300,6 +381,24 @@ internal static class ModelComposition
                 exception.GetType().Name);
             return null;
         }
+    }
+
+    /// <summary>Resolves a typed model credential only at the outbound provider boundary.</summary>
+    internal static async Task<string?> ResolveModelSecretAsync(
+        ISecretResolver secretResolver,
+        string secretReference,
+        SecretProviderTrust minimumTrust,
+        CancellationToken cancellationToken)
+    {
+        var request = new SecretResolutionRequest
+        {
+            Reference = SecretReference.Parse(secretReference),
+            ComponentId = "models:provider",
+            Purpose = "authenticate an outbound configured model request",
+            MinimumTrust = minimumTrust,
+        };
+        var result = await secretResolver.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
+        return result.Value?.Reveal();
     }
 
     /// <summary>Returns whether the path is inside the directory, including equality.</summary>
@@ -407,29 +506,76 @@ internal static class ModelComposition
     private sealed record RawModelLogGitProcessResult(int ExitCode, string StandardOutput);
 
     /// <summary>Wraps the provider with explicit model exchange diagnostics when requested for this process.</summary>
-    private static IModelProvider CreateOptionalLoggingProvider(IModelProvider provider, string? rawModelLogPath)
+    private static IModelProvider CreateOptionalLoggingProvider(
+        IModelProvider provider,
+        JsonlModelExchangeLog? modelExchangeLog)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        return string.IsNullOrWhiteSpace(rawModelLogPath)
+        return modelExchangeLog is null
             ? provider
-            : new LoggingModelProvider(provider, new JsonlModelExchangeLog(rawModelLogPath));
+            : new LoggingModelProvider(provider, modelExchangeLog);
     }
 
-    /// <summary>Resolves a typed model credential only at the outbound provider boundary.</summary>
-    private static async Task<string?> ResolveModelSecretAsync(
-        ISecretResolver secretResolver,
-        string secretReference,
-        CancellationToken cancellationToken)
+    /// <summary>Adds one host-owned authenticated Codex provider to a catalog without permitting overrides.</summary>
+    private static EffectiveModelProviderCatalog AddHostOwnedCodexProvider(
+        EffectiveModelProviderCatalog? catalog,
+        OpenAiCodexProviderConfiguration codexConfiguration,
+        ModelProviderRegistry registry,
+        bool enforceHttps)
     {
-        var request = new SecretResolutionRequest
+        var baseConfiguration = catalog?.Configuration ?? new ModelProviderCatalogConfiguration();
+        if (baseConfiguration.Providers.Any(provider => string.Equals(
+            provider.Id,
+            codexConfiguration.Id,
+            StringComparison.OrdinalIgnoreCase)))
         {
-            Reference = SecretReference.Parse(secretReference),
-            ComponentId = "models:provider",
-            Purpose = "authenticate an outbound configured model request",
-            MinimumTrust = SecretProviderTrust.RepositoryOwned,
-        };
-        var result = await secretResolver.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
-        return result.Value?.Reveal();
+            throw new InvalidOperationException(
+                "The authenticated Codex provider is host-owned and may not be overridden by provider catalogs.");
+        }
+
+        ModelProviderConfiguration[] providers = [.. baseConfiguration.Providers, codexConfiguration];
+        return new EffectiveModelProviderCatalog(
+            baseConfiguration with
+            {
+                Providers = providers,
+                DefaultProviderId = baseConfiguration.DefaultProviderId ?? codexConfiguration.Id,
+                DefaultModelId = baseConfiguration.DefaultModelId ?? codexConfiguration.Models[0].Id,
+            },
+            registry,
+            enforceHttps);
+    }
+
+    /// <summary>Loads only repository-excluding model definitions eligible for trusted auxiliary work.</summary>
+    private static EffectiveModelProviderCatalog? LoadTrustedCatalog(
+        IConfiguration trustedConfiguration,
+        ConfigurationPaths paths,
+        OpenAiCompatibleProviderRegistration openAiRegistration,
+        ModelProviderRegistry registry,
+        ILoggerFactory loggerFactory)
+    {
+        var enforceHttps = trustedConfiguration.GetValue("model:enforceModelEndpointHttps", true);
+        if (File.Exists(paths.UserProviderCatalog))
+        {
+            return ModelProviderConfigurationLoader.Load(
+                Path.GetFullPath(paths.UserProviderCatalog),
+                Path.GetFullPath(paths.RepositoryProviderCatalog),
+                registry,
+                limits: null,
+                enforceHttps: enforceHttps,
+                includeRepository: false,
+                observeDiagnostic: null);
+        }
+
+        var legacyCatalog = ModelProfileConfigurationLoader.Load(trustedConfiguration);
+        if (legacyCatalog.Profiles.Count == 0)
+        {
+            return null;
+        }
+
+        loggerFactory.CreateLogger("Threadsmith.Models.ProviderCatalog").LogWarning(
+            "Legacy model:profiles configuration is deprecated for trusted auxiliary model selection; "
+            + "migrate to ~/.threadsmith/providers.json before a future announced removal milestone.");
+        return openAiRegistration.CreateLegacyCatalog(legacyCatalog, enforceHttps);
     }
 
     /// <summary>Loads dedicated catalogs or adapts legacy profiles without allowing ambiguous mixed schemas.</summary>
@@ -530,7 +676,9 @@ internal sealed class ModelServices : IDisposable
         string status,
         SessionModelPreferences sessionPreferences,
         ActiveModelSelectionService? activeModels,
-        IDisposable? additionalResource = null)
+        IDisposable? additionalResource = null,
+        ConfiguredModelCatalog? trustedCatalog = null,
+        IModelProvider? trustedProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(catalog);
@@ -541,6 +689,8 @@ internal sealed class ModelServices : IDisposable
         _additionalResource = additionalResource;
         Catalog = catalog;
         Provider = provider;
+        TrustedCatalog = trustedCatalog ?? catalog;
+        TrustedProvider = trustedProvider ?? provider;
         StartupProfile = startupProfile;
         PreferredProfileId = preferredProfileId;
         Status = status;
@@ -553,6 +703,12 @@ internal sealed class ModelServices : IDisposable
 
     /// <summary>Gets the provider used for session model requests.</summary>
     internal IModelProvider Provider { get; }
+
+    /// <summary>Gets the repository-excluding profiles eligible for trusted auxiliary model work.</summary>
+    internal ConfiguredModelCatalog TrustedCatalog { get; }
+
+    /// <summary>Gets the repository-excluding provider router used for trusted auxiliary model work.</summary>
+    internal IModelProvider TrustedProvider { get; }
 
     /// <summary>Gets the profile used to initialize session preferences, when configured.</summary>
     internal ModelProfile? StartupProfile { get; }

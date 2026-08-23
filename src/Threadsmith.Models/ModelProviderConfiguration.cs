@@ -495,6 +495,7 @@ public static class ModelProviderConfigurationLoader
         ModelProviderRegistry registry,
         ModelProviderCatalogLimits? limits = null,
         bool enforceHttps = true,
+        bool includeRepository = true,
         Action<ModelProviderCatalogDiagnostic>? observeDiagnostic = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userCatalogPath);
@@ -508,7 +509,7 @@ public static class ModelProviderConfigurationLoader
 
         limits ??= new ModelProviderCatalogLimits();
         var user = File.Exists(userCatalogPath) ? ParseLayer(userCatalogPath, limits, "user") : null;
-        var repository = File.Exists(repositoryCatalogPath)
+        var repository = includeRepository && File.Exists(repositoryCatalogPath)
             ? ParseLayer(repositoryCatalogPath, limits, "repository")
             : null;
         observeDiagnostic?.Invoke(new ModelProviderCatalogDiagnostic(

@@ -86,9 +86,27 @@ internal static class ApplicationComposition
             new ConversationSummaryValidator(compactionPolicy, host.Sanitizer),
             compactionPolicy);
         var activeTurnCompactionPolicy = new ActiveTurnCompactionPolicy();
+        var activeTurnCompactionModelProfile = ModelComposition.ResolveActiveTurnCompactionProfile(
+            host.TrustedConfiguration,
+            integration.Models.TrustedCatalog);
+        var activeTurnCompactionProfile = activeTurnCompactionModelProfile is null
+            ? null
+            : new ActiveTurnCompactionCandidateProfile
+            {
+                ProfileId = activeTurnCompactionModelProfile.Id,
+                ContextWindowTokens = activeTurnCompactionModelProfile.ContextWindow,
+                OutputReserveTokens =
+                    activeTurnCompactionModelProfile.EffectiveRequestOutputTokenReserve,
+                ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
+                SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
+                Cost = activeTurnCompactionModelProfile.Cost,
+            };
+        var activeTurnCandidateProvider = activeTurnCompactionModelProfile is null
+            ? integration.Models.Provider
+            : integration.Models.TrustedProvider;
         var activeTurnCompactor = new ActiveTurnCompactor(
             new ModelActiveTurnCompactionCandidateProvider(
-                integration.Models.Provider,
+                activeTurnCandidateProvider,
                 activeTurnCompactionPolicy),
             new ActiveTurnCompactionValidator(activeTurnCompactionPolicy, host.Sanitizer),
             activeTurnCompactionPolicy);
@@ -229,7 +247,8 @@ internal static class ApplicationComposition
             },
             repositoryMemoryGovernor: repositoryMemoryGovernor,
             activeTurnCompactor: activeTurnCompactor,
-            activeTurnCompactionPolicy: activeTurnCompactionPolicy);
+            activeTurnCompactionPolicy: activeTurnCompactionPolicy,
+            activeTurnCompactionProfile: activeTurnCompactionProfile);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(

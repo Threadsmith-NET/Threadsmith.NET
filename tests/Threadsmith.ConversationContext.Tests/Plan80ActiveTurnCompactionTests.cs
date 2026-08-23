@@ -1,5 +1,6 @@
 namespace Threadsmith.ConversationContext.Tests;
 
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -393,6 +394,177 @@ public static class Plan80ActiveTurnCompactionTests
             StringComparison.Ordinal);
         Assert.Equal(ModelMessageRole.System, dispatched.Messages[0].Role);
         Assert.Equal(ModelMessageRole.User, dispatched.Messages[1].Role);
+    }
+
+    /// <summary>An explicit compaction profile independently owns routing, capacity, reasoning, and workload.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_uses_independent_compaction_profile()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate);
+        var policy = new ActiveTurnCompactionPolicy();
+        var candidateProfile = CreateCandidateProfile(ModelSensitiveDataPolicy.Allowed);
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, policy);
+        var request = CreateRequest([group]) with
+        {
+            CandidateProfile = candidateProfile,
+            ToolContinuationRound = 9,
+            ContainsSensitiveData = true,
+            SelectionConstraints = new ModelSelectionConstraints
+            {
+                ContainsSensitiveData = true,
+                MinimumContextWindow = 120_000,
+                MaximumCombinedCostPerMillionTokens = 5,
+            },
+        };
+
+        await provider.PrepareCandidate(request).ExecuteAsync();
+
+        var dispatched = Assert.Single(model.Requests);
+        Assert.NotEqual(request.ProfileId, dispatched.ResolvedProfileId);
+        Assert.Equal(candidateProfile.ProfileId, dispatched.ResolvedProfileId);
+        Assert.Equal(9, dispatched.ToolContinuationRound);
+        Assert.Equal(WorkloadClass.Summary, dispatched.WorkloadClass);
+        Assert.Equal(ReasoningLevel.Low, dispatched.ReasoningLevel);
+        Assert.True(dispatched.RequiredCapabilities.Streaming);
+        Assert.True(dispatched.RequiredCapabilities.StructuredOutput);
+        Assert.False(dispatched.RequiredCapabilities.ToolCalls);
+        Assert.True(dispatched.ContainsSensitiveData);
+        Assert.True(dispatched.SelectionConstraints.ContainsSensitiveData);
+        Assert.Equal(0, dispatched.SelectionConstraints.MinimumContextWindow);
+        Assert.Equal(5, dispatched.SelectionConstraints.MaximumCombinedCostPerMillionTokens);
+        Assert.Equal(1_024, dispatched.WireEstimate?.OutputReserveTokens);
+        Assert.True(dispatched.WireEstimate?.WireInputTokens <= 6_976);
+        Assert.Empty(dispatched.Tools);
+    }
+
+    /// <summary>Main-profile fallback preserves its already-authorized sensitivity boundary for later tool results.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_fallback_does_not_reclassify_main_profile()
+    {
+        var group = CreateGroup(1) with { Sensitivity = ConversationSensitivity.Sensitive };
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate);
+        var policy = new ActiveTurnCompactionPolicy();
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, policy);
+        var request = CreateRequest([group]) with
+        {
+            CandidateProfile = null,
+            ContainsSensitiveData = false,
+            SelectionConstraints = new ModelSelectionConstraints { ContainsSensitiveData = false },
+        };
+
+        await provider.PrepareCandidate(request).ExecuteAsync();
+
+        var dispatched = Assert.Single(model.Requests);
+        Assert.Equal(request.ProfileId, dispatched.ResolvedProfileId);
+        Assert.False(dispatched.ContainsSensitiveData);
+        Assert.False(dispatched.SelectionConstraints.ContainsSensitiveData);
+        Assert.Equal(WorkloadClass.General, dispatched.WorkloadClass);
+    }
+
+    /// <summary>Compactor telemetry attributes the actual candidate profile rather than the ordinary profile.</summary>
+    [Fact]
+    public static async Task Compactor_span_uses_request_candidate_profile_identity()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var candidateProfile = CreateCandidateProfile(ModelSensitiveDataPolicy.Allowed);
+        var request = CreateRequest([group]) with { CandidateProfile = candidateProfile };
+        Activity? stoppedActivity = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => string.Equals(
+                source.Name,
+                "Threadsmith.Context.ActiveTurnCompaction",
+                StringComparison.Ordinal),
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (string.Equals(
+                    activity.GetTagItem("threadsmith.run.id")?.ToString(),
+                    request.RunId.Value.ToString("D"),
+                    StringComparison.Ordinal))
+                {
+                    stoppedActivity = activity;
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            new FixedCandidateProvider(candidate),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
+            policy);
+
+        var result = await CompactWithNoOpObserverAsync(compactor, request);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, result.Outcome);
+        Assert.NotNull(stoppedActivity);
+        Assert.Equal(
+            candidateProfile.ProfileId.Value.ToString("D"),
+            stoppedActivity.GetTagItem("threadsmith.model.profile_id")?.ToString());
+    }
+
+    /// <summary>Sensitive candidate input is rejected before hooks or provider I/O when the configured profile prohibits it.</summary>
+    [Fact]
+    public static async Task Independent_candidate_profile_rejects_sensitive_input_during_preflight()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate);
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
+            policy);
+        var observer = new RecordingAttemptObserver();
+        var request = CreateRequest([group]) with
+        {
+            CandidateProfile = CreateCandidateProfile(ModelSensitiveDataPolicy.Prohibited),
+            ContainsSensitiveData = false,
+            SelectionConstraints = new ModelSelectionConstraints { ContainsSensitiveData = false },
+        };
+
+        var result = await compactor.CompactAsync(request, observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.ProviderFailure, result.Outcome);
+        Assert.Equal(0, result.ProviderCalls);
+        Assert.Empty(model.Requests);
+        Assert.Empty(observer.Order);
+        Assert.Empty(observer.Usages);
+    }
+
+    /// <summary>A request-specific cost ceiling rejects an expensive explicit profile before hooks or provider I/O.</summary>
+    [Fact]
+    public static async Task Independent_candidate_profile_honors_request_cost_ceiling_during_preflight()
+    {
+        var group = CreateGroup(1);
+        var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
+        var model = new CandidateModelProvider(candidate);
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
+            policy);
+        var observer = new RecordingAttemptObserver();
+        var request = CreateRequest([group]) with
+        {
+            CandidateProfile = CreateCandidateProfile(ModelSensitiveDataPolicy.Allowed),
+            SelectionConstraints = new ModelSelectionConstraints
+            {
+                MaximumCombinedCostPerMillionTokens = 1,
+            },
+        };
+
+        var result = await compactor.CompactAsync(request, observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.ProviderFailure, result.Outcome);
+        Assert.Equal(0, result.ProviderCalls);
+        Assert.Empty(model.Requests);
+        Assert.Empty(observer.Order);
     }
 
     /// <summary>Caller cancellation propagates and cannot activate a partial summary.</summary>
@@ -1084,6 +1256,24 @@ public static class Plan80ActiveTurnCompactionTests
             ProfileOutputReserveTokens = 8_000,
             BeforeInputTokens = 50_000,
             PressureTargetTokens = 40_000,
+        };
+    }
+
+    private static ActiveTurnCompactionCandidateProfile CreateCandidateProfile(
+        ModelSensitiveDataPolicy sensitiveDataPolicy)
+    {
+        return new ActiveTurnCompactionCandidateProfile
+        {
+            ProfileId = ModelProfileId.New(),
+            ContextWindowTokens = 8_000,
+            OutputReserveTokens = 1_024,
+            ReasoningLevel = ReasoningLevel.Low,
+            SensitiveDataPolicy = sensitiveDataPolicy,
+            Cost = new ModelCostMetadata
+            {
+                InputPerMillionTokens = 1,
+                OutputPerMillionTokens = 1,
+            },
         };
     }
 

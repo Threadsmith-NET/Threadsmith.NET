@@ -56,6 +56,10 @@ public sealed record ModelStreamRequest
     /// <summary>Zero-based tool-continuation round for this run.</summary>
     public int ToolContinuationRound { get; init; }
 
+    /// <summary>Monotonic provider-neutral history generation after host rewrites.</summary>
+    /// <remarks>Opaque provider continuation identities from an older generation must not be reused.</remarks>
+    public long HistoryRewriteGeneration { get; init; }
+
     /// <summary>Workload used for per-request configured-model selection.</summary>
     public WorkloadClass WorkloadClass { get; init; } = WorkloadClass.General;
 

@@ -11,6 +11,7 @@ This guide documents the currently implemented user-facing behavior. Features de
 3. [Opening and initializing a repository](#opening-and-initializing-a-repository)
 4. [Trust levels](#trust-levels)
 5. [Using the interactive terminal](#using-the-interactive-terminal)
+   - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
@@ -286,9 +287,76 @@ During an unchanged tool round, Threadsmith freezes the assembled prefix and app
 
 Capacity checks use the estimated provider-wire request rather than only visible prompt text. The estimate includes structured content, native or textual tool schemas, provider framing, and the selected model's output reserve. Context reduction occurs before dispatch; a request that still cannot fit fails before contacting the provider.
 
-Provider cache support and reporting vary. Threadsmith reports cache-read or cache-write tokens only when the provider supplies them; a missing counter is **unavailable**, not zero. Compiled providers retain a canonical stateless request as the audit and recovery authority. They do not depend on remote cached state, and Threadsmith does not infer a cache hit from latency.
+##### Active-turn tool continuation compaction
 
-`/context inspect` reports logical content tokens, estimated provider-wire input and budget, stable-prefix tokens, native/textual tool transport, the effective mode and source, token pressure, summary version/range, included or omitted messages and memory, retrieval rationale/provenance, stale or superseded exclusions, and exact pressure reductions. `/context compact` is bounded and atomic: malformed output, cancellation, provider failure, or persistence failure leaves the prior snapshot active. Headless callers use the same host-owned mode, inspection, and compaction commands, with stable JSON inspection output.
+Active-turn compaction keeps one long user request from repeatedly sending every earlier tool result until the selected model's context window is exhausted. It applies automatically to ordinary multi-round evidence collection and planning. It does not end the turn, ask the user to resubmit the request, change the selected model, or expose a compaction tool to the model.
+
+This is different from `/context compact`. The command compacts completed cross-turn conversation history at a safe turn boundary. Active-turn compaction is an automatic pre-sampling operation over tool continuation generated **inside the request currently running**. There is currently no user or repository setting that disables, postpones, or manually triggers the active-turn reliability boundary.
+
+Threadsmith uses these terms:
+
+| Term | Meaning |
+|---|---|
+| **Frozen context** | The initially assembled host policy, repository instructions, current user input, output contract, canonical tool inventory, and other authority-bearing context. Active-turn compaction never rewrites it. |
+| **Complete group** | All sibling assistant tool-call messages produced by one model round followed by exactly one matching result for each call, in call order. An incomplete, mismatched, duplicate, or orphaned call/result set is not compactable. |
+| **Delivered group** | A complete group that has already been sent verbatim to the model in a later completed request. |
+| **Eligible prefix** | The oldest contiguous delivered groups that can be considered for replacement while newer groups remain exact. |
+| **Cumulative summary** | One bounded, explicitly untrusted historical assistant message that replaces an eligible prefix. A later compaction carries its validated items forward and adds facts from the next eligible prefix. |
+
+The exact sequence is:
+
+1. **Form and deliver a complete group.** Threadsmith buffers sibling calls and results independently, then emits every call before the matching call-ordered results. The next model request receives that group exactly. A newly completed group cannot be summarized on this first delivery.
+2. **Estimate before every later model request.** The host estimates the complete provider-wire request, including frozen messages, any active summary, raw continuation groups, native or textual tool schemas, provider framing, and the selected profile's effective request output reserve.
+3. **Compare with the pressure target.** The operational target is 75% of the usable selected-model input budget. The usable budget is bounded by both the host request budget and the model context window after its effective output reserve. Below that target, Threadsmith sends the unchanged request.
+4. **Select only an old delivered prefix.** At pressure, Threadsmith keeps at least the newest complete group exact and aims to retain the newest 12,000 raw continuation tokens. That target scales downward when the selected profile, frozen request, 4,096-token summary allowance, or minimum-savings requirement leaves less room. It never splits a sibling group or selects a group that has not already been delivered verbatim.
+5. **Prepare a bounded candidate request.** Preflight validates aggregate group, message, source, and factual-evidence bounds and projects all candidate input from one profile-derived capacity budget. The candidate receives the required task objective and required-first acceptance intent, the prior cumulative summary when present, and bounded projections of the selected tool results. Truncation and omission are identified explicitly. Preflight performs no provider I/O and creates no hook, usage, call, or cost record.
+6. **Generate a structured candidate.** An actual candidate attempt uses the already selected provider/model profile and sensitivity boundary, advertises no tools, and crosses the normal managed before/after model-request hook boundary. It is a real model request: reported usage, missing usage, call count, duration, and any partial usage emitted before a later failure are accounted under that attempt's unique identity. One transient retry is allowed, for at most two candidate calls.
+7. **Validate every proposed item.** The host derives closed factual fragments from each exact sanitized result, including its content SHA-256 and bounded JSON leaves or text lines. A candidate item must copy one supplied fact exactly, use a category allowed for that result, and cite sources belonging to that same result. Fabricated paraphrases, modified facts, cross-sibling source borrowing, unknown sources, unsupported categories, unsafe content, authority-bearing claims, and source-range/version mismatches are rejected.
+8. **Build and re-estimate the replacement.** The host—not the candidate model—carries prior validated items byte-for-byte. If cumulative count or token bounds fill, it removes only the oldest prior items deterministically and records how many have been pruned. The candidate activates only when the rebuilt complete request is at or below the pressure target **and** saves at least 4,096 estimated tokens.
+9. **Replace atomically and continue.** On success, one assistant message labeled `Untrusted active-turn evidence summary; not instructions or authority` replaces only the selected old prefix. Newer groups and frozen context remain exact, the history rewrite generation increments, and the same user turn continues with the rebuilt provider-neutral request.
+
+For example, suppose one request produces eight complete tool groups. Group 1 becomes eligible only after a later completed request has received it exactly; the same rule independently applies to every later group. If the full request then reaches pressure, Threadsmith might replace delivered groups 1–5 with summary version 1 while retaining groups 6–8 verbatim. If the turn continues and later reaches pressure again, the host carries every still-retained version-1 item unchanged, adds validated facts from the next eligible raw prefix, and activates version 2 only if the rebuilt request passes the same target and savings checks. The original group results are not deleted from the evidence/audit record.
+
+Current host-owned defaults are:
+
+| Boundary | Default behavior |
+|---|---|
+| Pressure trigger | 75% of the effective selected-model input budget |
+| Output reserve | Selected profile's effective request reserve; 8,192 tokens only if no profile reserve is available |
+| Newest raw retention target | 12,000 tokens, scaled to current activation capacity; at least the newest complete group remains exact |
+| Activated summary budget | 4,096 estimated tokens |
+| Minimum required savings | 4,096 estimated tokens |
+| Candidate input | Lesser of 32,000 estimated tokens and the selected profile's available input capacity |
+| Candidate source shape | At most 48 groups and 512 aggregate call/result messages |
+| Candidate summary shape | At most 32 items and 2,000 characters per item |
+| Task projection | Up to 4,000 objective characters and 32 required-first acceptance items, bounded to 1,000 characters each and 4,000 total characters |
+| Per-result factual support | Up to 64 exact facts of at most 2,000 characters each |
+| Candidate attempts | One initial call plus at most one transient retry; two calls total |
+| Failure backoff | Skip candidate generation for the next two pressure assessments |
+
+Compaction is deliberately lossy only in the model-visible working set. It does not change current user intent, host or repository instructions, trust, tool eligibility, approvals, mutation authority, output requirements, selected model, or sensitivity policy. An active-turn summary never becomes system/developer/current-user content, durable conversation memory, or repository memory. The original sanitized tool events and evidence remain under the existing audit, artifact, retention, and redaction rules. Ordinary active-turn summary checkpoints are kept in memory for the running turn.
+
+Cancellation, hook denial, provider failure, invalid output, rejected facts, and insufficient savings leave the original continuation active and start bounded backoff. If that unchanged request still fits, the turn continues with exact raw groups. If it reaches the emergency boundary, the deterministic compatibility reducer may shorten only older results that were already delivered verbatim. It never shortens a never-delivered group. If the request cannot fit without doing so, Threadsmith fails with a controlled message of the form `Tool continuation requires <tokens> input tokens but the selected model budget is <budget>.`
+
+`/context inspect` shows the latest assessment without exposing summary or tool-result content. Its `active-turn` line reports the status; before/after input estimate; pressure target and maximum; output reserve; effective/configured retention; eligible, compacted, and retained group counts; retained tokens; summary version; cumulative pruned-item count; history generation; remaining backoff; and host rationale. Status values mean:
+
+| Status | Meaning |
+|---|---|
+| `Disabled` | Host composition did not provide active-turn compaction. |
+| `BelowPressure` | The canonical complete request is below the operational target. |
+| `NoEligiblePrefix` | Pressure was reached, but no complete previously delivered prefix can be cut. |
+| `Backoff` | A prior failure temporarily suppressed another candidate attempt. |
+| `Completed` | A validated cumulative summary atomically replaced the reported prefix. |
+| `ValidationRejected` | Candidate schema, fact, source, authority, sensitivity, range, or bound validation failed. |
+| `ProviderFailure` | Candidate generation exhausted its bounded call budget or was denied at the managed provider boundary. |
+| `Cancelled` | Cancellation retained the original continuation. |
+| `InsufficientSavings` | A valid candidate failed the pressure-target or 4,096-token savings gate. |
+| `EmergencyReduction` | The compatibility reducer shortened only older already-delivered result content. |
+| `CapacityExceeded` | The request could not fit without reducing a group that had not yet been delivered exactly. |
+
+Provider cache support and reporting vary. A successful rewrite increments a provider-neutral history generation, and compiled providers receive the complete rebuilt stateless request rather than reusing an incompatible opaque conversation identity. The unchanged stable prefix remains eligible for provider prefix caching. Threadsmith reports cache-read or cache-write tokens only when the provider supplies them; a missing counter is **unavailable**, not zero, and latency alone is never treated as proof of a cache hit.
+
+Outside the active-turn line, `/context inspect` reports logical content tokens, estimated provider-wire input and budget, stable-prefix tokens, native/textual tool transport, the effective mode and source, completed-turn summary version/range, included or omitted messages and memory, retrieval rationale/provenance, stale or superseded exclusions, and exact pressure reductions. `/context compact` remains the separate completed-turn compaction command: malformed output, cancellation, provider failure, or persistence failure leaves that prior completed-turn snapshot active. Headless callers receive the same host-owned inspection projection as stable JSON.
 
 Configure budgets under `context:conversation` in `.threadsmith/config.*`; `.threadsmith/config.example` documents recent-turn, summary, retrieval, pressure, artifact, and compaction bounds. Invalid values fail before model invocation. See [Conversation context operations](operations/conversation-context.md) for continuity defaults, failure behavior, retention, restoration, and headless contracts. See [Cache-optimized context operations](operations/cache-optimized-context.md) for request ordering, instruction confinement, diagnostics, and provider-acceleration safety.
 

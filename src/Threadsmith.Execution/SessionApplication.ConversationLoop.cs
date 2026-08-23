@@ -2,6 +2,8 @@ namespace Threadsmith.Execution;
 
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Models;
@@ -22,7 +24,11 @@ public sealed partial class SessionApplication
         var maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
-        var loopState = new ConversationLoopState(_limits.MaxStructuredOutputCharacters);
+        var loopState = new ConversationLoopState(
+            _limits.MaxStructuredOutputCharacters,
+            _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
+            _activeTurnCompactionPolicy.MaximumFactualFactsPerResult,
+            _activeTurnCompactionPolicy.MaximumFactualFactCharacters);
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
@@ -135,12 +141,52 @@ public sealed partial class SessionApplication
             loopState.FrozenContext = context;
         }
 
+        await AssessActiveTurnCompactionAsync(
+            runId,
+            registration,
+            modelRound,
+            modelTools,
+            context,
+            loopState,
+            cancellationToken);
+        var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
             runId,
             "conversation",
             modelRound - 1,
             Guid.NewGuid());
-        var requestEnvelope = CreateRequestEnvelope(context, modelTools, loopState.ContinuationMessages);
+        RequestEnvelope requestEnvelope;
+        try
+        {
+            requestEnvelope = CreateRequestEnvelope(
+                context,
+                modelTools,
+                modelVisibleContinuation.Messages,
+                modelVisibleContinuation.FirstNeverDeliveredMessageIndex);
+        }
+        catch (BudgetExceededException)
+        {
+            await UpdateFallbackInspectionAsync(
+                registration.SessionId,
+                runId,
+                ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                afterInputTokens: null,
+                rationale: "The request cannot fit without reducing a tool group that has not been delivered verbatim.",
+                cancellationToken);
+            throw;
+        }
+
+        if (requestEnvelope.EmergencyReductionApplied)
+        {
+            await UpdateFallbackInspectionAsync(
+                registration.SessionId,
+                runId,
+                ActiveTurnCompactionInspectionStatus.EmergencyReduction,
+                requestEnvelope.WireEstimate?.WireInputTokens,
+                "The deterministic emergency compatibility reducer bounded an older delivered tool result.",
+                cancellationToken);
+        }
+
         var modelRequest = CreateModelStreamRequest(
             runId,
             registration,
@@ -150,7 +196,8 @@ public sealed partial class SessionApplication
             modelPreference,
             context,
             requestEnvelope,
-            loopState.ContinuationMessages);
+            modelVisibleContinuation.Messages,
+            loopState.HistoryRewriteGeneration);
 
         return new ConversationRound(
             runId,
@@ -162,7 +209,8 @@ public sealed partial class SessionApplication
             modelTools,
             context,
             usageRequestId,
-            modelRequest);
+            modelRequest,
+            loopState.LastGroupSequence);
     }
 
     private async Task<ConversationRoundOutcome> ExecuteConversationRoundAsync(
@@ -172,9 +220,19 @@ public sealed partial class SessionApplication
         int maximumPlanProposalRepairAttempts,
         CancellationToken cancellationToken)
     {
+        loopState.BeginCurrentGroup();
         var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
-        var modelOperationId = round.UsageRequestId.InvocationId;
-        await InvokeBeforeModelRequestHookAsync(round, modelOperationId, cancellationToken);
+        var modelHookBoundary = new ModelRequestHookBoundary(
+            round.Registration.SessionId,
+            round.RunId,
+            round.InvocationContext?.RepositoryPath,
+            round.UsageRequestId.InvocationId,
+            round.ModelRound - 1,
+            "conversation",
+            round.ModelRequest.WorkloadClass,
+            round.ModelRequest.ContainsSensitiveData,
+            round.ModelRequest.Tools.Count);
+        await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
 
         try
         {
@@ -195,13 +253,14 @@ public sealed partial class SessionApplication
                 streamState.ToolInvoked = _contextAssembler is not null;
             }
 
+            loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
+            loopState.CommitCurrentGroup(round.ModelRound);
             streamState.ModelSucceeded = true;
         }
         finally
         {
             await InvokeAfterModelRequestHookAsync(
-                round,
-                modelOperationId,
+                modelHookBoundary,
                 streamState.ModelSucceeded,
                 streamState.ReportedUsage is not null);
 
@@ -329,7 +388,7 @@ public sealed partial class SessionApplication
             {
                 loopState.RecordPlanProposalRepairAttempt();
                 var toolCallId = CreateNextToolCallId(round.ModelRound, streamState);
-                loopState.ContinuationMessages.Add(CreateToolCallMessage(
+                loopState.AddCurrentToolCall(CreateToolCallMessage(
                     toolCallId,
                     tool.ToolName,
                     tool.ArgumentsJson));
@@ -337,7 +396,7 @@ public sealed partial class SessionApplication
                     "The propose_plan arguments did not match the required plan schema. Do not return a text plan. "
                     + "Call propose_plan again with strict JSON: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. "
                     + "Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
-                loopState.ContinuationMessages.Add(CreateToolResultMessage(
+                loopState.AddCurrentToolResult(CreateToolResultMessage(
                     toolCallId,
                     tool.ToolName,
                     repairContent));
@@ -379,7 +438,7 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         var toolCallId = CreateNextToolCallId(round.ModelRound, streamState);
-        loopState.ContinuationMessages.Add(CreateToolCallMessage(
+        loopState.AddCurrentToolCall(CreateToolCallMessage(
             toolCallId,
             tool.ToolName,
             tool.ArgumentsJson));
@@ -389,7 +448,7 @@ public sealed partial class SessionApplication
                 "The host planning-exploration limit was reached, so this inspection tool was not invoked. "
                 + "If this is read-only exploration, an audit, an explanation, or diagnostics, answer directly from the gathered evidence. "
                 + "Call propose_plan only if the user is asking Threadsmith to make actual repository changes.";
-            loopState.ContinuationMessages.Add(CreateToolResultMessage(
+            loopState.AddCurrentToolResult(CreateToolResultMessage(
                 toolCallId,
                 tool.ToolName,
                 convergenceContent));
@@ -412,7 +471,7 @@ public sealed partial class SessionApplication
                 SemanticConfidenceLevel.FullSemantic,
                 ["repository", "semantic"],
                 cancellationToken);
-            loopState.ContinuationMessages.Add(CreateToolResultMessage(
+            loopState.AddCurrentToolResult(CreateToolResultMessage(
                 toolCallId,
                 tool.ToolName,
                 semanticFirstContent));
@@ -420,24 +479,21 @@ public sealed partial class SessionApplication
         }
         else if (loopState.InvokedToolKeys.Contains(toolKey))
         {
-            if (_evidenceStore is not null)
-            {
-                var repeatContent =
-                    $"Tool '{tool.ToolName}' was already called with these arguments. "
-                    + "Do not repeat it; use the earlier result or answer the user directly.";
-                await AddToolFailureEvidenceAsync(
-                    round,
-                    repeatContent,
-                    $"tool:{tool.ToolName}:duplicate",
-                    SemanticConfidenceLevel.None,
-                    ["repository"],
-                    cancellationToken);
-                loopState.ContinuationMessages.Add(CreateToolResultMessage(
-                    toolCallId,
-                    tool.ToolName,
-                    repeatContent));
-                streamState.ToolInvoked = _contextAssembler is not null;
-            }
+            var repeatContent =
+                $"Tool '{tool.ToolName}' was already called with these arguments. "
+                + "Do not repeat it; use the earlier result or answer the user directly.";
+            await AddToolFailureEvidenceAsync(
+                round,
+                repeatContent,
+                $"tool:{tool.ToolName}:duplicate",
+                SemanticConfidenceLevel.None,
+                ["repository"],
+                cancellationToken);
+            loopState.AddCurrentToolResult(CreateToolResultMessage(
+                toolCallId,
+                tool.ToolName,
+                repeatContent));
+            streamState.ToolInvoked = _contextAssembler is not null;
         }
         else
         {
@@ -510,13 +566,27 @@ public sealed partial class SessionApplication
         {
             var result = batchResult.Result;
             var content = result.ResultJson ?? result.Error ?? "Tool completed.";
+            loopState.AddCurrentResultOutcome(batchResult.CorrelationId, result.Succeeded);
+            loopState.AddCurrentSource(
+                batchResult.CorrelationId,
+                ActiveTurnSourceKind.ToolInvocation,
+                result.ToolInvocationId.Value.ToString("D"));
+            foreach (var source in result.Sources)
+            {
+                loopState.AddCurrentSource(
+                    batchResult.CorrelationId,
+                    ActiveTurnSourceKind.ToolProvenance,
+                    JsonSerializer.Serialize(source));
+            }
+
             if (_evidenceStore is not null)
             {
+                var evidenceId = EvidenceId.New();
                 var source = result.Sources.FirstOrDefault();
                 await _evidenceStore.AddAsync(
                     new Evidence
                     {
-                        EvidenceId = EvidenceId.New(),
+                        EvidenceId = evidenceId,
                         SessionId = round.Registration.SessionId,
                         RunId = round.RunId,
                         Kind = result.Succeeded ? EvidenceKind.ToolResult : EvidenceKind.Failure,
@@ -538,9 +608,13 @@ public sealed partial class SessionApplication
                             : ["repository"],
                     },
                     cancellationToken);
+                loopState.AddCurrentSource(
+                    batchResult.CorrelationId,
+                    ActiveTurnSourceKind.Evidence,
+                    evidenceId.Value.ToString("D"));
             }
 
-            loopState.ContinuationMessages.Add(CreateToolResultMessage(
+            loopState.AddCurrentToolResult(CreateToolResultMessage(
                 batchResult.CorrelationId,
                 result.ToolId,
                 content));
@@ -550,8 +624,7 @@ public sealed partial class SessionApplication
     }
 
     private async Task InvokeBeforeModelRequestHookAsync(
-        ConversationRound round,
-        Guid modelOperationId,
+        ModelRequestHookBoundary boundary,
         CancellationToken cancellationToken)
     {
         if (_hooks is null)
@@ -561,16 +634,17 @@ public sealed partial class SessionApplication
 
         var hookDecision = await _hooks.InvokeAsync(
             HookPoint.BeforeModelRequest,
-            round.Registration.SessionId,
-            round.RunId,
-            round.InvocationContext?.RepositoryPath,
-            modelOperationId,
-            round.ModelRound - 1,
+            boundary.SessionId,
+            boundary.RunId,
+            boundary.RepositoryIdentity,
+            boundary.OperationId,
+            boundary.Generation,
             new Dictionary<string, string>
             {
-                ["workload"] = round.ModelRequest.WorkloadClass.ToString(),
-                ["containsSensitiveData"] = round.ModelRequest.ContainsSensitiveData.ToString(),
-                ["toolCount"] = round.ModelRequest.Tools.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["stage"] = boundary.Stage,
+                ["workload"] = boundary.WorkloadClass.ToString(),
+                ["containsSensitiveData"] = boundary.ContainsSensitiveData.ToString(),
+                ["toolCount"] = boundary.ToolCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             },
             cancellationToken: cancellationToken);
         if (hookDecision.Decision == HookDecisionKind.Block)
@@ -580,8 +654,7 @@ public sealed partial class SessionApplication
     }
 
     private async Task InvokeAfterModelRequestHookAsync(
-        ConversationRound round,
-        Guid modelOperationId,
+        ModelRequestHookBoundary boundary,
         bool modelSucceeded,
         bool usageReported)
     {
@@ -592,13 +665,14 @@ public sealed partial class SessionApplication
 
         _ = await _hooks.InvokeAsync(
             HookPoint.AfterModelRequest,
-            round.Registration.SessionId,
-            round.RunId,
-            round.InvocationContext?.RepositoryPath,
-            modelOperationId,
-            round.ModelRound - 1,
+            boundary.SessionId,
+            boundary.RunId,
+            boundary.RepositoryIdentity,
+            boundary.OperationId,
+            boundary.Generation,
             new Dictionary<string, string>
             {
+                ["stage"] = boundary.Stage,
                 ["succeeded"] = modelSucceeded.ToString(),
                 ["usageReported"] = usageReported.ToString(),
             },
@@ -703,10 +777,290 @@ public sealed partial class SessionApplication
         };
     }
 
+    private async Task AssessActiveTurnCompactionAsync(
+        RunId runId,
+        RunRegistration registration,
+        int modelRound,
+        IReadOnlyList<ModelToolDefinition> modelTools,
+        ContextAssemblyResult? context,
+        ConversationLoopState loopState,
+        CancellationToken cancellationToken)
+    {
+        if (context?.Layout is not { } layout)
+        {
+            return;
+        }
+
+        loopState.IncrementAssessmentSequence();
+        var outputReserve = _activeTurnCompactionPolicy.ResolveOutputReserve(
+            context.ModelResolution?.EffectiveRequestOutputTokenReserve);
+        var maximumInputTokens = context.Inspection.TokenBudget;
+        var pressureInputBudget = context.ModelResolution is { } selectedResolution
+            ? Math.Min(maximumInputTokens, selectedResolution.ContextWindow - outputReserve)
+            : maximumInputTokens;
+        var configuredPressureTarget = checked(
+            (pressureInputBudget * _activeTurnCompactionPolicy.PressureTargetPercent) / 100);
+        var pressureTargetTokens = Math.Max(1, configuredPressureTarget);
+        var visible = loopState.CreateModelVisibleContinuation();
+        var beforeEstimate = EstimateCompleteRequest(
+            context,
+            modelTools,
+            layout,
+            visible.Messages,
+            outputReserve);
+        var eligibleGroupCount = loopState.GetEligibleGroupCount();
+        var fixedRequestEstimate = EstimateCompleteRequest(
+            context,
+            modelTools,
+            layout,
+            [],
+            outputReserve);
+        var effectiveRetentionTargetTokens =
+            _activeTurnCompactionPolicy.ResolveEffectiveRetentionTarget(
+                beforeEstimate.WireInputTokens,
+                fixedRequestEstimate.WireInputTokens,
+                pressureTargetTokens);
+
+        async Task RecordAsync(
+            ActiveTurnCompactionInspectionStatus status,
+            string rationale,
+            int compactedGroupCount = 0,
+            int? afterInputTokens = null,
+            long? compactedFrom = null,
+            long? compactedThrough = null)
+        {
+            if (_contextAssembler is null)
+            {
+                return;
+            }
+
+            await _contextAssembler.UpdateActiveTurnInspectionAsync(
+                registration.SessionId,
+                runId,
+                new ActiveTurnCompactionInspectionProjection
+                {
+                    AssessmentSequence = loopState.AssessmentSequence,
+                    Status = status,
+                    BeforeInputTokens = beforeEstimate.WireInputTokens,
+                    AfterInputTokens = afterInputTokens,
+                    MaximumInputTokens = maximumInputTokens,
+                    PressureTargetTokens = pressureTargetTokens,
+                    OutputReserveTokens = outputReserve,
+                    ConfiguredRetentionTargetTokens =
+                        _activeTurnCompactionPolicy.RetainedRecentTokens,
+                    EffectiveRetentionTargetTokens = effectiveRetentionTargetTokens,
+                    EligibleGroupCount = eligibleGroupCount,
+                    CompactedGroupCount = compactedGroupCount,
+                    RetainedGroupCount = loopState.RawGroupCount,
+                    RetainedGroupTokens = loopState.RawGroupTokens,
+                    SummaryVersion = loopState.CompactionSummary?.Version ?? 0,
+                    PrunedPriorItemCount =
+                        loopState.CompactionSummary?.PrunedPriorItemCount ?? 0,
+                    HistoryRewriteGeneration = loopState.HistoryRewriteGeneration,
+                    SummaryContentHash = loopState.LastCheckpoint?.SummaryContentHash,
+                    CandidateProfileId = loopState.LastCheckpoint?.CandidateProfileId.Value,
+                    CompactedFromGroupSequence = compactedFrom,
+                    CompactedThroughGroupSequence = compactedThrough,
+                    BackoffRoundsRemaining = loopState.BackoffRoundsRemaining,
+                    Rationale = rationale,
+                },
+                cancellationToken);
+        }
+
+        if (!_activeTurnCompactionPolicy.Enabled || _activeTurnCompactor is null)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.Disabled,
+                "Active-turn continuation compaction is disabled by host composition.");
+            return;
+        }
+
+        if (beforeEstimate.WireInputTokens < pressureTargetTokens)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.BelowPressure,
+                "The canonical complete request is below the active-turn pressure target.");
+            return;
+        }
+
+        if (loopState.ConsumeBackoffRound())
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.Backoff,
+                "A bounded active-turn candidate failure backoff is in effect.");
+            return;
+        }
+
+        var eligiblePrefix = ActiveTurnCompactionCutSelector.SelectEligiblePrefix(
+            loopState.Groups,
+            _activeTurnCompactionPolicy,
+            effectiveRetentionTargetTokens);
+        if (eligiblePrefix.Count == 0 || context.ModelResolution?.ProfileId is not { } profileId)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.NoEligiblePrefix,
+                "Pressure was reached, but no complete previously delivered prefix is eligible.");
+            return;
+        }
+
+        var taskContext = ActiveTurnTaskContextProjector.Project(
+            registration.Task,
+            _activeTurnCompactionPolicy);
+        var request = new ActiveTurnCompactionRequest
+        {
+            RunId = runId,
+            ProfileId = profileId,
+            FrozenContextIdentity = string.Join(
+                '|',
+                context.Layout.StablePrefixDigest,
+                context.InstructionBundleDigest ?? "none",
+                context.ToolInventoryDigest ?? "none"),
+            TaskObjective = taskContext.Objective,
+            TaskObjectiveWasTruncated = taskContext.ObjectiveWasTruncated,
+            AcceptanceIntent = taskContext.AcceptanceIntent,
+            OmittedAcceptanceIntentCount = taskContext.OmittedAcceptanceIntentCount,
+            PriorSummary = loopState.CompactionSummary,
+            EligiblePrefix = eligiblePrefix,
+            SelectionConstraints = context.ModelConstraints,
+            ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
+            ProfileContextWindowTokens = context.ModelResolution.ContextWindow,
+            ProfileOutputReserveTokens = outputReserve,
+            BeforeInputTokens = beforeEstimate.WireInputTokens,
+            PressureTargetTokens = pressureTargetTokens,
+        };
+        var attemptObserver = new ActiveTurnCompactionAttemptObserver(
+            this,
+            registration,
+            modelRound,
+            registration.RepositoryIdentity);
+        var result = await _activeTurnCompactor.CompactAsync(
+            request,
+            attemptObserver,
+            cancellationToken);
+
+        if (result.Outcome == ActiveTurnCompactionOutcome.Completed
+            && result.Summary is { } summary)
+        {
+            var preview = loopState.CreatePreviewContinuation(summary, eligiblePrefix.Count);
+            var afterEstimate = EstimateCompleteRequest(
+                context,
+                modelTools,
+                layout,
+                preview.Messages,
+                outputReserve);
+            var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
+            if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens
+                && afterEstimate.WireInputTokens <= pressureTargetTokens)
+            {
+                var checkpoint = new ActiveTurnCompactionCheckpoint
+                {
+                    RunId = runId,
+                    SummaryVersion = summary.Version,
+                    CompactedFromGroupSequence = eligiblePrefix[0].Sequence,
+                    CompactedThroughGroupSequence = eligiblePrefix[^1].Sequence,
+                    Sources = eligiblePrefix
+                        .SelectMany(group => group.Sources)
+                        .Distinct()
+                        .ToArray(),
+                    FrozenContextIdentity = request.FrozenContextIdentity,
+                    BeforeInputTokens = beforeEstimate.WireInputTokens,
+                    AfterInputTokens = afterEstimate.WireInputTokens,
+                    RetainedGroupCount = loopState.RawGroupCount - eligiblePrefix.Count,
+                    RetainedGroupTokens = loopState.RawGroupTokens
+                        - eligiblePrefix.Sum(group => group.EstimatedTokens),
+                    CandidateProfileId = profileId,
+                    SummaryContentHash = summary.ContentHash,
+                    PrunedPriorItemCount = summary.PrunedPriorItemCount,
+                    HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
+                    Duration = result.Duration,
+                };
+                loopState.ActivateSummary(summary, eligiblePrefix, checkpoint);
+                _logger.LogInformation(
+                    "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
+                    eligiblePrefix.Count,
+                    runId.Value,
+                    beforeEstimate.WireInputTokens,
+                    afterEstimate.WireInputTokens,
+                    summary.Version);
+                await RecordAsync(
+                    ActiveTurnCompactionInspectionStatus.Completed,
+                    "A validated cumulative summary replaced the exact eligible prefix.",
+                    eligiblePrefix.Count,
+                    afterEstimate.WireInputTokens,
+                    eligiblePrefix[0].Sequence,
+                    eligiblePrefix[^1].Sequence);
+                return;
+            }
+
+            loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.InsufficientSavings,
+                "The validated candidate did not meet the configured target and minimum savings.",
+                afterInputTokens: afterEstimate.WireInputTokens);
+            return;
+        }
+
+        loopState.StartFailureBackoff(_activeTurnCompactionPolicy.FailureBackoffRounds);
+        var status = result.Outcome switch
+        {
+            ActiveTurnCompactionOutcome.ValidationRejected =>
+                ActiveTurnCompactionInspectionStatus.ValidationRejected,
+            ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
+            _ => ActiveTurnCompactionInspectionStatus.ProviderFailure,
+        };
+        _logger.LogWarning(
+            "Active-turn continuation compaction did not activate for run {RunId}: {Outcome} after {ProviderCalls} provider calls.",
+            runId.Value,
+            result.Outcome,
+            result.ProviderCalls);
+        await RecordAsync(status, result.Rationale);
+    }
+
+    private async Task UpdateFallbackInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        ActiveTurnCompactionInspectionStatus status,
+        int? afterInputTokens,
+        string rationale,
+        CancellationToken cancellationToken)
+    {
+        if (_contextAssembler?.GetInspection(runId)?.ActiveTurnCompaction is not { } activeTurn)
+        {
+            return;
+        }
+
+        await _contextAssembler.UpdateActiveTurnInspectionAsync(
+            sessionId,
+            runId,
+            activeTurn with
+            {
+                Status = status,
+                AfterInputTokens = afterInputTokens,
+                Rationale = rationale,
+            },
+            cancellationToken);
+    }
+
+    private static ModelWireEstimate EstimateCompleteRequest(
+        ContextAssemblyResult context,
+        IReadOnlyList<ModelToolDefinition> modelTools,
+        ModelRequestLayout layout,
+        IReadOnlyList<ModelMessage> continuationMessages,
+        int outputReserveTokens)
+    {
+        return ModelWireEstimator.Estimate(
+            [.. context.Messages ?? [], .. continuationMessages],
+            modelTools,
+            ToolTransportMode.Native,
+            layout.StablePrefixMessageCount,
+            outputReserveTokens);
+    }
+
     private static RequestEnvelope CreateRequestEnvelope(
         ContextAssemblyResult? context,
         IReadOnlyList<ModelToolDefinition> modelTools,
-        List<ModelMessage> continuationMessages)
+        List<ModelMessage> continuationMessages,
+        int? firstNeverDeliveredMessageIndex)
     {
         IReadOnlyList<ModelMessage> requestMessages =
         [
@@ -714,14 +1068,16 @@ public sealed partial class SessionApplication
             .. continuationMessages,
         ];
         var wireEstimate = context?.WireEstimate;
+        var emergencyReductionApplied = false;
 
         if (context?.Layout is { } requestLayout)
         {
-            BoundContinuationMessages(
+            emergencyReductionApplied = BoundContinuationMessages(
                 continuationMessages,
                 context,
                 modelTools,
-                requestLayout);
+                requestLayout,
+                firstNeverDeliveredMessageIndex);
             requestMessages =
             [
                 .. context.Messages ?? [],
@@ -735,7 +1091,10 @@ public sealed partial class SessionApplication
                 context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
         }
 
-        return new RequestEnvelope(requestMessages, wireEstimate);
+        return new RequestEnvelope(
+            requestMessages,
+            wireEstimate,
+            emergencyReductionApplied);
     }
 
     private static ModelStreamRequest CreateModelStreamRequest(
@@ -747,7 +1106,8 @@ public sealed partial class SessionApplication
         SessionModelPreferenceSnapshot? modelPreference,
         ContextAssemblyResult? context,
         RequestEnvelope requestEnvelope,
-        IReadOnlyList<ModelMessage> continuationMessages)
+        IReadOnlyList<ModelMessage> continuationMessages,
+        long historyRewriteGeneration)
     {
         return new ModelStreamRequest
         {
@@ -757,6 +1117,7 @@ public sealed partial class SessionApplication
                 continuationMessages),
             Seed = 42,
             ToolContinuationRound = modelRound - 1,
+            HistoryRewriteGeneration = historyRewriteGeneration,
             WorkloadClass = context?.WorkloadClass ?? WorkloadClass.General,
             ContainsSensitiveData = context?.ModelConstraints.ContainsSensitiveData
                 ?? false,
@@ -862,7 +1223,8 @@ public sealed partial class SessionApplication
         IReadOnlyList<ModelToolDefinition> ModelTools,
         ContextAssemblyResult? Context,
         ModelRequestUsageId UsageRequestId,
-        ModelStreamRequest ModelRequest);
+        ModelStreamRequest ModelRequest,
+        long DeliveredThroughGroupSequence);
 
     private sealed record ConversationRoundOutcome(
         ImplementationPlan? Plan,
@@ -871,30 +1233,271 @@ public sealed partial class SessionApplication
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,
-        ModelWireEstimate? WireEstimate);
+        ModelWireEstimate? WireEstimate,
+        bool EmergencyReductionApplied);
+
+    private sealed record ModelVisibleContinuation(
+        List<ModelMessage> Messages,
+        int? FirstNeverDeliveredMessageIndex);
+
+    private sealed record ModelRequestHookBoundary(
+        SessionId SessionId,
+        RunId RunId,
+        string? RepositoryIdentity,
+        Guid OperationId,
+        int Generation,
+        string Stage,
+        WorkloadClass WorkloadClass,
+        bool ContainsSensitiveData,
+        int ToolCount);
+
+    private sealed record PendingActiveTurnSource(
+        string ToolCallId,
+        ActiveTurnSourceKind Kind,
+        string Id);
+
+    private sealed class ActiveTurnCompactionAttemptObserver : IActiveTurnCompactionAttemptObserver
+    {
+        private readonly SessionApplication _owner;
+        private readonly RunRegistration _registration;
+        private readonly int _modelRound;
+        private readonly string? _repositoryIdentity;
+
+        public ActiveTurnCompactionAttemptObserver(
+            SessionApplication owner,
+            RunRegistration registration,
+            int modelRound,
+            string? repositoryIdentity)
+        {
+            _owner = owner;
+            _registration = registration;
+            _modelRound = modelRound;
+            _repositoryIdentity = repositoryIdentity;
+        }
+
+        public Task BeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return _owner.InvokeBeforeModelRequestHookAsync(
+                CreateBoundary(request, attempt, invocationId),
+                cancellationToken);
+        }
+
+        public async Task AfterProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            ActiveTurnCompactionAttemptOutcome outcome,
+            ModelUsage? usage,
+            TimeSpan duration,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await _owner.InvokeAfterModelRequestHookAsync(
+                    CreateBoundary(request, attempt, invocationId),
+                    outcome == ActiveTurnCompactionAttemptOutcome.Completed,
+                    usage is not null);
+            }
+            finally
+            {
+                var usageRequestId = new ModelRequestUsageId(
+                    request.RunId,
+                    "active-turn-compaction",
+                    _modelRound - 1,
+                    invocationId);
+                if (usage is null)
+                {
+                    _owner._sessionUsage?.ObserveMissing(
+                        _registration.SessionId,
+                        usageRequestId);
+                }
+                else
+                {
+                    _owner._sessionUsage?.Observe(
+                        _registration.SessionId,
+                        usageRequestId,
+                        usage);
+                }
+
+                var budgetUsage = _registration.Budget.Accrue(new BudgetDimensions(
+                    (usage?.InputTokens ?? 0) + (usage?.OutputTokens ?? 0),
+                    1,
+                    duration,
+                    usage?.EstimatedCost ?? 0));
+                if (budgetUsage.IsExhausted)
+                {
+                    throw new BudgetExceededException(
+                        budgetUsage.Reason
+                            ?? "Execution budget exhausted during active-turn compaction.");
+                }
+            }
+        }
+
+        private ModelRequestHookBoundary CreateBoundary(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId)
+        {
+            return new ModelRequestHookBoundary(
+                _registration.SessionId,
+                request.RunId,
+                _repositoryIdentity,
+                invocationId,
+                attempt - 1,
+                "active-turn-compaction",
+                WorkloadClass.General,
+                request.ContainsSensitiveData,
+                0);
+        }
+    }
 
     private sealed class ConversationLoopState
     {
         private const int MaximumRetainedToolCalls = 256;
+        private readonly List<ModelMessage> _currentCalls = [];
+        private readonly Dictionary<string, ModelMessage> _currentResults =
+            new(StringComparer.Ordinal);
+
+        private readonly List<ActiveTurnContinuationGroup> _groups = [];
+        private readonly int _maximumFactualFactCharacters;
+        private readonly int _maximumFactualFactsPerResult;
+        private readonly int _maximumSourcesPerGroup;
+        private readonly Dictionary<string, bool> _pendingResultOutcomes =
+            new(StringComparer.Ordinal);
+
+        private readonly List<PendingActiveTurnSource> _pendingSources = [];
         private int _retainedOutputCharacters;
         private int _retainedToolCalls;
+        private long _nextGroupSequence = 1;
 
-        public ConversationLoopState(int maximumOutputCharacters)
+        public ConversationLoopState(
+            int maximumOutputCharacters,
+            int maximumSourcesPerGroup,
+            int maximumFactualFactsPerResult,
+            int maximumFactualFactCharacters)
         {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSourcesPerGroup);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFactualFactsPerResult);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFactualFactCharacters);
             MaximumOutputCharacters = maximumOutputCharacters;
+            _maximumSourcesPerGroup = maximumSourcesPerGroup;
+            _maximumFactualFactsPerResult = maximumFactualFactsPerResult;
+            _maximumFactualFactCharacters = maximumFactualFactCharacters;
         }
+
+        public int AssessmentSequence { get; private set; }
+
+        public int BackoffRoundsRemaining { get; private set; }
+
+        public ActiveTurnCompactionSummary? CompactionSummary { get; private set; }
+
+        public ActiveTurnCompactionCheckpoint? LastCheckpoint { get; private set; }
 
         public ContextAssemblyResult? FrozenContext { get; set; }
 
+        public IReadOnlyList<ActiveTurnContinuationGroup> Groups => _groups;
+
+        public long HistoryRewriteGeneration { get; private set; }
+
         public HashSet<string> InvokedToolKeys { get; } = new(StringComparer.Ordinal);
 
-        public List<ModelMessage> ContinuationMessages { get; } = [];
+        public long LastGroupSequence => _nextGroupSequence - 1;
 
         public int MaximumOutputCharacters { get; }
 
         public int PlanProposalRepairAttempts { get; private set; }
 
+        public int RawGroupCount => _groups.Count;
+
+        public int RawGroupTokens => _groups.Sum(group => group.EstimatedTokens);
+
         public bool SemanticToolAttempted { get; set; }
+
+        public void ActivateSummary(
+            ActiveTurnCompactionSummary summary,
+            IReadOnlyList<ActiveTurnContinuationGroup> compactedPrefix,
+            ActiveTurnCompactionCheckpoint checkpoint)
+        {
+            ArgumentNullException.ThrowIfNull(summary);
+            ArgumentNullException.ThrowIfNull(compactedPrefix);
+            ArgumentNullException.ThrowIfNull(checkpoint);
+            if (compactedPrefix.Count == 0
+                || compactedPrefix.Count > _groups.Count
+                || !_groups.Take(compactedPrefix.Count).SequenceEqual(compactedPrefix))
+            {
+                throw new InvalidOperationException(
+                    "Only the exact oldest complete active-turn prefix can be activated.");
+            }
+
+            if (checkpoint.HistoryRewriteGeneration != HistoryRewriteGeneration + 1
+                || checkpoint.SummaryVersion != summary.Version
+                || !string.Equals(
+                    checkpoint.SummaryContentHash,
+                    summary.ContentHash,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The active-turn checkpoint does not match the atomic history rewrite.");
+            }
+
+            _groups.RemoveRange(0, compactedPrefix.Count);
+            CompactionSummary = summary;
+            LastCheckpoint = checkpoint;
+            HistoryRewriteGeneration = checkpoint.HistoryRewriteGeneration;
+            BackoffRoundsRemaining = 0;
+        }
+
+        public void AddCurrentToolCall(ModelMessage message)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            if (message.Role != ModelMessageRole.Assistant
+                || string.IsNullOrWhiteSpace(message.ToolCallId)
+                || _currentCalls.Any(call => string.Equals(
+                    call.ToolCallId,
+                    message.ToolCallId,
+                    StringComparison.Ordinal)))
+            {
+                throw new MalformedModelOutputException(
+                    "An active-turn group contains an invalid or duplicate assistant tool call.");
+            }
+
+            _currentCalls.Add(message);
+        }
+
+        public void AddCurrentToolResult(ModelMessage message)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            if (message.Role != ModelMessageRole.Tool
+                || string.IsNullOrWhiteSpace(message.ToolCallId)
+                || !_currentResults.TryAdd(message.ToolCallId, message))
+            {
+                throw new MalformedModelOutputException(
+                    "An active-turn group contains an invalid or duplicate tool result.");
+            }
+        }
+
+        public void AddCurrentSource(
+            string toolCallId,
+            ActiveTurnSourceKind kind,
+            string id)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(toolCallId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(id);
+            if (_pendingSources.Count < _maximumSourcesPerGroup)
+            {
+                _pendingSources.Add(new PendingActiveTurnSource(toolCallId, kind, id));
+            }
+        }
+
+        public void AddCurrentResultOutcome(string toolCallId, bool succeeded)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(toolCallId);
+            _pendingResultOutcomes[toolCallId] = succeeded;
+        }
 
         public void AddRetainedOutputCharacters(int additionalCharacters)
         {
@@ -912,6 +1515,213 @@ public sealed partial class SessionApplication
                 ref _retainedOutputCharacters);
         }
 
+        public void BeginCurrentGroup()
+        {
+            if (_currentCalls.Count > 0
+                || _currentResults.Count > 0
+                || _pendingSources.Count > 0
+                || _pendingResultOutcomes.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "The prior active-turn tool group was not completed atomically.");
+            }
+        }
+
+        public void CommitCurrentGroup(int modelRound)
+        {
+            if (_currentCalls.Count == 0)
+            {
+                if (_currentResults.Count > 0
+                    || _pendingSources.Count > 0
+                    || _pendingResultOutcomes.Count > 0)
+                {
+                    throw new MalformedModelOutputException(
+                        "The active-turn group contains result state without assistant tool calls.");
+                }
+
+                return;
+            }
+
+            if (_currentCalls.Count != _currentResults.Count)
+            {
+                throw new MalformedModelOutputException(
+                    "The active-turn group contains an orphaned assistant call or tool result.");
+            }
+
+            var results = new ModelMessage[_currentCalls.Count];
+            for (var index = 0; index < _currentCalls.Count; index++)
+            {
+                var call = _currentCalls[index];
+                var toolCallId = call.ToolCallId ?? throw new UnreachableException();
+                if (!_currentResults.TryGetValue(toolCallId, out var result)
+                    || !string.Equals(call.ToolName, result.ToolName, StringComparison.Ordinal))
+                {
+                    throw new MalformedModelOutputException(
+                        "The active-turn group contains a mismatched assistant call and tool result.");
+                }
+
+                results[index] = result;
+            }
+
+            var sequence = _nextGroupSequence++;
+            var sources = new List<ActiveTurnSourceReference>
+            {
+                new(
+                    ActiveTurnSourceKind.Group,
+                    sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    sequence),
+            };
+            sources.AddRange(_currentCalls.Select(call => new ActiveTurnSourceReference(
+                ActiveTurnSourceKind.ToolCall,
+                call.ToolCallId ?? throw new UnreachableException(),
+                sequence)));
+            sources.AddRange(_pendingSources.Select(source => new ActiveTurnSourceReference(
+                source.Kind,
+                source.Id,
+                sequence)));
+            var boundedSources = sources
+                .Distinct()
+                .Take(_maximumSourcesPerGroup)
+                .ToArray();
+            var boundedSourceSet = boundedSources.ToHashSet();
+            var factualEvidence = results.Select(result =>
+            {
+                var toolCallId = result.ToolCallId ?? throw new UnreachableException();
+                var resultSources = _pendingSources
+                    .Where(source => string.Equals(
+                        source.ToolCallId,
+                        toolCallId,
+                        StringComparison.Ordinal))
+                    .Select(source => new ActiveTurnSourceReference(
+                        source.Kind,
+                        source.Id,
+                        sequence))
+                    .Where(boundedSourceSet.Contains)
+                    .Distinct()
+                    .ToArray();
+                if (resultSources.Length == 0)
+                {
+                    var callSource = new ActiveTurnSourceReference(
+                        ActiveTurnSourceKind.ToolCall,
+                        toolCallId,
+                        sequence);
+                    resultSources = boundedSourceSet.Contains(callSource)
+                        ? [callSource]
+                        : [];
+                }
+
+                var content = string.Concat(result.Content.Select(part => part.Content));
+                bool? succeeded = _pendingResultOutcomes.TryGetValue(
+                    toolCallId,
+                    out var resultSucceeded)
+                    ? resultSucceeded
+                    : null;
+                return new ActiveTurnFactualEvidence
+                {
+                    ToolCallId = toolCallId,
+                    Sources = resultSources,
+                    AllowedKinds = ResolveAllowedKinds(resultSources, succeeded),
+                    SupportedFacts = ActiveTurnFactualEvidenceBuilder.CreateSupportedFacts(
+                        content,
+                        _maximumFactualFactsPerResult,
+                        _maximumFactualFactCharacters),
+                    ContentHash = ActiveTurnFactualEvidenceBuilder.ComputeContentHash(content),
+                };
+            }).Where(evidence => evidence.Sources.Count > 0).ToArray();
+            ModelMessage[] messages = [.. _currentCalls, .. results];
+            var estimate = ModelWireEstimator.Estimate(
+                messages,
+                [],
+                ToolTransportMode.Native,
+                0,
+                0);
+            _groups.Add(new ActiveTurnContinuationGroup
+            {
+                Sequence = sequence,
+                CompletedModelRound = modelRound,
+                Messages = messages,
+                Sources = boundedSources,
+                FactualEvidence = factualEvidence,
+                EstimatedTokens = estimate.WireInputTokens,
+                WasDeliveredVerbatim = false,
+            });
+            _currentCalls.Clear();
+            _currentResults.Clear();
+            _pendingSources.Clear();
+            _pendingResultOutcomes.Clear();
+        }
+
+        public bool ConsumeBackoffRound()
+        {
+            if (BackoffRoundsRemaining == 0)
+            {
+                return false;
+            }
+
+            BackoffRoundsRemaining--;
+            return true;
+        }
+
+        public ModelVisibleContinuation CreateModelVisibleContinuation()
+        {
+            var messages = new List<ModelMessage>();
+            if (CompactionSummary is { } summary)
+            {
+                messages.Add(ActiveTurnSummaryFormatter.CreateMessage(
+                    summary.Version,
+                    ActiveTurnSummaryFormatter.RenderItems(summary.Items)));
+            }
+
+            int? firstNeverDeliveredMessageIndex = null;
+            foreach (var group in _groups)
+            {
+                if (!group.WasDeliveredVerbatim && firstNeverDeliveredMessageIndex is null)
+                {
+                    firstNeverDeliveredMessageIndex = messages.Count;
+                }
+
+                messages.AddRange(group.Messages);
+            }
+
+            return new ModelVisibleContinuation(messages, firstNeverDeliveredMessageIndex);
+        }
+
+        public ModelVisibleContinuation CreatePreviewContinuation(
+            ActiveTurnCompactionSummary summary,
+            int compactedGroupCount)
+        {
+            ArgumentNullException.ThrowIfNull(summary);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(compactedGroupCount);
+            var messages = new List<ModelMessage>
+            {
+                ActiveTurnSummaryFormatter.CreateMessage(
+                    summary.Version,
+                    ActiveTurnSummaryFormatter.RenderItems(summary.Items)),
+            };
+            int? firstNeverDeliveredMessageIndex = null;
+            foreach (var group in _groups.Skip(compactedGroupCount))
+            {
+                if (!group.WasDeliveredVerbatim && firstNeverDeliveredMessageIndex is null)
+                {
+                    firstNeverDeliveredMessageIndex = messages.Count;
+                }
+
+                messages.AddRange(group.Messages);
+            }
+
+            return new ModelVisibleContinuation(messages, firstNeverDeliveredMessageIndex);
+        }
+
+        public int GetEligibleGroupCount()
+        {
+            return _groups.TakeWhile(group => group.WasDeliveredVerbatim).Count();
+        }
+
+        public void IncrementAssessmentSequence()
+        {
+            AssessmentSequence++;
+        }
+
         public void IncrementRetainedToolCalls()
         {
             _retainedToolCalls++;
@@ -922,9 +1732,85 @@ public sealed partial class SessionApplication
             }
         }
 
+        public void MarkGroupsDelivered(long throughSequence)
+        {
+            for (var index = 0; index < _groups.Count; index++)
+            {
+                if (_groups[index].Sequence > throughSequence)
+                {
+                    break;
+                }
+
+                if (!_groups[index].WasDeliveredVerbatim)
+                {
+                    _groups[index] = _groups[index] with { WasDeliveredVerbatim = true };
+                }
+            }
+        }
+
         public void RecordPlanProposalRepairAttempt()
         {
             PlanProposalRepairAttempts++;
+        }
+
+        public void StartFailureBackoff(int rounds)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(rounds);
+            BackoffRoundsRemaining = rounds;
+        }
+
+        private static IReadOnlyList<ActiveTurnSummaryItemKind> ResolveAllowedKinds(
+            IReadOnlyList<ActiveTurnSourceReference> sources,
+            bool? succeeded)
+        {
+            var kinds = new HashSet<ActiveTurnSummaryItemKind>
+            {
+                ActiveTurnSummaryItemKind.ToolOutcome,
+            };
+            if (succeeded == false)
+            {
+                kinds.Add(ActiveTurnSummaryItemKind.FailedInvestigation);
+            }
+
+            foreach (var source in sources.Where(source =>
+                source.Kind == ActiveTurnSourceKind.ToolProvenance))
+            {
+                try
+                {
+                    var provenance = JsonSerializer.Deserialize<ToolProvenanceSource>(source.Id);
+                    var kind = provenance?.Kind.ToLowerInvariant();
+                    if (kind is "file"
+                        or "directory"
+                        or "semantic-workspace"
+                        or "git"
+                        or "git-object"
+                        or "git-blame"
+                        or "git-comparison"
+                        or "solution"
+                        or "nuget"
+                        or "diagnostic-index"
+                        or "validation"
+                        or "test-discovery"
+                        or "test")
+                    {
+                        kinds.Add(ActiveTurnSummaryItemKind.RepositoryFinding);
+                    }
+
+                    if (kind is "diagnostic-index"
+                        or "validation"
+                        or "test-discovery"
+                        or "test")
+                    {
+                        kinds.Add(ActiveTurnSummaryItemKind.Diagnostic);
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Malformed provenance remains audit metadata but grants no factual category.
+                }
+            }
+
+            return kinds.OrderBy(kind => kind).ToArray();
         }
     }
 

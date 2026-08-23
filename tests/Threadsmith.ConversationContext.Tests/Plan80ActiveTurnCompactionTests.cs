@@ -403,16 +403,208 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.All(facts.EnumerateArray(), fact =>
         {
             Assert.True(fact.TryGetProperty("factId", out _));
+            Assert.True(fact.TryGetProperty("kind", out _));
             Assert.True(fact.TryGetProperty("content", out _));
         });
-        var outputItem = input.RootElement.GetProperty("requiredOutput")
-            .GetProperty("items")[0];
-        Assert.True(outputItem.TryGetProperty("factId", out _));
-        Assert.False(outputItem.TryGetProperty("content", out _));
-        Assert.False(outputItem.TryGetProperty("sources", out _));
+        var requiredOutput = input.RootElement.GetProperty("requiredOutput");
+        Assert.Equal(
+            policy.MaximumCandidateItems,
+            requiredOutput.GetProperty("maximumFactIds").GetInt32());
+        Assert.Equal(JsonValueKind.Array, requiredOutput.GetProperty("factIds").ValueKind);
+        Assert.False(requiredOutput.TryGetProperty("items", out _));
+        Assert.False(requiredOutput.TryGetProperty("schemaVersion", out _));
+        using var response = JsonDocument.Parse(model.LastResponse);
+        _ = Assert.Single(response.RootElement.EnumerateObject());
+        Assert.Equal(JsonValueKind.Array, response.RootElement.GetProperty("factIds").ValueKind);
         Assert.DoesNotContain(candidate.Items[0].Content, model.LastResponse, StringComparison.Ordinal);
         var selectedSource = Assert.Single(generation.Candidate.Items[0].Sources);
         Assert.Equal(ActiveTurnSourceKind.Evidence, selectedSource.Kind);
+    }
+
+    /// <summary>The host normalizes mixed ids, owns metadata, and omits retained or repeated facts.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_normalizes_fact_ids_and_owns_metadata()
+    {
+        var firstGroup = CreateGroup(1);
+        var evidence = firstGroup.FactualEvidence[0];
+        Assert.True(evidence.SupportedFacts.Count > 1);
+        var originalSecondGroup = CreateGroup(2);
+        var secondGroup = originalSecondGroup with
+        {
+            Messages =
+            [
+                originalSecondGroup.Messages[0],
+                originalSecondGroup.Messages[1] with
+                {
+                    Content = firstGroup.Messages[1].Content.ToArray(),
+                },
+            ],
+            FactualEvidence =
+            [
+                originalSecondGroup.FactualEvidence[0] with
+                {
+                    SupportedFacts = evidence.SupportedFacts.ToArray(),
+                    ContentHash = evidence.ContentHash,
+                },
+            ],
+        };
+        var source = evidence.Sources.First(item => item.Kind == ActiveTurnSourceKind.Evidence);
+        var prior = new ActiveTurnCompactionSummary
+        {
+            Version = 1,
+            ThroughGroupSequence = 0,
+            CoveredGroupSequences = [],
+            Items =
+            [
+                new ActiveTurnSummaryItem
+                {
+                    Kind = ActiveTurnSummaryItemKind.RepositoryFinding,
+                    Content = evidence.SupportedFacts[0],
+                    Sources = [source],
+                },
+            ],
+            PrunedPriorItemCount = 0,
+            ContentHash = "sha256:prior",
+        };
+        var selectedItem = CreateCandidate(firstGroup, prior.Version, [1, 2]).Items[0] with
+        {
+            Kind = ActiveTurnSummaryItemKind.RecommendedNextStep,
+            Content = evidence.SupportedFacts[1],
+        };
+        var modelSelection = new ActiveTurnCompactionCandidate
+        {
+            SchemaVersion = 99,
+            PriorSummaryVersion = 99,
+            ThroughGroupSequence = 99,
+            CoveredGroupSequences = [99],
+            Items = [selectedItem, selectedItem],
+        };
+        var model = new CandidateModelProvider(modelSelection, includeUnknownFactId: true);
+        var provider = new ModelActiveTurnCompactionCandidateProvider(
+            model,
+            new ActiveTurnCompactionPolicy());
+
+        var generation = await provider.PrepareCandidate(
+            CreateRequest([firstGroup, secondGroup]) with { PriorSummary = prior }).ExecuteAsync();
+
+        Assert.Equal(1, generation.Candidate.SchemaVersion);
+        Assert.Equal(prior.Version, generation.Candidate.PriorSummaryVersion);
+        Assert.Equal(secondGroup.Sequence, generation.Candidate.ThroughGroupSequence);
+        Assert.Equal([firstGroup.Sequence, secondGroup.Sequence], generation.Candidate.CoveredGroupSequences);
+        var item = Assert.Single(generation.Candidate.Items);
+        Assert.Equal(ActiveTurnSummaryItemKind.RepositoryFinding, item.Kind);
+        Assert.Equal(selectedItem.Content, item.Content);
+        using var input = JsonDocument.Parse(Assert.Single(model.Requests).Input);
+        var projectedFacts = input.RootElement.GetProperty("groups")
+            .EnumerateArray()
+            .SelectMany(group => group.GetProperty("factualEvidence").EnumerateArray())
+            .SelectMany(projectedEvidence => projectedEvidence.GetProperty("facts").EnumerateArray())
+            .Select(fact => (
+                Kind: fact.GetProperty("kind").GetString(),
+                Content: fact.GetProperty("content").GetString()))
+            .ToArray();
+        Assert.DoesNotContain(
+            projectedFacts,
+            fact => string.Equals(fact.Content, prior.Items[0].Content, StringComparison.Ordinal));
+        Assert.Equal(projectedFacts.Length, projectedFacts.Distinct().Count());
+    }
+
+    /// <summary>Excess valid ids are normalized to item and exact summary-token bounds.</summary>
+    [Fact]
+    public static async Task Model_candidate_provider_clamps_excess_ids_to_host_bounds()
+    {
+        var originalGroup = CreateGroup(1);
+        var resultContent = JsonSerializer.Serialize(
+            Enumerable.Range(0, 40).ToDictionary(
+                index => $"property-{index:D2}",
+                index => $"value-{index:D2}"));
+        var resultMessage = originalGroup.Messages[1] with
+        {
+            Content =
+            [
+                new ModelContentPart
+                {
+                    Kind = ModelContentPartKind.Json,
+                    Content = resultContent,
+                },
+            ],
+        };
+        var supportedFacts = ActiveTurnFactualEvidenceBuilder.CreateSupportedFacts(
+            resultContent,
+            64,
+            2_000);
+        var evidence = originalGroup.FactualEvidence[0] with
+        {
+            SupportedFacts = supportedFacts,
+            ContentHash = ActiveTurnFactualEvidenceBuilder.ComputeContentHash(resultContent),
+        };
+        var group = originalGroup with
+        {
+            Messages = [originalGroup.Messages[0], resultMessage],
+            FactualEvidence = [evidence],
+        };
+        var source = evidence.Sources.First(item => item.Kind == ActiveTurnSourceKind.Evidence);
+        var selectedItems = supportedFacts.Select(content => new ActiveTurnSummaryItem
+        {
+            Kind = ActiveTurnSummaryItemKind.RepositoryFinding,
+            Content = content,
+            Sources = [source],
+        }).ToArray();
+        var maximumItems = new ActiveTurnCompactionPolicy().MaximumCandidateItems;
+        Assert.True(selectedItems.Length > maximumItems);
+        var maximumItemContent = ActiveTurnSummaryFormatter.RenderItems(
+            selectedItems.Take(maximumItems).ToArray());
+        var maximumItemBudget = ModelWireEstimator.Estimate(
+            [ActiveTurnSummaryFormatter.CreateMessage(1, maximumItemContent)],
+            [],
+            ToolTransportMode.Native,
+            0,
+            0).WireInputTokens;
+        var countPolicy = new ActiveTurnCompactionPolicy
+        {
+            SummaryBudgetTokens = maximumItemBudget,
+        };
+        var candidate = new ActiveTurnCompactionCandidate
+        {
+            ThroughGroupSequence = group.Sequence,
+            CoveredGroupSequences = [group.Sequence],
+            Items = selectedItems,
+        };
+        var countCompactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(
+                new CandidateModelProvider(candidate),
+                countPolicy),
+            new ActiveTurnCompactionValidator(countPolicy, new SecretOutputSanitizer()),
+            countPolicy);
+
+        var countResult = await CompactWithNoOpObserverAsync(
+            countCompactor,
+            CreateRequest([group]));
+
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, countResult.Outcome);
+        Assert.Equal(maximumItems, Assert.IsType<ActiveTurnCompactionSummary>(countResult.Summary).Items.Count);
+
+        var oneItemContent = ActiveTurnSummaryFormatter.RenderItems([selectedItems[0]]);
+        var oneItemBudget = ModelWireEstimator.Estimate(
+            [ActiveTurnSummaryFormatter.CreateMessage(1, oneItemContent)],
+            [],
+            ToolTransportMode.Native,
+            0,
+            0).WireInputTokens;
+        var tokenPolicy = countPolicy with { SummaryBudgetTokens = oneItemBudget };
+        var tokenCompactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(
+                new CandidateModelProvider(candidate),
+                tokenPolicy),
+            new ActiveTurnCompactionValidator(tokenPolicy, new SecretOutputSanitizer()),
+            tokenPolicy);
+
+        var tokenResult = await CompactWithNoOpObserverAsync(
+            tokenCompactor,
+            CreateRequest([group]));
+
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, tokenResult.Outcome);
+        Assert.Single(Assert.IsType<ActiveTurnCompactionSummary>(tokenResult.Summary).Items);
     }
 
     /// <summary>An unknown model-selected fact id cannot manufacture candidate content or sources.</summary>
@@ -435,13 +627,19 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(1, result.ProviderCalls);
     }
 
-    /// <summary>One malformed selector response is retried and each provider attempt remains accounted.</summary>
-    [Fact]
-    public static async Task Model_candidate_provider_retries_malformed_selector_once()
+    /// <summary>One malformed or schema-incomplete selector is retried with full attempt accounting.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Model_candidate_provider_retries_malformed_selector_once(
+        bool omitRequiredArray)
     {
         var group = CreateGroup(1);
         var candidate = CreateCandidate(group, priorSummaryVersion: 0, [1]);
-        var model = new CandidateModelProvider(candidate, malformedResponseCount: 1);
+        var model = new CandidateModelProvider(
+            candidate,
+            malformedResponseCount: omitRequiredArray ? 0 : 1,
+            missingFactIdsResponseCount: omitRequiredArray ? 1 : 0);
         var policy = new ActiveTurnCompactionPolicy();
         var compactor = new ActiveTurnCompactor(
             new ModelActiveTurnCompactionCandidateProvider(model, policy),
@@ -1350,16 +1548,22 @@ public static class Plan80ActiveTurnCompactionTests
 
         private readonly ActiveTurnCompactionCandidate _candidate;
         private readonly string? _factIdOverride;
+        private readonly bool _includeUnknownFactId;
         private int _remainingMalformedResponses;
+        private int _remainingMissingFactIdsResponses;
 
         public CandidateModelProvider(
             ActiveTurnCompactionCandidate candidate,
             string? factIdOverride = null,
-            int malformedResponseCount = 0)
+            int malformedResponseCount = 0,
+            bool includeUnknownFactId = false,
+            int missingFactIdsResponseCount = 0)
         {
             _candidate = candidate;
             _factIdOverride = factIdOverride;
             _remainingMalformedResponses = malformedResponseCount;
+            _includeUnknownFactId = includeUnknownFactId;
+            _remainingMissingFactIdsResponses = missingFactIdsResponseCount;
         }
 
         public string LastResponse { get; private set; } = string.Empty;
@@ -1385,6 +1589,19 @@ public static class Plan80ActiveTurnCompactionTests
                 yield break;
             }
 
+            if (_remainingMissingFactIdsResponses > 0)
+            {
+                _remainingMissingFactIdsResponses--;
+                await Task.Yield();
+                yield return new ModelChunk
+                {
+                    Text = "{}",
+                    Usage = new ModelUsage(100, 1, IsEstimate: false),
+                    FinishReason = ModelFinishReason.Stop,
+                };
+                yield break;
+            }
+
             using var input = JsonDocument.Parse(request.Input);
             var facts = input.RootElement.GetProperty("groups")
                 .EnumerateArray()
@@ -1396,21 +1613,18 @@ public static class Plan80ActiveTurnCompactionTests
                     Content = fact.GetProperty("content").GetString(),
                 })
                 .ToArray();
-            var response = new
+            var selectedFactIds = _candidate.Items
+                .Select(item => _factIdOverride ?? facts.First(fact => string.Equals(
+                    fact.Content,
+                    item.Content,
+                    StringComparison.Ordinal)).FactId)
+                .ToList();
+            if (_includeUnknownFactId)
             {
-                _candidate.SchemaVersion,
-                _candidate.PriorSummaryVersion,
-                _candidate.ThroughGroupSequence,
-                _candidate.CoveredGroupSequences,
-                Items = _candidate.Items.Select(item => new
-                {
-                    Kind = item.Kind.ToString(),
-                    FactId = _factIdOverride ?? facts.First(fact => string.Equals(
-                        fact.Content,
-                        item.Content,
-                        StringComparison.Ordinal)).FactId,
-                }),
-            };
+                selectedFactIds.Insert(0, "unknown-fact-id");
+            }
+
+            var response = new { FactIds = selectedFactIds };
             LastResponse = JsonSerializer.Serialize(response, JsonOptions);
             await Task.Yield();
             yield return new ModelChunk

@@ -2312,7 +2312,7 @@ public sealed class ConversationalShell
             && OperationDurationFormatter.TryFormat(milliseconds, out var formatted)
                 ? $"; {formatted}"
                 : string.Empty;
-        return string.Format(
+        return Environment.NewLine + string.Format(
             CultureInfo.InvariantCulture,
             "{0}: {1:N0} → {2:N0} tokens; saved {3:N0} ({4:0.0}%); profile {5:D}{6}{7}",
             label,

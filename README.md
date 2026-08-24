@@ -115,7 +115,7 @@ Threadsmith keeps its SQLite session store and content-addressed artifacts under
 
 ## Tools and governed changes
 
-Threadsmith registers twenty-eight built-in runtime tools. Repository configuration, trust, invocation policy, semantic-workspace availability, and user approval determine which tools are available for a request. 
+Threadsmith registers built-in runtime tools. Repository configuration, trust, invocation policy, semantic-workspace availability, and user approval determine which tools are available for a request.
 
 **Notable Features**
 - Tools may be enabled/disabled at the machine, user, and repository levels for any reason (such as to reduce context size by removing unused tools)
@@ -141,6 +141,7 @@ Threadsmith registers twenty-eight built-in runtime tools. Repository configurat
 | `test_discover` | Discover bounded stable test identities in a selected test project. |
 | `test_run_targeted` | Run one host-issued test identity with a generated exact filter. |
 | `find_symbol` | Find compiler symbols with stable identity and semantic confidence. |
+| `code_explore` | Resolve exact C# symbol, stable-ID, or path anchors and return bounded current line-numbered source with digests, confidence, omissions, and continuations. |
 | `find_references` | Find references to a compiler symbol. |
 | `find_implementations` | Find implementations of a compiler symbol. |
 | `call_hierarchy` | Traverse bounded incoming/outgoing compiler-known calls with dispatch, cycles, confidence, and omissions. |

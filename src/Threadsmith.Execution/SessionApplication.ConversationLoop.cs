@@ -598,15 +598,20 @@ public sealed partial class SessionApplication
                         {
                             SourcePath = source?.Identifier,
                             ToolInvocationId = result.ToolInvocationId,
-                            SemanticConfidence = SemanticConfidenceLevel.None,
+                            SemanticConfidence = ReadSemanticConfidence(result.ToolId, content),
                             Source = $"tool:{result.ToolId}",
                         },
                         CollectedAt = DateTimeOffset.UtcNow,
                         Relevance = result.Succeeded ? 0.8 : 1,
                         EstimatedTokens = Math.Max(1, (content.Length + 3) / 4),
-                        InvalidationKeys = result.ToolId is "find_symbol"
+                        InvalidationKeys = result.ToolId is "code_explore"
+                            or "find_symbol"
                             or "find_references"
                             or "find_implementations"
+                            or "call_hierarchy"
+                            or "symbol_impact"
+                            or "csharp_pattern_search"
+                            or "generated_code_query"
                             ? ["repository", "semantic"]
                             : ["repository"],
                     },
@@ -624,6 +629,101 @@ public sealed partial class SessionApplication
         }
 
         return true;
+    }
+
+    private static SemanticConfidenceLevel ReadSemanticConfidence(string toolId, string content)
+    {
+        if (!IsSemanticEvidenceTool(toolId))
+        {
+            return SemanticConfidenceLevel.None;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return ReadSemanticConfidence(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return SemanticConfidenceLevel.None;
+        }
+    }
+
+    private static bool IsSemanticEvidenceTool(string toolId)
+    {
+        return toolId is "code_explore"
+            or "find_symbol"
+            or "find_references"
+            or "find_implementations"
+            or "call_hierarchy"
+            or "symbol_impact"
+            or "csharp_pattern_search"
+            or "generated_code_query";
+    }
+
+    private static SemanticConfidenceLevel ReadSemanticConfidence(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (TryReadConfidenceProperty(element, "confidence", out var confidence)
+                || TryReadConfidenceProperty(element, "semanticConfidence", out confidence))
+            {
+                return confidence;
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var confidence = ReadSemanticConfidence(item);
+                if (confidence != SemanticConfidenceLevel.None)
+                {
+                    return confidence;
+                }
+            }
+        }
+
+        return SemanticConfidenceLevel.None;
+    }
+
+    private static bool TryReadConfidenceProperty(
+        JsonElement element,
+        string propertyName,
+        out SemanticConfidenceLevel confidence)
+    {
+        confidence = SemanticConfidenceLevel.None;
+        JsonElement? matched = null;
+        foreach (var propertyItem in element.EnumerateObject())
+        {
+            if (string.Equals(propertyItem.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                matched = propertyItem.Value;
+                break;
+            }
+        }
+
+        if (matched is not { } property)
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && Enum.TryParse(property.GetString(), ignoreCase: true, out confidence)
+            && Enum.IsDefined(confidence))
+        {
+            return true;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number
+            && property.TryGetInt32(out var numeric)
+            && Enum.IsDefined(typeof(SemanticConfidenceLevel), numeric))
+        {
+            confidence = (SemanticConfidenceLevel)numeric;
+            return true;
+        }
+
+        return false;
     }
 
     private async Task InvokeBeforeModelRequestHookAsync(

@@ -1,6 +1,6 @@
 # Implementation Plan 81: Roslyn Code Explore Exact Anchors and Source
 
-**Status:** Planned
+**Status:** Active. Source implementation, focused automated coverage, and user/operator documentation are in place; MTP-248 interactive/headless evidence remains pending before this work item is final and before dependent Plan 82 work begins.
 
 **Delivery track:** Milestone 28 — Roslyn-backed code exploration foundation
 **Strategy source:** Shared Context §A.1, §A.3, §A.5, §C, and §G; Milestone 28; Scenario AO
@@ -147,10 +147,10 @@ When implemented, update the user guide and native-tool operations documentation
 
 The external functional-reference boundary for `C:\source\repos\codegraph` must remain explicit in implementation notes and reviews; no copied or reverse-engineered implementation material enters Threadsmith documentation, source, tests, prompts, schemas, or assets.
 
-## 17. Open Decisions
+## 17. Resolved Decisions
 
-- Final canonical tool name and whether `code_explore` requires an explicit schema version field or relies on tool-definition versioning.
-- Exact anchor syntax and limits, including whether symbol IDs and textual names share one union or separate arrays.
-- Whether source digests identify full files, exact returned ranges, or both.
-- The smallest useful oversized-declaration projection that still avoids a follow-up read.
-- Whether current-source drift triggers an immediate safe semantic refresh or only an explicit incomplete result in the initial implementation.
+- The canonical tool name is `code_explore`; versioning follows the existing tool-definition/schema lifecycle rather than a request-level version field.
+- Exact textual anchors, stable symbol IDs, and path anchors remain separate request arrays so policy, disambiguation, and continuation cursors are explicit.
+- Source identity includes both full-file SHA-256 and returned-range SHA-256 when source is emitted; continuation cursors carry file digest and workspace generation expectations.
+- Oversized or budget-exhausted source returns explicit omissions plus replayable exact path/range continuations instead of arbitrary unrelated tails.
+- Current-source drift and expected-digest/generation mismatches produce incomplete/omitted evidence in this foundation; they do not trigger an implicit refresh or fallback search.

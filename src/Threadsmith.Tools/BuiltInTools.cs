@@ -356,7 +356,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
         "search",
-        "Search file contents for exact literals, configuration keys, routes, log messages, comments, and docs. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
+        "Search file contents for exact literals, configuration keys, routes, log messages, comments, and docs. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, source-bearing exact exploration, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
         ToolCategory.FileSearch,
         RepositoryTrustLevel.TrustedRead,
         ApprovalLevel.None,
@@ -1192,7 +1192,7 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
         "find_symbol",
-        "Primary compiler-aware tool for C# declarations. MUST use before search for a symbol; returns stable symbol identifiers for find_references, find_implementations, call_hierarchy, and symbol_impact.",
+        "Primary compiler-aware tool for C# declarations when source is not required. Prefer code_explore for exact symbol or path questions that need current source. MUST use a semantic tool before search for a symbol; returns stable symbol identifiers for find_references, find_implementations, call_hierarchy, and symbol_impact.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,

@@ -400,6 +400,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 dotNetInventory,
                 nativeValidation,
                 advancedSemanticQueries,
+                advancedSemanticQueries,
                 secretResolver,
                 toolLimits);
             directFetchApprovalPrompt = approvalPrompt;
@@ -814,6 +815,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         IDotNetInventoryService dotNetInventory,
         INativeValidationToolService nativeValidation,
         IAdvancedSemanticQueryService advancedSemanticQueries,
+        ICodeExploreService codeExplore,
         ISecretResolver secretResolver,
         ToolLimits limits)
     {
@@ -877,6 +879,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             new DiagnosticQueryTool(nativeValidation),
             new TestDiscoveryTool(nativeValidation),
             new TargetedTestTool(nativeValidation),
+            new CodeExploreTool(codeExplore),
             new CallHierarchyTool(advancedSemanticQueries),
             new SymbolImpactTool(advancedSemanticQueries),
             new CSharpPatternSearchTool(advancedSemanticQueries),

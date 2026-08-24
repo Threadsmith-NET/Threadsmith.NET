@@ -11,7 +11,7 @@ Own .NET SDK, MSBuild, Roslyn workspace, confidence-aware semantic discovery, an
 - `SemanticLifecycleObserver.cs` — non-reentrant repository/solution event queue into semantic loading.
 - `SemanticMutationEngine.cs` — Roslyn symbol rename and exact syntax-node replacement that emit host-owned transactional text mutations.
 - `DotNetInventoryService.cs` — normalized selected-solution/project/TFM/reference/package/test facade over loaded semantic state with bounded central-package metadata inspection.
-- `AdvancedSemanticQueryService.cs` — Generation-fenced call hierarchy, explainable impact, closed C# structural-pattern search, and already-loaded generated-document inspection.
+- `AdvancedSemanticQueryService.cs` — Generation-fenced exact code-explore source projection, call hierarchy, explainable impact, closed C# structural-pattern search, and already-loaded generated-document inspection.
 
 ## Local Contracts
 
@@ -30,7 +30,7 @@ Own .NET SDK, MSBuild, Roslyn workspace, confidence-aware semantic discovery, an
 - Bounded syntax replacement requires an exact expression, statement, or member node span; invalid replacement syntax is rejected and formatting is limited to the annotated replacement region.
 - Semantic source projection caches linked-document counts and parsed target-framework metadata once per query.
 - Inventory derives selected-solution provenance and project metadata paths from the authoritative loaded workspace, exposes every metadata read for tool-policy confinement, preserves semantic confidence and omissions, bounds project/XML reads, attributes project versus central package versions where knowable, and never restores or builds.
-- Advanced semantic queries capture the existing workspace solution, compiled-project set, confidence, repository root, and monotonically increasing generation once; late stale results fail rather than replacing current evidence. Traversals are deterministic and depth/node/edge/time bounded, impact edges carry reasons, runtime/dynamic unknowns remain omissions, patterns use only the closed version-1 host schema, and generated queries inspect only already-loaded classified documents without running generators.
+- Advanced semantic queries capture the existing workspace solution, compiled-project set, confidence, repository root, and monotonically increasing generation once; late stale results fail rather than replacing current evidence. Code exploration resolves only exact symbols, stable IDs, and confined C# path anchors, verifies current file identity before source emission, and returns bounded line-numbered source with explicit omissions and continuations. Traversals are deterministic and depth/node/edge/time bounded, impact edges carry reasons, runtime/dynamic unknowns remain omissions, patterns use only the closed version-1 host schema, and generated queries inspect only already-loaded classified documents without running generators.
 
 ## Work Guidance
 

@@ -1127,27 +1127,57 @@ public sealed partial class SessionApplication :
         if (!workspaceAvailable
             || semanticToolAttempted
             || !string.Equals(tool.ToolName, "search", StringComparison.OrdinalIgnoreCase)
-            || !modelTools.Any(static definition => string.Equals(
-                definition.Name,
-                "find_symbol",
-                StringComparison.OrdinalIgnoreCase))
             || !TryGetSearchQuery(tool.ArgumentsJson, out var query)
             || !LooksLikeCSharpSymbolOrFileQuery(query))
         {
             return false;
         }
 
+        var hasCodeExplore = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "code_explore",
+            StringComparison.OrdinalIgnoreCase));
+        var hasFindSymbol = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "find_symbol",
+            StringComparison.OrdinalIgnoreCase));
+        if (!hasCodeExplore && !hasFindSymbol)
+        {
+            return false;
+        }
+
         var boundedQuery = BoundSingleLine(query, 160);
-        var suggestedQuery = BoundSingleLine(StripCSharpExtension(query), 160);
-        content = "A semantic workspace is loaded and find_symbol is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
-            + $"Call find_symbol with query '{suggestedQuery}' before text search. The rejected search query was '{boundedQuery}'. "
+        var isFileQuery = boundedQuery.Contains(".cs", StringComparison.OrdinalIgnoreCase);
+        var isExactPathQuery = isFileQuery && LooksLikeExactCSharpPathQuery(boundedQuery);
+        var isExactSymbolQuery = !isFileQuery && LooksLikeExactCSharpSymbolQuery(boundedQuery);
+        if (!isExactPathQuery && !isExactSymbolQuery && !hasFindSymbol)
+        {
+            return false;
+        }
+
+        var suggestedQuery = isExactPathQuery || isExactSymbolQuery
+            ? boundedQuery
+            : isFileQuery
+                ? BoundSingleLine(GetCSharpFileSymbolQuery(query), 160)
+                : BoundSingleLine(GetDiscoverableSymbolQuery(query), 160);
+        var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
+            ? "code_explore"
+            : "find_symbol";
+        var suggestedCall = suggestedTool == "code_explore" && isExactPathQuery
+            ? $"Call code_explore with query '{suggestedQuery}' and a pathAnchors entry for that repository-relative .cs path before text search."
+            : suggestedTool == "code_explore"
+                ? $"Call code_explore with query '{suggestedQuery}' as an exact symbol anchor before text search."
+                : $"Call find_symbol with query '{suggestedQuery}' before text search.";
+        content = $"A semantic workspace is loaded and {suggestedTool} is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
+            + $"{suggestedCall} The rejected search query was '{boundedQuery}'. "
             + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";
         return true;
     }
 
     private static bool IsSemanticInspectionTool(string toolName)
     {
-        return string.Equals(toolName, "find_symbol", StringComparison.OrdinalIgnoreCase)
+        return string.Equals(toolName, "code_explore", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(toolName, "find_symbol", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "find_references", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "find_implementations", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "call_hierarchy", StringComparison.OrdinalIgnoreCase)
@@ -1206,6 +1236,57 @@ public sealed partial class SessionApplication :
             || query.Contains("interface", StringComparison.OrdinalIgnoreCase)
             || query.Contains("record", StringComparison.OrdinalIgnoreCase)
             || query.Contains("struct", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeExactCSharpPathQuery(string query)
+    {
+        var trimmed = query.Trim();
+        return trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && (trimmed.Contains('/', StringComparison.Ordinal)
+                || trimmed.Contains('\\', StringComparison.Ordinal)
+                || trimmed.StartsWith(".", StringComparison.Ordinal));
+    }
+
+    private static bool LooksLikeExactCSharpSymbolQuery(string query)
+    {
+        var trimmed = query.Trim();
+        var parameterStart = trimmed.IndexOf('(');
+        var name = parameterStart < 0 ? trimmed : trimmed[..parameterStart];
+        return !string.IsNullOrWhiteSpace(name)
+            && !name.Any(char.IsWhiteSpace)
+            && LooksLikeQualifiedIdentifier(name)
+            && (parameterStart < 0 || trimmed.EndsWith(")", StringComparison.Ordinal));
+    }
+
+    private static bool LooksLikeQualifiedIdentifier(string value)
+    {
+        var parts = value.Split('.');
+        return parts.Length > 0 && parts.All(IsIdentifierLike);
+    }
+
+    private static bool IsIdentifierLike(string value)
+    {
+        if (value.Length == 0 || (!char.IsLetter(value[0]) && value[0] != '_'))
+        {
+            return false;
+        }
+
+        return value.Skip(1).All(character => char.IsLetterOrDigit(character) || character == '_');
+    }
+
+    private static string GetCSharpFileSymbolQuery(string query)
+    {
+        var trimmed = query.Trim();
+        var separator = Math.Max(trimmed.LastIndexOf('/'), trimmed.LastIndexOf('\\'));
+        var fileName = separator < 0 ? trimmed : trimmed[(separator + 1)..];
+        return StripCSharpExtension(fileName);
+    }
+
+    private static string GetDiscoverableSymbolQuery(string query)
+    {
+        var token = ExtractIdentifierTokens(query)
+            .LastOrDefault(token => token.Any(char.IsUpper) && token.Any(char.IsLower));
+        return token ?? StripCSharpExtension(query);
     }
 
     private static IEnumerable<string> ExtractIdentifierTokens(string query)

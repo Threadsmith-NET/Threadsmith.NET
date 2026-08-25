@@ -457,7 +457,7 @@ public sealed class RepositoryMemoryGovernor : IRepositoryMemoryGovernor
         var changes = new List<RepositoryMemoryStateUpdate>();
         foreach (var item in SelectOverflow(snapshot.Items, activeItemCapacity))
         {
-            var reason = "Repository memory active-item bound was exceeded.";
+            const string reason = "Repository memory active-item bound was exceeded.";
             changes.Add(new RepositoryMemoryStateUpdate(
                 item.Id,
                 item.Validity,

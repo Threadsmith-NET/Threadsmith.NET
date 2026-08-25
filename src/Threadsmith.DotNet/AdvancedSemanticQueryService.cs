@@ -563,6 +563,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
         var continuations = new List<CodeExploreContinuationTarget>();
+        CodeExploreFlow? flow = null;
+        CodeExploreBlastRadius? blastRadius = null;
         var alternativesCapped = false;
         var timeReached = false;
         SemanticSourceProjection? projection = null;
@@ -621,6 +623,54 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             omissions.Add("The code exploration time limit was reached during anchor resolution.");
         }
 
+        if (!timeReached && projection is not null)
+        {
+            try
+            {
+                var flowAnchors = await ResolveCodeExploreFlowAnchorsAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    request,
+                    resolutions,
+                    timeout.Token);
+                if (ShouldBuildCodeExploreFlow(request, flowAnchors))
+                {
+                    flow = await BuildCodeExploreFlowAsync(
+                        snapshot,
+                        projection,
+                        sourceReader,
+                        request,
+                        flowAnchors,
+                        candidates,
+                        timeout.Token);
+                    omissions.AddRange(flow.Traversal.Omissions);
+                }
+                else if (request.Mode == CodeExploreMode.Flow && flowAnchors.Count < 2)
+                {
+                    omissions.Add("Flow mode requires at least two resolved source-bearing symbol anchors.");
+                }
+
+                if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors))
+                {
+                    blastRadius = await BuildCodeExploreBlastRadiusAsync(
+                        snapshot,
+                        projection,
+                        sourceReader,
+                        request,
+                        flowAnchors,
+                        candidates,
+                        timeout.Token);
+                    omissions.AddRange(blastRadius.Omissions);
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                timeReached = true;
+                omissions.Add("The code exploration time limit was reached during flow composition.");
+            }
+        }
+
         var selectedSections = new List<CodeExploreFileSection>();
         var seenSections = new HashSet<string>(StringComparer.Ordinal);
         var remainingSourceCharacters = request.Limits.MaximumSourceCharacters;
@@ -631,6 +681,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             {
                 foreach (var candidate in candidates
                     .OrderBy(candidate => candidate.Priority)
+                    .ThenBy(candidate => IsFlowCallSiteCandidate(candidate) ? 0 : 1)
                     .ThenBy(candidate => candidate.FilePath, PathComparer)
                     .ThenBy(candidate => candidate.Location?.Range.StartLine ?? candidate.PreferredLine ?? 0)
                     .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal))
@@ -729,6 +780,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var sourceOmissions = selectedSections
             .SelectMany(section => section.Source.OmittedRanges)
             .Distinct(StringComparer.Ordinal);
+        flow = AttachCodeExploreSourceSections(flow, selectedSections);
         var coverageOmissions = omissions
             .Concat(sourceOmissions)
             .Concat(resolutions
@@ -749,7 +801,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selectedSections,
             coverage,
             coverageOmissions,
-            continuations.DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}").ToArray());
+            continuations.DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}").ToArray(),
+            flow,
+            blastRadius);
     }
 
     private static void AddContinuationIfWithinLimit(
@@ -836,6 +890,1681 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int SourceCharacters,
         IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets);
 
+    private sealed record CodeExploreFlowAnchor(
+        SemanticSymbolIdentity Identity,
+        ISymbol Symbol,
+        CodeExploreLocation Location);
+
+    private sealed record CodeExploreCallEvidence(
+        ISymbol Caller,
+        ISymbol Callee,
+        Location? Site);
+
+    private sealed record CodeExplorePathSearchResult(
+        IReadOnlyList<CodeExploreCallEvidence> Edges,
+        IReadOnlyList<CodeExploreCallEvidence> CycleEdges,
+        bool IsComplete,
+        bool DepthLimitReached,
+        bool NodeLimitReached,
+        bool EdgeLimitReached,
+        string Reason);
+
+    private sealed record CodeExplorePairPathCandidate(
+        CodeExploreFlowAnchor From,
+        CodeExploreFlowAnchor To,
+        CodeExplorePathSearchResult Result);
+
+    private sealed record CodeExploreFlowNodeDraft(
+        ISymbol Symbol,
+        CodeExploreFlowNodeRole Role,
+        int Depth);
+
+    private static async Task<IReadOnlyList<CodeExploreFlowAnchor>> ResolveCodeExploreFlowAnchorsAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreAnchorResolution> resolutions,
+        CancellationToken cancellationToken)
+    {
+        var anchors = new List<CodeExploreFlowAnchor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var resolution in resolutions.Where(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved
+            && resolution.SelectedSymbol is not null))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var selectedSymbol = resolution.SelectedSymbol
+                ?? throw new InvalidOperationException("Resolved symbol metadata cannot be null.");
+            var groups = await ResolveSymbolGroupsInSnapshotAsync(
+                snapshot,
+                selectedSymbol.Id,
+                request.PathAnchors,
+                cancellationToken);
+            CodeExploreSymbolGroup? selectedGroup = null;
+            CodeExploreLocation? selectedLocation = null;
+            foreach (var group in groups)
+            {
+                var location = await FirstCodeExploreGroupLocationAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    group,
+                    cancellationToken);
+                if (location is null)
+                {
+                    continue;
+                }
+
+                selectedGroup ??= group;
+                selectedLocation ??= location;
+                if (CodeExploreLocationsEqual(location, resolution.SelectedLocation))
+                {
+                    selectedGroup = group;
+                    selectedLocation = location;
+                    break;
+                }
+            }
+
+            var symbol = selectedGroup?.Symbols.FirstOrDefault();
+            if (symbol is null || selectedLocation is null || !seen.Add(selectedSymbol.Id))
+            {
+                continue;
+            }
+
+            anchors.Add(new CodeExploreFlowAnchor(selectedSymbol, symbol, selectedLocation));
+        }
+
+        return anchors;
+    }
+
+    private static bool CodeExploreLocationsEqual(
+        CodeExploreLocation left,
+        CodeExploreLocation? right)
+    {
+        return right is not null
+            && string.Equals(left.ProjectName, right.ProjectName, StringComparison.Ordinal)
+            && string.Equals(left.TargetFramework, right.TargetFramework, StringComparison.Ordinal)
+            && string.Equals(left.FilePath, right.FilePath, PathComparison)
+            && left.Range.Equals(right.Range);
+    }
+
+    private static bool ShouldBuildCodeExploreFlow(
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreFlowAnchor> anchors)
+    {
+        return anchors.Count >= 2 && request.Mode is CodeExploreMode.Auto
+            or CodeExploreMode.Survey
+            or CodeExploreMode.Flow
+            or CodeExploreMode.Impact;
+    }
+
+    private static bool ShouldBuildCodeExploreBlastRadius(
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreFlowAnchor> anchors)
+    {
+        return anchors.Count > 0 && (request.Mode is CodeExploreMode.Survey
+            or CodeExploreMode.Flow
+            or CodeExploreMode.Impact
+            || (request.Mode == CodeExploreMode.Auto && anchors.Count >= 2));
+    }
+
+    private static async Task<CodeExploreFlow> BuildCodeExploreFlowAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreFlowAnchor> anchors,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        CancellationToken cancellationToken)
+    {
+        var orderedAnchors = anchors
+            .OrderBy(anchor => anchor.Identity.Id, StringComparer.Ordinal)
+            .ToArray();
+        var namedIds = orderedAnchors
+            .Select(anchor => anchor.Identity.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var retainedAnchors = orderedAnchors
+            .Take(request.Limits.MaximumFlowNodes)
+            .ToArray();
+        var nodeDrafts = retainedAnchors.ToDictionary(
+            anchor => anchor.Identity.Id,
+            anchor => new CodeExploreFlowNodeDraft(anchor.Symbol, CodeExploreFlowNodeRole.NamedAnchor, 0),
+            StringComparer.Ordinal);
+        var resultNodeIds = nodeDrafts.Keys.ToHashSet(StringComparer.Ordinal);
+        var candidateSymbolsAdded = new HashSet<string>(
+            sourceCandidates
+                .Select(candidate => candidate.Identity?.Id)
+                .Where(id => id is not null)
+                .Select(id => id ?? string.Empty),
+            StringComparer.Ordinal);
+        var bridgeIds = new HashSet<string>(StringComparer.Ordinal);
+        var boundaryCallerIds = new HashSet<string>(StringComparer.Ordinal);
+        var paths = new List<CodeExploreFlowPath>();
+        var deferredIncompletePaths = new List<CodeExploreFlowPath>();
+        var edgeOrdinals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var edges = new List<CodeExploreFlowEdge>();
+        var dispatchBranches = new List<CodeExploreDispatchBranch>();
+        var boundaries = new List<CodeExploreFlowBoundary>();
+        var omissions = new List<string>();
+        var depthReached = false;
+        var nodeReached = orderedAnchors.Length > retainedAnchors.Length;
+        var edgeReached = false;
+        var pathLimitReached = false;
+        var evidenceOmitted = false;
+
+        if (nodeReached)
+        {
+            omissions.Add("The flow node limit is smaller than the resolved anchor count; flow paths were omitted.");
+        }
+        else
+        {
+            var completeCandidates = new List<CodeExplorePairPathCandidate>();
+            var incompleteCandidates = new List<CodeExplorePairPathCandidate>();
+            for (var fromIndex = 0; fromIndex < orderedAnchors.Length; fromIndex++)
+            {
+                for (var toIndex = fromIndex + 1; toIndex < orderedAnchors.Length; toIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var forward = await FindCodeExploreFlowPathAsync(
+                        snapshot,
+                        orderedAnchors[fromIndex].Symbol,
+                        orderedAnchors[toIndex].Symbol,
+                        request.Limits,
+                        cancellationToken);
+                    var reverse = await FindCodeExploreFlowPathAsync(
+                        snapshot,
+                        orderedAnchors[toIndex].Symbol,
+                        orderedAnchors[fromIndex].Symbol,
+                        request.Limits,
+                        cancellationToken);
+                    depthReached |= forward.DepthLimitReached || reverse.DepthLimitReached;
+                    nodeReached |= forward.NodeLimitReached || reverse.NodeLimitReached;
+                    edgeReached |= forward.EdgeLimitReached || reverse.EdgeLimitReached;
+                    var selected = SelectCodeExplorePairPathCandidate(
+                        orderedAnchors[fromIndex],
+                        orderedAnchors[toIndex],
+                        forward,
+                        reverse);
+                    if (selected.Result.IsComplete)
+                    {
+                        completeCandidates.Add(selected);
+                    }
+                    else
+                    {
+                        incompleteCandidates.Add(selected);
+                    }
+                }
+            }
+
+            foreach (var candidate in completeCandidates.OrderBy(candidate => candidate.Result.Edges.Count)
+                .ThenBy(candidate => candidate.Result.Edges.Sum(edge => DispatchSortRank(ClassifyDispatch(edge.Callee))))
+                .ThenBy(candidate => candidate.From.Identity.Id, StringComparer.Ordinal)
+                .ThenBy(candidate => candidate.To.Identity.Id, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (paths.Count >= request.Limits.MaximumFlowPaths)
+                {
+                    pathLimitReached = true;
+                    break;
+                }
+
+                _ = await TryAdmitCompletePathAsync(candidate);
+            }
+
+            if (paths.Count < request.Limits.MaximumFlowPaths && !pathLimitReached)
+            {
+                foreach (var path in deferredIncompletePaths
+                    .Concat(incompleteCandidates
+                        .OrderBy(candidate => candidate.From.Identity.Id, StringComparer.Ordinal)
+                        .ThenBy(candidate => candidate.To.Identity.Id, StringComparer.Ordinal)
+                        .Select(CreateIncompleteCodeExploreFlowPath)))
+                {
+                    if (paths.Count >= request.Limits.MaximumFlowPaths)
+                    {
+                        pathLimitReached = true;
+                        break;
+                    }
+
+                    paths.Add(path);
+                }
+            }
+
+            pathLimitReached |= completeCandidates.Count > paths.Count(candidate => candidate.IsComplete);
+        }
+
+        if (pathLimitReached)
+        {
+            omissions.Add("The maximum selected flow-path count was reached.");
+        }
+
+        if (request.Limits.MaximumDispatchBranches > 0)
+        {
+            var dispatchLimitReached = await AddDispatchBranchesAsync(
+                snapshot,
+                projection,
+                sourceReader,
+                request,
+                edges,
+                nodeDrafts,
+                candidateSymbolsAdded,
+                sourceCandidates,
+                dispatchBranches,
+                omissions,
+                cancellationToken);
+            nodeReached |= dispatchLimitReached;
+        }
+
+        var nodes = new List<CodeExploreFlowNode>();
+        foreach (var item in nodeDrafts
+            .OrderBy(item => item.Value.Depth)
+            .ThenBy(item => item.Key, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (nodes.Count >= request.Limits.MaximumFlowNodes)
+            {
+                nodeReached = true;
+                omissions.Add("The returned flow node limit was reached.");
+                break;
+            }
+
+            var identity = CreateIdentity(item.Value.Symbol);
+            var locations = await CreateCodeExploreLocationsAsync(
+                snapshot,
+                projection,
+                sourceReader,
+                item.Value.Symbol,
+                cancellationToken);
+            if (locations.Count == 0 && !item.Value.Role.Equals(CodeExploreFlowNodeRole.NamedAnchor) && HasSourceEvidence(item.Value.Symbol))
+            {
+                evidenceOmitted = true;
+                omissions.Add("Flow symbols outside the invocation path policy were omitted.");
+                continue;
+            }
+
+            nodes.Add(new CodeExploreFlowNode(
+                identity,
+                item.Value.Role,
+                item.Value.Depth,
+                null,
+                namedIds.Contains(identity.Id),
+                item.Value.Role == CodeExploreFlowNodeRole.Connector,
+                locations));
+        }
+
+        omissions.Add("Dynamic, reflection, dependency-injection, and runtime-only call targets are not inferred unless Roslyn exposes an unresolved call-site boundary in returned source.");
+        var distinctOmissions = omissions
+            .Concat(BuildOmissions(depthReached, nodeReached, edgeReached, false))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var traversalComplete = !depthReached && !nodeReached && !edgeReached && !pathLimitReached && !evidenceOmitted;
+        return new CodeExploreFlow(
+            paths,
+            nodes,
+            edges,
+            dispatchBranches,
+            boundaries,
+            new SemanticTraversalSummary(
+                nodes.Count,
+                edges.Count,
+                traversalComplete,
+                depthReached,
+                nodeReached,
+                edgeReached,
+                false,
+                distinctOmissions));
+
+        async Task<bool> TryAdmitCompletePathAsync(CodeExplorePairPathCandidate candidate)
+        {
+            var pathNodeIds = CreateFlowPathNodeIds(candidate.Result.Edges);
+            var pathSymbols = candidate.Result.Edges
+                .SelectMany(edge => new[] { edge.Caller, edge.Callee })
+                .Distinct(SymbolEqualityComparer.Default)
+                .ToArray();
+            foreach (var symbol in pathSymbols)
+            {
+                if (!await IsPolicyAllowedFlowSymbolAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    symbol,
+                    cancellationToken))
+                {
+                    evidenceOmitted = true;
+                    omissions.Add("A compiler-proven path was omitted because one or more connector symbols are outside the invocation path policy.");
+                    deferredIncompletePaths.Add(new CodeExploreFlowPath(
+                        candidate.From.Identity.Id,
+                        candidate.To.Identity.Id,
+                        [candidate.From.Identity.Id, candidate.To.Identity.Id],
+                        [],
+                        false,
+                        "The path crosses source outside the invocation path policy."));
+                    return false;
+                }
+            }
+
+            var pathBridgeIds = pathNodeIds
+                .Where(id => !namedIds.Contains(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (bridgeIds.Count + pathBridgeIds.Count(id => !bridgeIds.Contains(id)) > request.Limits.MaximumFlowBridgeSymbols)
+            {
+                nodeReached = true;
+                omissions.Add("A compiler-proven path was omitted because the unnamed connector limit was reached.");
+                deferredIncompletePaths.Add(new CodeExploreFlowPath(
+                    candidate.From.Identity.Id,
+                    candidate.To.Identity.Id,
+                    [candidate.From.Identity.Id, candidate.To.Identity.Id],
+                    [],
+                    false,
+                    "The path requires more unnamed connector symbols than the request permits."));
+                return false;
+            }
+
+            var newPathNodeIds = pathNodeIds
+                .Where(id => !resultNodeIds.Contains(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (resultNodeIds.Count + newPathNodeIds.Length > request.Limits.MaximumFlowNodes)
+            {
+                nodeReached = true;
+                omissions.Add("A compiler-proven path was omitted because the returned flow node limit was reached.");
+                deferredIncompletePaths.Add(new CodeExploreFlowPath(
+                    candidate.From.Identity.Id,
+                    candidate.To.Identity.Id,
+                    [candidate.From.Identity.Id, candidate.To.Identity.Id],
+                    [],
+                    false,
+                    "The path would exceed the returned flow node limit."));
+                return false;
+            }
+
+            var cycleEdges = candidate.Result.CycleEdges
+                .Where(edge => pathNodeIds.Contains(CreateIdentity(edge.Caller).Id, StringComparer.Ordinal)
+                    && pathNodeIds.Contains(CreateIdentity(edge.Callee).Id, StringComparer.Ordinal))
+                .DistinctBy(CreateFlowEdgeKey)
+                .ToArray();
+            var newPathEdgeCount = candidate.Result.Edges
+                .Concat(cycleEdges)
+                .Select(CreateFlowEdgeKey)
+                .Distinct(StringComparer.Ordinal)
+                .Count(key => !edgeOrdinals.ContainsKey(key));
+            if (edges.Count + newPathEdgeCount > request.Limits.MaximumFlowEdges)
+            {
+                edgeReached = true;
+                omissions.Add("The returned flow edge limit was reached before a selected path could be emitted.");
+                deferredIncompletePaths.Add(new CodeExploreFlowPath(
+                    candidate.From.Identity.Id,
+                    candidate.To.Identity.Id,
+                    [candidate.From.Identity.Id, candidate.To.Identity.Id],
+                    [],
+                    false,
+                    "The flow edge limit was reached before this path could be emitted."));
+                return false;
+            }
+
+            foreach (var id in pathBridgeIds)
+            {
+                bridgeIds.Add(id);
+            }
+
+            foreach (var id in newPathNodeIds)
+            {
+                resultNodeIds.Add(id);
+            }
+
+            var pathEdgeOrdinals = new List<int>();
+            for (var edgeIndex = 0; edgeIndex < candidate.Result.Edges.Count; edgeIndex++)
+            {
+                var evidence = candidate.Result.Edges[edgeIndex];
+                AddOrUpdateFlowNode(nodeDrafts, evidence.Caller, namedIds, edgeIndex);
+                AddOrUpdateFlowNode(nodeDrafts, evidence.Callee, namedIds, edgeIndex + 1);
+                await AddFlowSourceCandidateAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    evidence.Caller,
+                    candidateSymbolsAdded,
+                    sourceCandidates,
+                    "Compiler-proven flow declaration source.",
+                    3,
+                    cancellationToken);
+                await AddFlowSourceCandidateAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    evidence.Callee,
+                    candidateSymbolsAdded,
+                    sourceCandidates,
+                    "Compiler-proven flow declaration source.",
+                    3,
+                    cancellationToken);
+                await AddFlowCallSiteSourceCandidateAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    evidence.Caller,
+                    evidence.Site,
+                    sourceCandidates,
+                    cancellationToken);
+                await AddUnresolvedCallBoundariesAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    evidence.Caller,
+                    boundaryCallerIds,
+                    boundaries,
+                    cancellationToken);
+                pathEdgeOrdinals.Add(await AddCodeExploreFlowEdgeAsync(evidence, false));
+            }
+
+            foreach (var cycleEdge in cycleEdges)
+            {
+                AddOrUpdateFlowNode(nodeDrafts, cycleEdge.Caller, namedIds, IndexOfSymbolId(pathNodeIds, CreateIdentity(cycleEdge.Caller).Id));
+                AddOrUpdateFlowNode(nodeDrafts, cycleEdge.Callee, namedIds, IndexOfSymbolId(pathNodeIds, CreateIdentity(cycleEdge.Callee).Id));
+                await AddFlowCallSiteSourceCandidateAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    cycleEdge.Caller,
+                    cycleEdge.Site,
+                    sourceCandidates,
+                    cancellationToken);
+                _ = await AddCodeExploreFlowEdgeAsync(cycleEdge, true);
+            }
+
+            paths.Add(new CodeExploreFlowPath(
+                candidate.From.Identity.Id,
+                candidate.To.Identity.Id,
+                pathNodeIds,
+                pathEdgeOrdinals,
+                true,
+                "Selected deterministic compiler-proven call path."));
+            return true;
+        }
+
+        async Task<int> AddCodeExploreFlowEdgeAsync(CodeExploreCallEvidence evidence, bool closesCycle)
+        {
+            var edgeKey = CreateFlowEdgeKey(evidence);
+            if (edgeOrdinals.TryGetValue(edgeKey, out var existingOrdinal))
+            {
+                return existingOrdinal;
+            }
+
+            var callerIdentity = CreateIdentity(evidence.Caller);
+            var calleeIdentity = CreateIdentity(evidence.Callee);
+            var callSite = await CreateCodeExploreLocationAsync(
+                snapshot,
+                projection,
+                sourceReader,
+                evidence.Site,
+                cancellationToken);
+            var dispatchKind = ClassifyDispatch(evidence.Callee);
+            var isAmbiguousDispatch = IsAmbiguousDispatch(evidence.Callee);
+            var proofKind = isAmbiguousDispatch
+                ? CodeExploreEdgeProofKind.CompilerKnownDispatchBoundary
+                : CodeExploreEdgeProofKind.CompilerProvenCall;
+            var proof = closesCycle
+                ? "The compiler resolved this call relationship and it closes a cycle among returned flow nodes."
+                : isAmbiguousDispatch
+                    ? "The compiler resolved this call site, but runtime dispatch may choose among compiler-known implementations."
+                    : "The compiler resolved this call relationship from loaded source and symbols.";
+            var ordinal = edges.Count;
+            edgeOrdinals.Add(edgeKey, ordinal);
+            edges.Add(new CodeExploreFlowEdge(
+                ordinal,
+                callerIdentity.Id,
+                calleeIdentity.Id,
+                dispatchKind,
+                callSite,
+                isAmbiguousDispatch,
+                closesCycle,
+                proofKind,
+                proof));
+            AddFlowBoundary(boundaries, evidence.Callee, dispatchKind, callSite);
+            return ordinal;
+        }
+    }
+
+    private static async Task<CodeExplorePathSearchResult> FindCodeExploreFlowPathAsync(
+        AdvancedSemanticSnapshot snapshot,
+        ISymbol source,
+        ISymbol target,
+        CodeExploreLimits limits,
+        CancellationToken cancellationToken)
+    {
+        var sourceIdentity = CreateIdentity(source);
+        var targetIdentity = CreateIdentity(target);
+        if (string.Equals(sourceIdentity.Id, targetIdentity.Id, StringComparison.Ordinal))
+        {
+            return new CodeExplorePathSearchResult([], [], true, false, false, false, "The anchors resolve to the same semantic symbol.");
+        }
+
+        var pending = new Queue<ISymbol>();
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var symbols = new Dictionary<string, ISymbol>(StringComparer.Ordinal)
+        {
+            [sourceIdentity.Id] = source,
+        };
+        var depths = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [sourceIdentity.Id] = 0,
+        };
+        var predecessors = new Dictionary<string, CodeExploreCallEvidence>(StringComparer.Ordinal);
+        var cycleEdges = new List<CodeExploreCallEvidence>();
+        var cycleEdgeKeys = new HashSet<string>(StringComparer.Ordinal);
+        var searchedEdges = 0;
+        var depthReached = false;
+        var nodeReached = false;
+        var edgeReached = false;
+        pending.Enqueue(source);
+
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = pending.Dequeue();
+            var currentId = CreateIdentity(current).Id;
+            if (!expanded.Add(currentId))
+            {
+                continue;
+            }
+
+            var depth = depths[currentId];
+            if (depth >= limits.MaximumFlowDepth)
+            {
+                depthReached = true;
+                continue;
+            }
+
+            var outgoing = await FindOutgoingAsync(current, snapshot.Solution, cancellationToken);
+            foreach (var evidence in outgoing
+                .Select(item => new CodeExploreCallEvidence(item.Caller, item.Callee, item.Site))
+                .OrderBy(item => string.Equals(CreateIdentity(item.Callee).Id, targetIdentity.Id, StringComparison.Ordinal) ? 0 : 1)
+                .ThenBy(item => DispatchSortRank(ClassifyDispatch(item.Callee)))
+                .ThenBy(item => CreateIdentity(item.Callee).Id, StringComparer.Ordinal)
+                .ThenBy(item => item.Site?.SourceTree?.FilePath ?? string.Empty, PathComparer)
+                .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (searchedEdges >= limits.MaximumFlowEdges)
+                {
+                    edgeReached = true;
+                    break;
+                }
+
+                searchedEdges++;
+                var calleeIdentity = CreateIdentity(evidence.Callee);
+                if (!symbols.ContainsKey(calleeIdentity.Id))
+                {
+                    if (symbols.Count >= limits.MaximumFlowNodes)
+                    {
+                        nodeReached = true;
+                        break;
+                    }
+
+                    symbols.Add(calleeIdentity.Id, evidence.Callee);
+                }
+
+                if (depths.ContainsKey(calleeIdentity.Id))
+                {
+                    if (IsCycleEdge(currentId, calleeIdentity.Id, sourceIdentity.Id, predecessors))
+                    {
+                        var cycleKey = CreateFlowEdgeKey(evidence);
+                        if (cycleEdgeKeys.Add(cycleKey))
+                        {
+                            cycleEdges.Add(evidence);
+                        }
+                    }
+
+                    continue;
+                }
+
+                depths.Add(calleeIdentity.Id, depth + 1);
+                predecessors.Add(calleeIdentity.Id, evidence);
+                if (string.Equals(calleeIdentity.Id, targetIdentity.Id, StringComparison.Ordinal))
+                {
+                    var pathEdges = ReconstructCodeExplorePath(sourceIdentity.Id, targetIdentity.Id, predecessors);
+                    var pathNodeIds = CreateFlowPathNodeIds(pathEdges).ToHashSet(StringComparer.Ordinal);
+                    if (searchedEdges < limits.MaximumFlowEdges)
+                    {
+                        var targetOutgoing = await FindOutgoingAsync(evidence.Callee, snapshot.Solution, cancellationToken);
+                        foreach (var targetEvidence in targetOutgoing
+                            .Select(item => new CodeExploreCallEvidence(item.Caller, item.Callee, item.Site))
+                            .OrderBy(item => DispatchSortRank(ClassifyDispatch(item.Callee)))
+                            .ThenBy(item => CreateIdentity(item.Callee).Id, StringComparer.Ordinal)
+                            .ThenBy(item => item.Site?.SourceTree?.FilePath ?? string.Empty, PathComparer)
+                            .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
+                        {
+                            if (searchedEdges >= limits.MaximumFlowEdges)
+                            {
+                                break;
+                            }
+
+                            searchedEdges++;
+                            var targetCalleeId = CreateIdentity(targetEvidence.Callee).Id;
+                            if (!pathNodeIds.Contains(targetCalleeId)
+                                || !IsCycleEdge(calleeIdentity.Id, targetCalleeId, sourceIdentity.Id, predecessors))
+                            {
+                                continue;
+                            }
+
+                            var cycleKey = CreateFlowEdgeKey(targetEvidence);
+                            if (cycleEdgeKeys.Add(cycleKey))
+                            {
+                                cycleEdges.Add(targetEvidence);
+                            }
+                        }
+                    }
+
+                    return new CodeExplorePathSearchResult(
+                        pathEdges,
+                        cycleEdges,
+                        true,
+                        depthReached,
+                        nodeReached,
+                        edgeReached,
+                        "Compiler-proven path found.");
+                }
+
+                pending.Enqueue(evidence.Callee);
+            }
+
+            if (nodeReached || edgeReached)
+            {
+                break;
+            }
+        }
+
+        var reason = nodeReached || edgeReached || depthReached
+            ? "No compiler-proven path was found before traversal limits were reached."
+            : "No compiler-proven directed call path was found between the anchors in the loaded semantic snapshot.";
+        return new CodeExplorePathSearchResult([], cycleEdges, false, depthReached, nodeReached, edgeReached, reason);
+    }
+
+    private static IReadOnlyList<CodeExploreCallEvidence> ReconstructCodeExplorePath(
+        string sourceId,
+        string targetId,
+        IReadOnlyDictionary<string, CodeExploreCallEvidence> predecessors)
+    {
+        var edges = new List<CodeExploreCallEvidence>();
+        var current = targetId;
+        while (!string.Equals(current, sourceId, StringComparison.Ordinal))
+        {
+            if (!predecessors.TryGetValue(current, out var evidence))
+            {
+                return [];
+            }
+
+            edges.Add(evidence);
+            current = CreateIdentity(evidence.Caller).Id;
+        }
+
+        edges.Reverse();
+        return edges;
+    }
+
+    private static bool IsCycleEdge(
+        string callerId,
+        string calleeId,
+        string sourceId,
+        IReadOnlyDictionary<string, CodeExploreCallEvidence> predecessors)
+    {
+        if (string.Equals(callerId, calleeId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var current = callerId;
+        while (!string.Equals(current, sourceId, StringComparison.Ordinal))
+        {
+            if (!predecessors.TryGetValue(current, out var evidence))
+            {
+                return false;
+            }
+
+            current = CreateIdentity(evidence.Caller).Id;
+            if (string.Equals(current, calleeId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return string.Equals(sourceId, calleeId, StringComparison.Ordinal);
+    }
+
+    private static CodeExplorePairPathCandidate SelectCodeExplorePairPathCandidate(
+        CodeExploreFlowAnchor first,
+        CodeExploreFlowAnchor second,
+        CodeExplorePathSearchResult forward,
+        CodeExplorePathSearchResult reverse)
+    {
+        var forwardCandidate = new CodeExplorePairPathCandidate(first, second, forward);
+        var reverseCandidate = new CodeExplorePairPathCandidate(second, first, reverse);
+        return CompareCodeExplorePathCandidates(forwardCandidate, reverseCandidate) <= 0
+            ? forwardCandidate
+            : reverseCandidate;
+    }
+
+    private static int CompareCodeExplorePathCandidates(
+        CodeExplorePairPathCandidate left,
+        CodeExplorePairPathCandidate right)
+    {
+        var completeCompare = right.Result.IsComplete.CompareTo(left.Result.IsComplete);
+        if (completeCompare != 0)
+        {
+            return completeCompare;
+        }
+
+        var lengthCompare = left.Result.Edges.Count.CompareTo(right.Result.Edges.Count);
+        if (lengthCompare != 0)
+        {
+            return lengthCompare;
+        }
+
+        var dispatchCompare = left.Result.Edges.Sum(edge => DispatchSortRank(ClassifyDispatch(edge.Callee)))
+            .CompareTo(right.Result.Edges.Sum(edge => DispatchSortRank(ClassifyDispatch(edge.Callee))));
+        if (dispatchCompare != 0)
+        {
+            return dispatchCompare;
+        }
+
+        var fromCompare = string.Compare(left.From.Identity.Id, right.From.Identity.Id, StringComparison.Ordinal);
+        return fromCompare != 0
+            ? fromCompare
+            : string.Compare(left.To.Identity.Id, right.To.Identity.Id, StringComparison.Ordinal);
+    }
+
+    private static CodeExploreFlowPath CreateIncompleteCodeExploreFlowPath(CodeExplorePairPathCandidate candidate)
+    {
+        return new CodeExploreFlowPath(
+            candidate.From.Identity.Id,
+            candidate.To.Identity.Id,
+            [candidate.From.Identity.Id, candidate.To.Identity.Id],
+            [],
+            false,
+            candidate.Result.Reason);
+    }
+
+    private static int DispatchSortRank(CallDispatchKind kind)
+    {
+        return kind switch
+        {
+            CallDispatchKind.Direct => 0,
+            CallDispatchKind.Static => 1,
+            CallDispatchKind.Constructor => 2,
+            CallDispatchKind.Extension => 3,
+            CallDispatchKind.LocalFunction => 4,
+            CallDispatchKind.Interface => 5,
+            CallDispatchKind.Virtual => 6,
+            CallDispatchKind.Delegate => 7,
+            _ => 8,
+        };
+    }
+
+    private static IReadOnlyList<string> CreateFlowPathNodeIds(IReadOnlyList<CodeExploreCallEvidence> edges)
+    {
+        if (edges.Count == 0)
+        {
+            return [];
+        }
+
+        var nodes = new List<string> { CreateIdentity(edges[0].Caller).Id };
+        nodes.AddRange(edges.Select(edge => CreateIdentity(edge.Callee).Id));
+        return nodes;
+    }
+
+    private static int IndexOfSymbolId(IReadOnlyList<string> symbolIds, string symbolId)
+    {
+        for (var index = 0; index < symbolIds.Count; index++)
+        {
+            if (string.Equals(symbolIds[index], symbolId, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return 0;
+    }
+
+    private static void AddOrUpdateFlowNode(
+        Dictionary<string, CodeExploreFlowNodeDraft> nodes,
+        ISymbol symbol,
+        IReadOnlySet<string> namedIds,
+        int depth)
+    {
+        var identity = CreateIdentity(symbol);
+        var role = namedIds.Contains(identity.Id)
+            ? CodeExploreFlowNodeRole.NamedAnchor
+            : CodeExploreFlowNodeRole.Connector;
+        if (nodes.TryGetValue(identity.Id, out var existing))
+        {
+            var effectiveRole = existing.Role == CodeExploreFlowNodeRole.NamedAnchor || role == CodeExploreFlowNodeRole.NamedAnchor
+                ? CodeExploreFlowNodeRole.NamedAnchor
+                : existing.Role;
+            nodes[identity.Id] = existing with
+            {
+                Role = effectiveRole,
+                Depth = Math.Min(existing.Depth, depth),
+            };
+            return;
+        }
+
+        nodes.Add(identity.Id, new CodeExploreFlowNodeDraft(symbol, role, depth));
+    }
+
+    private static async Task AddFlowSourceCandidateAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        ISymbol symbol,
+        HashSet<string> candidateSymbolsAdded,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        string selectionReason,
+        int priority,
+        CancellationToken cancellationToken)
+    {
+        var identity = CreateIdentity(symbol);
+        if (!candidateSymbolsAdded.Add(identity.Id))
+        {
+            return;
+        }
+
+        var anchor = new CodeExploreAnchor(
+            CodeExploreAnchorKind.SymbolId,
+            identity.Id,
+            null,
+            null,
+            false,
+            CodeExplorePathSelectionMode.Auto,
+            null,
+            null);
+        await AddSymbolSourceCandidatesAsync(
+            snapshot,
+            projection,
+            sourceReader,
+            symbol,
+            anchor,
+            selectionReason,
+            priority,
+            sourceCandidates,
+            cancellationToken);
+    }
+
+    private static async Task AddFlowCallSiteSourceCandidateAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        ISymbol caller,
+        Location? callSite,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        CancellationToken cancellationToken)
+    {
+        if (callSite?.SourceTree is null)
+        {
+            return;
+        }
+
+        var filePath = callSite.SourceTree.FilePath;
+        if (string.IsNullOrWhiteSpace(filePath)
+            || !Path.IsPathRooted(filePath)
+            || !sourceReader.IsPathAllowed(filePath))
+        {
+            return;
+        }
+
+        var document = snapshot.Solution.GetDocument(callSite.SourceTree);
+        if (document is null)
+        {
+            return;
+        }
+
+        var text = await document.GetTextAsync(cancellationToken);
+        var safeStart = Math.Min(callSite.SourceSpan.Start, text.Length);
+        var safeEnd = Math.Min(callSite.SourceSpan.End, text.Length);
+        var startLine = text.Lines.GetLineFromPosition(safeStart);
+        var endLine = text.Lines.GetLineFromPosition(Math.Max(safeEnd - 1, safeStart));
+        var span = TextSpan.FromBounds(startLine.Start, endLine.EndIncludingLineBreak);
+        var identity = CreateIdentity(caller);
+        var location = ToCodeExploreLocation(
+            CreateDocumentLocation(document, callSite.SourceTree, span, projection),
+            snapshot.RepositoryPath);
+        sourceCandidates.Add(new CodeExploreSectionCandidate(
+            document,
+            document.FilePath ?? filePath,
+            span,
+            identity,
+            location,
+            CodeExploreAnchorKind.SymbolId,
+            identity.Id,
+            "Compiler-proven flow call-site source.",
+            1,
+            startLine.LineNumber + 1,
+            endLine.LineNumber + 1,
+            false,
+            CodeExplorePathSelectionMode.ExactLineRange,
+            null,
+            null,
+            null,
+            null));
+    }
+
+    private static async Task<bool> IsPolicyAllowedFlowSymbolAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        ISymbol symbol,
+        CancellationToken cancellationToken)
+    {
+        if (!HasSourceEvidence(symbol))
+        {
+            return true;
+        }
+
+        var location = await FirstCodeExploreLocationAsync(
+            snapshot,
+            projection,
+            sourceReader,
+            symbol,
+            cancellationToken);
+        return location is not null;
+    }
+
+    private static bool HasSourceEvidence(ISymbol symbol)
+    {
+        return symbol.DeclaringSyntaxReferences.Length > 0
+            || symbol.Locations.Any(location => location.IsInSource);
+    }
+
+    private static string CreateFlowEdgeKey(CodeExploreCallEvidence evidence)
+    {
+        var callerId = CreateIdentity(evidence.Caller).Id;
+        var calleeId = CreateIdentity(evidence.Callee).Id;
+        var path = evidence.Site?.SourceTree?.FilePath ?? string.Empty;
+        var span = evidence.Site?.SourceSpan ?? default;
+        return $"{callerId}|{calleeId}|{path}|{span.Start}|{span.End}";
+    }
+
+    private static void AddFlowBoundary(
+        List<CodeExploreFlowBoundary> boundaries,
+        ISymbol callee,
+        CallDispatchKind dispatchKind,
+        CodeExploreLocation? callSite)
+    {
+        var kind = dispatchKind switch
+        {
+            CallDispatchKind.Interface or CallDispatchKind.Virtual => CodeExploreFlowBoundaryKind.RuntimeDispatch,
+            CallDispatchKind.Delegate => CodeExploreFlowBoundaryKind.Delegate,
+            CallDispatchKind.Unknown => CodeExploreFlowBoundaryKind.Unknown,
+            _ => (CodeExploreFlowBoundaryKind?)null,
+        };
+        if (kind is null)
+        {
+            return;
+        }
+
+        var identity = CreateIdentity(callee);
+        if (boundaries.Any(boundary => boundary.Kind == kind.Value
+            && string.Equals(boundary.SymbolId, identity.Id, StringComparison.Ordinal)
+            && Equals(boundary.CallSite, callSite)))
+        {
+            return;
+        }
+
+        var reason = kind.Value switch
+        {
+            CodeExploreFlowBoundaryKind.RuntimeDispatch => "Runtime dispatch may choose implementations not proven by this selected path; compiler-known branches are returned separately when available.",
+            CodeExploreFlowBoundaryKind.Delegate => "Delegate invocation targets are runtime values and are not invented by code_explore.",
+            _ => "The compiler could not classify a safe static continuation for this call site.",
+        };
+        boundaries.Add(new CodeExploreFlowBoundary(
+            kind.Value,
+            identity.Id,
+            callSite,
+            reason,
+            [identity.Id]));
+    }
+
+    private static async Task AddUnresolvedCallBoundariesAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        ISymbol caller,
+        HashSet<string> visitedCallerIds,
+        List<CodeExploreFlowBoundary> boundaries,
+        CancellationToken cancellationToken)
+    {
+        var callerIdentity = CreateIdentity(caller);
+        if (!visitedCallerIds.Add(callerIdentity.Id))
+        {
+            return;
+        }
+
+        foreach (var reference in caller.DeclaringSyntaxReferences
+            .OrderBy(reference => reference.SyntaxTree.FilePath, PathComparer)
+            .ThenBy(reference => reference.Span.Start))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var syntaxPath = reference.SyntaxTree.FilePath;
+            if (string.IsNullOrWhiteSpace(syntaxPath)
+                || !Path.IsPathRooted(syntaxPath)
+                || !sourceReader.IsPathAllowed(syntaxPath))
+            {
+                continue;
+            }
+
+            var declaration = await reference.GetSyntaxAsync(cancellationToken);
+            var document = snapshot.Solution.GetDocument(declaration.SyntaxTree);
+            if (document is null)
+            {
+                continue;
+            }
+
+            var model = await document.GetSemanticModelAsync(cancellationToken)
+                ?? throw new InvalidOperationException("The semantic model became unavailable.");
+            var expressions = declaration.DescendantNodes()
+                .OfType<ExpressionSyntax>()
+                .Where(node => node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax)
+                .Where(node => BelongsToDeclaration(node, declaration));
+            foreach (var expression in expressions)
+            {
+                var info = model.GetSymbolInfo(expression, cancellationToken);
+                if (info.Symbol is not null)
+                {
+                    continue;
+                }
+
+                var callSite = await CreateCodeExploreLocationAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    expression.GetLocation(),
+                    cancellationToken);
+                if (callSite is null)
+                {
+                    continue;
+                }
+
+                var reason = info.CandidateSymbols.Length > 0
+                    ? "The compiler reported candidate call targets at this call site; code_explore did not invent a compiler-proven edge."
+                    : "The compiler did not resolve a static call target at this call site; code_explore stopped at an explicit boundary.";
+                AddUnknownFlowBoundary(boundaries, callerIdentity.Id, callSite, reason);
+            }
+        }
+    }
+
+    private static void AddUnknownFlowBoundary(
+        List<CodeExploreFlowBoundary> boundaries,
+        string symbolId,
+        CodeExploreLocation callSite,
+        string reason)
+    {
+        if (boundaries.Any(boundary => boundary.Kind == CodeExploreFlowBoundaryKind.Unknown
+            && string.Equals(boundary.SymbolId, symbolId, StringComparison.Ordinal)
+            && Equals(boundary.CallSite, callSite)))
+        {
+            return;
+        }
+
+        boundaries.Add(new CodeExploreFlowBoundary(
+            CodeExploreFlowBoundaryKind.Unknown,
+            symbolId,
+            callSite,
+            reason,
+            [symbolId]));
+    }
+
+    private static async Task<bool> AddDispatchBranchesAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreFlowEdge> edges,
+        Dictionary<string, CodeExploreFlowNodeDraft> nodeDrafts,
+        HashSet<string> candidateSymbolsAdded,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        List<CodeExploreDispatchBranch> dispatchBranches,
+        List<string> omissions,
+        CancellationToken cancellationToken)
+    {
+        var limitReached = false;
+        var returnedTargets = 0;
+        var branchRoots = edges
+            .Where(edge => edge.DispatchKind is CallDispatchKind.Interface or CallDispatchKind.Virtual)
+            .Select(edge => edge.CalleeSymbolId)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var rootId in branchRoots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (dispatchBranches.Count >= request.Limits.MaximumDispatchBranches
+                || returnedTargets >= request.Limits.MaximumDispatchBranches)
+            {
+                omissions.Add("The dispatch-branch limit was reached.");
+                return true;
+            }
+
+            var rootSymbol = nodeDrafts.TryGetValue(rootId, out var draft)
+                ? draft.Symbol
+                : await ResolveSymbolAsync(snapshot.Solution, rootId, cancellationToken);
+            var implementations = await FindDispatchImplementationSymbolsAsync(
+                rootSymbol,
+                snapshot.Solution,
+                cancellationToken);
+            var targets = new List<CodeExploreDispatchTarget>();
+            foreach (var implementation in implementations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (returnedTargets >= request.Limits.MaximumDispatchBranches)
+                {
+                    limitReached = true;
+                    break;
+                }
+
+                var identity = CreateIdentity(implementation);
+                var location = await FirstCodeExploreLocationAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    implementation,
+                    cancellationToken);
+                if (location is null && HasSourceEvidence(implementation))
+                {
+                    limitReached = true;
+                    continue;
+                }
+
+                if (!nodeDrafts.ContainsKey(identity.Id) && nodeDrafts.Count >= request.Limits.MaximumFlowNodes)
+                {
+                    limitReached = true;
+                    break;
+                }
+
+                targets.Add(new CodeExploreDispatchTarget(identity, location, null));
+                returnedTargets++;
+                if (nodeDrafts.TryGetValue(identity.Id, out var existingDraft))
+                {
+                    nodeDrafts[identity.Id] = existingDraft with
+                    {
+                        Role = existingDraft.Role == CodeExploreFlowNodeRole.NamedAnchor
+                            ? CodeExploreFlowNodeRole.NamedAnchor
+                            : CodeExploreFlowNodeRole.DispatchBranch,
+                        Depth = Math.Min(existingDraft.Depth, 1),
+                    };
+                }
+                else
+                {
+                    nodeDrafts.Add(identity.Id, new CodeExploreFlowNodeDraft(
+                        implementation,
+                        CodeExploreFlowNodeRole.DispatchBranch,
+                        1));
+                }
+
+                await AddFlowSourceCandidateAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    implementation,
+                    candidateSymbolsAdded,
+                    sourceCandidates,
+                    "Compiler-known dispatch branch source.",
+                    4,
+                    cancellationToken);
+            }
+
+            var rootEdge = edges.First(edge => string.Equals(edge.CalleeSymbolId, rootId, StringComparison.Ordinal));
+            var branchOmissions = implementations.Count > targets.Count
+                ? [$"{implementations.Count - targets.Count} compiler-known implementation or override branches were omitted by branch limits or path policy."]
+                : Array.Empty<string>();
+            if (branchOmissions.Length > 0)
+            {
+                limitReached = true;
+            }
+
+            dispatchBranches.Add(new CodeExploreDispatchBranch(
+                CreateIdentity(rootSymbol),
+                rootEdge.CallSite,
+                targets,
+                targets.Count,
+                implementations.Count,
+                branchOmissions));
+        }
+
+        if (limitReached)
+        {
+            omissions.Add("One or more compiler-known dispatch branches were omitted by branch, node, or path-policy limits.");
+        }
+
+        return limitReached;
+    }
+
+    private static async Task<IReadOnlyList<ISymbol>> FindDispatchImplementationSymbolsAsync(
+        ISymbol rootSymbol,
+        Solution solution,
+        CancellationToken cancellationToken)
+    {
+        var implementations = new List<ISymbol>();
+        var directImplementations = await SymbolFinder.FindImplementationsAsync(
+            rootSymbol,
+            solution,
+            cancellationToken: cancellationToken);
+        implementations.AddRange(directImplementations);
+        if (rootSymbol is IMethodSymbol method)
+        {
+            if (method.ContainingType?.TypeKind == TypeKind.Interface)
+            {
+                var typeImplementations = await SymbolFinder.FindImplementationsAsync(
+                    method.ContainingType,
+                    solution,
+                    cancellationToken: cancellationToken);
+                foreach (var type in typeImplementations.OfType<INamedTypeSymbol>())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var mapped = type.FindImplementationForInterfaceMember(method);
+                    if (mapped is not null)
+                    {
+                        implementations.Add(mapped);
+                        continue;
+                    }
+
+                    implementations.AddRange(type.GetMembers(method.Name)
+                        .OfType<IMethodSymbol>()
+                        .Where(candidate => MethodSignaturesMatch(method, candidate)));
+                }
+            }
+
+            var overrideRoots = implementations
+                .OfType<IMethodSymbol>()
+                .Append(method)
+                .Where(candidate => candidate.IsVirtual || candidate.IsAbstract || candidate.IsOverride)
+                .Distinct(SymbolEqualityComparer.Default)
+                .OfType<IMethodSymbol>()
+                .ToArray();
+            foreach (var overrideRoot in overrideRoots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var overrides = await SymbolFinder.FindOverridesAsync(
+                    overrideRoot,
+                    solution,
+                    cancellationToken: cancellationToken);
+                implementations.AddRange(overrides);
+            }
+        }
+
+        return implementations
+            .Select(symbol => symbol.OriginalDefinition)
+            .Distinct(SymbolEqualityComparer.Default)
+            .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool MethodSignaturesMatch(IMethodSymbol expected, IMethodSymbol candidate)
+    {
+        return string.Equals(expected.Name, candidate.Name, StringComparison.Ordinal)
+            && expected.TypeParameters.Length == candidate.TypeParameters.Length
+            && expected.Parameters.Length == candidate.Parameters.Length
+            && expected.Parameters.Zip(candidate.Parameters).All(pair =>
+                pair.First.RefKind == pair.Second.RefKind
+                && string.Equals(
+                    pair.First.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                    pair.Second.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                    StringComparison.Ordinal));
+    }
+
+    private static async Task<CodeExploreBlastRadius> BuildCodeExploreBlastRadiusAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        IReadOnlyList<CodeExploreFlowAnchor> anchors,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<CodeExploreBlastRadiusItem>();
+        var omissions = new List<string>();
+        var continuations = new List<CodeExploreContinuationTarget>();
+        var candidateSymbolsAdded = new HashSet<string>(
+            sourceCandidates
+                .Select(candidate => candidate.Identity?.Id)
+                .Where(id => id is not null)
+                .Select(id => id ?? string.Empty),
+            StringComparer.Ordinal);
+        var countedProjectIds = new HashSet<ProjectId>();
+        var countedTestProjectIds = new HashSet<ProjectId>();
+        var returnedProjectIds = new HashSet<ProjectId>();
+        var returnedTestProjectIds = new HashSet<ProjectId>();
+        var totalCallers = 0;
+        var totalImplementations = 0;
+        var totalProjects = 0;
+        var totalTests = 0;
+
+        foreach (var anchor in anchors.OrderBy(anchor => anchor.Identity.Id, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var callers = (await SymbolFinder.FindCallersAsync(
+                    anchor.Symbol,
+                    snapshot.Solution,
+                    cancellationToken))
+                .Select(caller => caller.CallingSymbol)
+                .Distinct(SymbolEqualityComparer.Default)
+                .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal)
+                .ToArray();
+            totalCallers += callers.Length;
+            foreach (var caller in callers)
+            {
+                if (!await TryAddBlastSymbolItemAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    request,
+                    anchor.Identity.Id,
+                    caller,
+                    ImpactKind.Caller,
+                    "Caller directly invokes a primary code_explore anchor.",
+                    items,
+                    omissions,
+                    candidateSymbolsAdded,
+                    sourceCandidates,
+                    cancellationToken))
+                {
+                    AddBlastContinuation(continuations, snapshot, anchor.Identity.Id);
+                    break;
+                }
+            }
+
+            var implementations = (await SymbolFinder.FindImplementationsAsync(
+                    anchor.Symbol,
+                    snapshot.Solution,
+                    cancellationToken: cancellationToken))
+                .Distinct(SymbolEqualityComparer.Default)
+                .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal)
+                .ToArray();
+            totalImplementations += implementations.Length;
+            foreach (var implementation in implementations)
+            {
+                if (!await TryAddBlastSymbolItemAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    request,
+                    anchor.Identity.Id,
+                    implementation,
+                    ImpactKind.Implementation,
+                    "Symbol implements or overrides a primary code_explore anchor.",
+                    items,
+                    omissions,
+                    candidateSymbolsAdded,
+                    sourceCandidates,
+                    cancellationToken))
+                {
+                    AddBlastContinuation(continuations, snapshot, anchor.Identity.Id);
+                    break;
+                }
+            }
+
+            var projects = FindDependentProjects(snapshot, anchor.Symbol, cancellationToken);
+            foreach (var project in projects)
+            {
+                var kind = IsTestProject(project) ? ImpactKind.Test : ImpactKind.Project;
+                if (kind == ImpactKind.Test)
+                {
+                    if (!countedTestProjectIds.Add(project.Id))
+                    {
+                        continue;
+                    }
+
+                    totalTests++;
+                }
+                else
+                {
+                    if (!countedProjectIds.Add(project.Id))
+                    {
+                        continue;
+                    }
+
+                    totalProjects++;
+                }
+
+                var returnedIds = kind == ImpactKind.Test ? returnedTestProjectIds : returnedProjectIds;
+                if (!returnedIds.Add(project.Id))
+                {
+                    continue;
+                }
+
+                if (items.Count >= request.Limits.MaximumBlastRadiusItems)
+                {
+                    AddBlastContinuation(continuations, snapshot, anchor.Identity.Id);
+                    continue;
+                }
+
+                var reason = kind == ImpactKind.Test
+                    ? "Test project depends on a project containing primary anchor evidence."
+                    : "Project depends on a project containing primary anchor evidence.";
+                items.Add(new CodeExploreBlastRadiusItem(
+                    anchor.Identity.Id,
+                    kind,
+                    null,
+                    null,
+                    project.Name,
+                    reason));
+            }
+        }
+
+        if (items.Count >= request.Limits.MaximumBlastRadiusItems
+            && (totalCallers + totalImplementations + totalProjects + totalTests) > items.Count)
+        {
+            omissions.Add("The compact blast-radius item limit was reached.");
+        }
+
+        omissions.Add("Blast-radius evidence is compiler/project metadata only and is not exhaustive validation scope.");
+        return new CodeExploreBlastRadius(
+            items,
+            items.Count(item => item.Kind == ImpactKind.Caller),
+            totalCallers,
+            items.Count(item => item.Kind == ImpactKind.Implementation),
+            totalImplementations,
+            items.Count(item => item.Kind == ImpactKind.Project),
+            totalProjects,
+            items.Count(item => item.Kind == ImpactKind.Test),
+            totalTests,
+            omissions.Distinct(StringComparer.Ordinal).ToArray(),
+            continuations.DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.WorkspaceGeneration}:{target.Reason}").ToArray());
+    }
+
+    private static async Task<bool> TryAddBlastSymbolItemAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        string anchorSymbolId,
+        ISymbol symbol,
+        ImpactKind kind,
+        string reason,
+        List<CodeExploreBlastRadiusItem> items,
+        List<string> omissions,
+        HashSet<string> candidateSymbolsAdded,
+        List<CodeExploreSectionCandidate> sourceCandidates,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count >= request.Limits.MaximumBlastRadiusItems)
+        {
+            return false;
+        }
+
+        var identity = CreateIdentity(symbol);
+        var location = await FirstCodeExploreLocationAsync(
+            snapshot,
+            projection,
+            sourceReader,
+            symbol,
+            cancellationToken);
+        if (location is null && HasSourceEvidence(symbol))
+        {
+            omissions.Add("Blast-radius symbols outside the invocation path policy were omitted.");
+            return true;
+        }
+
+        items.Add(new CodeExploreBlastRadiusItem(
+            anchorSymbolId,
+            kind,
+            identity,
+            location,
+            location?.ProjectName,
+            reason));
+        await AddFlowSourceCandidateAsync(
+            snapshot,
+            projection,
+            sourceReader,
+            symbol,
+            candidateSymbolsAdded,
+            sourceCandidates,
+            "Compact blast-radius declaration source.",
+            5,
+            cancellationToken);
+        return true;
+    }
+
+    private static IReadOnlyList<Project> FindDependentProjects(
+        AdvancedSemanticSnapshot snapshot,
+        ISymbol symbol,
+        CancellationToken cancellationToken)
+    {
+        var projectNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var location in symbol.Locations.Where(location => location.IsInSource))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (location.SourceTree is null)
+            {
+                continue;
+            }
+
+            var document = snapshot.Solution.GetDocument(location.SourceTree);
+            if (document is not null)
+            {
+                projectNames.Add(document.Project.Name);
+            }
+        }
+
+        var projects = snapshot.Solution.Projects
+            .Where(project => projectNames.Contains(project.Name))
+            .ToArray();
+        return snapshot.Solution.Projects
+            .Where(project => project.ProjectReferences.Any(reference =>
+                projects.Any(candidate => candidate.Id == reference.ProjectId)))
+            .OrderBy(project => project.Name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void AddBlastContinuation(
+        List<CodeExploreContinuationTarget> continuations,
+        AdvancedSemanticSnapshot snapshot,
+        string symbolId)
+    {
+        continuations.Add(new CodeExploreContinuationTarget(
+            CodeExploreAnchorKind.SymbolId,
+            symbolId,
+            null,
+            null,
+            null,
+            false,
+            null,
+            null,
+            snapshot.Generation,
+            "Retry symbol_impact or increase maximumBlastRadiusItems for more compact impact evidence."));
+    }
+
+    private static async Task<IReadOnlyList<CodeExploreLocation>> CreateCodeExploreLocationsAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        ISymbol symbol,
+        CancellationToken cancellationToken)
+    {
+        var locations = new List<CodeExploreLocation>();
+        foreach (var location in symbol.Locations
+            .Where(location => location.IsInSource)
+            .OrderBy(location => location.SourceTree?.FilePath ?? string.Empty, PathComparer)
+            .ThenBy(location => location.SourceSpan.Start))
+        {
+            var projected = await CreateCodeExploreLocationAsync(
+                snapshot,
+                projection,
+                sourceReader,
+                location,
+                cancellationToken);
+            if (projected is not null)
+            {
+                locations.Add(projected);
+            }
+        }
+
+        return locations;
+    }
+
+    private static async Task<CodeExploreLocation?> CreateCodeExploreLocationAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        Location? location,
+        CancellationToken cancellationToken)
+    {
+        if (location is null)
+        {
+            return null;
+        }
+
+        var semanticLocation = await CreateLocationAsync(snapshot, projection, location, cancellationToken);
+        if (semanticLocation is null || !sourceReader.IsPathAllowed(semanticLocation.FilePath))
+        {
+            return null;
+        }
+
+        return ToCodeExploreLocation(semanticLocation, snapshot.RepositoryPath);
+    }
+
+    private static CodeExploreFlow? AttachCodeExploreSourceSections(
+        CodeExploreFlow? flow,
+        IReadOnlyList<CodeExploreFileSection> sections)
+    {
+        if (flow is null)
+        {
+            return null;
+        }
+
+        var sourceIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var index = 0; index < sections.Count; index++)
+        {
+            foreach (var identity in sections[index].SemanticIdentities)
+            {
+                sourceIndexes.TryAdd(identity.Id, index);
+            }
+        }
+
+        var nodes = flow.Nodes
+            .Select(node => node with { SourceSectionIndex = FindSourceSectionIndex(sourceIndexes, node.Symbol.Id, node.SourceSectionIndex) })
+            .ToArray();
+        var branches = flow.DispatchBranches
+            .Select(branch => branch with
+            {
+                Implementations = branch.Implementations
+                    .Select(target => target with { SourceSectionIndex = FindSourceSectionIndex(sourceIndexes, target.Symbol.Id, target.SourceSectionIndex) })
+                    .ToArray(),
+            })
+            .ToArray();
+        return flow with
+        {
+            Nodes = nodes,
+            DispatchBranches = branches,
+        };
+    }
+
+    private static int? FindSourceSectionIndex(
+        IReadOnlyDictionary<string, int> indexes,
+        string symbolId,
+        int? fallback)
+    {
+        return indexes.TryGetValue(symbolId, out var index) ? index : fallback;
+    }
+
     private static void ValidateCodeExploreRequest(CodeExploreRequest request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Query);
@@ -845,12 +2574,24 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             throw new ArgumentOutOfRangeException(nameof(request), "Code exploration queries are limited to 1,024 characters.");
         }
 
+        if (!Enum.IsDefined(request.Mode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Code exploration mode is not supported.");
+        }
+
         var limits = request.Limits;
         if (limits.MaximumAnchors is < 1 or > 16
             || limits.MaximumAlternatives is < 1 or > 25
             || limits.MaximumFiles is < 1 or > 16
             || limits.MaximumSourceCharacters is < 1 or > 100_000
             || limits.MaximumPerFileSourceCharacters is < 1 or > 65_536
+            || limits.MaximumFlowPaths is < 1 or > 32
+            || limits.MaximumFlowBridgeSymbols is < 0 or > 128
+            || limits.MaximumFlowDepth is < 1 or > 8
+            || limits.MaximumFlowNodes is < 1 or > 1000
+            || limits.MaximumFlowEdges is < 1 or > 5000
+            || limits.MaximumDispatchBranches is < 0 or > 200
+            || limits.MaximumBlastRadiusItems is < 0 or > 200
             || limits.TimeoutMilliseconds is < 1 or > 60_000)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Code exploration bounds are outside host limits.");
@@ -1969,14 +3710,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static CodeExplorePathSelectionMode EffectiveSelectionMode(CodeExploreAnchor anchor)
     {
-        if (anchor.SelectionMode != CodeExplorePathSelectionMode.Auto)
-        {
-            return anchor.SelectionMode;
-        }
-
         if (anchor.Line is null)
         {
             return CodeExplorePathSelectionMode.WholeFile;
+        }
+
+        if (anchor.SelectionMode != CodeExplorePathSelectionMode.Auto)
+        {
+            return anchor.SelectionMode;
         }
 
         return anchor.StartAtLine
@@ -2263,9 +4004,35 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static SyntaxNode? FindContainingMember(SyntaxNode root, SourceText text, int oneBasedLine)
     {
         var line = text.Lines[oneBasedLine - 1];
-        var position = Math.Min(line.Start, Math.Max(text.Length - 1, 0));
-        var token = root.FindToken(position);
-        return token.Parent?.AncestorsAndSelf().OfType<MemberDeclarationSyntax>().FirstOrDefault();
+        var member = root.DescendantNodes()
+            .OfType<MemberDeclarationSyntax>()
+            .Where(candidate => ContainsLine(text, candidate.Span, oneBasedLine))
+            .OrderBy(candidate => candidate.Span.Length)
+            .FirstOrDefault();
+        if (member is not null || string.IsNullOrWhiteSpace(line.ToString()))
+        {
+            return member;
+        }
+
+        return root.DescendantNodes()
+            .OfType<MemberDeclarationSyntax>()
+            .Where(candidate => ContainsLine(text, candidate.FullSpan, oneBasedLine))
+            .OrderBy(candidate => candidate.FullSpan.Length)
+            .FirstOrDefault();
+    }
+
+    private static bool ContainsLine(SourceText text, TextSpan span, int oneBasedLine)
+    {
+        if (span.Length == 0)
+        {
+            return false;
+        }
+
+        var safeStart = Math.Min(span.Start, Math.Max(text.Length - 1, 0));
+        var safeEnd = Math.Min(Math.Max(span.End - 1, span.Start), Math.Max(text.Length - 1, 0));
+        var startLine = text.Lines.GetLineFromPosition(safeStart).LineNumber + 1;
+        var endLine = text.Lines.GetLineFromPosition(safeEnd).LineNumber + 1;
+        return oneBasedLine >= startLine && oneBasedLine <= endLine;
     }
 
     private static ISymbol? GetDeclaredSymbol(
@@ -2321,14 +4088,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (symbol.ContainingType is not null)
             {
                 var containingType = symbol.ContainingType.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+                var fullyQualifiedContainingType = symbol.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                 yield return $"{containingType}.{signature}";
+                yield return $"{fullyQualifiedContainingType}.{signature}";
+                yield return $"{containingType}.{method.Name}";
+                yield return $"{fullyQualifiedContainingType}.{method.Name}";
             }
         }
 
         if (symbol.ContainingType is not null)
         {
             var containingType = symbol.ContainingType.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+            var fullyQualifiedContainingType = symbol.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             yield return $"{containingType}.{symbol.Name}";
+            yield return $"{fullyQualifiedContainingType}.{symbol.Name}";
         }
 
         if (symbol.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace)
@@ -2451,6 +4224,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return parameters < 0 ? value : value[..parameters];
     }
 
+    private static bool IsFlowCallSiteCandidate(CodeExploreSectionCandidate candidate)
+    {
+        return string.Equals(candidate.SelectionReason, "Compiler-proven flow call-site source.", StringComparison.Ordinal);
+    }
+
     private static string CreateSectionKey(CodeExploreSectionCandidate candidate)
     {
         var range = candidate.Location?.Range;
@@ -2474,8 +4252,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool RequiresLine(CodeExplorePathSelectionMode mode)
     {
-        return mode is CodeExplorePathSelectionMode.ContainingDeclaration
-            or CodeExplorePathSelectionMode.SingleLine
+        return mode is CodeExplorePathSelectionMode.SingleLine
             or CodeExplorePathSelectionMode.TailWindow
             or CodeExplorePathSelectionMode.ExactLineRange;
     }
@@ -2664,7 +4441,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             foreach (var expression in expressions)
             {
                 var info = model.GetSymbolInfo(expression, cancellationToken);
-                var target = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
+                var target = info.Symbol;
                 if (target is IMethodSymbol method)
                 {
                     calls.Add((symbol, method.OriginalDefinition, expression.GetLocation()));

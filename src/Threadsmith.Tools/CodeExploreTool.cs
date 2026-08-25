@@ -9,7 +9,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreRequest, CodeExploreResult>(
         "code_explore",
-        "Primary source-bearing C# exploration tool for exact symbol, stable symbol id, and repository-relative C# path anchors. Use before find_symbol plus read_file when the question needs current declaration source; unanchored natural-language discovery is not supported yet and returns guidance.",
+        "Primary source-bearing C# exploration tool for exact symbol, stable symbol id, and repository-relative C# path anchors. Use before find_symbol plus read_file when the question needs current declaration source. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. Unanchored natural-language discovery is not supported yet and returns guidance.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,
@@ -55,7 +55,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     protected override string DescribeActivity(CodeExploreRequest input)
     {
         var anchorCount = input.ExactSymbolAnchors.Count + input.SymbolIds.Count + input.PathAnchors.Count;
-        return anchorCount == 0 ? BoundActivity(input.Query) : $"{BoundActivity(input.Query)} ({anchorCount} anchors)";
+        var mode = input.Mode == CodeExploreMode.Auto ? "auto" : input.Mode.ToString().ToLowerInvariant();
+        return anchorCount == 0
+            ? $"{BoundActivity(input.Query)} ({mode})"
+            : $"{BoundActivity(input.Query)} ({mode}, {anchorCount} anchors)";
     }
 
     /// <inheritdoc />
@@ -66,6 +69,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         if (input.Query.Length > 1024)
         {
             throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
+        }
+
+        if (!Enum.IsDefined(input.Mode))
+        {
+            throw new ToolArgumentValidationException("code exploration mode is not supported.");
         }
 
         ValidateLimits(input.Limits);
@@ -136,6 +144,13 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || limits.MaximumFiles is < 1 or > 16
             || limits.MaximumSourceCharacters is < 1 or > 100_000
             || limits.MaximumPerFileSourceCharacters is < 1 or > 65_536
+            || limits.MaximumFlowPaths is < 1 or > 32
+            || limits.MaximumFlowBridgeSymbols is < 0 or > 128
+            || limits.MaximumFlowDepth is < 1 or > 8
+            || limits.MaximumFlowNodes is < 1 or > 1000
+            || limits.MaximumFlowEdges is < 1 or > 5000
+            || limits.MaximumDispatchBranches is < 0 or > 200
+            || limits.MaximumBlastRadiusItems is < 0 or > 200
             || limits.TimeoutMilliseconds is < 1 or > 60_000)
         {
             throw new ToolArgumentValidationException("code exploration bounds are outside host limits.");
@@ -144,22 +159,42 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 
     private static CodeExploreResult Confine(CodeExploreResult result, ToolInvocationContext context)
     {
-        CodeExploreFileSection[] sections = [.. result.FileSections.Where(section => IsAllowed(section.FilePath, context))];
+        var sectionIndexMap = new Dictionary<int, int>();
+        var confinedSections = new List<CodeExploreFileSection>();
+        for (var index = 0; index < result.FileSections.Count; index++)
+        {
+            var section = result.FileSections[index];
+            if (!IsAllowed(section.FilePath, context))
+            {
+                continue;
+            }
+
+            sectionIndexMap[index] = confinedSections.Count;
+            confinedSections.Add(section);
+        }
+
+        CodeExploreFileSection[] sections = [.. confinedSections];
         CodeExploreAnchorResolution[] resolutions = [.. result.ResolvedAnchors.Select(resolution => Confine(resolution, context))];
         CodeExploreContinuationTarget[] continuations = [.. result.ContinuationTargets.Where(target => target.FilePath is null || IsAllowed(target.FilePath, context))];
+        var flow = Confine(result.Flow, context, sectionIndexMap, out var flowOmitted);
+        var blastRadius = Confine(result.BlastRadius, context, out var blastRadiusOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
         var omitted = sections.Length != result.FileSections.Count
             || alternativesOmitted
             || resolutions.Any(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Omitted)
-            || continuations.Length != result.ContinuationTargets.Count;
+            || continuations.Length != result.ContinuationTargets.Count
+            || flowOmitted
+            || blastRadiusOmitted;
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
             ResolvedAnchors = resolutions,
             FileSections = sections,
             ContinuationTargets = continuations,
+            Flow = flow,
+            BlastRadius = blastRadius,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
@@ -191,6 +226,214 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             };
     }
 
+    private static CodeExploreFlow? Confine(
+        CodeExploreFlow? flow,
+        ToolInvocationContext context,
+        IReadOnlyDictionary<int, int> sectionIndexMap,
+        out bool omitted)
+    {
+        omitted = false;
+        if (flow is null)
+        {
+            return null;
+        }
+
+        var confinedNodeCandidates = new List<CodeExploreFlowNode>();
+        foreach (var node in flow.Nodes)
+        {
+            var confinedNode = Confine(node, context, sectionIndexMap, ref omitted);
+            if (confinedNode.Locations.Count == 0 && !confinedNode.IsNamedAnchor)
+            {
+                omitted = true;
+                continue;
+            }
+
+            confinedNodeCandidates.Add(confinedNode);
+        }
+
+        var keptNodeIds = confinedNodeCandidates
+            .Select(node => node.Symbol.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var edgeOrdinalMap = new Dictionary<int, int>();
+        var edges = new List<CodeExploreFlowEdge>();
+        foreach (var edge in flow.Edges)
+        {
+            if ((edge.CallSite is not null && !IsAllowed(edge.CallSite.FilePath, context))
+                || !keptNodeIds.Contains(edge.CallerSymbolId)
+                || !keptNodeIds.Contains(edge.CalleeSymbolId))
+            {
+                omitted = true;
+                continue;
+            }
+
+            edgeOrdinalMap[edge.Ordinal] = edges.Count;
+            edges.Add(edge with { Ordinal = edges.Count });
+        }
+
+        var pathList = new List<CodeExploreFlowPath>();
+        foreach (var path in flow.Paths)
+        {
+            pathList.Add(Confine(path, edgeOrdinalMap, keptNodeIds, ref omitted));
+        }
+
+        var paths = pathList.ToArray();
+        var branchList = new List<CodeExploreDispatchBranch>();
+        foreach (var branch in flow.DispatchBranches)
+        {
+            branchList.Add(Confine(branch, context, sectionIndexMap, ref omitted));
+        }
+
+        var branches = branchList.ToArray();
+        var referencedNodeIds = paths
+            .SelectMany(path => path.NodeIds)
+            .Concat(edges.Select(edge => edge.CallerSymbolId))
+            .Concat(edges.Select(edge => edge.CalleeSymbolId))
+            .Concat(branches.SelectMany(branch => branch.Implementations.Select(target => target.Symbol.Id)))
+            .ToHashSet(StringComparer.Ordinal);
+        var nodes = confinedNodeCandidates
+            .Where(node => node.IsNamedAnchor || referencedNodeIds.Contains(node.Symbol.Id))
+            .ToArray();
+        var finalNodeIds = nodes
+            .Select(node => node.Symbol.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var boundaryList = new List<CodeExploreFlowBoundary>();
+        foreach (var boundary in flow.Boundaries)
+        {
+            if (!finalNodeIds.Contains(boundary.SymbolId))
+            {
+                omitted = true;
+                continue;
+            }
+
+            var callSiteAllowed = boundary.CallSite is null || IsAllowed(boundary.CallSite.FilePath, context);
+            omitted |= !callSiteAllowed;
+            boundaryList.Add(boundary with { CallSite = callSiteAllowed ? boundary.CallSite : null });
+        }
+
+        var boundaries = boundaryList.ToArray();
+        return flow with
+        {
+            Paths = paths,
+            Nodes = nodes,
+            Edges = edges,
+            DispatchBranches = branches,
+            Boundaries = boundaries,
+            Traversal = flow.Traversal with
+            {
+                IsComplete = flow.Traversal.IsComplete && !omitted,
+                Omissions = AddPolicyOmission(flow.Traversal.Omissions, omitted),
+            },
+        };
+    }
+
+    private static CodeExploreFlowPath Confine(
+        CodeExploreFlowPath path,
+        IReadOnlyDictionary<int, int> edgeOrdinalMap,
+        IReadOnlySet<string> keptNodeIds,
+        ref bool omitted)
+    {
+        var nodeIds = path.NodeIds
+            .Where(keptNodeIds.Contains)
+            .ToArray();
+        var ordinals = path.EdgeOrdinals
+            .Where(edgeOrdinalMap.ContainsKey)
+            .Select(ordinal => edgeOrdinalMap[ordinal])
+            .ToArray();
+        if (ordinals.Length != path.EdgeOrdinals.Count || nodeIds.Length != path.NodeIds.Count)
+        {
+            omitted = true;
+        }
+
+        return path with
+        {
+            NodeIds = nodeIds,
+            EdgeOrdinals = ordinals,
+            IsComplete = path.IsComplete
+                && ordinals.Length == path.EdgeOrdinals.Count
+                && nodeIds.Length == path.NodeIds.Count,
+        };
+    }
+
+    private static CodeExploreFlowNode Confine(
+        CodeExploreFlowNode node,
+        ToolInvocationContext context,
+        IReadOnlyDictionary<int, int> sectionIndexMap,
+        ref bool omitted)
+    {
+        var locations = node.Locations
+            .Where(location => IsAllowed(location.FilePath, context))
+            .ToArray();
+        omitted |= locations.Length != node.Locations.Count;
+        return node with
+        {
+            Locations = locations,
+            SourceSectionIndex = RemapSectionIndex(node.SourceSectionIndex, sectionIndexMap),
+        };
+    }
+
+    private static CodeExploreDispatchBranch Confine(
+        CodeExploreDispatchBranch branch,
+        ToolInvocationContext context,
+        IReadOnlyDictionary<int, int> sectionIndexMap,
+        ref bool omitted)
+    {
+        var callSiteAllowed = branch.CallSite is null || IsAllowed(branch.CallSite.FilePath, context);
+        var implementations = branch.Implementations
+            .Where(target => target.Location is not null && IsAllowed(target.Location.FilePath, context))
+            .Select(target => target with { SourceSectionIndex = RemapSectionIndex(target.SourceSectionIndex, sectionIndexMap) })
+            .ToArray();
+        omitted |= !callSiteAllowed || implementations.Length != branch.Implementations.Count;
+        return branch with
+        {
+            CallSite = callSiteAllowed ? branch.CallSite : null,
+            Implementations = implementations,
+            ReturnedCount = implementations.Length,
+        };
+    }
+
+    private static CodeExploreBlastRadius? Confine(
+        CodeExploreBlastRadius? blastRadius,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (blastRadius is null)
+        {
+            return null;
+        }
+
+        var items = blastRadius.Items
+            .Where(item => item.Symbol is null
+                ? item.Location is null || IsAllowed(item.Location.FilePath, context)
+                : item.Location is not null && IsAllowed(item.Location.FilePath, context))
+            .ToArray();
+        var continuations = blastRadius.ContinuationTargets
+            .Where(target => target.FilePath is null || IsAllowed(target.FilePath, context))
+            .ToArray();
+        omitted = items.Length != blastRadius.Items.Count
+            || continuations.Length != blastRadius.ContinuationTargets.Count;
+        return blastRadius with
+        {
+            Items = items,
+            ContinuationTargets = continuations,
+            Omissions = AddPolicyOmission(blastRadius.Omissions, omitted),
+        };
+    }
+
+    private static int? RemapSectionIndex(
+        int? sourceSectionIndex,
+        IReadOnlyDictionary<int, int> sectionIndexMap)
+    {
+        if (sourceSectionIndex is null)
+        {
+            return null;
+        }
+
+        return sectionIndexMap.TryGetValue(sourceSectionIndex.Value, out var remapped)
+            ? remapped
+            : null;
+    }
+
     private static IReadOnlyList<string> AddPolicyOmission(
         IReadOnlyList<string> omissions,
         bool omitted)
@@ -215,10 +458,20 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 
     private static bool IsTruncated(CodeExploreResult result)
     {
+        var blastRadiusTruncated = result.BlastRadius is { } blastRadius
+            && (blastRadius.ReturnedCallers < blastRadius.TotalCallers
+                || blastRadius.ReturnedImplementations < blastRadius.TotalImplementations
+                || blastRadius.ReturnedProjects < blastRadius.TotalProjects
+                || blastRadius.ReturnedTests < blastRadius.TotalTests);
+        var flowBranchTruncated = result.Flow is { } flow
+            && flow.DispatchBranches.Any(branch => branch.ReturnedCount < branch.TotalCount || branch.Omissions.Count > 0);
         return !result.Coverage.SymbolResolutionComplete
             || !result.Coverage.CompiledProjectCoverageComplete
             || !result.Coverage.SourceComplete
-            || !result.Coverage.OutputComplete;
+            || !result.Coverage.OutputComplete
+            || result.Flow is { Traversal.IsComplete: false }
+            || flowBranchTruncated
+            || blastRadiusTruncated;
     }
 
     private static bool QueryLooksLikePath(string query)
@@ -235,8 +488,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 
     private static bool RequiresLine(CodeExplorePathSelectionMode mode)
     {
-        return mode is CodeExplorePathSelectionMode.ContainingDeclaration
-            or CodeExplorePathSelectionMode.SingleLine
+        return mode is CodeExplorePathSelectionMode.SingleLine
             or CodeExplorePathSelectionMode.TailWindow
             or CodeExplorePathSelectionMode.ExactLineRange;
     }

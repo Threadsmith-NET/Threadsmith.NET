@@ -623,6 +623,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             omissions.Add("The code exploration time limit was reached during anchor resolution.");
         }
 
+        var selectedSections = new List<CodeExploreFileSection>();
+        var seenSections = new HashSet<string>(StringComparer.Ordinal);
+        var remainingSourceCharacters = request.Limits.MaximumSourceCharacters;
+        var outputBoundReached = false;
+        if (!timeReached && projection is not null)
+        {
+            await ProjectAvailableSourceAsync(
+                candidate => candidate.Priority <= 1,
+                "anchor source projection");
+        }
+
         if (!timeReached && projection is not null)
         {
             try
@@ -671,15 +682,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        var selectedSections = new List<CodeExploreFileSection>();
-        var seenSections = new HashSet<string>(StringComparer.Ordinal);
-        var remainingSourceCharacters = request.Limits.MaximumSourceCharacters;
-        var outputBoundReached = false;
         if (!timeReached && projection is not null)
         {
+            await ProjectAvailableSourceAsync(
+                _ => true,
+                "source projection");
+        }
+
+        async Task ProjectAvailableSourceAsync(
+            Func<CodeExploreSectionCandidate, bool> predicate,
+            string phase)
+        {
+            if (projection is null)
+            {
+                return;
+            }
+
+            var activeProjection = projection;
             try
             {
                 foreach (var candidate in candidates
+                    .Where(predicate)
                     .OrderBy(candidate => candidate.Priority)
                     .ThenBy(candidate => IsFlowCallSiteCandidate(candidate) ? 0 : 1)
                     .ThenBy(candidate => candidate.FilePath, PathComparer)
@@ -721,7 +744,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
                     var projected = await ProjectCodeExploreSectionAsync(
                         snapshot,
-                        projection,
+                        activeProjection,
                         sourceReader,
                         candidate,
                         Math.Min(remainingSourceCharacters, request.Limits.MaximumPerFileSourceCharacters),
@@ -740,7 +763,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
             {
                 timeReached = true;
-                omissions.Add("The code exploration time limit was reached during source projection.");
+                omissions.Add($"The code exploration time limit was reached during {phase}.");
             }
         }
 
@@ -914,6 +937,49 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CodeExploreFlowAnchor To,
         CodeExplorePathSearchResult Result);
 
+    private sealed class CodeExploreFlowTraversalBudget
+    {
+        private readonly HashSet<string> _nodeIds = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _edgeKeys = new(StringComparer.Ordinal);
+
+        internal bool TryAddNode(string nodeId, int maximumNodes)
+        {
+            if (_nodeIds.Contains(nodeId))
+            {
+                return true;
+            }
+
+            if (_nodeIds.Count >= maximumNodes)
+            {
+                return false;
+            }
+
+            _nodeIds.Add(nodeId);
+            return true;
+        }
+
+        internal bool TryAddEdge(string edgeKey, int maximumEdges)
+        {
+            if (_edgeKeys.Contains(edgeKey))
+            {
+                return true;
+            }
+
+            if (_edgeKeys.Count >= maximumEdges)
+            {
+                return false;
+            }
+
+            _edgeKeys.Add(edgeKey);
+            return true;
+        }
+
+        internal bool HasEdgeCapacity(int maximumEdges)
+        {
+            return _edgeKeys.Count < maximumEdges;
+        }
+    }
+
     private sealed record CodeExploreFlowNodeDraft(
         ISymbol Symbol,
         CodeExploreFlowNodeRole Role,
@@ -1039,6 +1105,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             StringComparer.Ordinal);
         var bridgeIds = new HashSet<string>(StringComparer.Ordinal);
         var boundaryCallerIds = new HashSet<string>(StringComparer.Ordinal);
+        var searchBudget = new CodeExploreFlowTraversalBudget();
+        foreach (var anchor in retainedAnchors)
+        {
+            _ = searchBudget.TryAddNode(anchor.Identity.Id, request.Limits.MaximumFlowNodes);
+        }
+
+        var pathSearchCache = new Dictionary<string, CodeExplorePathSearchResult>(StringComparer.Ordinal);
         var paths = new List<CodeExploreFlowPath>();
         var deferredIncompletePaths = new List<CodeExploreFlowPath>();
         var edgeOrdinals = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -1059,6 +1132,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         else
         {
             var completeCandidates = new List<CodeExplorePairPathCandidate>();
+            var frontierCandidates = new List<CodeExplorePairPathCandidate>();
             var incompleteCandidates = new List<CodeExplorePairPathCandidate>();
             for (var fromIndex = 0; fromIndex < orderedAnchors.Length; fromIndex++)
             {
@@ -1070,12 +1144,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         orderedAnchors[fromIndex].Symbol,
                         orderedAnchors[toIndex].Symbol,
                         request.Limits,
+                        searchBudget,
+                        pathSearchCache,
                         cancellationToken);
                     var reverse = await FindCodeExploreFlowPathAsync(
                         snapshot,
                         orderedAnchors[toIndex].Symbol,
                         orderedAnchors[fromIndex].Symbol,
                         request.Limits,
+                        searchBudget,
+                        pathSearchCache,
                         cancellationToken);
                     depthReached |= forward.DepthLimitReached || reverse.DepthLimitReached;
                     nodeReached |= forward.NodeLimitReached || reverse.NodeLimitReached;
@@ -1088,6 +1166,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     if (selected.Result.IsComplete)
                     {
                         completeCandidates.Add(selected);
+                    }
+                    else if (selected.Result.Edges.Count > 0)
+                    {
+                        frontierCandidates.Add(selected);
                     }
                     else
                     {
@@ -1108,7 +1190,22 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     break;
                 }
 
-                _ = await TryAdmitCompletePathAsync(candidate);
+                _ = await TryAdmitPathAsync(candidate);
+            }
+
+            foreach (var candidate in frontierCandidates.OrderBy(candidate => candidate.Result.Edges.Count)
+                .ThenBy(candidate => candidate.Result.Edges.Sum(edge => DispatchSortRank(ClassifyDispatch(edge.Callee))))
+                .ThenBy(candidate => candidate.From.Identity.Id, StringComparer.Ordinal)
+                .ThenBy(candidate => candidate.To.Identity.Id, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (paths.Count >= request.Limits.MaximumFlowPaths)
+                {
+                    pathLimitReached = true;
+                    break;
+                }
+
+                _ = await TryAdmitPathAsync(candidate);
             }
 
             if (paths.Count < request.Limits.MaximumFlowPaths && !pathLimitReached)
@@ -1196,7 +1293,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .Concat(BuildOmissions(depthReached, nodeReached, edgeReached, false))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var traversalComplete = !depthReached && !nodeReached && !edgeReached && !pathLimitReached && !evidenceOmitted;
+        var hasIncompletePath = paths.Any(path => !path.IsComplete);
+        var traversalComplete = !depthReached && !nodeReached && !edgeReached && !pathLimitReached && !evidenceOmitted && !hasIncompletePath;
         return new CodeExploreFlow(
             paths,
             nodes,
@@ -1213,7 +1311,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 false,
                 distinctOmissions));
 
-        async Task<bool> TryAdmitCompletePathAsync(CodeExplorePairPathCandidate candidate)
+        async Task<bool> TryAdmitPathAsync(CodeExplorePairPathCandidate candidate)
         {
             var pathNodeIds = CreateFlowPathNodeIds(candidate.Result.Edges);
             var pathSymbols = candidate.Result.Edges
@@ -1353,6 +1451,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     evidence.Caller,
                     boundaryCallerIds,
                     boundaries,
+                    omissions,
+                    request.Limits.MaximumFlowEdges,
                     cancellationToken);
                 pathEdgeOrdinals.Add(await AddCodeExploreFlowEdgeAsync(evidence, false));
             }
@@ -1372,13 +1472,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 _ = await AddCodeExploreFlowEdgeAsync(cycleEdge, true);
             }
 
+            var pathReason = candidate.Result.IsComplete
+                ? "Selected deterministic compiler-proven call path."
+                : candidate.Result.Reason;
             paths.Add(new CodeExploreFlowPath(
                 candidate.From.Identity.Id,
                 candidate.To.Identity.Id,
                 pathNodeIds,
                 pathEdgeOrdinals,
-                true,
-                "Selected deterministic compiler-proven call path."));
+                candidate.Result.IsComplete,
+                pathReason));
             return true;
         }
 
@@ -1430,13 +1533,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ISymbol source,
         ISymbol target,
         CodeExploreLimits limits,
+        CodeExploreFlowTraversalBudget traversalBudget,
+        Dictionary<string, CodeExplorePathSearchResult> pathSearchCache,
         CancellationToken cancellationToken)
     {
         var sourceIdentity = CreateIdentity(source);
         var targetIdentity = CreateIdentity(target);
+        var cacheKey = $"{sourceIdentity.Id}|{targetIdentity.Id}";
+        if (pathSearchCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
         if (string.Equals(sourceIdentity.Id, targetIdentity.Id, StringComparison.Ordinal))
         {
-            return new CodeExplorePathSearchResult([], [], true, false, false, false, "The anchors resolve to the same semantic symbol.");
+            var sameSymbol = new CodeExplorePathSearchResult([], [], true, false, false, false, "The anchors resolve to the same semantic symbol.");
+            pathSearchCache[cacheKey] = sameSymbol;
+            return sameSymbol;
         }
 
         var pending = new Queue<ISymbol>();
@@ -1450,6 +1563,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             [sourceIdentity.Id] = 0,
         };
         var predecessors = new Dictionary<string, CodeExploreCallEvidence>(StringComparer.Ordinal);
+        CodeExplorePathSearchResult? dispatchFrontier = null;
         var cycleEdges = new List<CodeExploreCallEvidence>();
         var cycleEdgeKeys = new HashSet<string>(StringComparer.Ordinal);
         var searchedEdges = 0;
@@ -1466,6 +1580,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (!expanded.Add(currentId))
             {
                 continue;
+            }
+
+            if (!traversalBudget.TryAddNode(currentId, limits.MaximumFlowNodes))
+            {
+                nodeReached = true;
+                break;
             }
 
             var depth = depths[currentId];
@@ -1485,7 +1605,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (searchedEdges >= limits.MaximumFlowEdges)
+                var edgeKey = CreateFlowEdgeKey(evidence);
+                if (searchedEdges >= limits.MaximumFlowEdges
+                    || !traversalBudget.TryAddEdge(edgeKey, limits.MaximumFlowEdges))
                 {
                     edgeReached = true;
                     break;
@@ -1495,7 +1617,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 var calleeIdentity = CreateIdentity(evidence.Callee);
                 if (!symbols.ContainsKey(calleeIdentity.Id))
                 {
-                    if (symbols.Count >= limits.MaximumFlowNodes)
+                    if (symbols.Count >= limits.MaximumFlowNodes
+                        || !traversalBudget.TryAddNode(calleeIdentity.Id, limits.MaximumFlowNodes))
                     {
                         nodeReached = true;
                         break;
@@ -1524,7 +1647,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     var pathEdges = ReconstructCodeExplorePath(sourceIdentity.Id, targetIdentity.Id, predecessors);
                     var pathNodeIds = CreateFlowPathNodeIds(pathEdges).ToHashSet(StringComparer.Ordinal);
-                    if (searchedEdges < limits.MaximumFlowEdges)
+                    if (searchedEdges < limits.MaximumFlowEdges && traversalBudget.HasEdgeCapacity(limits.MaximumFlowEdges))
                     {
                         var targetOutgoing = await FindOutgoingAsync(evidence.Callee, snapshot.Solution, cancellationToken);
                         foreach (var targetEvidence in targetOutgoing
@@ -1534,7 +1657,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                             .ThenBy(item => item.Site?.SourceTree?.FilePath ?? string.Empty, PathComparer)
                             .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
                         {
-                            if (searchedEdges >= limits.MaximumFlowEdges)
+                            var targetEdgeKey = CreateFlowEdgeKey(targetEvidence);
+                            if (searchedEdges >= limits.MaximumFlowEdges
+                                || !traversalBudget.TryAddEdge(targetEdgeKey, limits.MaximumFlowEdges))
                             {
                                 break;
                             }
@@ -1555,7 +1680,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         }
                     }
 
-                    return new CodeExplorePathSearchResult(
+                    var found = new CodeExplorePathSearchResult(
                         pathEdges,
                         cycleEdges,
                         true,
@@ -1563,6 +1688,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         nodeReached,
                         edgeReached,
                         "Compiler-proven path found.");
+                    pathSearchCache[cacheKey] = found;
+                    return found;
+                }
+
+                if (IsAmbiguousDispatch(evidence.Callee)
+                    && await IsDispatchImplementationTargetAsync(evidence.Callee, target, snapshot.Solution, cancellationToken))
+                {
+                    var frontierPath = ReconstructCodeExplorePath(sourceIdentity.Id, calleeIdentity.Id, predecessors);
+                    if (dispatchFrontier is null || frontierPath.Count < dispatchFrontier.Edges.Count)
+                    {
+                        dispatchFrontier = new CodeExplorePathSearchResult(
+                            frontierPath,
+                            cycleEdges,
+                            false,
+                            depthReached,
+                            nodeReached,
+                            edgeReached,
+                            "The static path reaches a compiler-known dispatch boundary; the requested target is a possible implementation branch, not a proven runtime continuation.");
+                    }
                 }
 
                 pending.Enqueue(evidence.Callee);
@@ -1574,10 +1718,24 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
+        if (dispatchFrontier is not null)
+        {
+            dispatchFrontier = dispatchFrontier with
+            {
+                DepthLimitReached = depthReached,
+                NodeLimitReached = nodeReached,
+                EdgeLimitReached = edgeReached,
+            };
+            pathSearchCache[cacheKey] = dispatchFrontier;
+            return dispatchFrontier;
+        }
+
         var reason = nodeReached || edgeReached || depthReached
             ? "No compiler-proven path was found before traversal limits were reached."
             : "No compiler-proven directed call path was found between the anchors in the loaded semantic snapshot.";
-        return new CodeExplorePathSearchResult([], cycleEdges, false, depthReached, nodeReached, edgeReached, reason);
+        var noPath = new CodeExplorePathSearchResult([], cycleEdges, false, depthReached, nodeReached, edgeReached, reason);
+        pathSearchCache[cacheKey] = noPath;
+        return noPath;
     }
 
     private static IReadOnlyList<CodeExploreCallEvidence> ReconstructCodeExplorePath(
@@ -1631,6 +1789,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return string.Equals(sourceId, calleeId, StringComparison.Ordinal);
     }
 
+    private static async Task<bool> IsDispatchImplementationTargetAsync(
+        ISymbol dispatchRoot,
+        ISymbol target,
+        Solution solution,
+        CancellationToken cancellationToken)
+    {
+        var targetId = CreateIdentity(target).Id;
+        var implementations = await FindDispatchImplementationSymbolsAsync(dispatchRoot, solution, cancellationToken);
+        return implementations.Any(implementation =>
+            string.Equals(CreateIdentity(implementation).Id, targetId, StringComparison.Ordinal));
+    }
+
     private static CodeExplorePairPathCandidate SelectCodeExplorePairPathCandidate(
         CodeExploreFlowAnchor first,
         CodeExploreFlowAnchor second,
@@ -1652,6 +1822,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         if (completeCompare != 0)
         {
             return completeCompare;
+        }
+
+        var evidenceCompare = (right.Result.Edges.Count > 0).CompareTo(left.Result.Edges.Count > 0);
+        if (evidenceCompare != 0)
+        {
+            return evidenceCompare;
         }
 
         var lengthCompare = left.Result.Edges.Count.CompareTo(right.Result.Edges.Count);
@@ -1930,6 +2106,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ISymbol caller,
         HashSet<string> visitedCallerIds,
         List<CodeExploreFlowBoundary> boundaries,
+        List<string> omissions,
+        int maximumBoundaries,
         CancellationToken cancellationToken)
     {
         var callerIdentity = CreateIdentity(caller);
@@ -1981,6 +2159,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (callSite is null)
                 {
                     continue;
+                }
+
+                if (boundaries.Count >= maximumBoundaries)
+                {
+                    omissions.Add("The flow boundary limit was reached; additional unresolved call-site boundaries were omitted.");
+                    return;
                 }
 
                 var reason = info.CandidateSymbols.Length > 0
@@ -2301,7 +2485,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
             }
 
-            var projects = FindDependentProjects(snapshot, anchor.Symbol, cancellationToken);
+            var projects = FindDependentProjects(
+                snapshot,
+                anchor.Symbol,
+                request.Limits.MaximumFlowDepth,
+                cancellationToken);
             foreach (var project in projects)
             {
                 var kind = IsTestProject(project) ? ImpactKind.Test : ImpactKind.Project;
@@ -2337,8 +2525,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
 
                 var reason = kind == ImpactKind.Test
-                    ? "Test project depends on a project containing primary anchor evidence."
-                    : "Project depends on a project containing primary anchor evidence.";
+                    ? "Test project directly or transitively depends on a project containing primary anchor evidence."
+                    : "Project directly or transitively depends on a project containing primary anchor evidence.";
                 items.Add(new CodeExploreBlastRadiusItem(
                     anchor.Identity.Id,
                     kind,
@@ -2426,9 +2614,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static IReadOnlyList<Project> FindDependentProjects(
         AdvancedSemanticSnapshot snapshot,
         ISymbol symbol,
+        int maximumDepth,
         CancellationToken cancellationToken)
     {
-        var projectNames = new HashSet<string>(StringComparer.Ordinal);
+        var rootProjectIds = new HashSet<ProjectId>();
         foreach (var location in symbol.Locations.Where(location => location.IsInSource))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2440,16 +2629,38 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var document = snapshot.Solution.GetDocument(location.SourceTree);
             if (document is not null)
             {
-                projectNames.Add(document.Project.Name);
+                rootProjectIds.Add(document.Project.Id);
             }
         }
 
         var projects = snapshot.Solution.Projects
-            .Where(project => projectNames.Contains(project.Name))
+            .OrderBy(project => project.Name, StringComparer.Ordinal)
             .ToArray();
-        return snapshot.Solution.Projects
-            .Where(project => project.ProjectReferences.Any(reference =>
-                projects.Any(candidate => candidate.Id == reference.ProjectId)))
+        var seen = new HashSet<ProjectId>(rootProjectIds);
+        var dependents = new List<Project>();
+        var pending = new Queue<(ProjectId ProjectId, int Depth)>(rootProjectIds.Select(id => (id, 0)));
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (var projectId, var depth) = pending.Dequeue();
+            if (depth >= maximumDepth)
+            {
+                continue;
+            }
+
+            foreach (var project in projects.Where(project => project.ProjectReferences.Any(reference => reference.ProjectId == projectId)))
+            {
+                if (!seen.Add(project.Id))
+                {
+                    continue;
+                }
+
+                dependents.Add(project);
+                pending.Enqueue((project.Id, depth + 1));
+            }
+        }
+
+        return dependents
             .OrderBy(project => project.Name, StringComparer.Ordinal)
             .ToArray();
     }

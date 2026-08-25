@@ -1,6 +1,6 @@
 # Implementation Plan 81: Roslyn Code Explore Exact Anchors and Source
 
-**Status:** Active. Source implementation, focused automated coverage, and user/operator documentation are in place; MTP-248 interactive/headless evidence remains pending before this work item is final and before dependent Plan 82 work begins.
+**Status:** Complete. Source implementation, focused automated coverage, user/operator documentation, and MTP-248 interactive/headless acceptance evidence are in place; dependent Plan 82 work may proceed.
 
 **Delivery track:** Milestone 28 — Roslyn-backed code exploration foundation
 **Strategy source:** Shared Context §A.1, §A.3, §A.5, §C, and §G; Milestone 28; Scenario AO
@@ -10,7 +10,7 @@
 
 Introduce a typed read-only `code_explore` tool that resolves exact C# symbol and repository-relative path anchors against one immutable Roslyn workspace generation and returns the bounded current source required to reason about those anchors. A successful exact exploration should collapse the common `find_symbol` then `read_file` dependency chain without removing either granular tool.
 
-This plan is the first independently user-testable foundation for Milestone 28. Plan 82 must not begin until the focused automated gates and MTP-248 pass on the maintained fixture and at least one ordinary disposable C# repository.
+This plan is the first independently user-testable foundation for Milestone 28. Its focused automated gates and MTP-248 have passed on the maintained fixture and an ordinary disposable C# repository, satisfying the Plan 82 prerequisite.
 
 ## 2. Architectural Context
 
@@ -44,9 +44,9 @@ The local repository at `C:\source\repos\codegraph` may be consulted only as a f
 
 ## 5. Current State
 
-`find_symbol` returns stable symbol identities and declaration locations but no source body. `call_hierarchy` and `symbol_impact` accept stable symbol IDs and return graphs without source content. `read_file` returns bounded current text with continuation metadata but has no compiler identity. Each advanced semantic query independently captures and generation-fences a Roslyn snapshot.
+Before this plan, `find_symbol` returned stable symbol identities and declaration locations but no source body, while `read_file` returned bounded current text with continuation metadata but no compiler identity. The completed `code_explore` foundation now returns combined exact semantic identity and current declaration or path source from one fenced Roslyn snapshot.
 
-No current native tool returns a combined exact semantic identity plus current declaration source. The tool runtime already provides policy, scheduling, provenance, output bounds, cancellation, result serialization, and provider-neutral projection that the new tool can reuse.
+`call_hierarchy`, `symbol_impact`, `find_symbol`, and `read_file` remain independently available granular tools. The tool runtime continues to provide policy, scheduling, provenance, output bounds, cancellation, result serialization, and provider-neutral projection.
 
 ## 6. Proposed Design
 
@@ -109,7 +109,7 @@ Expected areas:
 
 Automated coverage must verify exact and qualified names, documentation IDs, overloads, partials, containing-type/path/line disambiguation, pinned paths, deterministic order, complete and bounded declaration source, line numbering, digests, current-source drift, generated/linked classification, multi-TFM locations, partial compilation, unloaded projects, prohibited/reparse paths, sensitivity, timeout, cancellation, stale generation discard, output limits, schema parity, result provenance, scheduling, interactive/headless equivalence, and unchanged granular tools.
 
-The user-testable checkpoint is [MTP-248](manual-test-plan.md#mtp-248--exact-semantic-anchors-with-source-bearing-results). It is a blocking prerequisite for Plan 82, not merely an end-of-milestone rehearsal.
+The user-testable checkpoint [MTP-248](manual-test-plan.md#mtp-248--exact-semantic-anchors-with-source-bearing-results) has passed and satisfied the Plan 82 prerequisite.
 
 ## 11. Security/Permissions
 

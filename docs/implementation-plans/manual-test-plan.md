@@ -49,15 +49,14 @@ Expected: natural-language exploration remains deterministic, Roslyn-backed, bou
 
 ## MTP-249 — Multi-anchor semantic flow and dispatch branches
 
-1. Open a disposable trusted C# solution containing two named endpoints connected through direct calls, one unnamed bridge, an interface implementation, a virtual override, a delegate invocation, a cycle, dependent projects, and tests.
+1. Open a disposable trusted C# solution containing two named endpoints connected through direct calls, one unnamed bridge, an interface implementation, a virtual override, a delegate invocation, an unresolved dynamic call site, a cycle, direct and transitive dependent projects, and tests.
 2. Ask how the named endpoints connect and include their exact symbol names in the request.
-3. Confirm one `code_explore` result leads with the bounded compiler-proven path, includes relevant source bodies and call-site context, classifies direct/static/constructor/extension/local/interface/virtual/delegate dispatch, and identifies cycles.
+3. Confirm one `code_explore` result projects explicitly named anchor source first, then leads with the bounded compiler-proven path, includes relevant source bodies and call-site context, classifies direct/static/constructor/extension/local/interface/virtual/delegate dispatch, and identifies cycles where bounded evidence reaches them.
 4. Confirm interface and virtual edges expose bounded implementation branches with counts and locations, while delegate, reflection, dynamic, dependency-injection, and runtime-only continuations are marked as unresolved unless compiler-proven.
-5. Confirm compact blast-radius evidence identifies material callers, implementations, dependent projects, and tests with reasons, while full reference lists remain bounded and available through exact continuation targets.
-6. Repeat with ambiguous overloads, disconnected anchors, depth/node/edge/time limits, partial compilation, semantic invalidation, and cancellation; compare interactive and headless results.
+5. Confirm compact blast-radius evidence identifies material callers, implementations, direct/transitive dependent projects, and tests with reasons, while full reference lists remain bounded and available through exact continuation targets.
+6. Repeat with ambiguous overloads, disconnected anchors, prohibited connector or branch paths, malformed line-less path anchors, depth/node/edge/time/source limits, partial compilation, semantic invalidation, and cancellation; compare interactive and headless results.
 
-Expected: multi-anchor exploration composes existing Roslyn relationships into one generation-fenced, source-bearing flow without inventing runtime edges. Dispatch ambiguity, bounds, omissions, provenance, and impact are explicit and granular semantic tools remain available for exact follow-up.
-
+Expected: multi-anchor exploration composes existing Roslyn relationships into one generation-fenced, source-bearing flow without inventing runtime edges. Dispatch ambiguity, static boundaries, path-policy omissions, bounds, provenance, and impact are explicit; named anchor source remains available when later optional flow/impact expansion is incomplete; granular semantic tools remain available for exact follow-up.
 
 ## MTP-248 — Exact semantic anchors with source-bearing results
 

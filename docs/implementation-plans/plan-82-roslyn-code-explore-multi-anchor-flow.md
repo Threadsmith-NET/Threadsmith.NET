@@ -1,10 +1,10 @@
 # Implementation Plan 82: Roslyn Code Explore Multi-Anchor Flow
 
-**Status:** Planned
+**Status:** Active. Production implementation, focused automated coverage, and user/operator documentation are in place; MTP-249 interactive/headless evidence and final broader gates remain before completion and before Plan 83 begins.
 
 **Delivery track:** Milestone 28 — compiler-proven flow and impact composition
 **Strategy source:** Shared Context §A.1, §A.3, §A.5, §C, and §G; Milestone 28; Scenario AO
-**Prerequisite plans:** plans 43 and 81; Plan 81 acceptance and MTP-248 must pass before implementation begins
+**Prerequisite plans:** plans 43 and 81. Plan 81 acceptance and MTP-248 have passed and are no longer blockers for this work item.
 
 ## 1. Objective
 
@@ -44,9 +44,9 @@ The local repository at `C:\source\repos\codegraph` is a functional reference on
 
 ## 5. Current State
 
-`call_hierarchy` can traverse incoming/outgoing compiler-known calls for one stable symbol and reports dispatch, ambiguity, cycles, limits, and omissions. `symbol_impact` returns references, callers, implementations, dependent projects/tests, and generated/linked classification for one root. Neither query finds a path among several named endpoints or includes their source bodies.
+`call_hierarchy` still traverses incoming/outgoing compiler-known calls for one stable symbol and reports dispatch, ambiguity, cycles, limits, and omissions. `symbol_impact` still returns references, callers, implementations, dependent projects/tests, and generated/linked classification for one root. They remain granular follow-up tools.
 
-Plan 81 will provide exact resolved anchors and source sections but no composed multi-anchor graph. Without this plan, the model must still join hierarchy/impact results and decide which files/ranges to read in subsequent rounds.
+Plan 81 now provides exact resolved anchors and source sections. The current Plan 82 implementation composes those anchors into bounded flow and impact evidence inside `code_explore` without invoking registered semantic tools or guessing runtime-only continuations.
 
 ## 6. Proposed Design
 
@@ -81,33 +81,39 @@ Existing Plan 81 contracts evolve additively and remain serializable, provider-n
 
 ## 8. Project/File Changes
 
-Expected areas:
+Implemented areas:
 
-- `Threadsmith.Core` — additive flow, dispatch-boundary, and blast-radius DTOs.
-- `Threadsmith.DotNet` — snapshot-scoped graph gather, path selection, implementation expansion, impact summarization, and source linkage.
-- `Threadsmith.Tools` — mode/limit validation, result bounds, provenance, and activity detail.
-- `Threadsmith.Context` — compact semantic-flow evidence selection only where generic tool evidence is insufficient.
-- Telemetry, TUI/headless projections, focused semantic/tool/context tests, docs, Scenario AO, and MTP-249.
+- `Threadsmith.Core` - additive flow, dispatch-boundary, mode, limit, and blast-radius DTOs.
+- `Threadsmith.DotNet` - snapshot-scoped path selection, bounded shared traversal budgets, dispatch branch expansion, unresolved-boundary capture, transitive dependent-project/test impact summarization, and source linkage.
+- `Threadsmith.Tools` - mode/limit validation, path-policy confinement for source/flow/branch/blast evidence, provenance, truncation, and activity detail.
+- `Threadsmith.NativeTools.Tests` - maintained semantic-flow fixture covering direct paths, interface/virtual dispatch, compact impact, unresolved boundaries, policy denial, and tool-adapter confinement.
+- User/operations docs, Scenario AO, and MTP-249 procedure text.
+
+`Threadsmith.Context` and provider projection remain compatible through the additive host-owned result contract; no Roslyn or tool-runtime implementation type enters durable state or public projections.
 
 ## 9. Ordered Tasks
 
-1. Verify Plan 81 acceptance evidence and MTP-248; re-read applicable DOX and C# guardrails.
-2. Profile current `find_symbol`/`call_hierarchy`/`find_implementations`/`symbol_impact`/`read_file` chains on a fixed multi-anchor task.
-3. Freeze path-selection, bridge, dispatch-branch, runtime-boundary, blast-radius, source-priority, and completeness semantics.
-4. Implement deterministic bounded multi-anchor graph gathering against one captured snapshot.
-5. Implement compiler-proven path selection, cycles, typed call sites, interface/virtual branches, and explicit unresolved boundaries.
-6. Integrate declaration/call-site source allocation and compact impact summaries.
-7. Add limits, cancellation, stale-generation discard, provenance, telemetry, and provider projection.
-8. Add direct/interface/virtual/delegate/extension/local/constructor/overload/cycle/disconnected/large-fan-out fixtures.
-9. Run focused tests, architecture tests, provider/tool tests, solution build, formatting, and planning-governance checks.
-10. Run MTP-249 interactively and headlessly; record checkpoint evidence before changing plan status.
-11. Complete docs/DOX closeout. Begin Plan 83 only after this plan's acceptance and user-testable gate pass.
+Completed implementation tasks:
+
+1. Verified Plan 81 acceptance/MTP-248 and re-read applicable DOX and C# guardrails.
+2. Froze path-selection, bridge, dispatch-branch, runtime-boundary, blast-radius, source-priority, and completeness semantics for the first Plan 82 slice.
+3. Implemented deterministic bounded multi-anchor graph gathering against one captured snapshot.
+4. Implemented compiler-proven path selection, typed call sites, bounded interface/virtual branches, explicit unresolved boundaries, and fail-closed policy filtering.
+5. Integrated named-anchor-first source allocation, operative call-site source projection, and compact impact summaries over direct/transitive dependent projects and tests.
+6. Added limits, cancellation propagation, generation fencing, provenance, tool activity, result confinement, and truncation reporting.
+7. Added focused direct/interface/virtual/impact/unresolved-boundary/policy-confinement automated coverage.
+
+Remaining before completion:
+
+1. Run MTP-249 interactively and headlessly on the maintained semantic-flow fixture and one disposable multi-project repository.
+2. Run the broader focused semantic/tool/context/provider/architecture gates required by release readiness.
+3. Record final checkpoint evidence and change this plan's status only after the acceptance criteria pass.
 
 ## 10. Testing
 
-Automated coverage must verify path correctness and deterministic tie-breaking, no-path results, bounded unnamed bridges, all existing dispatch kinds, interface/virtual implementation counts, delegate/runtime boundaries, cycles, overload identity, source linkage, call-site ranges, impact reasons/counts, dependent projects/tests, generated/linked nodes, depth/node/edge/time/source limits, partial compilation, cancellation, invalidation, interactive/headless parity, result serialization, architecture isolation, and unchanged granular tool behavior.
+Automated coverage now includes a maintained `Plan82CodeExploreFlowTests` fixture for direct bridge paths, call-site source projection, interface dispatch frontiers and branches, virtual override branches, direct/transitive dependent project and test impact, capped unresolved dynamic boundaries, source-policy denial, and defense-in-depth tool confinement of flow/branch/blast evidence.
 
-The user-testable checkpoint is [MTP-249](manual-test-plan.md#mtp-249--multi-anchor-semantic-flow-and-dispatch-branches). Its successful completion is a blocking prerequisite for Plan 83.
+Additional automated gates before completion should cover the remaining dispatch kinds and large-boundary cases where practical, plus architecture/provider/tool schema compatibility, serialization, cancellation/invalidation, and unchanged granular tool behavior. The user-testable checkpoint is [MTP-249](manual-test-plan.md#mtp-249--multi-anchor-semantic-flow-and-dispatch-branches). Its successful completion remains a blocking prerequisite for Plan 83.
 
 ## 11. Security/Permissions
 
@@ -145,10 +151,10 @@ When implemented, document flow modes, dispatch classifications, runtime limitat
 
 Implementation reviews must continue to state that `C:\source\repos\codegraph` is functional reference only. No copied or reverse-engineered source, algorithms, thresholds, schemas, prompts, tests, names, or internal structure may enter Threadsmith.
 
-## 17. Open Decisions
+## 17. Resolved Decisions
 
-- Exact multi-terminal path-selection algorithm and deterministic tie-break order.
-- Maximum unnamed connector count and whether callers and callees have different costs.
-- Whether implementation branches appear inline on flow edges or in a separate bounded branch collection.
-- Minimum source required for an edge to count as sufficiently explained.
-- Which impact categories are always present versus requested only in `Impact` mode.
+- Flow composition uses bounded pairwise directed searches among resolved source-bearing anchors, with deterministic ranking that prefers complete paths, shorter compiler-proven evidence, stable semantic identities, and usable source.
+- Unnamed connector, depth, node, edge, path, dispatch-branch, blast-radius, file, source, and time budgets are explicit request limits validated by the tool adapter; traversal budgets are shared across pair searches within one request.
+- Interface and virtual runtime ambiguity is represented by compiler-known dispatch-boundary edges plus separate bounded `CodeExploreDispatchBranch` entries; the result does not invent continuation edges to possible runtime targets.
+- Named anchor source is projected before optional flow/impact expansion. Flow-spine declarations and operative call-site windows are added only while source budgets and path policy permit them.
+- `Impact` evidence is compact planning context over callers, implementations, and direct/transitive dependent projects/tests; it is not exhaustive validation scope and does not authorize mutation or test selection.

@@ -47,7 +47,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M25 | Complete | Repository-scoped cross-session memory in the existing ignored repo SQLite store. | [Details](milestones/milestone-25-repository-scoped-cross-session-memory.md) |
 | M26 | Planned | Packaged local documentation bundle and maintained natural Q&A skill. | [Details](milestones/milestone-26-packaged-local-documentation-help-skill.md) |
 | M27 | Complete | Low-friction URL-only MCP OAuth onboarding with dynamic client registration. | [Details](milestones/milestone-27-low-friction-mcp-oauth-dynamic-registration.md) |
-| M28 | Planned | Roslyn-backed task-sufficient code exploration with source, flow, ranking, safe deduplication, and associated artifacts. | [Details](milestones/milestone-28-roslyn-backed-code-exploration.md) |
+| M28 | Active | Roslyn-backed task-sufficient code exploration with source, flow, ranking, safe deduplication, and associated artifacts. | [Details](milestones/milestone-28-roslyn-backed-code-exploration.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

@@ -235,6 +235,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
+        var maximumCorrectiveTurns = configuration.GetValue("execution:maxCorrectiveTurns", 3);
         var executionLimits = new ExecutionLimits
         {
             MaxModelRounds = configuration.GetValue(
@@ -243,15 +244,10 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxPlanningToolRounds = configuration.GetValue(
                 "execution:maxPlanningToolRounds",
                 ExecutionLimits.DefaultMaxPlanningToolRounds),
-            MaxPlanProposalRepairAttempts = configuration.GetValue(
-                "execution:maxPlanProposalRepairAttempts",
-                3),
-            MaxPlanRevisionRepairAttempts = configuration.GetValue(
-                "execution:maxPlanRevisionRepairAttempts",
-                3),
-            MaxMutationProposalRepairAttempts = configuration.GetValue(
-                "execution:maxMutationProposalRepairAttempts",
-                3),
+            MaxCorrectiveTurns = maximumCorrectiveTurns,
+            MaxPlanProposalRepairAttempts = maximumCorrectiveTurns,
+            MaxPlanRevisionRepairAttempts = maximumCorrectiveTurns,
+            MaxMutationProposalRepairAttempts = maximumCorrectiveTurns,
             MaxStructuredOutputCharacters = configuration.GetValue(
                 "execution:maxStructuredOutputCharacters",
                 8 * 1024 * 1024),

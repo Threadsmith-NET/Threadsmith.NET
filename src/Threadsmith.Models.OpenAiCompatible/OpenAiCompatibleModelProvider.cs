@@ -100,6 +100,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCancellation.CancelAfter(_profile.Timeout);
         HttpResponseMessage? response = null;
@@ -142,6 +143,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             $"Tool '{definition.Name}' argument schema must be a JSON object.");
                     }
 
+                    var wireToolName = toolNameMap.ToWireName(definition.Name);
                     var strictSchema = definition.PreferStrictArguments
                         ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
                             definition.Name,
@@ -154,7 +156,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         Function = new OpenAiFunction
                         {
-                            Name = definition.Name,
+                            Name = wireToolName,
                             Description = definition.Description,
                             Parameters = providerSchema.RootElement.Clone(),
                             Strict = strictSchema is null ? null : true,
@@ -166,7 +168,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var body = new OpenAiChatRequest
             {
                 Model = _profile.ModelId,
-                Messages = CreateMessages(request),
+                Messages = CreateMessages(request, toolNameMap),
                 Stream = true,
                 StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
                 MaximumOutputTokens = maximumOutputTokens,
@@ -390,7 +392,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                     if (choice.FinishReason is { } finishReason)
                     {
-                        foreach (var toolChunk in DrainToolCalls(toolCalls, canonicalTools))
+                        foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
                         {
                             yield return toolChunk;
                         }
@@ -409,7 +411,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
             }
 
-            foreach (var toolChunk in DrainToolCalls(toolCalls, canonicalTools))
+            foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
             {
                 yield return toolChunk;
             }
@@ -431,7 +433,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
     }
 
-    private static IReadOnlyList<OpenAiMessage> CreateMessages(ModelStreamRequest request)
+    private static IReadOnlyList<OpenAiMessage> CreateMessages(
+        ModelStreamRequest request,
+        ModelToolWireNameMap toolNameMap)
     {
         if (request.Messages.Count == 0)
         {
@@ -464,7 +468,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             Id = message.ToolCallId,
                             Function = new OpenAiMessageFunctionCall
                             {
-                                Name = message.ToolName,
+                                Name = toolNameMap.ToWireName(message.ToolName),
                                 Arguments = content,
                             },
                         });
@@ -674,100 +678,34 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private static IReadOnlyList<ModelChunk> DrainToolCalls(
         Dictionary<int, ToolCallAccumulator> toolCalls,
-        IReadOnlyList<ModelToolDefinition> availableTools)
+        ModelToolWireNameMap toolNameMap)
     {
-        var chunks = new List<ModelChunk>();
-        foreach (var call in toolCalls.OrderBy(item => item.Key).Select(item => item.Value))
+        var calls = toolCalls
+            .OrderBy(item => item.Key)
+            .Select(item => item.Value)
+            .ToArray();
+        for (var index = 0; index < calls.Length; index++)
         {
-            var arguments = NormalizeToolArguments(call.Name, call.Arguments, availableTools);
-            var output = new ToolRequestModelOutput(call.Name, arguments);
-            ModelOutputValidator.Validate(output);
-            chunks.Add(new ModelChunk { Output = output });
+            var output = new ToolRequestModelOutput(
+                toolNameMap.ToCanonicalName(calls[index].Name),
+                calls[index].Arguments);
+            ModelOutputValidator.ValidateInvocation(
+                output,
+                providerFamily: "openai-compatible",
+                toolOrdinal: index,
+                toolCallCount: calls.Length);
         }
 
+        var chunks = calls
+            .Select(call => new ModelChunk
+            {
+                Output = new ToolRequestModelOutput(
+                    toolNameMap.ToCanonicalName(call.Name),
+                    call.Arguments),
+            })
+            .ToArray();
         toolCalls.Clear();
         return chunks;
-    }
-
-    private static string NormalizeToolArguments(
-        string toolName,
-        string? arguments,
-        IReadOnlyList<ModelToolDefinition> availableTools)
-    {
-        if (string.IsNullOrWhiteSpace(arguments))
-        {
-            return AcceptsNoArguments(toolName, availableTools) ? "{}" : arguments ?? string.Empty;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(arguments);
-            return arguments;
-        }
-        catch (JsonException)
-        {
-            return AcceptsNoArguments(toolName, availableTools) ? "{}" : arguments;
-        }
-    }
-
-    private static bool AcceptsNoArguments(
-        string toolName,
-        IReadOnlyList<ModelToolDefinition> availableTools)
-    {
-        var definition = availableTools.FirstOrDefault(tool =>
-            string.Equals(tool.Name, toolName, StringComparison.Ordinal));
-        if (definition is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
-            var root = schema.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("type", out var type)
-                || type.ValueKind != JsonValueKind.String
-                || !string.Equals(type.GetString(), "object", StringComparison.Ordinal)
-                || !root.TryGetProperty("properties", out var properties)
-                || properties.ValueKind != JsonValueKind.Object
-                || properties.EnumerateObject().Any()
-                || !root.TryGetProperty("additionalProperties", out var additionalProperties)
-                || additionalProperties.ValueKind != JsonValueKind.False)
-            {
-                return false;
-            }
-
-            if (root.TryGetProperty("required", out var required)
-                && (required.ValueKind != JsonValueKind.Array || required.GetArrayLength() > 0))
-            {
-                return false;
-            }
-
-            HashSet<string> acceptedKeywords = new(
-            [
-                "$anchor",
-                "$comment",
-                "$id",
-                "$schema",
-                "additionalProperties",
-                "deprecated",
-                "description",
-                "examples",
-                "properties",
-                "readOnly",
-                "required",
-                "title",
-                "type",
-                "writeOnly",
-            ],
-            StringComparer.Ordinal);
-            return root.EnumerateObject().All(property => acceptedKeywords.Contains(property.Name));
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
     }
 
     private async Task DelayBeforeRetryAsync(

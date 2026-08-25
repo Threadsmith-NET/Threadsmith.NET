@@ -40,6 +40,60 @@ public sealed record ToolBatchRequest(int Ordinal, string CorrelationId, ToolInv
 /// <param name="Result">Terminal invocation result.</param>
 public sealed record ToolBatchResult(int Ordinal, string CorrelationId, ToolInvocationResult Result);
 
+/// <summary>Opaque prepared snapshot produced by preflight and consumed by batch invocation.</summary>
+public sealed class ToolBatchPreparation
+{
+    /// <summary>Empty prepared snapshot.</summary>
+    public static ToolBatchPreparation Empty { get; } = new(Array.Empty<IReadOnlyList<PlannedToolInvocation>>());
+
+    /// <summary>Initializes a new instance of the <see cref="ToolBatchPreparation"/> class.</summary>
+    internal ToolBatchPreparation(IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> waves)
+    {
+        ArgumentNullException.ThrowIfNull(waves);
+        Waves = waves;
+        Requests = waves
+            .SelectMany(static wave => wave)
+            .Select(static planned => planned.Request)
+            .OrderBy(static request => request.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>Gets the original model-ordered requests represented by this preparation.</summary>
+    internal IReadOnlyList<ToolBatchRequest> Requests { get; }
+
+    /// <summary>Gets the prepared conflict-free waves.</summary>
+    internal IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> Waves { get; }
+}
+
+/// <summary>No-side-effect validation result for a complete sibling tool batch.</summary>
+public sealed record ToolBatchPreflightResult
+{
+    /// <summary>Successful preflight result.</summary>
+    public static ToolBatchPreflightResult Success { get; } = new()
+    {
+        Succeeded = true,
+        Preparation = ToolBatchPreparation.Empty,
+    };
+
+    /// <summary>Whether the entire batch can enter the invocation pipeline.</summary>
+    public bool Succeeded { get; init; }
+
+    /// <summary>Original model ordinal of the first failed sibling when known.</summary>
+    public int? FailedOrdinal { get; init; }
+
+    /// <summary>Tool id of the first failed sibling when known.</summary>
+    public string? FailedToolId { get; init; }
+
+    /// <summary>Normalized error classification for the preflight failure.</summary>
+    public ToolErrorClassification ErrorClassification { get; init; }
+
+    /// <summary>Sanitized, bounded reason that excludes raw arguments and secrets.</summary>
+    public string? SafeReason { get; init; }
+
+    /// <summary>Prepared registration snapshot to invoke when preflight succeeds.</summary>
+    public ToolBatchPreparation? Preparation { get; init; }
+}
+
 /// <summary>One validated invocation and its immutable scheduling snapshot.</summary>
 /// <param name="Request">Original request.</param>
 /// <param name="Registration">Generation-fenced registration, or <see langword="null" /> when preparation failed.</param>

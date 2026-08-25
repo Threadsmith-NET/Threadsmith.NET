@@ -51,6 +51,18 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario C2 — Conversation-Native Corrective Turns
+
+1. A model emits malformed tool arguments, an unavailable tool, or an invalid sibling in a multi-tool response.
+2. The host rejects the invalid request before execution and does not repair arguments.
+3. The next model request contains bounded corrective feedback controlled by `execution:maxCorrectiveTurns`.
+4. A corrected request can proceed; exhausted attempts fail closed with sanitized diagnostics.
+5. For MCP imported tools with provider-unsafe canonical ids, the provider wire name is safely aliased and mapped back before invocation.
+
+**Verifies:** active-turn corrective history, atomic pre-execution batch rejection, purge after successful correction, safe diagnostics without raw malformed arguments/secrets/provider bodies, provider-neutral canonical tool identity, and OpenAI-family tool-name aliasing.
+
+---
+
 ## Scenario D — Drop-In Extension
 
 1. User copies an extension package into the configured directory.

@@ -1,5 +1,7 @@
 namespace Threadsmith.Models;
 
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Threadsmith.Core;
@@ -29,27 +31,7 @@ public static class ModelOutputValidator
             case TextModelOutput text when string.IsNullOrWhiteSpace(text.Text):
                 throw new MalformedModelOutputException("Text model output is empty.");
             case ToolRequestModelOutput tool:
-                if (string.IsNullOrWhiteSpace(tool.ToolName))
-                {
-                    throw new MalformedModelOutputException("Tool name is empty.");
-                }
-
-                try
-                {
-                    using var arguments = JsonDocument.Parse(tool.ArgumentsJson);
-                    if (arguments.RootElement.ValueKind != JsonValueKind.Object)
-                    {
-                        throw new MalformedModelOutputException(
-                            "Tool arguments must be a JSON object.");
-                    }
-                }
-                catch (JsonException exception)
-                {
-                    throw new MalformedModelOutputException(
-                        "Tool arguments are not valid JSON.",
-                        exception);
-                }
-
+                ValidateInvocation(tool);
                 break;
             case PlanModelOutput plan:
                 ValidatePlan(plan.Plan);
@@ -77,12 +59,40 @@ public static class ModelOutputValidator
         }
         catch (JsonException exception)
         {
-            throw new MalformedModelOutputException(
-                "The provider did not return strict plan JSON.",
-                exception);
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.PlanSchemaMismatch,
+                "The propose_plan arguments did not match the required plan schema.",
+                toolName: "propose_plan",
+                argumentsJson: json,
+                providerFamily: null,
+                toolOrdinal: null,
+                toolCallCount: null,
+                jsonException: exception,
+                innerException: exception);
         }
 
-        Validate(output);
+        try
+        {
+            Validate(output);
+        }
+        catch (MalformedInvocationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is MalformedModelOutputException or ArgumentException)
+        {
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.PlanSchemaMismatch,
+                "The propose_plan arguments did not match the required plan schema.",
+                toolName: "propose_plan",
+                argumentsJson: json,
+                providerFamily: null,
+                toolOrdinal: null,
+                toolCallCount: null,
+                jsonException: null,
+                innerException: exception);
+        }
+
         return output;
     }
 
@@ -98,13 +108,156 @@ public static class ModelOutputValidator
         }
         catch (JsonException exception)
         {
-            throw new MalformedModelOutputException(
-                "The provider did not return strict mutation-set JSON.",
-                exception);
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.MutationSchemaMismatch,
+                "The propose_mutations arguments did not match the required mutation schema.",
+                toolName: "propose_mutations",
+                argumentsJson: json,
+                providerFamily: null,
+                toolOrdinal: null,
+                toolCallCount: null,
+                jsonException: exception,
+                innerException: exception);
         }
 
-        Validate(output);
+        try
+        {
+            Validate(output);
+        }
+        catch (MalformedInvocationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is MalformedModelOutputException or ArgumentException)
+        {
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.MutationSchemaMismatch,
+                "The propose_mutations arguments did not match the required mutation schema.",
+                toolName: "propose_mutations",
+                argumentsJson: json,
+                providerFamily: null,
+                toolOrdinal: null,
+                toolCallCount: null,
+                jsonException: null,
+                innerException: exception);
+        }
+
         return output;
+    }
+
+    /// <summary>Validates a model-authored tool invocation before it reaches execution.</summary>
+    public static void ValidateInvocation(
+        ToolRequestModelOutput tool,
+        string? providerFamily = null,
+        int? toolOrdinal = null,
+        int? toolCallCount = null)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        if (string.IsNullOrWhiteSpace(tool.ToolName))
+        {
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.MissingToolName,
+                "Tool name is missing.",
+                tool.ToolName,
+                tool.ArgumentsJson,
+                providerFamily,
+                toolOrdinal,
+                toolCallCount,
+                jsonException: null,
+                innerException: null);
+        }
+
+        try
+        {
+            using var arguments = JsonDocument.Parse(tool.ArgumentsJson);
+            if (arguments.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw CreateInvocationException(
+                    MalformedInvocationFailureKind.NonObjectArguments,
+                    "Tool arguments must be a JSON object.",
+                    tool.ToolName,
+                    tool.ArgumentsJson,
+                    providerFamily,
+                    toolOrdinal,
+                    toolCallCount,
+                    jsonException: null,
+                    innerException: null);
+            }
+        }
+        catch (MalformedInvocationException)
+        {
+            throw;
+        }
+        catch (JsonException exception)
+        {
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.InvalidJsonArguments,
+                "Tool arguments are not valid JSON.",
+                tool.ToolName,
+                tool.ArgumentsJson,
+                providerFamily,
+                toolOrdinal,
+                toolCallCount,
+                exception,
+                exception);
+        }
+    }
+
+    private static MalformedInvocationException CreateInvocationException(
+        MalformedInvocationFailureKind kind,
+        string safeMessage,
+        string? toolName,
+        string? argumentsJson,
+        string? providerFamily,
+        int? toolOrdinal,
+        int? toolCallCount,
+        JsonException? jsonException,
+        Exception? innerException)
+    {
+        var diagnostic = new MalformedInvocationDiagnostic
+        {
+            Kind = kind,
+            SafeMessage = BoundSingleLine(safeMessage, 512),
+            ToolName = BoundNullable(toolName, 128),
+            ToolOrdinal = toolOrdinal,
+            ToolCallCount = toolCallCount,
+            ProviderFamily = BoundNullable(providerFamily, 64),
+            ArgumentCharacterCount = argumentsJson?.Length,
+            ArgumentSha256 = argumentsJson is null
+                ? null
+                : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(argumentsJson))).ToLowerInvariant(),
+            JsonPath = BoundNullable(jsonException?.Path, 256),
+            JsonLineNumber = jsonException?.LineNumber,
+            JsonBytePositionInLine = jsonException?.BytePositionInLine,
+        };
+        return innerException is null
+            ? new MalformedInvocationException(diagnostic)
+            : new MalformedInvocationException(diagnostic, innerException);
+    }
+
+    private static string? BoundNullable(string? value, int maximumCharacters)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : BoundSingleLine(value, maximumCharacters);
+    }
+
+    private static string BoundSingleLine(string value, int maximumCharacters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+        foreach (var character in value)
+        {
+            if (builder.Length == maximumCharacters)
+            {
+                break;
+            }
+
+            builder.Append(char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static void ValidatePlan(ImplementationPlan plan)
@@ -116,14 +269,20 @@ public static class ModelOutputValidator
                 $"Unsupported plan schema version {plan.SchemaVersion}; expected 2.");
         }
 
+        var steps = plan.Steps;
+        var risks = plan.Risks;
+        var outstandingQuestions = plan.OutstandingQuestions;
         if (plan.Revision <= 0
             || string.IsNullOrWhiteSpace(plan.Summary)
             || plan.Summary.Length > 4096
-            || plan.Steps.Count is < 1 or > 100
-            || plan.Risks.Count > 100
-            || plan.Risks.Any(risk => string.IsNullOrWhiteSpace(risk) || risk.Length > 4096)
-            || plan.OutstandingQuestions.Count > 100
-            || plan.OutstandingQuestions.Any(question =>
+            || steps is null
+            || steps.Count is < 1 or > 100
+            || risks is null
+            || risks.Count > 100
+            || risks.Any(risk => string.IsNullOrWhiteSpace(risk) || risk.Length > 4096)
+            || outstandingQuestions is null
+            || outstandingQuestions.Count > 100
+            || outstandingQuestions.Any(question =>
                 string.IsNullOrWhiteSpace(question) || question.Length > 4096))
         {
             throw new MalformedModelOutputException(
@@ -131,8 +290,16 @@ public static class ModelOutputValidator
         }
 
         var stepIds = new HashSet<StepId>();
-        foreach (var step in plan.Steps)
+        foreach (var step in steps)
         {
+            if (step is null)
+            {
+                throw new MalformedModelOutputException(
+                    "Plan steps require unique ids, bounded text, and repository-relative file intents.");
+            }
+
+            var fileIntents = step.FileIntents;
+            var validation = step.Validation;
             if (step.StepId == default
                 || !stepIds.Add(step.StepId)
                 || string.IsNullOrWhiteSpace(step.Title)
@@ -141,12 +308,14 @@ public static class ModelOutputValidator
                 || step.Description.Length > 8192
                 || string.IsNullOrWhiteSpace(step.ExpectedOutcome)
                 || step.ExpectedOutcome.Length > 4096
-                || step.FileIntents.Count > 100
-                || step.Validation.Count > 100
-                || step.Validation.Any(expectation =>
+                || fileIntents is null
+                || fileIntents.Count > 100
+                || validation is null
+                || validation.Count > 100
+                || validation.Any(expectation =>
                     string.IsNullOrWhiteSpace(expectation)
                     || expectation.Length > 4096)
-                || step.FileIntents.Any(IsInvalidPlanFileIntent))
+                || fileIntents.Any(IsInvalidPlanFileIntent))
             {
                 throw new MalformedModelOutputException(
                     "Plan steps require unique ids, bounded text, and repository-relative file intents.");

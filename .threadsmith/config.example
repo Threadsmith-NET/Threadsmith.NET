@@ -97,13 +97,6 @@
     ]
   },
 
-  // ── Approved-plan execution orchestration (M11 / plan 37) ─────────────
-  "execution": {
-    // Combined compiler/test correction attempts. Every attempt repeats exact
-    // diff, policy, transactional apply, and validation gates.
-    "correctionBudget": 3
-  },
-
   // ── Parallel agents and isolated workers (M11.1 / plan 38) ────────────
   // Delegation is one level deep. Children are in-process asynchronous runs;
   // these limits never authorize mutation, process, network, or model access.
@@ -451,15 +444,9 @@
     // Optional initial evidence-collection inspection-tool cutoff. 0 disables the
     // separate cutoff so exploration can use the full model-round budget.
     "maxPlanningToolRounds": 0,
-    // Automatic malformed propose_plan argument repair attempts before the host
-    // fails closed.
-    "maxPlanProposalRepairAttempts": 3,
-    // Automatic repair attempts when plan sanity checks find repairable scope
-    // problems before any manual plan prompt or policy auto-approval.
-    "maxPlanRevisionRepairAttempts": 3,
-    // Automatic mutation-proposal repair attempts after repairable schema,
-    // exact-text, or pre-mutation validation failures before staging.
-    "maxMutationProposalRepairAttempts": 3,
+    // Active-turn corrective attempts for recoverable malformed or invalid
+    // model-authored requests before the host fails closed.
+    "maxCorrectiveTurns": 3,
     // Maximum structured (JSON) mutation output characters accumulated from a
     // streaming model before it is rejected as malformed.
     "maxStructuredOutputCharacters": 8388608,

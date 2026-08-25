@@ -1,228 +1,144 @@
-# Implementation Plan 88: Unified Model Correction Loop Substrate
+# Implementation Plan 88: Conversation-Native Corrective Turns
 
-**Status:** Planned
+**Status:** Active — conversation-loop corrective turns implemented through behavior signoff; later plan-sanity, mutation-proposal, post-apply validation, and obsolete-helper migration remain.
 
-**Delivery track:** Maintenance — consolidate scattered model-output correction without changing host authority
+**Delivery track:** Maintenance — graceful recovery from malformed or invalid model requests
 **Strategy source:** Shared Context §A.1, §A.2, §A.5, §C, and §G; execution, model, planning, mutation, and validation contracts
-**Prerequisite plans:** Plan 87 functionality signoff; existing plan/mutation repair behavior must be covered before consolidation begins
+**Prerequisites:** Existing plan, mutation, tool, and execution-correction behavior must be inventoried before removal or migration
+**Implementation blueprint:** [`plan88_plan.md`](plan88_plan.md)
 
 ## 1. Objective
 
-Replace scattered one-off model-output repair loops with one small host-owned correction-loop substrate. The substrate should let each workflow define its own correction policy and message while sharing retry bounds, budget accounting, cancellation, observability, sanitized diagnostics, and continuation mechanics.
+Make recoverable malformed or invalid model requests part of the normal active conversation. When the model emits a malformed tool request, invalid tool batch, malformed structured plan, malformed mutation proposal, or repairable validation failure, the host rejects the request, appends a bounded corrective message, and asks the model to try again in the same logical turn.
 
-The goal is not to make the model authoritative. The goal is to make nondeterministic malformed model output recoverable everywhere it is safe to retry, while keeping host validation and workflow state transitions authoritative.
+No malformed or invalid request is executed, staged, approved, or silently repaired by the host.
 
 ## 2. Architectural Context
 
-Threadsmith currently has correction behavior in multiple places:
+Threadsmith already has several local repair mechanisms:
 
-- ordinary conversation tool guidance can be returned as tool evidence for semantic-first and duplicate-tool cases;
-- `propose_plan` has a bounded schema repair path inside the conversation loop;
-- plan sanity and revision flows have their own repair behavior;
-- mutation proposals have a separate correction loop in the mutation proposal application;
-- Plan 87 adds malformed tool-invocation correction for provider-boundary and ordinary conversation failures.
+- `propose_plan` schema repair inside the conversation loop;
+- plan sanity repair before approval;
+- mutation proposal repair for schema, expected-text, and pre-mutation diagnostic failures;
+- approved-plan validation correction after post-apply build/test failure;
+- ordinary tool-result guidance for duplicate or phase-limited tools;
+- provider-boundary failures for malformed native tool-call arguments.
 
-These loops share concepts but not implementation: attempt counts, correction text, evidence insertion, retry eligibility, budget accounting, cancellation behavior, and failure reporting are distributed. That makes it easy for one malformed-output class to terminate while another receives useful correction.
-
-Plan 88 creates a common substrate after Plan 87 proves the malformed-tool behavior. It should consolidate mechanics without flattening domain policy. Plan proposal, mutation proposal, sanity repair, and ordinary tool invocation still have different validation rules and authority boundaries.
+Plan 88 folds these into one simpler conversation-based corrective-turn pattern. The detailed file/symbol inventory and implementation outline live in `plan88_plan.md`.
 
 ## 3. Scope
 
-- Define a shared correction-loop runner for model-output correction attempts.
-- Keep correction policies typed and workflow-specific: ordinary tool invocation, `propose_plan`, plan revision/sanity, mutation proposal, and future structured outputs can each supply their own eligibility rules and correction prompt.
-- Share attempt counting, exhaustion handling, cancellation, model/cost/wall-clock budget accounting, transient status, durable sanitized observability, and raw-payload redaction rules.
-- Normalize correction result classifications: corrected, exhausted, cancelled, unsafe/non-recoverable, budget-exhausted, provider-failed, and superseded by workflow transition.
-- Preserve existing transcript/protocol requirements for tool-call correlation, provider message order, and structured chronological messages.
-- Keep all provider SDK, Roslyn, terminal, extension, MCP, and persistence implementation types behind existing boundaries.
-- Migrate existing specialized loops only when their current behavior is covered by focused tests or explicit acceptance notes.
-- Implement functionality first, then stop for user review.
-- Write or update automated tests only after the user signs off on the behavior.
-- Write or update user/operator documentation only after the user signs off on the behavior.
+- Add one configurable corrective-turn limit: `execution:maxCorrectiveTurns`.
+- Convert recoverable malformed/invalid model requests into active-turn corrective messages.
+- Reject an entire batched tool request when any sibling is malformed or invalid before execution.
+- Preserve useful successful tool evidence and accepted plans/mutations.
+- Purge corrective noise from future model history after successful correction.
+- Remove existing bespoke correction loops after their behavior is folded into the shared corrective-turn path.
+- Preserve existing approval and validation gates around accepted plans, mutations, and tool execution.
 
 ## 4. Non-Scope
 
-- No change to the validated schemas for plans, mutations, or tools unless required to preserve existing behavior.
-- No host-side repair of model-authored JSON into executable operations.
-- No relaxation of approval, trust, mutation, path, process, MCP, extension, validation, or tool policy gates.
-- No replacement of domain-specific validation with a generic parser.
-- No new autonomous planner, self-healing agent layer, or multi-agent debate.
-- No unbounded retries or hidden background correction after a user-visible terminal failure.
-- No acceptance-scenario, manual-test-plan, user-guide, or operations-document changes before behavior signoff.
+- No separate hidden correction-loop substrate.
+- No host-side repair of malformed model-authored arguments into executable requests.
+- No execution of partially malformed batches.
+- No weakening of plan approval, mutation approval, tool policy, path checks, or validation.
+- No user/operator documentation updates before behavior signoff.
 
 ## 5. Current State
 
-Correction loops are useful but local. The `propose_plan` path can repair malformed schema output in evidence collection. Mutation proposals can be corrected against malformed schema, missing expected text, and pre-mutation diagnostics. Plan sanity repair has separate flow-specific handling. Ordinary conversation tool calls have policy/tool-result guidance for some semantic misuse cases, and Plan 87 adds malformed tool-call recovery.
-
-The fragmentation causes inconsistent behavior and duplicated mechanics. It also makes new structured model outputs risky because each feature must remember to add its own bounded retry, sanitization, logging, budget, and cancellation behavior.
+The current repair behavior is fragmented and uses separate counters, hidden task-constraint injection, and message-substring classification in places. Provider-boundary malformed native tool-call arguments can fail before the conversation loop can ask for correction. Tool batches are not preflighted as one atomic unit before execution.
 
 ## 6. Proposed Design
 
-### 6.1 Correction substrate
+Use the active conversation as the correction channel:
 
-Introduce a small internal correction-loop abstraction, not a public framework. It should coordinate:
+1. assemble a model request with active-turn history;
+2. stream one model response;
+3. classify malformed/invalid request output before execution;
+4. if recoverable and the configured corrective-turn budget remains, append a corrective message and continue;
+5. if accepted, execute or stage through the ordinary path;
+6. after success, purge corrective/rejected-request noise from future model history;
+7. if exhausted, fail closed with a sanitized reason.
 
-1. current attempt count and configured/internal maximum;
-2. whether a failure is recoverable in the current phase/workflow;
-3. construction of sanitized correction evidence/instructions;
-4. model continuation request creation or workflow-specific retry invocation;
-5. budget, cancellation, and timeout handling;
-6. result classification and terminal failure formatting.
-
-The substrate does not parse plans, mutations, or tool arguments itself. It calls workflow-owned validators and receives typed correction failures.
-
-### 6.2 Typed correction policies
-
-Each participating workflow supplies a correction policy with:
-
-- a stable correction category;
-- maximum attempts or a reference to an existing configured bound;
-- recoverability rules;
-- safe diagnostic fields permitted in correction text;
-- transcript/message insertion strategy;
-- validation callback for the next model output;
-- exhaustion behavior.
-
-Initial policies:
-
-- malformed ordinary tool invocation, building on Plan 87;
-- `propose_plan` schema repair;
-- plan sanity/revision repair, where the current workflow already retries;
-- mutation proposal repair;
-- optional structured-output provider failures where an existing safe retry path already exists.
-
-### 6.3 Message and evidence strategies
-
-The substrate supports multiple safe correction strategies:
-
-- host/developer correction message when no valid tool-call correlation exists;
-- assistant tool-call plus tool-result correction when a valid tool call exists but domain validation rejected it;
-- workflow-specific repair evidence for plan or mutation proposals;
-- direct retry with additional validation evidence for non-tool structured outputs.
-
-The policy chooses the strategy. The substrate enforces bounds and redaction.
-
-### 6.4 State and accounting
-
-Track correction attempts in the active turn or workflow state, not in raw transcript text. Preserve existing durable checkpoint semantics for plan and mutation workflows. Correction attempts must count toward model request count, token/cost estimates, wall-clock budget, and cancellation. Exhaustion should produce one clear terminal reason with the last safe failure category.
-
-### 6.5 Incremental migration
-
-Do not replace all loops in one risky edit. Migrate in this order:
-
-1. wrap Plan 87 malformed-tool correction with the shared substrate;
-2. move `propose_plan` repair mechanics while preserving its exact correction schema guidance and bounded count;
-3. adapt plan sanity/revision repair only where it shares the same model-call lifecycle;
-4. move mutation proposal repair mechanics while preserving its diagnostic/pre-mutation evidence behavior;
-5. remove duplicated counters/helpers only after behavior parity is verified.
+The detailed processing-loop diagram, file-level changes, provider diagnostics, tool-batch preflight, and bespoke-loop removal steps are specified in `plan88_plan.md`.
 
 ## 7. Public Contracts
 
-Expected contracts are internal host-owned types, likely in `Threadsmith.Execution` with shared model-facing DTOs remaining in `Threadsmith.Models` only where provider-neutral failures require them:
+Expected additive or changed contracts:
 
-- `CorrectionCategory` or equivalent closed internal identifier;
-- `CorrectionFailure` safe diagnostic record;
-- `CorrectionPolicy`/`CorrectionRequest`/`CorrectionOutcome` internal records;
-- shared exhaustion formatter and sanitized activity/event projection helpers;
-- optional configuration binding for correction counts only if existing knobs cannot be reused.
+- `ExecutionLimits.MaxCorrectiveTurns` and config key `execution:maxCorrectiveTurns`;
+- safe malformed-invocation diagnostics in `Threadsmith.Models`;
+- a no-side-effect tool-batch preflight result in `Threadsmith.Tools`;
+- a generic correction-attempt event/projection if needed for TUI/headless visibility.
 
-No provider SDK, terminal, Roslyn, extension, MCP SDK, persistence connection, or live workflow object crosses subsystem boundaries.
+Existing durable correction/checkpoint fields remain compatible until a separate checkpoint simplification is warranted.
 
 ## 8. Project/File Changes
 
-Before functionality signoff, expected source changes are limited to:
+See `plan88_plan.md` for the authoritative implementation file list. Primary areas are:
 
-- `src/Threadsmith.Execution/` — shared correction substrate and integration into conversation/planning/mutation flows;
-- `src/Threadsmith.Models/` — only if Plan 87 failure metadata needs minor adjustment for shared use;
-- `src/Threadsmith.Models.OpenAiCompatible/` and `src/Threadsmith.Models.OpenAiCodex/` — only if Plan 87 integration needs provider metadata naming updates;
-- configuration/composition files only if correction counts become an exposed setting;
-- telemetry/event projection files only if existing sanitized activity hooks are insufficient.
-
-Do not change tests or product documentation during the functionality trial.
-
-After signoff, likely tests and documentation are listed in Sections 10 and 16.
+- `src/Threadsmith.Execution/SessionApplication.ConversationLoop.cs`
+- `src/Threadsmith.Execution/SessionApplication.cs`
+- `src/Threadsmith.Execution/MutationProposalApplication.cs`
+- `src/Threadsmith.Execution/ExecutionOrchestrator.cs`
+- `src/Threadsmith.Models/`
+- `src/Threadsmith.Models.OpenAiCompatible/`
+- `src/Threadsmith.Models.OpenAiCodex/`
+- `src/Threadsmith.Tools/`
+- `src/Threadsmith.App/`
+- affected tests and projections after behavior signoff
 
 ## 9. Ordered Tasks
 
-### Functionality trial
-
-1. Get user approval of this plan and the incremental migration order.
-2. Inventory the existing correction loops and record their current attempt counts, correction messages, terminal failure classes, and durable state effects.
-3. Define the smallest shared correction substrate that can express Plan 87 and `propose_plan` without weakening either.
-4. Integrate Plan 87 malformed-tool correction into the substrate.
-5. Migrate `propose_plan` repair mechanics and verify behavior parity manually.
-6. Migrate plan sanity/revision repair only if the same substrate fits without broad redesign.
-7. Migrate mutation proposal repair mechanics only after preserving its existing diagnostics and pre-mutation correction behavior.
-8. Remove duplicated retry helpers/counters only where the migrated paths prove parity.
-9. Build affected projects and run focused manual/scripted trials.
-10. Stop and wait for explicit user signoff.
-
-### After functionality signoff
-
-11. Add or update the focused automated tests listed in Section 10.
-12. Run focused suites and fix confirmed parity defects.
-13. Update only the documentation listed in Section 16.
-14. Run broader build/test/format/planning-governance checks.
-15. Update this plan status only after signed-off behavior, deferred verification, and deferred documentation pass.
-
-Do not commit the functionality trial as complete before the deferred tests and documentation are finished.
+1. Implement the configurable corrective-turn limit.
+2. Add safe malformed-invocation diagnostics.
+3. Add provider-boundary malformed tool-call correction.
+4. Add whole-batch tool preflight and atomic rejection.
+5. Migrate ordinary tool and `propose_plan` correction in the conversation loop.
+6. Stop for behavior signoff.
+7. Add focused tests. **Done for the signed-off conversation-loop/provider/tool-batch slice.**
+8. Migrate plan sanity, mutation proposal, and post-apply validation correction. **Deferred.**
+9. Remove obsolete bespoke helper loops and counters. **Deferred with the remaining migrations.**
+10. Update user/operator docs only after behavior signoff. **Done for the signed-off slice.**
 
 ## 10. Testing
 
-After signoff, add or update tests for these cases:
-
-1. **Plan 87 parity** — malformed tool-call correction still succeeds, exhausts, cancels, and redacts as before.
-2. **Propose-plan parity** — malformed plan JSON/schema receives the same bounded guidance and successful repair as before.
-3. **Propose-plan exhaustion** — exhaustion count and terminal reason match the previous contract except for intentional wording improvements.
-4. **Plan sanity/revision parity** — existing repair evidence, approval boundaries, and durable proposal state remain unchanged.
-5. **Mutation proposal parity** — malformed schema, missing expected text, and pre-mutation diagnostic correction remain bounded and preserve durable checkpoint behavior.
-6. **Budget accounting** — all correction attempts count against model/cost/wall-clock budgets.
-7. **Cancellation** — cancellation stops any correction category without starting another model request.
-8. **Transcript strategy safety** — provider tool-call correlation is used only when valid; otherwise host/developer correction is used.
-9. **Redaction** — raw malformed payloads, secrets, hidden reasoning, provider bodies, and source bodies are not leaked.
-10. **Unknown category safety** — unsupported correction categories fail closed rather than retrying indefinitely.
-11. **No behavior expansion** — correction substrate does not change tool authorization, mutation approval, validation gates, or phase transitions.
+Focused tests now cover provider-boundary malformed arguments, provider-safe tool-name aliasing, batch preflight/prepared invocation, conversation-level invalid-batch rejection, `propose_plan` correction, null plan schema diagnostics, and config binding for the signed-off slice. Add or migrate tests for plan sanity, mutation proposal, post-apply validation correction, obsolete helper-loop removal, and their exhaustion/cancellation cases when those deferred migrations are implemented.
 
 ## 11. Security/Permissions
 
-The substrate centralizes retry mechanics, not authority. Every workflow validator remains authoritative. Correction messages are untrusted model input, not approval, not evidence of user intent, and not permission to execute. Tool, mutation, build, MCP, extension, web, process, path, secret, and validation policies remain enforced before any side effect.
-
-Centralized redaction must be stricter than any prior local loop. If a workflow cannot provide safe diagnostic fields, its correction policy must emit generic correction text or mark the failure non-recoverable.
+Corrective messages are instructions to retry; they are not approval. Accepted requests still pass the ordinary tool, plan, mutation, path, and validation gates. Raw malformed arguments and provider bodies must not be included in correction text, ordinary events, logs, or snapshots.
 
 ## 12. Observability
 
-Emit sanitized correction telemetry consistently: category, attempt, maximum, failure kind, workflow phase, provider family when applicable, corrected/exhausted/cancelled outcome, budget exhaustion, and duration. Do not log raw malformed payloads, request/response bodies, hidden reasoning, credentials, source bodies, mutation contents beyond existing approved previews, or tool result bodies outside existing governed evidence.
+Record sanitized corrective-turn attempts with category, attempt number, maximum attempts, safe reason, and outcome. Do not log raw malformed arguments.
 
 ## 13. Migration/Compatibility
 
-The migration is internal. Existing durable sessions, events, checkpoints, plan proposals, mutation proposals, and tool results remain readable. Historical events from local correction loops remain valid. New events or status text, if any, must be additive and schema-version tolerant. If a migrated category fails to preserve behavior, revert that category to its local loop and keep the substrate for the categories that passed signoff.
+The migration is internal. Existing durable sessions and events remain readable. Obsolete local repair events or helper DTOs may remain as historical types if persistence compatibility requires them, but new production code should use the conversation-native path.
 
 ## 14. Acceptance Criteria
 
-- One shared correction substrate handles retry bounds, cancellation, budget accounting, sanitized observability, exhaustion, and message/evidence insertion for migrated categories.
-- Plan 87 malformed-tool correction runs through the substrate without behavior regression.
-- Existing `propose_plan`, plan repair, and mutation correction behavior is preserved or intentionally left on local loops until parity is proven.
-- No malformed or invalid model output is executed, staged, approved, or treated as host authority.
-- Correction attempts are consistent, bounded, recoverable where safe, and terminal only after exhaustion or non-recoverability.
-- Focused parity tests, affected workflow tests, architecture checks, solution build, and planning-governance checks pass after signoff.
+- Recoverable malformed or invalid model requests receive bounded active-turn corrective feedback.
+- One invalid sibling rejects an entire tool batch before any sibling executes.
+- Corrective-turn count is configurable through `execution:maxCorrectiveTurns`.
+- Existing bespoke correction loops are removed or folded into the shared process.
+- Corrective noise is not retained in future model history after success.
+- Approval, mutation, tool, path, and validation gates remain unchanged for accepted requests.
+- Focused tests and relevant build/architecture checks pass after implementation.
 
 ## 15. Risks
 
-- **Over-generalization hides domain policy:** keep validation and correction text workflow-owned.
-- **Large refactor destabilizes planning/mutation:** migrate incrementally and stop when parity becomes uncertain.
-- **Central loop logs too much:** default to generic safe diagnostics unless a workflow explicitly supplies redacted fields.
-- **Provider protocol mismatch:** policy chooses transcript strategy; substrate does not fake correlations.
-- **Behavior changes masked as refactor:** require parity tests after signoff before marking complete.
+- Provider-boundary diagnostics may accidentally leak raw malformed arguments.
+- Batch preflight could diverge from invocation validation if it does not reuse the same deserialization path.
+- Purging corrective messages too aggressively could remove useful executed evidence.
+- Migrating plan/mutation loops too early could change approval or checkpoint behavior.
 
 ## 16. Documentation
 
-After signoff, update internal testing docs and operator troubleshooting only where behavior is user/operator visible. User-facing docs should describe the observable principle, not internal substrate details: malformed model output receives bounded correction when safe, and terminal failure occurs only after correction exhaustion or non-recoverability. Architecture or DOX updates are needed only if durable ownership or workflow guidance changes.
-
-Do not update user/operator documentation, acceptance scenarios, or manual test procedures before behavior signoff.
+No user/operator documentation updates before behavior signoff. After signoff, document only observable behavior: Threadsmith can ask the model to correct malformed or invalid requests a bounded number of times before failing closed.
 
 ## 17. Open Decisions
 
-- Final substrate type names and owning project.
-- Whether correction attempt counts remain category-specific or share one default with category overrides.
-- Which plan sanity/revision paths should migrate in the first pass versus remain local.
-- Whether mutation proposal correction should migrate fully or only share budget/exhaustion/redaction helpers.
-- Exact event/status wording for correction attempts and exhaustion.
+- Whether obsolete config keys should be read as one-release compatibility aliases for `execution:maxCorrectiveTurns`.
+- Exact generic event name for corrective-turn projection.

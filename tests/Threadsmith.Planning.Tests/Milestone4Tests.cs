@@ -1,4 +1,4 @@
-namespace Threadsmith.Planning.Tests;
+﻿namespace Threadsmith.Planning.Tests;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -168,7 +168,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("maximum retained output size", exception.Message, StringComparison.Ordinal);
@@ -197,7 +197,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded reasoning"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
 
-        _ = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        _ = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Empty(observed.OfType<ModelReasoningObserved>());
@@ -222,7 +222,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded tool output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("maximum retained output size", exception.Message, StringComparison.Ordinal);
@@ -245,7 +245,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("invalid plan"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("positive revision, summary", exception.Message, StringComparison.Ordinal);
@@ -293,10 +293,61 @@ public static class Milestone4Tests
             }
             """;
 
-        var exception = Assert.Throws<MalformedModelOutputException>(() =>
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
             ModelOutputValidator.ParsePlan(json));
 
-        Assert.Contains("file intents", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+        Assert.Contains("file intents", exception.InnerException?.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Null plan collections are corrective schema mismatches, not runtime null dereferences.</summary>
+    [Theory]
+    [InlineData("steps")]
+    [InlineData("risks")]
+    [InlineData("outstandingQuestions")]
+    [InlineData("fileIntents")]
+    [InlineData("validation")]
+    public static void ModelOutputValidator_NullPlanCollections_AreRejectedAsMalformedInvocation(string nullProperty)
+    {
+        var fileIntents = nullProperty == "fileIntents"
+            ? "null"
+            : "[{\"kind\":\"Modify\",\"path\":\"src/Foo.cs\"}]";
+        var validation = nullProperty == "validation" ? "null" : "[]";
+        var steps = nullProperty == "steps"
+            ? "null"
+            : $$"""
+              [
+                {
+                  "stepId": { "value": "11111111-1111-1111-1111-111111111111" },
+                  "title": "Valid step",
+                  "description": "A valid step with one file intent.",
+                  "fileIntents": {{fileIntents}},
+                  "expectedOutcome": "Rejected safely when one collection is null.",
+                  "validation": {{validation}}
+                }
+              ]
+              """;
+        var risks = nullProperty == "risks" ? "null" : "[]";
+        var outstandingQuestions = nullProperty == "outstandingQuestions" ? "null" : "[]";
+        var json = $$"""
+            {
+              "schemaVersion": 1,
+              "plan": {
+                "schemaVersion": 2,
+                "revision": 1,
+                "summary": "Null collection plan.",
+                "steps": {{steps}},
+                "risks": {{risks}},
+                "outstandingQuestions": {{outstandingQuestions}}
+              }
+            }
+            """;
+
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
+            ModelOutputValidator.ParsePlan(json));
+
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+        Assert.Equal("propose_plan", exception.Diagnostic.ToolName);
     }
 
     /// <summary>Tiny tool requests cannot bypass retained-output safety through allocation count.</summary>
@@ -315,7 +366,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded tool count"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("maximum retained tool-call count", exception.Message, StringComparison.Ordinal);
@@ -356,7 +407,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("exclusive plan output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
@@ -382,15 +433,15 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("duplicate plan output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>A malformed repairable plan proposal still excludes later tool output in the same response.</summary>
+    /// <summary>A malformed plan proposal followed by a sibling tool fails closed with a safe argument diagnostic.</summary>
     [Fact]
-    public static async Task SessionApplication_RepairablePlanThenTool_FailsClosed()
+    public static async Task SessionApplication_MalformedPlanThenTool_FailsClosedWithArgumentDiagnostic()
     {
         await using var events = new DomainEventStream();
         var application = new SessionApplication(
@@ -403,15 +454,15 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxPlanProposalRepairAttempts = 1 });
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 });
         var dispatcher = new CommandDispatcher([application]);
-        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("repairable exclusive plan output"));
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("malformed plan then tool"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
-        Assert.Contains("only tool-producing output", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Tool arguments are not valid JSON", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Ordinary conversation remains available after cumulative usage crosses execution limits.</summary>
@@ -531,9 +582,9 @@ public static class Milestone4Tests
         Assert.Equal(2, model.Requests.Count);
         var repair = Assert.Single(
             model.Requests[1].Messages,
-            message => message.Role == ModelMessageRole.Tool
-                && message.ToolName == "propose_plan");
-        Assert.Contains("did not match the required plan schema", repair.Content[0].Content, StringComparison.Ordinal);
+            message => message.Role == ModelMessageRole.Developer
+                && string.Equals(message.SectionId, "active-turn-correction:1", StringComparison.Ordinal));
+        Assert.Contains("Tool arguments are not valid JSON", repair.Content[0].Content, StringComparison.Ordinal);
         Assert.True(await dispatcher.DispatchAsync(
             new RejectPlanCommand(sessionId, runId, "test complete")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
@@ -581,7 +632,7 @@ public static class Milestone4Tests
 
         // The revision turn runs in AwaitingPlanApproval, not EvidenceCollection, so a
         // propose_plan tool call is malformed and must surface as MalformedModelOutputException.
-        var reviseException = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var reviseException = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new RevisePlanCommand(sessionId, runId, "narrow the scope")));
         Assert.Contains("outside the initial conversational turn", reviseException.Message, StringComparison.Ordinal);
         Assert.Equal(RunPhase.Failed, (await projections.GetAsync<SessionProjection>(
@@ -1557,7 +1608,7 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("hard sanity"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
 
-        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         Assert.Contains("non-repairable", exception.Message, StringComparison.Ordinal);
@@ -2045,6 +2096,78 @@ public static class Milestone4Tests
         }
     }
 
+    /// <summary>An invalid sibling rejects the whole conversation tool batch before execution.</summary>
+    [Fact]
+    public static async Task ToolBatchPreflight_InvalidSiblingRejectsWholeBatchBeforeExecution()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-batch-correction-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var tool = new CountingReadTool();
+            var registry = new ToolRegistry([tool]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new InvalidBatchThenTextModelProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("batch correction"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect with a malformed sibling"));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+            Assert.Equal(0, tool.ExecutionCount);
+            Assert.Empty(evidence.Snapshot(sessionId));
+            Assert.Equal(2, model.Requests.Count);
+            var correctionRequest = model.Requests[1];
+            ModelMessage[] assistantCalls = [.. correctionRequest.Messages
+                .Where(message => message.Role == ModelMessageRole.Assistant && message.ToolName == "counting_read")];
+            ModelMessage[] correctionResults = [.. correctionRequest.Messages
+                .Where(message => message.Role == ModelMessageRole.Tool && message.ToolName == "counting_read")];
+            Assert.Equal(2, assistantCalls.Length);
+            Assert.Equal(2, correctionResults.Length);
+            Assert.Contains(
+                correctionResults,
+                message => message.Content.Any(part => part.Content.Contains("Call 1", StringComparison.Ordinal)));
+            Assert.All(
+                correctionResults,
+                message => Assert.Contains("executed", message.Content[0].Content, StringComparison.Ordinal));
+            Assert.Contains(
+                correctionResults,
+                message => message.Content[0].Content.Contains("Nothing in the batch was executed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>A never-delivered oversized tool group fails capacity rather than silently truncating its first delivery.</summary>
     [Fact]
     public static async Task NeverDeliveredLargeToolResult_FailsBeforeContinuationDispatch()
@@ -2174,9 +2297,15 @@ public static class Milestone4Tests
 
             var snapshot = evidence.Snapshot(sessionId);
             Assert.Single(snapshot, item => item.Kind == EvidenceKind.ToolResult);
-            Assert.Single(snapshot, item => item.Kind == EvidenceKind.Failure
-                && item.Provenance.Source == "tool:list_files:duplicate");
+            Assert.DoesNotContain(snapshot, item => item.Kind == EvidenceKind.Failure);
             Assert.Equal(3, model.Requests.Count);
+            Assert.Contains(
+                model.Requests[2].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "list_files", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains(
+                        "already called",
+                        StringComparison.Ordinal)));
             Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -2253,9 +2382,12 @@ public static class Milestone4Tests
             while (projection?.Phase != RunPhase.AwaitingPlanApproval);
 
             var snapshot = evidence.Snapshot(sessionId);
-            Assert.Single(snapshot, item => item.Kind == EvidenceKind.Failure
-                && item.Provenance.Source == "tool:search:semantic-first"
-                && item.Content.Contains("Call find_symbol", StringComparison.Ordinal));
+            Assert.DoesNotContain(snapshot, item => item.Kind == EvidenceKind.Failure);
+            Assert.Contains(
+                model.Requests[1].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "search", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains("Call find_symbol", StringComparison.Ordinal)));
             Assert.Single(snapshot, item => item.Kind == EvidenceKind.ToolResult
                 && item.Provenance.Source == "tool:find_symbol");
             Assert.DoesNotContain(snapshot, item => item.Provenance.Source == "tool:search");
@@ -2685,11 +2817,12 @@ public static class Milestone4Tests
         {
             await Task.Yield();
             cancellationToken.ThrowIfCancellationRequested();
+            var maximumEntries = 10 + request.ToolContinuationRound;
             yield return new ModelChunk
             {
                 Output = new ToolRequestModelOutput(
                     "list_files",
-                    "{\"path\":\".\",\"maximumEntries\":10}"),
+                    $"{{\"path\":\".\",\"maximumEntries\":{maximumEntries}}}"),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -3984,6 +4117,87 @@ public static class Milestone4Tests
             yield return new ModelChunk { Text = "Inspection complete." };
         }
     }
+
+    private sealed class InvalidBatchThenTextModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "counting_read",
+                        "{\"path\":123}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "counting_read",
+                        "{\"path\":\".\"}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            yield return new ModelChunk { Text = "Corrected without tools." };
+        }
+    }
+
+    private sealed class CountingReadTool : Tool<CountingReadInput, CountingReadOutput>
+    {
+        private static readonly ToolDefinition _definition = new()
+        {
+            Id = "counting_read",
+            Version = "1.0",
+            Description = "Test-only read tool.",
+            Category = ToolCategory.FileRead,
+            InputSchema = new ToolSchema(
+                nameof(CountingReadInput),
+                1,
+                "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}"),
+            OutputSchema = new ToolSchema(nameof(CountingReadOutput), 1, "{\"type\":\"object\"}"),
+            RequiredTrust = RepositoryTrustLevel.UntrustedInspection,
+            SideEffect = ToolSideEffect.ReadOnly,
+            Idempotency = ToolIdempotency.Idempotent,
+            SupportsCancellation = true,
+            Timeout = TimeSpan.FromSeconds(5),
+            MaximumOutputBytes = 1024,
+        };
+
+        public int ExecutionCount { get; private set; }
+
+        public override ToolDefinition Definition => _definition;
+
+        public override Task<ToolExecution<CountingReadOutput>> ExecuteAsync(
+            CountingReadInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ExecutionCount++;
+            return Task.FromResult(new ToolExecution<CountingReadOutput>(
+                new CountingReadOutput(input.Path),
+                []));
+        }
+
+        protected override void ValidateInput(CountingReadInput input)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
+        }
+    }
+
+    private sealed record CountingReadInput(string Path);
+
+    private sealed record CountingReadOutput(string Path);
 
     private sealed class RecordingHookCoordinator : IHookCoordinator
     {

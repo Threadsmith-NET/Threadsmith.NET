@@ -236,8 +236,88 @@ public sealed class TransientModelException : Exception
     }
 }
 
+/// <summary>Safe failure categories for malformed model-authored invocations.</summary>
+public enum MalformedInvocationFailureKind
+{
+    /// <summary>Tool arguments were not valid JSON.</summary>
+    InvalidJsonArguments,
+
+    /// <summary>Tool arguments were valid JSON but not a JSON object.</summary>
+    NonObjectArguments,
+
+    /// <summary>The tool name was omitted or blank.</summary>
+    MissingToolName,
+
+    /// <summary>The requested tool is unknown to the host.</summary>
+    UnknownTool,
+
+    /// <summary>The requested tool is not currently available to the model.</summary>
+    UnavailableTool,
+
+    /// <summary>The arguments did not match the tool's schema or invariants.</summary>
+    ArgumentSchemaMismatch,
+
+    /// <summary>The requested tool is invalid in the current run phase.</summary>
+    PhaseInvalidTool,
+
+    /// <summary>The response mixed plan/mutation output with another tool-producing output.</summary>
+    MultipleToolProducingOutputs,
+
+    /// <summary>The structured plan payload did not match the required schema.</summary>
+    PlanSchemaMismatch,
+
+    /// <summary>The structured mutation payload did not match the required schema.</summary>
+    MutationSchemaMismatch,
+
+    /// <summary>Plan sanity checks found repairable issues.</summary>
+    PlanSanityRepair,
+
+    /// <summary>Pre-mutation analysis found repairable diagnostics.</summary>
+    PreMutationDiagnostics,
+
+    /// <summary>Post-apply validation failed and can be corrected by another mutation proposal.</summary>
+    PostApplyValidation,
+}
+
+/// <summary>Sanitized diagnostic metadata for a recoverable malformed model invocation.</summary>
+public sealed record MalformedInvocationDiagnostic
+{
+    /// <summary>Safe machine-readable failure kind.</summary>
+    public required MalformedInvocationFailureKind Kind { get; init; }
+
+    /// <summary>Short sanitized explanation that excludes raw arguments and provider bodies.</summary>
+    public required string SafeMessage { get; init; }
+
+    /// <summary>Tool name when it is safe and known.</summary>
+    public string? ToolName { get; init; }
+
+    /// <summary>Zero-based tool-call ordinal in the model response when known.</summary>
+    public int? ToolOrdinal { get; init; }
+
+    /// <summary>Total sibling tool-call count when known.</summary>
+    public int? ToolCallCount { get; init; }
+
+    /// <summary>Provider family that produced the malformed invocation when known.</summary>
+    public string? ProviderFamily { get; init; }
+
+    /// <summary>Raw argument character count, without retaining the argument content.</summary>
+    public int? ArgumentCharacterCount { get; init; }
+
+    /// <summary>SHA-256 digest of the raw argument content, without retaining the content itself.</summary>
+    public string? ArgumentSha256 { get; init; }
+
+    /// <summary>JSON parser path when available.</summary>
+    public string? JsonPath { get; init; }
+
+    /// <summary>JSON parser line number when available.</summary>
+    public long? JsonLineNumber { get; init; }
+
+    /// <summary>JSON parser byte position within the line when available.</summary>
+    public long? JsonBytePositionInLine { get; init; }
+}
+
 /// <summary>Exception representing invalid structured provider output.</summary>
-public sealed class MalformedModelOutputException : Exception
+public class MalformedModelOutputException : Exception
 {
     /// <summary>Initializes a new instance of the <see cref="MalformedModelOutputException"/> class.</summary>
     public MalformedModelOutputException()
@@ -254,6 +334,56 @@ public sealed class MalformedModelOutputException : Exception
     public MalformedModelOutputException(string message, Exception innerException)
         : base(message, innerException)
     {
+    }
+}
+
+/// <summary>Exception carrying safe metadata for a recoverable malformed model invocation.</summary>
+public sealed class MalformedInvocationException : MalformedModelOutputException
+{
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException()
+        : this(CreateCompatibilityDiagnostic("The model emitted a malformed invocation."))
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(string message)
+        : this(CreateCompatibilityDiagnostic(message))
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(string message, Exception innerException)
+        : this(CreateCompatibilityDiagnostic(message), innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(MalformedInvocationDiagnostic diagnostic)
+        : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage)
+    {
+        Diagnostic = diagnostic;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(MalformedInvocationDiagnostic diagnostic, Exception innerException)
+        : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage, innerException)
+    {
+        Diagnostic = diagnostic;
+    }
+
+    /// <summary>Gets the sanitized diagnostic metadata.</summary>
+    public MalformedInvocationDiagnostic Diagnostic { get; }
+
+    private static MalformedInvocationDiagnostic CreateCompatibilityDiagnostic(string message)
+    {
+        return new MalformedInvocationDiagnostic
+        {
+            Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+            SafeMessage = string.IsNullOrWhiteSpace(message)
+                ? "The model emitted a malformed invocation."
+                : message,
+        };
     }
 }
 

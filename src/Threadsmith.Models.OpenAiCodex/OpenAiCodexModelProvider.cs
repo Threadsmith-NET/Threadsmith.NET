@@ -56,6 +56,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 + $"{profileOutputLimit} tokens.");
         }
 
+        var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_profile.Timeout);
         var accessToken = AccessToken;
@@ -64,7 +66,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         while (true)
         {
             attempt++;
-            using var message = CreateRequest(request, accessToken, maximumOutputTokens);
+            using var message = CreateRequest(
+                request,
+                accessToken,
+                maximumOutputTokens,
+                canonicalTools,
+                toolNameMap);
             HttpResponseMessage response;
             try
             {
@@ -84,7 +91,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                     using StreamReader reader = new(stream);
-                    await foreach (var chunk in ReadEventsAsync(reader, timeout.Token).ConfigureAwait(false))
+                    await foreach (var chunk in ReadEventsAsync(reader, toolNameMap, timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
                     }
@@ -137,7 +144,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private HttpRequestMessage CreateRequest(
         ModelStreamRequest request,
         string accessToken,
-        int maximumOutputTokens)
+        int maximumOutputTokens,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        ModelToolWireNameMap toolNameMap)
     {
         JsonObject body = new()
         {
@@ -146,7 +155,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["stream"] = true,
             ["max_output_tokens"] = maximumOutputTokens,
             ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
-            ["input"] = CreateInput(request),
+            ["input"] = CreateInput(request, toolNameMap),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
             ["reasoning"] = new JsonObject
             {
@@ -161,10 +170,10 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             body["parallel_tool_calls"] = allowMultipleToolCalls;
         }
 
-        if (request.Tools.Count > 0)
+        if (canonicalTools.Count > 0)
         {
             JsonArray tools = [];
-            foreach (var tool in ModelToolCanonicalizer.Canonicalize(request.Tools))
+            foreach (var tool in canonicalTools)
             {
                 var strictSchema = tool.PreferStrictArguments
                     ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
@@ -174,7 +183,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 tools.Add(new JsonObject
                 {
                     ["type"] = "function",
-                    ["name"] = tool.Name,
+                    ["name"] = toolNameMap.ToWireName(tool.Name),
                     ["description"] = tool.Description,
                     ["parameters"] = JsonNode.Parse(strictSchema ?? tool.ArgumentsJsonSchema),
                     ["strict"] = strictSchema is not null,
@@ -202,7 +211,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return message;
     }
 
-    private static JsonArray CreateInput(ModelStreamRequest request)
+    private static JsonArray CreateInput(
+        ModelStreamRequest request,
+        ModelToolWireNameMap toolNameMap)
     {
         if (request.Messages.Count == 0)
         {
@@ -231,7 +242,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     ["type"] = "function_call",
                     ["call_id"] = message.ToolCallId,
-                    ["name"] = message.ToolName,
+                    ["name"] = toolNameMap.ToWireName(message.ToolName),
                     ["arguments"] = content,
                 });
                 continue;
@@ -275,9 +286,10 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
         StreamReader reader,
+        ModelToolWireNameMap toolNameMap,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var sawToolCall = false;
+        var pendingToolCalls = new List<PendingCodexToolCall>();
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -313,14 +325,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     break;
                 case "response.output_item.done":
                     if (root.TryGetProperty("item", out var item)
-                        && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal)
-                        && GetString(item, "name") is { Length: > 0 } name)
+                        && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal))
                     {
-                        sawToolCall = true;
-                        yield return new ModelChunk
-                        {
-                            Output = new ToolRequestModelOutput(name, GetString(item, "arguments") ?? "{}"),
-                        };
+                        pendingToolCalls.Add(new PendingCodexToolCall(
+                            GetString(item, "name"),
+                            GetString(item, "arguments")));
                     }
 
                     break;
@@ -331,16 +340,50 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                         yield return new ModelChunk { Usage = usage };
                     }
 
+                    var toolOutputs = CreateCodexToolOutputs(pendingToolCalls, toolNameMap);
+                    foreach (var output in toolOutputs)
+                    {
+                        yield return new ModelChunk { Output = output };
+                    }
+
                     yield return new ModelChunk
                     {
-                        FinishReason = sawToolCall ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop,
+                        FinishReason = toolOutputs.Count > 0 ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop,
                     };
+                    pendingToolCalls.Clear();
                     break;
                 case "response.failed":
                 case "error":
                     throw new ModelProviderException("The Codex Responses stream reported a provider error.");
             }
         }
+    }
+
+    private static IReadOnlyList<ToolRequestModelOutput> CreateCodexToolOutputs(
+        IReadOnlyList<PendingCodexToolCall> pendingToolCalls,
+        ModelToolWireNameMap toolNameMap)
+    {
+        if (pendingToolCalls.Count == 0)
+        {
+            return [];
+        }
+
+        var outputs = new ToolRequestModelOutput[pendingToolCalls.Count];
+        for (var index = 0; index < pendingToolCalls.Count; index++)
+        {
+            var pending = pendingToolCalls[index];
+            var output = new ToolRequestModelOutput(
+                toolNameMap.ToCanonicalName(pending.Name ?? string.Empty),
+                pending.Arguments ?? string.Empty);
+            ModelOutputValidator.ValidateInvocation(
+                output,
+                providerFamily: "openai-codex",
+                toolOrdinal: index,
+                toolCallCount: pendingToolCalls.Count);
+            outputs[index] = output;
+        }
+
+        return outputs;
     }
 
     private static ModelUsage? TryReadUsage(JsonElement root)
@@ -426,4 +469,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ? result
             : null;
     }
+
+    private sealed record PendingCodexToolCall(string? Name, string? Arguments);
 }

@@ -53,7 +53,8 @@ public static class ToolRuntimeTests
                 new TestSanitizer(),
                 NullLogger<SessionApplication>.Instance,
                 pipeline,
-                (_, _) => Task.FromResult(CreateContext(repository)));
+                (_, _) => Task.FromResult(CreateContext(repository)),
+                toolRegistry: pipeline.Registry);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
             var runId = await application.HandleAsync(
@@ -1053,9 +1054,11 @@ public static class ToolRuntimeTests
             new FindImplementationsTool(resolver).Definition.Description,
         ];
 
-        Assert.All(
-            descriptions,
-            description => Assert.Contains("MUST use before search", description, StringComparison.Ordinal));
+        Assert.All(descriptions, description =>
+        {
+            Assert.Contains("MUST use", description, StringComparison.Ordinal);
+            Assert.Contains("before search", description, StringComparison.Ordinal);
+        });
         Assert.Contains(
             "interface implementations",
             new FindImplementationsTool(resolver).Definition.Description,
@@ -1854,6 +1857,84 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Conversation preflight rejects one invalid sibling before any sibling can execute.</summary>
+    [Fact]
+    public static async Task BatchPreflight_InvalidSibling_RejectsBeforeExecution()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var executionOrder = new ConcurrentQueue<string>();
+            var pipeline = CreatePipeline(
+                events,
+                [new OrderedReadTool("valid_read", ToolConcurrencyMode.ParallelSafe, executionOrder)]);
+            var context = CreateContext(repository);
+            ToolBatchRequest[] requests =
+            [
+                CreateBatchRequest(0, "call-invalid", "valid_read", context, string.Empty),
+                CreateBatchRequest(1, "call-valid", "valid_read", context),
+            ];
+
+            var preflight = pipeline.PreflightBatch(requests);
+
+            Assert.False(preflight.Succeeded);
+            Assert.Equal(0, preflight.FailedOrdinal);
+            Assert.Equal("valid_read", preflight.FailedToolId);
+            Assert.Equal(ToolErrorClassification.InvalidArguments, preflight.ErrorClassification);
+            Assert.Empty(executionOrder);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Prepared batch invocation consumes the exact preflight registration snapshot.</summary>
+    [Fact]
+    public static async Task BatchPreparedInvocation_UsesPreflightRegistrationSnapshot()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var executionOrder = new ConcurrentQueue<string>();
+            var registry = new ToolRegistry([]);
+            var oldTool = new LabeledDynamicTool("dynamic_read", "old", executionOrder);
+            var newTool = new LabeledDynamicTool("dynamic_read", "new", executionOrder);
+            var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "test-extension");
+            registry.RegisterOrReplace(oldTool, source);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                new TestSanitizer(),
+                NullLogger<ToolInvocationPipeline>.Instance,
+                CreateBudget());
+            var context = CreateContext(repository);
+            ToolBatchRequest[] requests =
+            [
+                CreateBatchRequest(0, "call-dynamic", "dynamic_read", context),
+            ];
+            var preflight = pipeline.PreflightBatch(requests);
+            var preparation = Assert.IsType<ToolBatchPreparation>(preflight.Preparation);
+            registry.RegisterOrReplace(newTool, source, oldTool);
+
+            var preparedResults = await pipeline.InvokePreparedBatchAsync(preparation);
+            var ordinaryResults = await pipeline.InvokeBatchAsync(requests);
+
+            Assert.True(preflight.Succeeded);
+            Assert.True(Assert.Single(preparedResults).Result.Succeeded);
+            Assert.True(Assert.Single(ordinaryResults).Result.Succeeded);
+            Assert.Equal(["old", "new"], executionOrder);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Fail-fast drains and returns the cancelled outcome of every started sibling.</summary>
     [Fact]
     public static async Task Batch_FailFastCancellation_PreservesStartedResults()
@@ -2546,6 +2627,41 @@ public static class ToolRuntimeTests
             _executionOrder.Enqueue(Definition.Id);
             return Task.FromResult(new ToolExecution<BarrierReadOutput>(
                 new BarrierReadOutput(Definition.Id),
+                []));
+        }
+
+        protected override void ValidateInput(BarrierReadInput input)
+        {
+        }
+    }
+
+    private sealed class LabeledDynamicTool : Tool<BarrierReadInput, BarrierReadOutput>
+    {
+        private readonly ToolDefinition _definition;
+        private readonly string _label;
+        private readonly ConcurrentQueue<string> _executionOrder;
+
+        public LabeledDynamicTool(
+            string id,
+            string label,
+            ConcurrentQueue<string> executionOrder)
+        {
+            _label = label;
+            _executionOrder = executionOrder;
+            _definition = CreateReadDefinition(id, ToolConcurrencyMode.SerializedPerRegistration, 1);
+        }
+
+        public override ToolDefinition Definition => _definition;
+
+        public override Task<ToolExecution<BarrierReadOutput>> ExecuteAsync(
+            BarrierReadInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _executionOrder.Enqueue(_label);
+            return Task.FromResult(new ToolExecution<BarrierReadOutput>(
+                new BarrierReadOutput(_label),
                 []));
         }
 

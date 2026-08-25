@@ -122,8 +122,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 84 | `plan-84-context-aware-code-explore-source-deduplication.md` | Context-proven cross-call source-range deduplication |
 | 85 | `plan-85-code-explore-associated-non-csharp-artifacts.md` | Bounded associated prompt, configuration, and project artifacts |
 | 86 | `plan-86-pi-style-active-turn-summary.md` | Pi-style active-turn summary compaction |
-| 87 | `plan-87-bounded-malformed-tool-invocation-correction.md` | Bounded malformed tool-invocation correction |
-| 88 | `plan-88-unified-model-correction-loop-substrate.md` | Unified model correction-loop substrate |
+| 88 | `plan-88-unified-model-correction-loop-substrate.md` | Conversation-native corrective messages |
+| 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline
 

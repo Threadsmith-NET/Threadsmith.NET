@@ -168,6 +168,7 @@ internal static class ConfigurationBootstrap
             ["budget:cost"] = "0",
             ["execution:maxModelRounds"] = ExecutionLimits.DefaultMaxModelRounds.ToString(CultureInfo.InvariantCulture),
             ["execution:maxPlanningToolRounds"] = ExecutionLimits.DefaultMaxPlanningToolRounds.ToString(CultureInfo.InvariantCulture),
+            ["execution:maxCorrectiveTurns"] = "3",
             ["execution:maxStructuredOutputCharacters"] = (8 * 1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["execution:toolResultPreviewCharacters"] = "4096",
             ["model:http:pooledConnectionLifetimeSeconds"] = "900",

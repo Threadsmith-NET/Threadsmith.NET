@@ -28,20 +28,24 @@ public sealed record ExecutionLimits
     public int MaxPlanningToolRounds { get; init; } = DefaultMaxPlanningToolRounds;
 
     /// <summary>
-    /// Maximum malformed <c>propose_plan</c> argument repair attempts before the host fails closed.
+    /// Maximum active-turn corrective messages for recoverable malformed or invalid model requests.
     /// Default: 3.
+    /// </summary>
+    public int MaxCorrectiveTurns { get; init; } = 3;
+
+    /// <summary>
+    /// Legacy malformed <c>propose_plan</c> repair budget retained for compatibility until tests and
+    /// checkpoint-facing contracts finish migrating to <see cref="MaxCorrectiveTurns"/>.
     /// </summary>
     public int MaxPlanProposalRepairAttempts { get; init; } = 3;
 
     /// <summary>
-    /// Maximum automatic plan-revision attempts after cheap plan sanity checks find repairable
-    /// structured-scope issues before any approval prompt. Default: 3.
+    /// Legacy plan-revision repair budget retained for compatibility until plan-sanity repair migrates.
     /// </summary>
     public int MaxPlanRevisionRepairAttempts { get; init; } = 3;
 
     /// <summary>
-    /// Maximum mutation-proposal attempts after host validation/staging rejects repairable
-    /// model-authored text evidence. Default: 3.
+    /// Legacy mutation-proposal repair budget retained for compatibility until mutation correction migrates.
     /// </summary>
     public int MaxMutationProposalRepairAttempts { get; init; } = 3;
 

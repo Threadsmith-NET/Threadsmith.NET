@@ -290,6 +290,47 @@ public sealed class Plan50OpenAiCodexTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>
+    [Fact]
+    public async Task Provider_ProviderUnsafeToolNames_AreAliasedAndMappedBack()
+    {
+        const string stream = """
+            data: {"type":"response.output_item.done","item":{"type":"function_call","name":"greenstreet-cre_search_sectors","arguments":"{}"}}
+
+            data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2}}}
+
+            data: [DONE]
+
+            """;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var chunks = await provider.StreamAsync(
+            CreateStreamRequest() with
+            {
+                Tools =
+                [
+                    new ModelToolDefinition
+                    {
+                        Name = "greenstreet-cre:search_sectors",
+                        Description = "Search Green Street sectors.",
+                        ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+                    },
+                ],
+            },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"name\":\"greenstreet-cre_search_sectors\"", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"name\":\"greenstreet-cre:search_sectors\"", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
+        var tool = Assert.IsType<ToolRequestModelOutput>(
+            Assert.Single(chunks, chunk => chunk.Output is not null).Output);
+        Assert.Equal("greenstreet-cre:search_sectors", tool.ToolName);
+        Assert.Equal("{}", tool.ArgumentsJson);
+    }
+
     /// <summary>A pre-stream authentication rejection refreshes and safely replays exactly once.</summary>
     [Fact]
     public async Task Provider_AuthenticationRejection_RefreshesAndReplaysOnce()

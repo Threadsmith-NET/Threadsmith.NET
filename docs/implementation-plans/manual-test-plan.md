@@ -1,5 +1,16 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-253 — Conversation-native corrective turns and MCP tool-name aliasing
+
+1. Configure `execution:maxCorrectiveTurns` to the default value and run a controlled model/provider fixture whose first tool response contains malformed JSON arguments, then a corrected valid call. Confirm the malformed payload is not executed, logged, persisted, or echoed; the next request contains bounded corrective feedback; and the corrected call can proceed.
+2. In a request with two sibling tool calls, make one sibling unavailable, duplicate, phase-invalid, or argument-invalid before execution. Confirm the entire batch is rejected before any sibling starts, every correlated call receives corrective tool feedback, no valid sibling result is retained as evidence, and a corrected full batch can proceed within the budget.
+3. Exhaust the corrective-turn budget and cancel during a corrective retry. Confirm Threadsmith fails closed with sanitized diagnostic classification, no partial execution, and no orphaned tool, MCP, process, or provider operation.
+4. Connect an enabled MCP fixture whose canonical imported tool id contains a profile separator such as `fixture:search_sectors`. Confirm host configuration, `/tools`, MCP approval/status, diagnostics, events, and logs use the canonical id while OpenAI-family model requests use only provider-safe per-request aliases and map successful model calls back to the canonical id before invocation.
+5. Repeat interactively and headlessly, inspect raw-model logging when explicitly enabled, and confirm raw malformed arguments, provider response bodies, headers, tokens, secrets, and MCP server content are not exposed outside their privileged diagnostic boundary.
+
+Expected: recoverable malformed or invalid model-authored requests become bounded active-turn corrective messages controlled by `execution:maxCorrectiveTurns`. The host never repairs or executes malformed requests, atomically rejects invalid sibling batches before execution, purges corrective history after success, and preserves canonical MCP tool identity inside Threadsmith while adapting provider wire names safely.
+
+
 ## MTP-252 — Associated prompt, configuration, and project artifacts
 
 1. Open a disposable trusted C# repository where a response-builder method selects a checked-in prompt template, reads a bounded JSON option, and references an additional document or project resource.

@@ -198,7 +198,7 @@ internal static class ApplicationComposition
                         ProjectInventory = projectInventory,
                         Stages = validationStages,
                     },
-                    CorrectionBudget = host.Configuration.GetValue("execution:correctionBudget", 3),
+                    CorrectionBudget = host.ExecutionLimits.MaxCorrectiveTurns,
                 };
             },
             tools.HookCoordinator,

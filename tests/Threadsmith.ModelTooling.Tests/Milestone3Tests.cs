@@ -1152,6 +1152,52 @@ public static class Milestone3Tests
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
     }
 
+    /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_ProviderUnsafeToolNames_AreAliasedAndMappedBack()
+    {
+        string? requestBody = null;
+        const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"greenstreet-cre_search_sectors\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return Response(HttpStatusCode.OK, stream);
+        });
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(handler),
+            CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1));
+
+        var chunks = await CollectAsync(provider, new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "search sectors",
+            RequiredCapabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+            },
+            Tools =
+            [
+                new ModelToolDefinition
+                {
+                    Name = "greenstreet-cre:search_sectors",
+                    Description = "Search Green Street sectors.",
+                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+                },
+            ],
+        });
+
+        Assert.NotNull(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
+        var function = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray())
+            .GetProperty("function");
+        Assert.Equal("greenstreet-cre_search_sectors", function.GetProperty("name").GetString());
+        var tool = Assert.IsType<ToolRequestModelOutput>(
+            Assert.Single(chunks, chunk => chunk.Output is not null).Output);
+        Assert.Equal("greenstreet-cre:search_sectors", tool.ToolName);
+        Assert.Equal("{}", tool.ArgumentsJson);
+    }
+
     /// <summary>Ordinary inspection tools retain canonical schemas without strict wire enforcement.</summary>
     [Fact]
     public static async Task OpenAiAdapter_OrdinaryToolSchema_OmitsStrictAndAllowsMultipleCalls()
@@ -1614,9 +1660,9 @@ public static class Milestone3Tests
         Assert.Equal(content, Assert.Single(chunks, chunk => chunk.Text is not null).Text);
     }
 
-    /// <summary>Empty arguments from compatible providers normalize to an empty JSON object.</summary>
+    /// <summary>Empty arguments from compatible providers are rejected instead of silently repaired.</summary>
     [Fact]
-    public static async Task OpenAiAdapter_EmptyToolArguments_NormalizesEmptyObject()
+    public static async Task OpenAiAdapter_EmptyToolArguments_AreRejected()
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"datetime\",\"arguments\":\"\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
@@ -1638,17 +1684,16 @@ public static class Milestone3Tests
             ],
         };
 
-        var chunks = await CollectAsync(provider, request);
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() =>
+            CollectAsync(provider, request));
 
-        var tool = Assert.IsType<ToolRequestModelOutput>(
-            Assert.Single(chunks, chunk => chunk.Output is not null).Output);
-        Assert.Equal("datetime", tool.ToolName);
-        Assert.Equal("{}", tool.ArgumentsJson);
+        Assert.Equal(MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        Assert.Equal("datetime", exception.Diagnostic.ToolName);
     }
 
-    /// <summary>Malformed arguments for a schema with no accepted input normalize to an empty object.</summary>
+    /// <summary>Malformed arguments for a schema with no accepted input are rejected instead of repaired.</summary>
     [Fact]
-    public static async Task OpenAiAdapter_MalformedNoInputToolArguments_NormalizesEmptyObject()
+    public static async Task OpenAiAdapter_MalformedNoInputToolArguments_AreRejected()
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"datetime\",\"arguments\":\"{datetime}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
@@ -1669,11 +1714,11 @@ public static class Milestone3Tests
             ],
         };
 
-        var chunks = await CollectAsync(provider, request);
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() =>
+            CollectAsync(provider, request));
 
-        var tool = Assert.IsType<ToolRequestModelOutput>(
-            Assert.Single(chunks, chunk => chunk.Output is not null).Output);
-        Assert.Equal("{}", tool.ArgumentsJson);
+        Assert.Equal(MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        Assert.Equal("datetime", exception.Diagnostic.ToolName);
     }
 
     /// <summary>Malformed arguments remain rejected when the selected tool accepts input.</summary>
@@ -1699,7 +1744,11 @@ public static class Milestone3Tests
             ],
         };
 
-        await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(provider, request));
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() =>
+            CollectAsync(provider, request));
+
+        Assert.Equal(MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        Assert.Equal("read_file", exception.Diagnostic.ToolName);
     }
 
     /// <summary>Malformed arguments are never discarded for open or composed object schemas.</summary>
@@ -1731,7 +1780,11 @@ public static class Milestone3Tests
             ],
         };
 
-        await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(provider, request));
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() =>
+            CollectAsync(provider, request));
+
+        Assert.Equal(MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        Assert.Equal("dynamic_tool", exception.Diagnostic.ToolName);
     }
 
     /// <summary>Empty arguments remain invalid when the selected tool requires input.</summary>
@@ -1757,7 +1810,11 @@ public static class Milestone3Tests
             ],
         };
 
-        await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(provider, request));
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() =>
+            CollectAsync(provider, request));
+
+        Assert.Equal(MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        Assert.Equal("read_file", exception.Diagnostic.ToolName);
     }
 
     /// <summary>Missing provider usage is estimated and remains enforceable by the cost budget.</summary>
@@ -1864,8 +1921,9 @@ public static class Milestone3Tests
             () => CollectAsync(provider));
 
         Assert.Equal(RetryClassification.MalformedOutput, ModelFailureClassifier.Classify(exception));
-        Assert.Throws<MalformedModelOutputException>(() => ModelOutputValidator.Validate(
+        var invocation = Assert.Throws<MalformedInvocationException>(() => ModelOutputValidator.Validate(
             new ToolRequestModelOutput("read_file", "[]")));
+        Assert.Equal(MalformedInvocationFailureKind.NonObjectArguments, invocation.Diagnostic.Kind);
         Assert.Throws<MalformedModelOutputException>(() => ModelOutputValidator.Validate(
             new TextModelOutput("valid") { SchemaVersion = 2 }));
     }

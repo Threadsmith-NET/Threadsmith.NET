@@ -15,6 +15,18 @@ public interface IToolInvocationPipeline
         ToolInvocationRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Validates a complete sibling set without publishing events, requesting approval, or executing tools.</summary>
+    ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests);
+
+    /// <summary>Executes a preflight-prepared sibling set against the validated registration snapshot.</summary>
+    Task<IReadOnlyList<ToolBatchResult>> InvokePreparedBatchAsync(
+        ToolBatchPreparation preparation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        return InvokeBatchAsync(preparation.Requests, cancellationToken);
+    }
+
     /// <summary>Executes a complete sibling set in deterministic conflict-free waves.</summary>
     async Task<IReadOnlyList<ToolBatchResult>> InvokeBatchAsync(
         IReadOnlyList<ToolBatchRequest> requests,
@@ -92,6 +104,73 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     }
 
     /// <inheritdoc />
+    public ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        if (requests.Count == 0)
+        {
+            return ToolBatchPreflightResult.Success;
+        }
+
+        var duplicate = requests
+            .GroupBy(request => request.CorrelationId, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1)
+            ?.OrderBy(request => request.Ordinal)
+            .Skip(1)
+            .FirstOrDefault();
+        if (duplicate is not null)
+        {
+            return new ToolBatchPreflightResult
+            {
+                FailedOrdinal = duplicate.Ordinal,
+                FailedToolId = duplicate.Invocation.ToolId,
+                ErrorClassification = ToolErrorClassification.InvalidArguments,
+                SafeReason = "Sibling tool-call correlation identifiers must be unique.",
+            };
+        }
+
+        var planner = new ToolConflictPlanner(_registry, _parallelOptions);
+        var waves = planner.Plan(requests);
+        foreach (var planned in waves.SelectMany(static wave => wave).OrderBy(item => item.Request.Ordinal))
+        {
+            if (planned.PreparationError is not null)
+            {
+                return new ToolBatchPreflightResult
+                {
+                    FailedOrdinal = planned.Request.Ordinal,
+                    FailedToolId = planned.Request.Invocation.ToolId,
+                    ErrorClassification = ToolErrorClassification.InvalidArguments,
+                    SafeReason = "Tool arguments do not match the declared input schema or host invariants.",
+                };
+            }
+        }
+
+        return new ToolBatchPreflightResult
+        {
+            Succeeded = true,
+            Preparation = new ToolBatchPreparation(waves),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ToolBatchResult>> InvokePreparedBatchAsync(
+        ToolBatchPreparation preparation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        if (preparation.Requests.Count == 0)
+        {
+            return [];
+        }
+
+        return await InvokePlannedWavesAsync(
+            preparation.Requests,
+            preparation.Waves,
+            usePreparedSnapshot: true,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<ToolBatchResult>> InvokeBatchAsync(
         IReadOnlyList<ToolBatchRequest> requests,
         CancellationToken cancellationToken = default)
@@ -109,6 +188,36 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
         var planner = new ToolConflictPlanner(_registry, _parallelOptions);
         var waves = planner.Plan(requests);
+        return await InvokePlannedWavesAsync(
+            requests,
+            waves,
+            usePreparedSnapshot: false,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ToolInvocationResult> InvokeAsync(
+        ToolInvocationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ToolId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ArgumentsJson);
+        ArgumentNullException.ThrowIfNull(request.Context);
+        return await InvokeCoreAsync(
+            request,
+            preparationError: null,
+            preparedRegistration: null,
+            returnCancellationResult: false,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ToolBatchResult>> InvokePlannedWavesAsync(
+        IReadOnlyList<ToolBatchRequest> requests,
+        IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> waves,
+        bool usePreparedSnapshot,
+        CancellationToken cancellationToken)
+    {
         var results = new List<ToolBatchResult>(requests.Count);
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var wave in waves)
@@ -116,12 +225,16 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             cancellationToken.ThrowIfCancellationRequested();
             Task<ToolBatchResult>[] tasks = [.. wave.Select(async planned =>
             {
-                var result = await InvokeCoreAsync(
-                    planned.Request.Invocation with
+                var invocation = usePreparedSnapshot
+                    ? planned.Request.Invocation
+                    : planned.Request.Invocation with
                     {
                         ExpectedRegistration = planned.Registration?.Tool,
-                    },
+                    };
+                var result = await InvokeCoreAsync(
+                    invocation,
                     planned.PreparationError,
+                    usePreparedSnapshot ? planned.Registration : null,
                     returnCancellationResult: true,
                     batchCancellation.Token);
                 if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
@@ -163,25 +276,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         return [.. results.OrderBy(result => result.Ordinal)];
     }
 
-    /// <inheritdoc />
-    public async Task<ToolInvocationResult> InvokeAsync(
-        ToolInvocationRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.ToolId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.ArgumentsJson);
-        ArgumentNullException.ThrowIfNull(request.Context);
-        return await InvokeCoreAsync(
-            request,
-            preparationError: null,
-            returnCancellationResult: false,
-            cancellationToken);
-    }
-
     private async Task<ToolInvocationResult> InvokeCoreAsync(
         ToolInvocationRequest request,
         string? preparationError,
+        ToolRegistration? preparedRegistration,
         bool returnCancellationResult,
         CancellationToken cancellationToken)
     {
@@ -191,14 +289,17 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var invocationId = ToolInvocationId.New();
         var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
-        ToolRegistration? registration;
-        try
+        var registration = preparedRegistration;
+        if (registration is null)
         {
-            registration = _registry.GetRegistration(request.ToolId);
-        }
-        catch (KeyNotFoundException)
-        {
-            registration = null;
+            try
+            {
+                registration = _registry.GetRegistration(request.ToolId);
+            }
+            catch (KeyNotFoundException)
+            {
+                registration = null;
+            }
         }
 
         var source = registration?.Source
@@ -225,8 +326,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         try
         {
             tool = registration?.Tool ?? request.ExpectedRegistration ?? _registry.Get(request.ToolId);
-            if (registration is not null
-                && request.ExpectedRegistration is not null
+            if (request.ExpectedRegistration is not null
                 && !ReferenceEquals(tool, request.ExpectedRegistration))
             {
                 throw new ToolArgumentValidationException(

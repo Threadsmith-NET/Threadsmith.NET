@@ -235,10 +235,7 @@ public static class RepoConfigTests
         var config = LoadConfigExample();
         Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, config.GetValue("execution:maxModelRounds", 0));
         Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, config.GetValue("execution:maxPlanningToolRounds", 0));
-        Assert.Equal(3, config.GetValue("execution:maxPlanProposalRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:maxPlanRevisionRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:maxMutationProposalRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:correctionBudget", 0));
+        Assert.Equal(3, config.GetValue("execution:maxCorrectiveTurns", 0));
         Assert.Equal(32, config.GetValue("agents:queueCapacity", 0));
         Assert.Equal(4, config.GetValue("agents:maxActiveGlobal", 0));
         Assert.Equal(3, config.GetValue("agents:maxActivePerParent", 0));
@@ -254,18 +251,16 @@ public static class RepoConfigTests
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
     }
 
-    /// <summary>The production composition root binds the documented model-repair limit keys.</summary>
+    /// <summary>The production composition root binds the documented corrective-turn limit key.</summary>
     [Fact]
-    public static void HostFoundationBindsModelRepairLimits()
+    public static void HostFoundationBindsCorrectiveTurnLimit()
     {
         var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ConfigExamplePath) ?? ".", ".."));
         var source = File.ReadAllText(Path.Combine(repoRoot, "src", "Threadsmith.App", "HostFoundation.cs"));
-        Assert.Contains("MaxPlanProposalRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxPlanProposalRepairAttempts", source, StringComparison.Ordinal);
-        Assert.Contains("MaxPlanRevisionRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxPlanRevisionRepairAttempts", source, StringComparison.Ordinal);
-        Assert.Contains("MaxMutationProposalRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxMutationProposalRepairAttempts", source, StringComparison.Ordinal);
+        Assert.Contains("execution:maxCorrectiveTurns", source, StringComparison.Ordinal);
+        Assert.Contains("MaxCorrectiveTurns = maximumCorrectiveTurns", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("execution:maxPlanProposalRepairAttempts", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("execution:maxMutationProposalRepairAttempts", source, StringComparison.Ordinal);
     }
 
     /// <summary>M8 persistence, retention, MCP, and diagnostic keys bind to their documented values (plan-18/19/20).</summary>

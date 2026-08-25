@@ -285,7 +285,7 @@ public sealed class RepositoryMemoryGovernor : IRepositoryMemoryGovernor
         var snapshot = await _store.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
         var superseded = snapshot.Items.FirstOrDefault(item => item.Id == command.MemoryId)
             ?? throw new InvalidOperationException("The repository memory item to supersede was not found.");
-        IReadOnlyList<RepositoryMemoryStateUpdate> validityChanges = superseded.Validity == RepositoryMemoryValidity.Active
+        var validityChanges = superseded.Validity == RepositoryMemoryValidity.Active
             ? []
             : CreateActiveItemBoundUpdates(
                 snapshot,

@@ -40,6 +40,7 @@ public sealed partial class SessionApplication
                 maximumPlanningToolRounds,
                 loopState,
                 cancellationToken);
+            invocationContext = round.InvocationContext;
             var outcome = await ExecuteConversationRoundAsync(
                 round,
                 loopState,
@@ -138,6 +139,10 @@ public sealed partial class SessionApplication
                 cancellationToken);
             loopState.FrozenContext = context;
         }
+
+        invocationContext = AttachModelBudgetToInvocationContext(
+            invocationContext,
+            context?.ModelResolution);
 
         await AssessActiveTurnCompactionAsync(
             runId,
@@ -1524,6 +1529,26 @@ public sealed partial class SessionApplication
             requestMessages,
             wireEstimate,
             emergencyReductionApplied);
+    }
+
+    private static ToolInvocationContext? AttachModelBudgetToInvocationContext(
+        ToolInvocationContext? invocationContext,
+        ModelResolution? modelResolution)
+    {
+        if (invocationContext is null || modelResolution is null)
+        {
+            return invocationContext;
+        }
+
+        var effectiveInputTokens = Math.Max(
+            1,
+            modelResolution.ContextWindow - modelResolution.EffectiveRequestOutputTokenReserve);
+        return invocationContext with
+        {
+            ModelContextWindowTokens = modelResolution.ContextWindow,
+            ModelRequestOutputReserveTokens = modelResolution.EffectiveRequestOutputTokenReserve,
+            ModelEffectiveInputBudgetTokens = effectiveInputTokens,
+        };
     }
 
     private static ModelStreamRequest CreateModelStreamRequest(

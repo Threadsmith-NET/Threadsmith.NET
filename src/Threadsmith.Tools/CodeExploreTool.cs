@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Resolves exact C# anchors and returns bounded current source from one semantic generation.</summary>
@@ -9,7 +10,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreRequest, CodeExploreResult>(
         "code_explore",
-        "Primary source-bearing C# exploration tool for exact symbol, stable symbol id, and repository-relative C# path anchors. Use before find_symbol plus read_file when the question needs current declaration source. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. Unanchored natural-language discovery is not supported yet and returns guidance.",
+        "Primary source-bearing C# exploration tool for natural-language C# architecture or behavior questions, exact symbols, stable symbol ids, and repository-relative C# path anchors. Use before find_symbol, search, or read_file when the question needs current declaration source, structural survey, flow, or compact impact evidence. Natural-language query terms drive bounded deterministic Roslyn declaration discovery/ranking when exact anchors are not known; they are inert only in that they are never executed and never provider-reranked. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. Do not answer implementation questions from this tool description; when source is available, inspect the repository implementation and cite returned files/declarations. Use returned continuation anchors for focused follow-up.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,
@@ -39,8 +40,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Code exploration requires an opened workspace.");
         var sourceReader = new PolicyCodeExploreSourceReader(context.Invocation);
-        var result = await _service.QueryCodeExploreAsync(workspaceId, input, sourceReader, cancellationToken);
+        var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
+        var result = await _service.QueryCodeExploreAsync(workspaceId, effectiveInput, sourceReader, cancellationToken);
+        result = ApplyBudgetSource(result, budgetSource);
         result = Confine(result, context.Invocation);
+        result = BoundResultForModelBudget(result, context.Invocation);
         ToolProvenanceSource[] sources = [
             .. result.FileSections.Select(section => new ToolProvenanceSource(
                 "file",
@@ -157,6 +161,352 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         }
     }
 
+    private static CodeExploreRequest ApplyModelBudget(
+        CodeExploreRequest input,
+        ToolInvocationContext context,
+        out string? budgetSource)
+    {
+        budgetSource = null;
+        if (context.ModelEffectiveInputBudgetTokens is not { } effectiveInputTokens || effectiveInputTokens <= 0)
+        {
+            return input;
+        }
+
+        var modelSourceCharacters = (int)Math.Clamp(
+            (long)effectiveInputTokens * 3,
+            1,
+            100_000);
+        var maximumSourceCharacters = Math.Min(
+            input.Limits.MaximumSourceCharacters,
+            modelSourceCharacters);
+        var maximumPerFileSourceCharacters = Math.Min(
+            input.Limits.MaximumPerFileSourceCharacters,
+            maximumSourceCharacters);
+        if (maximumSourceCharacters == input.Limits.MaximumSourceCharacters
+            && maximumPerFileSourceCharacters == input.Limits.MaximumPerFileSourceCharacters)
+        {
+            return input;
+        }
+
+        budgetSource = "request source limits clamped by the selected model effective input budget "
+            + $"({effectiveInputTokens} tokens after output reserve "
+            + $"{context.ModelRequestOutputReserveTokens ?? 0} tokens; 3 source characters per token ceiling).";
+        return input with
+        {
+            Limits = input.Limits with
+            {
+                MaximumSourceCharacters = maximumSourceCharacters,
+                MaximumPerFileSourceCharacters = maximumPerFileSourceCharacters,
+            },
+        };
+    }
+
+    private static CodeExploreResult ApplyBudgetSource(
+        CodeExploreResult result,
+        string? budgetSource)
+    {
+        return budgetSource is null || result.Allocation is null
+            ? result
+            : result with { Allocation = result.Allocation with { BudgetSource = budgetSource } };
+    }
+
+    private static CodeExploreResult BoundResultForModelBudget(
+        CodeExploreResult result,
+        ToolInvocationContext context)
+    {
+        if (context.ModelEffectiveInputBudgetTokens is not { } effectiveInputTokens || effectiveInputTokens <= 0)
+        {
+            return result;
+        }
+
+        var maximumSerializedBytes = (int)Math.Clamp((long)effectiveInputTokens * 3, 1024, 1024 * 1024);
+        if (GetSerializedByteCount(result) <= maximumSerializedBytes)
+        {
+            return result;
+        }
+
+        var bounded = result;
+        bounded = TrimCandidateSummaries(bounded, maximumSerializedBytes);
+        bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
+        bounded = TrimFlow(bounded, maximumSerializedBytes);
+        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
+        bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
+        bounded = TrimFileSections(bounded, maximumSerializedBytes);
+        if (GetSerializedByteCount(bounded) <= maximumSerializedBytes)
+        {
+            return bounded;
+        }
+
+        var minimal = bounded with
+        {
+            FileSections = [],
+            ContinuationTargets = [],
+            Flow = null,
+            BlastRadius = null,
+            CandidateSummaries = [],
+            Allocation = bounded.Allocation is null
+                ? null
+                : bounded.Allocation with
+                {
+                    SpentSourceCharacters = 0,
+                    Files = [],
+                },
+            ResolvedAnchors = bounded.ResolvedAnchors
+                .Select(anchor => anchor with { Alternatives = [] })
+                .ToArray(),
+            Omissions = AddResultBoundOmission(bounded.Omissions),
+            Coverage = bounded.Coverage with
+            {
+                SourceComplete = false,
+                SymbolResolutionComplete = false,
+                OutputComplete = false,
+                Omissions = AddResultBoundOmission(bounded.Coverage.Omissions),
+            },
+        };
+        return minimal;
+    }
+
+    private static CodeExploreResult TrimCandidateSummaries(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var summaries = result.CandidateSummaries;
+        while (summaries is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            summaries = summaries.Take(summaries.Count / 2).ToArray();
+            result = result with
+            {
+                CandidateSummaries = summaries,
+                Discovery = result.Discovery is null
+                    ? null
+                    : result.Discovery with { CandidateLimitReached = true },
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimBlastRadius(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var blastRadius = result.BlastRadius;
+        while (blastRadius is { Items.Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            var items = blastRadius.Items.Take(blastRadius.Items.Count / 2).ToArray();
+            blastRadius = blastRadius with
+            {
+                Items = items,
+                Omissions = AddResultBoundOmission(blastRadius.Omissions),
+            };
+            result = result with
+            {
+                BlastRadius = blastRadius,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimFlow(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var flow = result.Flow;
+        while (flow is not null && HasFlowMetadata(flow) && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            flow = flow with
+            {
+                Paths = TakeHalf(flow.Paths),
+                Nodes = TakeHalf(flow.Nodes),
+                Edges = TakeHalf(flow.Edges),
+                DispatchBranches = TakeHalf(flow.DispatchBranches),
+                Boundaries = TakeHalf(flow.Boundaries),
+                Traversal = flow.Traversal with
+                {
+                    IsComplete = false,
+                    Omissions = AddResultBoundOmission(flow.Traversal.Omissions),
+                },
+            };
+            result = result with
+            {
+                Flow = flow,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimContinuationTargets(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        while (result.ContinuationTargets.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            result = result with
+            {
+                ContinuationTargets = result.ContinuationTargets.Take(result.ContinuationTargets.Count / 2).ToArray(),
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimAnchorAlternatives(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        if (GetSerializedByteCount(result) <= maximumSerializedBytes
+            || !result.ResolvedAnchors.Any(anchor => anchor.Alternatives.Count > 0))
+        {
+            return result;
+        }
+
+        return result with
+        {
+            ResolvedAnchors = result.ResolvedAnchors
+                .Select(anchor => anchor with { Alternatives = [] })
+                .ToArray(),
+            Omissions = AddResultBoundOmission(result.Omissions),
+            Coverage = result.Coverage with
+            {
+                SymbolResolutionComplete = false,
+                OutputComplete = false,
+                Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+            },
+        };
+    }
+
+    private static CodeExploreResult TrimFileSections(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        while (result.FileSections.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            var fileSections = result.FileSections.Take(result.FileSections.Count / 2).ToArray();
+            result = result with
+            {
+                FileSections = fileSections,
+                Flow = NullRemovedSourceSectionIndexes(result.Flow, fileSections.Length),
+                Allocation = TrimAllocationToFileSections(result.Allocation, fileSections),
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    SourceComplete = false,
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreFlow? NullRemovedSourceSectionIndexes(
+        CodeExploreFlow? flow,
+        int retainedSectionCount)
+    {
+        if (flow is null)
+        {
+            return null;
+        }
+
+        return flow with
+        {
+            Nodes = flow.Nodes.Select(node => node with
+            {
+                SourceSectionIndex = RetainSourceSectionIndex(node.SourceSectionIndex, retainedSectionCount),
+            }).ToArray(),
+            DispatchBranches = flow.DispatchBranches.Select(branch => branch with
+            {
+                Implementations = branch.Implementations.Select(target => target with
+                {
+                    SourceSectionIndex = RetainSourceSectionIndex(target.SourceSectionIndex, retainedSectionCount),
+                }).ToArray(),
+            }).ToArray(),
+        };
+    }
+
+    private static int? RetainSourceSectionIndex(int? sourceSectionIndex, int retainedSectionCount)
+    {
+        return sourceSectionIndex is >= 0 && sourceSectionIndex < retainedSectionCount
+            ? sourceSectionIndex
+            : null;
+    }
+
+    private static CodeExploreAllocationSummary? TrimAllocationToFileSections(
+        CodeExploreAllocationSummary? allocation,
+        IReadOnlyList<CodeExploreFileSection> fileSections)
+    {
+        if (allocation is null)
+        {
+            return null;
+        }
+
+        var retainedPaths = fileSections
+            .Select(section => section.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var files = allocation.Files
+            .Where(file => retainedPaths.Contains(file.FilePath))
+            .ToArray();
+        return allocation with
+        {
+            SpentSourceCharacters = files.Sum(file => file.SpentCharacters),
+            Files = files,
+        };
+    }
+
+    private static T[] TakeHalf<T>(IReadOnlyList<T> items)
+    {
+        return [.. items.Take(items.Count / 2)];
+    }
+
+    private static bool HasFlowMetadata(CodeExploreFlow flow)
+    {
+        return flow.Paths.Count > 0
+            || flow.Nodes.Count > 0
+            || flow.Edges.Count > 0
+            || flow.DispatchBranches.Count > 0
+            || flow.Boundaries.Count > 0;
+    }
+
+    private static int GetSerializedByteCount(CodeExploreResult result)
+    {
+        return JsonSerializer.SerializeToUtf8Bytes(result).Length;
+    }
+
+    private static IReadOnlyList<string> AddResultBoundOmission(IReadOnlyList<string> omissions)
+    {
+        const string omission = "Code exploration metadata was bounded to fit the selected model request budget.";
+        return omissions.Contains(omission, StringComparer.Ordinal)
+            ? omissions
+            : [.. omissions, omission];
+    }
+
     private static CodeExploreResult Confine(CodeExploreResult result, ToolInvocationContext context)
     {
         var sectionIndexMap = new Dictionary<int, int>();
@@ -178,6 +528,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CodeExploreContinuationTarget[] continuations = [.. result.ContinuationTargets.Where(target => target.FilePath is null || IsAllowed(target.FilePath, context))];
         var flow = Confine(result.Flow, context, sectionIndexMap, out var flowOmitted);
         var blastRadius = Confine(result.BlastRadius, context, out var blastRadiusOmitted);
+        var candidateSummaries = Confine(result.CandidateSummaries, context, out var candidateSummaryOmitted);
+        var allocation = Confine(result.Allocation, context, out var allocationOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
@@ -186,7 +538,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || resolutions.Any(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Omitted)
             || continuations.Length != result.ContinuationTargets.Count
             || flowOmitted
-            || blastRadiusOmitted;
+            || blastRadiusOmitted
+            || candidateSummaryOmitted
+            || allocationOmitted;
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
@@ -195,6 +549,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             ContinuationTargets = continuations,
             Flow = flow,
             BlastRadius = blastRadius,
+            CandidateSummaries = candidateSummaries,
+            Allocation = allocation,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
@@ -420,6 +776,60 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         };
     }
 
+    private static IReadOnlyList<CodeExploreCandidateSummary>? Confine(
+        IReadOnlyList<CodeExploreCandidateSummary>? candidateSummaries,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (candidateSummaries is null)
+        {
+            return null;
+        }
+
+        var summaries = candidateSummaries
+            .Where(summary => IsCandidateSummaryAllowed(summary, context))
+            .ToArray();
+        omitted = summaries.Length != candidateSummaries.Count;
+        return summaries;
+    }
+
+    private static CodeExploreAllocationSummary? Confine(
+        CodeExploreAllocationSummary? allocation,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (allocation is null)
+        {
+            return null;
+        }
+
+        var files = allocation.Files
+            .Where(file => IsAllowed(file.FilePath, context))
+            .ToArray();
+        omitted = files.Length != allocation.Files.Count;
+        return allocation with { Files = files };
+    }
+
+    private static bool IsCandidateSummaryAllowed(
+        CodeExploreCandidateSummary summary,
+        ToolInvocationContext context)
+    {
+        if (summary.Location is not null)
+        {
+            return IsAllowed(summary.Location.FilePath, context)
+                && (summary.FilePath is null || IsAllowed(summary.FilePath, context));
+        }
+
+        if (summary.Symbol is not null)
+        {
+            return summary.FilePath is not null && IsAllowed(summary.FilePath, context);
+        }
+
+        return summary.FilePath is null || IsAllowed(summary.FilePath, context);
+    }
+
     private static int? RemapSectionIndex(
         int? sourceSectionIndex,
         IReadOnlyDictionary<int, int> sectionIndexMap)
@@ -469,6 +879,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || !result.Coverage.CompiledProjectCoverageComplete
             || !result.Coverage.SourceComplete
             || !result.Coverage.OutputComplete
+            || result.Discovery is { CatalogComplete: false } or { CandidateLimitReached: true }
             || result.Flow is { Traversal.IsComplete: false }
             || flowBranchTruncated
             || blastRadiusTruncated;
@@ -476,9 +887,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 
     private static bool QueryLooksLikePath(string query)
     {
-        return query.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-            || query.Contains('/')
-            || query.Contains('\\');
+        var trimmed = query.Trim();
+        return !trimmed.Any(char.IsWhiteSpace)
+            && (trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains('/')
+                || trimmed.Contains('\\'));
     }
 
     private static bool IsSha256Hex(string value)

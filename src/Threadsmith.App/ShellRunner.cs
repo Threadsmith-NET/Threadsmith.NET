@@ -89,8 +89,29 @@ internal static class ShellRunner
                 Console.Out,
                 context.WebFetchAuthorization,
                 context.Paths.RepositoryRoot);
-            if (context.CommandLine.RepositoryOptionsSpecified
-                || context.CommandLine.RequestArguments.Count == 0)
+            var request = string.Join(' ', context.CommandLine.RequestArguments);
+            if (context.CommandLine.RepositoryOptionsSpecified)
+            {
+                if (context.CommandLine.RequestArguments.Count > 0)
+                {
+                    return await headlessShell.RunRepositoryRequestAsync(
+                        "Headless",
+                        context.Paths.RepositoryRoot,
+                        context.CommandLine.RequestedTrust ?? RepositoryTrustLevel.UntrustedInspection,
+                        context.CommandLine.RequestedSolution,
+                        request,
+                        processCancellation.Token);
+                }
+
+                return await headlessShell.InspectRepositoryAsync(
+                    "Repository discovery",
+                    context.Paths.RepositoryRoot,
+                    context.CommandLine.RequestedTrust ?? RepositoryTrustLevel.UntrustedInspection,
+                    context.CommandLine.RequestedSolution,
+                    processCancellation.Token);
+            }
+
+            if (context.CommandLine.RequestArguments.Count == 0)
             {
                 return await headlessShell.InspectRepositoryAsync(
                     "Repository discovery",
@@ -100,7 +121,6 @@ internal static class ShellRunner
                     processCancellation.Token);
             }
 
-            var request = string.Join(' ', context.CommandLine.RequestArguments);
             return await headlessShell.RunAsync("Headless", request, processCancellation.Token);
         }
         catch (OperationCanceledException) when (processCancellation.IsCancellationRequested)

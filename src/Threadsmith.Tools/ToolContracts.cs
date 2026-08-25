@@ -295,6 +295,15 @@ public sealed record ToolInvocationContext
     /// <summary>Logical secret references available to this invocation.</summary>
     public IReadOnlyList<string> AllowedSecretReferences { get; init; } = [];
 
+    /// <summary>Selected model context window captured for this request, when model resolution has occurred.</summary>
+    public int? ModelContextWindowTokens { get; init; }
+
+    /// <summary>Selected model output reserve captured for this request, when model resolution has occurred.</summary>
+    public int? ModelRequestOutputReserveTokens { get; init; }
+
+    /// <summary>Effective selected-model input budget after output reserve, when model resolution has occurred.</summary>
+    public int? ModelEffectiveInputBudgetTokens { get; init; }
+
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
 }

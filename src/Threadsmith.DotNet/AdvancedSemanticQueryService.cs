@@ -14,6 +14,12 @@ using Threadsmith.Core;
 public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService, ICodeExploreService
 {
     private const int MaximumCurrentSourceFileBytes = 1024 * 1024;
+    private const int MaximumCodeExploreCatalogEntries = 50_000;
+    private const int MaximumCodeExploreCatalogs = 4;
+    private const int MaximumNaturalLanguageCandidateSummaries = 64;
+    private const int MaximumNaturalLanguageGraphSeeds = 8;
+    private const int MaximumNaturalLanguageGraphEdges = 128;
+    private const int MinimumUsefulSourceCharacters = 256;
 
     private static readonly TimeSpan NonCooperativeCompilationBackstop = TimeSpan.FromSeconds(2);
 
@@ -21,6 +27,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ["public", "private", "protected", "internal", "static", "abstract", "virtual", "override", "sealed", "partial", "async", "readonly", "required", "unsafe", "extern", "new"],
         StringComparer.Ordinal);
 
+    private static readonly HashSet<string> NaturalLanguageStopWords = new(
+        ["a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could", "did", "do", "does", "for", "from", "has", "have", "how", "i", "in", "into", "is", "it", "its", "me", "of", "on", "or", "please", "show", "that", "the", "their", "this", "through", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with", "without"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private readonly Lock _catalogGate = new();
+    private readonly Dictionary<string, CodeExploreDeclarationCatalog> _codeExploreCatalogs = new(StringComparer.Ordinal);
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
@@ -552,17 +564,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
-        var anchors = BuildCodeExploreAnchors(request);
-        if (anchors.Count == 0)
-        {
-            EnsureCurrent(engine, snapshot.Generation);
-            return CreateUnanchoredCodeExploreResult(snapshot, request.Query);
-        }
-
+        var queryInterpretation = InterpretCodeExploreQuery(request.Query);
+        var anchors = BuildCodeExploreAnchors(request).ToList();
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
         var continuations = new List<CodeExploreContinuationTarget>();
+        var allocationFiles = new List<CodeExploreAllocationFileSummary>();
+        var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
+        CodeExploreDiscoverySummary? discovery = null;
         CodeExploreFlow? flow = null;
         CodeExploreBlastRadius? blastRadius = null;
         var alternativesCapped = false;
@@ -571,6 +581,34 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         try
         {
             projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
+            if (anchors.Count == 0 && ShouldUseNaturalLanguageDiscovery(queryInterpretation))
+            {
+                var naturalLanguage = await DiscoverNaturalLanguageCodeExploreAsync(
+                    workspaceId,
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    request,
+                    queryInterpretation,
+                    timeout.Token);
+                anchors.AddRange(naturalLanguage.Anchors);
+                queryInterpretation = queryInterpretation with { UnresolvedTerms = naturalLanguage.UnresolvedTerms };
+                discovery = naturalLanguage.Discovery;
+                candidateSummaries = naturalLanguage.Candidates;
+                omissions.AddRange(naturalLanguage.Omissions);
+            }
+
+            if (anchors.Count == 0)
+            {
+                EnsureCurrent(engine, snapshot.Generation);
+                return CreateUnanchoredCodeExploreResult(
+                    snapshot,
+                    request.Query,
+                    queryInterpretation,
+                    discovery,
+                    candidateSummaries);
+            }
+
             foreach (var anchor in anchors)
             {
                 timeout.Token.ThrowIfCancellationRequested();
@@ -625,7 +663,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         var selectedSections = new List<CodeExploreFileSection>();
         var seenSections = new HashSet<string>(StringComparer.Ordinal);
-        var remainingSourceCharacters = request.Limits.MaximumSourceCharacters;
+        var reservedCharacters = discovery is null
+            ? 0
+            : Math.Min(
+                request.Limits.MaximumSourceCharacters,
+                EstimateReservedCodeExploreCharacters(queryInterpretation, discovery));
+        var availableSourceCharacters = Math.Max(0, request.Limits.MaximumSourceCharacters - reservedCharacters);
+        var remainingSourceCharacters = availableSourceCharacters;
         var outputBoundReached = false;
         if (!timeReached && projection is not null)
         {
@@ -704,6 +748,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 foreach (var candidate in candidates
                     .Where(predicate)
                     .OrderBy(candidate => candidate.Priority)
+                    .ThenBy(candidate => candidate.AllocationRank ?? int.MaxValue)
                     .ThenBy(candidate => IsFlowCallSiteCandidate(candidate) ? 0 : 1)
                     .ThenBy(candidate => candidate.FilePath, PathComparer)
                     .ThenBy(candidate => candidate.Location?.Range.StartLine ?? candidate.PreferredLine ?? 0)
@@ -729,7 +774,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         break;
                     }
 
-                    if (remainingSourceCharacters <= 0)
+                    if (remainingSourceCharacters <= 0 && selectedSections.Count > 0)
                     {
                         outputBoundReached = true;
                         AddContinuationIfWithinLimit(
@@ -742,15 +787,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         break;
                     }
 
+                    var sourceAllowance = remainingSourceCharacters <= 0
+                        ? 0
+                        : Math.Min(
+                            remainingSourceCharacters,
+                            request.Limits.MaximumPerFileSourceCharacters);
                     var projected = await ProjectCodeExploreSectionAsync(
                         snapshot,
                         activeProjection,
                         sourceReader,
                         candidate,
-                        Math.Min(remainingSourceCharacters, request.Limits.MaximumPerFileSourceCharacters),
+                        sourceAllowance,
                         timeout.Token);
                     remainingSourceCharacters -= projected.SourceCharacters;
                     selectedSections.Add(projected.Section);
+                    allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                        projected.Section.FilePath,
+                        sourceAllowance,
+                        projected.SourceCharacters,
+                        projected.Section.Source.Completeness,
+                        IsUsefulCodeExploreSection(projected.Section),
+                        projected.Section.Source.OmittedRanges.FirstOrDefault()));
                     foreach (var continuation in projected.ContinuationTargets)
                     {
                         AddContinuationIfWithinLimit(continuations, continuation, request.Limits.MaximumFiles);
@@ -817,6 +874,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             sourceComplete,
             !timeReached && !outputBoundReached && !alternativesCapped,
             coverageOmissions);
+        var allocation = new CodeExploreAllocationSummary(
+            request.Limits.MaximumSourceCharacters,
+            reservedCharacters,
+            availableSourceCharacters - remainingSourceCharacters,
+            "request.maximumSourceCharacters after reserved metadata, plus request.maximumPerFileSourceCharacters",
+            allocationFiles);
         return new CodeExploreResult(
             snapshot.Generation,
             snapshot.Confidence,
@@ -826,7 +889,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             coverageOmissions,
             continuations.DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}").ToArray(),
             flow,
-            blastRadius);
+            blastRadius,
+            queryInterpretation,
+            discovery,
+            candidateSummaries,
+            allocation);
     }
 
     private static void AddContinuationIfWithinLimit(
@@ -877,7 +944,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         bool StartAtLine,
         CodeExplorePathSelectionMode SelectionMode,
         string? ExpectedFileSha256,
-        long? ExpectedWorkspaceGeneration);
+        long? ExpectedWorkspaceGeneration,
+        int? AllocationRank);
 
     private sealed record CodeExploreSymbolResolution(bool AlternativesCapped);
 
@@ -905,8 +973,52 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CodeExplorePathSelectionMode SelectionMode,
         string? ExpectedFileSha256,
         long? ExpectedWorkspaceGeneration,
+        int? AllocationRank,
         SourceText? PreloadedText,
         string? PreloadedFileSha256);
+
+    private sealed record CodeExploreDeclarationCatalog(
+        string Key,
+        long WorkspaceGeneration,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> Entries,
+        bool IsComplete,
+        IReadOnlyList<string> Omissions);
+
+    private sealed record CodeExploreDeclarationCatalogEntry(
+        SemanticSymbolIdentity Identity,
+        string Name,
+        string MetadataName,
+        string DisplayName,
+        string FullyQualifiedName,
+        string? ContainingType,
+        string? ContainingNamespace,
+        string Kind,
+        string ProjectName,
+        string TargetFramework,
+        string FilePath,
+        string RelativeFilePath,
+        SourceRange Range,
+        bool IsGenerated,
+        bool IsLinked,
+        bool IsTest,
+        IReadOnlyList<string> Terms,
+        IReadOnlyList<string> QualifiedNames);
+
+    private sealed record CodeExploreRankedCandidate(
+        CodeExploreDeclarationCatalogEntry Entry,
+        CodeExploreCandidateTier Tier,
+        CodeExploreSelectionReason Reasons,
+        int Score,
+        int CoveredTermCount,
+        string AmbiguityGroup);
+
+    private sealed record NaturalLanguageCodeExploreDiscovery(
+        IReadOnlyList<CodeExploreAnchor> Anchors,
+        CodeExploreQueryInterpretation Interpretation,
+        CodeExploreDiscoverySummary Discovery,
+        CodeExploreCandidateSummary[] Candidates,
+        IReadOnlyList<string> UnresolvedTerms,
+        IReadOnlyList<string> Omissions);
 
     private sealed record ProjectedCodeExploreSection(
         CodeExploreFileSection Section,
@@ -1952,6 +2064,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             false,
             CodeExplorePathSelectionMode.Auto,
             null,
+            null,
             null);
         await AddSymbolSourceCandidatesAsync(
             snapshot,
@@ -2017,6 +2130,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             endLine.LineNumber + 1,
             false,
             CodeExplorePathSelectionMode.ExactLineRange,
+            null,
             null,
             null,
             null,
@@ -2861,7 +2975,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             anchor.StartAtLine,
             anchor.SelectionMode,
             anchor.ExpectedFileSha256,
-            anchor.ExpectedWorkspaceGeneration)));
+            anchor.ExpectedWorkspaceGeneration,
+            null)));
         anchors.AddRange(request.SymbolIds.Select(symbolId => new CodeExploreAnchor(
             CodeExploreAnchorKind.SymbolId,
             symbolId,
@@ -2869,6 +2984,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             false,
             CodeExplorePathSelectionMode.Auto,
+            null,
             null,
             null)));
         anchors.AddRange(request.ExactSymbolAnchors.Select(anchor => new CodeExploreAnchor(
@@ -2879,29 +2995,797 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             false,
             CodeExplorePathSelectionMode.Auto,
             null,
+            null,
             null)));
         if (anchors.Count > 0)
         {
             return anchors;
         }
 
-        if (QueryLooksLikePath(request.Query) || IsExactSymbolAnchor(request.Query))
+        if (IsCSharpPathSpan(request.Query) || IsExactSymbolAnchor(request.Query))
         {
-            return [new CodeExploreAnchor(CodeExploreAnchorKind.Query, request.Query, null, null, false, CodeExplorePathSelectionMode.Auto, null, null)];
+            return [new CodeExploreAnchor(CodeExploreAnchorKind.Query, request.Query, null, null, false, CodeExplorePathSelectionMode.Auto, null, null, null)];
         }
 
         return [];
     }
 
+    private async Task<NaturalLanguageCodeExploreDiscovery> DiscoverNaturalLanguageCodeExploreAsync(
+        WorkspaceId workspaceId,
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRequest request,
+        CodeExploreQueryInterpretation interpretation,
+        CancellationToken cancellationToken)
+    {
+        var catalog = await GetOrBuildCodeExploreCatalogAsync(
+            workspaceId,
+            snapshot,
+            projection,
+            cancellationToken);
+        var allowedEntries = GetAllowedCodeExploreCatalogEntries(catalog, sourceReader, cancellationToken);
+        var ranked = RankNaturalLanguageCandidates(
+            allowedEntries,
+            interpretation,
+            cancellationToken);
+        ranked = await ApplyGraphConnectivityAsync(
+            snapshot,
+            ranked,
+            cancellationToken);
+        var rankedByIdentity = ranked
+            .GroupBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        var anchors = new List<CodeExploreAnchor>();
+        var summaries = new List<CodeExploreCandidateSummary>();
+        var selectedIdentityIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbolId in interpretation.StableSymbolIds.Take(request.Limits.MaximumAnchors))
+        {
+            var allocationRank = anchors.Count + 1;
+            anchors.Add(new CodeExploreAnchor(
+                CodeExploreAnchorKind.SymbolId,
+                symbolId,
+                null,
+                null,
+                false,
+                CodeExplorePathSelectionMode.Auto,
+                null,
+                null,
+                allocationRank));
+            selectedIdentityIds.Add(symbolId);
+            summaries.Add(new CodeExploreCandidateSummary(
+                null,
+                null,
+                null,
+                CodeExploreCandidateTier.Pinned,
+                CodeExploreSelectionReason.Pinned | CodeExploreSelectionReason.ExactIdentifier,
+                summaries.Count + 1,
+                true,
+                "Natural-language query contained a stable semantic symbol id.",
+                symbolId));
+        }
+
+        foreach (var path in interpretation.PathLikeSpans
+            .Where(IsCSharpPathSpan)
+            .Distinct(PathComparer)
+            .Take(Math.Max(0, request.Limits.MaximumAnchors - anchors.Count)))
+        {
+            var allocationRank = anchors.Count + 1;
+            anchors.Add(new CodeExploreAnchor(
+                CodeExploreAnchorKind.Path,
+                path,
+                null,
+                null,
+                false,
+                CodeExplorePathSelectionMode.WholeFile,
+                null,
+                null,
+                allocationRank));
+            summaries.Add(new CodeExploreCandidateSummary(
+                null,
+                null,
+                path,
+                CodeExploreCandidateTier.Pinned,
+                CodeExploreSelectionReason.Pinned | CodeExploreSelectionReason.Path,
+                summaries.Count + 1,
+                true,
+                "Natural-language query contained a repository-relative C# path span.",
+                path));
+        }
+
+        var symbolSlots = Math.Max(0, request.Limits.MaximumAnchors - anchors.Count);
+        var selected = rankedByIdentity
+            .Where(candidate => !selectedIdentityIds.Contains(candidate.Entry.Identity.Id))
+            .Take(symbolSlots)
+            .ToArray();
+        foreach (var candidate in selected)
+        {
+            if (!selectedIdentityIds.Add(candidate.Entry.Identity.Id))
+            {
+                continue;
+            }
+
+            anchors.Add(new CodeExploreAnchor(
+                CodeExploreAnchorKind.SymbolId,
+                candidate.Entry.Identity.Id,
+                null,
+                null,
+                false,
+                CodeExplorePathSelectionMode.Auto,
+                null,
+                null,
+                anchors.Count + 1));
+        }
+
+        var selectedIds = selectedIdentityIds.ToHashSet(StringComparer.Ordinal);
+        var pinnedSummaryCount = summaries.Count;
+        var maximumCandidateSummaries = ResolveNaturalLanguageCandidateSummaryLimit(
+            request.Limits.MaximumSourceCharacters,
+            pinnedSummaryCount);
+        summaries.AddRange(rankedByIdentity
+            .Take(maximumCandidateSummaries)
+            .Select((candidate, index) => CreateCandidateSummary(
+                candidate,
+                pinnedSummaryCount + index + 1,
+                selectedIds.Contains(candidate.Entry.Identity.Id))));
+        var ambiguityGroups = CreateAmbiguityGroups(rankedByIdentity, selectedIds);
+        var unresolvedTerms = interpretation.Terms
+            .Where(term => !ranked.Any(candidate => CandidateCoversTerm(candidate.Entry, term)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var candidateLimitReached = rankedByIdentity.Length > maximumCandidateSummaries;
+        var omissions = new List<string>(catalog.Omissions);
+        if (candidateLimitReached)
+        {
+            omissions.Add("Natural-language candidate summaries were capped by the host result limit.");
+        }
+
+        if (ranked.Length == 0 && summaries.Count == 0)
+        {
+            omissions.Add("No compiler-known declarations matched the natural-language query terms.");
+        }
+
+        return new NaturalLanguageCodeExploreDiscovery(
+            anchors,
+            interpretation with { UnresolvedTerms = unresolvedTerms },
+            new CodeExploreDiscoverySummary(
+                allowedEntries.Length,
+                rankedByIdentity.Length + pinnedSummaryCount,
+                anchors.Count,
+                catalog.IsComplete,
+                candidateLimitReached || !catalog.IsComplete,
+                ambiguityGroups,
+                "request.maximumAnchors, request.maximumFiles, and request.maximumSourceCharacters"),
+            [.. summaries],
+            unresolvedTerms,
+            omissions);
+    }
+
+    private async Task<CodeExploreDeclarationCatalog> GetOrBuildCodeExploreCatalogAsync(
+        WorkspaceId workspaceId,
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        CancellationToken cancellationToken)
+    {
+        var key = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        lock (_catalogGate)
+        {
+            if (_codeExploreCatalogs.TryGetValue(key, out var existing))
+            {
+                return existing;
+            }
+        }
+
+        var catalog = await BuildCodeExploreCatalogAsync(key, snapshot, projection, cancellationToken);
+        lock (_catalogGate)
+        {
+            foreach (var staleKey in _codeExploreCatalogs.Keys
+                .Where(item => item.StartsWith(workspaceId.Value.ToString("D"), StringComparison.Ordinal)
+                    && !string.Equals(item, key, StringComparison.Ordinal))
+                .ToArray())
+            {
+                _codeExploreCatalogs.Remove(staleKey);
+            }
+
+            _codeExploreCatalogs[key] = catalog;
+            while (_codeExploreCatalogs.Count > MaximumCodeExploreCatalogs)
+            {
+                var firstKey = _codeExploreCatalogs.Keys.Order(StringComparer.Ordinal).First();
+                _codeExploreCatalogs.Remove(firstKey);
+            }
+        }
+
+        return catalog;
+    }
+
+    private static async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
+        string key,
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        CancellationToken cancellationToken)
+    {
+        var entries = new List<CodeExploreDeclarationCatalogEntry>();
+        var omissions = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var isComplete = true;
+        foreach (var project in snapshot.Solution.Projects
+            .Where(project => snapshot.CompiledProjects.Contains(project.Id))
+            .OrderBy(project => project.Name, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var semanticModelCache = new Dictionary<DocumentId, SemanticModel>();
+            var documents = await GetCodeExploreCatalogDocumentsAsync(project, cancellationToken);
+            foreach ((var document, var isSourceGenerated) in documents)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (entries.Count >= MaximumCodeExploreCatalogEntries)
+                {
+                    isComplete = false;
+                    omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
+                    return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+                }
+
+                if (document.FilePath is not { } documentPath || !Path.IsPathRooted(documentPath))
+                {
+                    continue;
+                }
+
+                var root = await document.GetSyntaxRootAsync(cancellationToken);
+                if (root is null)
+                {
+                    continue;
+                }
+
+                if (!semanticModelCache.TryGetValue(document.Id, out var model))
+                {
+                    model = await document.GetSemanticModelAsync(cancellationToken);
+                    if (model is null)
+                    {
+                        omissions.Add("One loaded C# document was omitted from the declaration catalog because its semantic model was unavailable.");
+                        continue;
+                    }
+
+                    semanticModelCache.Add(document.Id, model);
+                }
+
+                foreach (var declaration in EnumerateCodeExploreCatalogDeclarations(root))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var symbol = model.GetDeclaredSymbol(declaration, cancellationToken);
+                    if (symbol is null)
+                    {
+                        continue;
+                    }
+
+                    var location = CreateDocumentLocation(document, declaration.SyntaxTree, declaration.Span, projection);
+                    var entry = CreateCodeExploreCatalogEntry(snapshot, symbol, location, isSourceGenerated);
+                    var entryKey = $"{entry.Identity.Id}|{entry.FilePath}|{entry.Range.StartLine}|{entry.Range.StartColumn}|{entry.Range.EndLine}|{entry.Range.EndColumn}";
+                    if (seen.Add(entryKey))
+                    {
+                        entries.Add(entry);
+                        if (entries.Count >= MaximumCodeExploreCatalogEntries)
+                        {
+                            isComplete = false;
+                            omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
+                            return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (snapshot.Confidence < SemanticConfidenceLevel.FullSemantic)
+        {
+            isComplete = false;
+            omissions.Add("The declaration catalog was built from partial semantic coverage.");
+        }
+
+        return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+    }
+
+    private static async Task<IReadOnlyList<(Document Document, bool IsSourceGenerated)>> GetCodeExploreCatalogDocumentsAsync(
+        Project project,
+        CancellationToken cancellationToken)
+    {
+        IEnumerable<Document> generatedDocuments = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
+        return
+        [
+            .. project.Documents
+                .Select(document => (Document: document, IsSourceGenerated: false))
+                .Concat(generatedDocuments.Select(document => (Document: document, IsSourceGenerated: true)))
+                .GroupBy(item => item.Document.Id)
+                .Select(group => group.OrderByDescending(item => item.IsSourceGenerated).First())
+                .OrderBy(item => item.Document.FilePath ?? item.Document.Name, PathComparer),
+        ];
+    }
+
+    private static CodeExploreDeclarationCatalogEntry CreateCodeExploreCatalogEntry(
+        AdvancedSemanticSnapshot snapshot,
+        ISymbol symbol,
+        SemanticSourceLocation location,
+        bool isSourceGenerated)
+    {
+        var identity = CreateIdentity(symbol);
+        var filePath = location.FilePath;
+        var relativePath = ToRepositoryRelativePath(filePath, snapshot.RepositoryPath);
+        var displayName = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+        var fullyQualifiedName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        var containingType = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+        var containingNamespace = symbol.ContainingNamespace is { IsGlobalNamespace: false } namespaceSymbol
+            ? namespaceSymbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)
+            : null;
+        var qualifiedNames = CreateCatalogQualifiedNames(symbol, identity, displayName, fullyQualifiedName, containingType, containingNamespace);
+        var kindName = symbol is INamedTypeSymbol { IsRecord: true }
+            ? "Record"
+            : symbol is INamedTypeSymbol namedType ? namedType.TypeKind.ToString() : symbol.Kind.ToString();
+        return new CodeExploreDeclarationCatalogEntry(
+            identity,
+            symbol.Name,
+            symbol.MetadataName,
+            displayName,
+            fullyQualifiedName,
+            containingType,
+            containingNamespace,
+            kindName,
+            location.ProjectName,
+            location.TargetFramework,
+            filePath,
+            relativePath,
+            location.Range,
+            location.IsGenerated || isSourceGenerated,
+            location.IsLinked,
+            IsTestProjectNameOrPath(location.ProjectName, relativePath),
+            CreateCatalogTerms(symbol, kindName, location.ProjectName, relativePath, containingType, containingNamespace),
+            qualifiedNames);
+    }
+
+    private static IEnumerable<SyntaxNode> EnumerateCodeExploreCatalogDeclarations(SyntaxNode root)
+    {
+        foreach (var node in root.DescendantNodes())
+        {
+            switch (node)
+            {
+                case FieldDeclarationSyntax field:
+                    foreach (var variable in field.Declaration.Variables)
+                    {
+                        yield return variable;
+                    }
+
+                    break;
+                case EventFieldDeclarationSyntax field:
+                    foreach (var variable in field.Declaration.Variables)
+                    {
+                        yield return variable;
+                    }
+
+                    break;
+                case BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or EnumMemberDeclarationSyntax
+                    or BaseMethodDeclarationSyntax or PropertyDeclarationSyntax or EventDeclarationSyntax
+                    or IndexerDeclarationSyntax or OperatorDeclarationSyntax:
+                    yield return node;
+                    break;
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> CreateCatalogQualifiedNames(
+        ISymbol symbol,
+        SemanticSymbolIdentity identity,
+        string displayName,
+        string fullyQualifiedName,
+        string? containingType,
+        string? containingNamespace)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            NormalizeComparableName(identity.Id),
+            NormalizeComparableName(symbol.Name),
+            NormalizeComparableName(symbol.MetadataName),
+            NormalizeComparableName(displayName),
+            NormalizeComparableName(fullyQualifiedName),
+        };
+        if (!string.IsNullOrWhiteSpace(containingType))
+        {
+            names.Add(NormalizeComparableName($"{containingType}.{symbol.Name}"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(containingNamespace))
+        {
+            names.Add(NormalizeComparableName($"{containingNamespace}.{symbol.MetadataName}"));
+        }
+
+        return names.Where(name => name.Length > 0).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateCatalogTerms(
+        ISymbol symbol,
+        string kindName,
+        string projectName,
+        string relativePath,
+        string? containingType,
+        string? containingNamespace)
+    {
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddCodeExploreTerms(terms, symbol.Name);
+        AddCodeExploreTerms(terms, symbol.MetadataName);
+        AddCodeExploreTerms(terms, kindName);
+        AddCodeExploreTerms(terms, symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
+        AddCodeExploreTerms(terms, symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+        AddCodeExploreTerms(terms, projectName);
+        AddCodeExploreTerms(terms, relativePath);
+        if (!string.IsNullOrWhiteSpace(containingType))
+        {
+            AddCodeExploreTerms(terms, containingType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(containingNamespace))
+        {
+            AddCodeExploreTerms(terms, containingNamespace);
+        }
+
+        return terms.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static CodeExploreDeclarationCatalogEntry[] GetAllowedCodeExploreCatalogEntries(
+        CodeExploreDeclarationCatalog catalog,
+        ICodeExploreSourceReader sourceReader,
+        CancellationToken cancellationToken)
+    {
+        var entries = new List<CodeExploreDeclarationCatalogEntry>();
+        foreach (var entry in catalog.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (sourceReader.IsPathAllowed(entry.FilePath))
+            {
+                entries.Add(entry);
+            }
+        }
+
+        return [.. entries];
+    }
+
+    private static CodeExploreRankedCandidate[] RankNaturalLanguageCandidates(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CodeExploreQueryInterpretation interpretation,
+        CancellationToken cancellationToken)
+    {
+        var termCounts = entries
+            .SelectMany(entry => entry.Terms.Distinct(StringComparer.OrdinalIgnoreCase))
+            .GroupBy(term => term, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var nameCounts = entries
+            .GroupBy(entry => NormalizeComparableName(entry.Name), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var preliminary = new List<CodeExploreRankedCandidate>();
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rank = RankNaturalLanguageCandidate(entry, interpretation, termCounts, nameCounts, entries.Count);
+            if (rank is not null)
+            {
+                preliminary.Add(rank);
+            }
+        }
+
+        var fileCounts = preliminary
+            .GroupBy(candidate => candidate.Entry.FilePath, PathComparer)
+            .ToDictionary(group => group.Key, group => group.Count(), PathComparer);
+        return OrderNaturalLanguageCandidates(preliminary
+            .Select(candidate => fileCounts.GetValueOrDefault(candidate.Entry.FilePath) > 1
+                ? candidate with
+                {
+                    Reasons = candidate.Reasons | CodeExploreSelectionReason.CoLocated,
+                    Score = candidate.Score + 60,
+                }
+                : candidate));
+    }
+
+    private static CodeExploreRankedCandidate[] OrderNaturalLanguageCandidates(
+        IEnumerable<CodeExploreRankedCandidate> candidates)
+    {
+        return
+        [
+            .. candidates
+                .OrderBy(candidate => candidate.Tier)
+                .ThenByDescending(candidate => candidate.Score)
+                .ThenBy(candidate => KindSortRank(candidate.Entry.Kind))
+                .ThenBy(candidate => candidate.Entry.RelativeFilePath, PathComparer)
+                .ThenBy(candidate => candidate.Entry.Range.StartLine)
+                .ThenBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal),
+        ];
+    }
+
+    private static async Task<CodeExploreRankedCandidate[]> ApplyGraphConnectivityAsync(
+        AdvancedSemanticSnapshot snapshot,
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CancellationToken cancellationToken)
+    {
+        if (ranked.Count <= 1)
+        {
+            return [.. ranked];
+        }
+
+        var rankedById = ranked
+            .GroupBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var seedIds = new HashSet<string>(StringComparer.Ordinal);
+        var seeds = ranked
+            .Where(candidate => candidate.Tier <= CodeExploreCandidateTier.MultiTermStructural)
+            .Take(MaximumNaturalLanguageGraphSeeds)
+            .ToArray();
+        foreach (var seed in seeds)
+        {
+            seedIds.Add(seed.Entry.Identity.Id);
+        }
+
+        if (seeds.Length == 0)
+        {
+            return [.. ranked];
+        }
+
+        var connectedIds = new HashSet<string>(StringComparer.Ordinal);
+        var edgeCount = 0;
+        foreach (var seed in seeds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var groups = await ResolveSymbolGroupsInSnapshotAsync(
+                snapshot,
+                seed.Entry.Identity.Id,
+                [],
+                cancellationToken);
+            foreach (var symbol in groups.SelectMany(group => group.Symbols)
+                .Distinct(SymbolEqualityComparer.Default)
+                .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal))
+            {
+                foreach (var connected in await FindNaturalLanguageConnectedSymbolsAsync(snapshot, symbol, cancellationToken))
+                {
+                    if (edgeCount >= MaximumNaturalLanguageGraphEdges)
+                    {
+                        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds);
+                    }
+
+                    edgeCount++;
+                    var connectedId = CreateIdentity(connected).Id;
+                    if (!seedIds.Contains(connectedId) && rankedById.ContainsKey(connectedId))
+                    {
+                        connectedIds.Add(connectedId);
+                    }
+                }
+            }
+        }
+
+        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds);
+    }
+
+    private static async Task<IReadOnlyList<ISymbol>> FindNaturalLanguageConnectedSymbolsAsync(
+        AdvancedSemanticSnapshot snapshot,
+        ISymbol symbol,
+        CancellationToken cancellationToken)
+    {
+        var connected = new List<ISymbol>();
+        var outgoing = await FindOutgoingAsync(symbol, snapshot.Solution, cancellationToken);
+        connected.AddRange(outgoing.Select(edge => edge.Callee.OriginalDefinition));
+        var callers = await SymbolFinder.FindCallersAsync(
+            symbol,
+            snapshot.Solution,
+            cancellationToken);
+        connected.AddRange(callers.Select(caller => caller.CallingSymbol.OriginalDefinition));
+        var implementations = await SymbolFinder.FindImplementationsAsync(
+            symbol,
+            snapshot.Solution,
+            cancellationToken: cancellationToken);
+        connected.AddRange(implementations.Select(item => item.OriginalDefinition));
+        if (symbol is IMethodSymbol method)
+        {
+            var overrides = await SymbolFinder.FindOverridesAsync(
+                method,
+                snapshot.Solution,
+                cancellationToken: cancellationToken);
+            connected.AddRange(overrides.Select(item => item.OriginalDefinition));
+        }
+
+        return
+        [
+            .. connected
+                .Where(item => item.Locations.Any(location => location.IsInSource))
+                .Distinct(SymbolEqualityComparer.Default)
+                .OrderBy(item => CreateIdentity(item).Id, StringComparer.Ordinal),
+        ];
+    }
+
+    private static CodeExploreRankedCandidate[] BoostGraphConnectedCandidates(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlySet<string> connectedIds,
+        IReadOnlySet<string> seedIds)
+    {
+        if (connectedIds.Count == 0)
+        {
+            return [.. ranked];
+        }
+
+        return OrderNaturalLanguageCandidates(ranked.Select(candidate =>
+        {
+            if (!connectedIds.Contains(candidate.Entry.Identity.Id)
+                || seedIds.Contains(candidate.Entry.Identity.Id))
+            {
+                return candidate;
+            }
+
+            var reasons = (candidate.Reasons | CodeExploreSelectionReason.GraphConnected) & ~CodeExploreSelectionReason.Peripheral;
+            return candidate with
+            {
+                Tier = MinTier(candidate.Tier, CodeExploreCandidateTier.GraphConnected),
+                Reasons = reasons,
+                Score = candidate.Score + 260,
+            };
+        }));
+    }
+
+    private static CodeExploreRankedCandidate? RankNaturalLanguageCandidate(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyDictionary<string, int> termCounts,
+        IReadOnlyDictionary<string, int> nameCounts,
+        int catalogEntryCount)
+    {
+        var reasons = CodeExploreSelectionReason.None;
+        var tier = CodeExploreCandidateTier.Peripheral;
+        var score = 0;
+        foreach (var path in interpretation.PathLikeSpans.Where(IsCSharpPathSpan))
+        {
+            if (PathSpanMatchesEntry(path, entry))
+            {
+                reasons |= CodeExploreSelectionReason.Path;
+                tier = MinTier(tier, CodeExploreCandidateTier.ExactQualified);
+                score += 900;
+            }
+        }
+
+        foreach (var qualified in interpretation.QualifiedNames)
+        {
+            if (entry.QualifiedNames.Any(name => string.Equals(name, qualified, StringComparison.OrdinalIgnoreCase)))
+            {
+                reasons |= CodeExploreSelectionReason.QualifiedName;
+                tier = MinTier(tier, CodeExploreCandidateTier.ExactQualified);
+                score += 850;
+            }
+        }
+
+        foreach (var identifier in interpretation.ExactIdentifiers.Select(NormalizeComparableName).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!IdentifierMatchesEntry(identifier, entry))
+            {
+                continue;
+            }
+
+            reasons |= CodeExploreSelectionReason.ExactIdentifier;
+            var count = nameCounts.GetValueOrDefault(identifier);
+            if (count is > 0 and <= 5)
+            {
+                tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+                score += 700;
+            }
+            else
+            {
+                score += 220;
+            }
+        }
+
+        var coveredTerms = interpretation.Terms
+            .Where(term => CandidateCoversTerm(entry, term))
+            .Select(CanonicalCodeExploreTerm)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var uncommonTermCount = coveredTerms.Count(term => !IsCommonCodeExploreTerm(term, termCounts, catalogEntryCount));
+        if (coveredTerms.Length >= 2 && uncommonTermCount > 0)
+        {
+            reasons |= CodeExploreSelectionReason.MultiTerm;
+            tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            score += 360 + (coveredTerms.Length * 70) + (uncommonTermCount * 50);
+        }
+        else if (coveredTerms.Length == 1 && uncommonTermCount == 1)
+        {
+            score += 120;
+        }
+
+        if (HasContainingTypeCorroboration(entry, interpretation))
+        {
+            reasons |= CodeExploreSelectionReason.ContainingType;
+            tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            score += 160;
+        }
+
+        if (entry.IsTest)
+        {
+            reasons |= CodeExploreSelectionReason.Test;
+            if (HasTestFocus(interpretation))
+            {
+                reasons |= CodeExploreSelectionReason.UserFocus;
+                score += 140;
+            }
+            else
+            {
+                score -= 120;
+            }
+        }
+
+        if (entry.IsGenerated)
+        {
+            reasons |= CodeExploreSelectionReason.Generated;
+            if (HasGeneratedFocus(interpretation))
+            {
+                reasons |= CodeExploreSelectionReason.UserFocus;
+                score += 140;
+            }
+            else
+            {
+                score -= 120;
+            }
+        }
+
+        if (HasKindFocus(entry, interpretation))
+        {
+            reasons |= CodeExploreSelectionReason.UserFocus;
+            score += 80;
+        }
+
+        if (reasons == CodeExploreSelectionReason.None || score <= 0)
+        {
+            return null;
+        }
+
+        if (tier == CodeExploreCandidateTier.Peripheral)
+        {
+            reasons |= CodeExploreSelectionReason.Peripheral;
+        }
+
+        return new CodeExploreRankedCandidate(
+            entry,
+            tier,
+            reasons,
+            score,
+            coveredTerms.Length,
+            CreateAmbiguityKey(entry));
+    }
+
+    private static CodeExploreCandidateSummary CreateCandidateSummary(
+        CodeExploreRankedCandidate candidate,
+        int rank,
+        bool selected)
+    {
+        var location = new CodeExploreLocation(
+            candidate.Entry.ProjectName,
+            candidate.Entry.TargetFramework,
+            candidate.Entry.RelativeFilePath,
+            candidate.Entry.Range,
+            candidate.Entry.IsGenerated,
+            candidate.Entry.IsLinked);
+        return new CodeExploreCandidateSummary(
+            candidate.Entry.Identity,
+            location,
+            candidate.Entry.RelativeFilePath,
+            candidate.Tier,
+            candidate.Reasons,
+            rank,
+            selected,
+            CreateNaturalLanguageSelectionReason(candidate, selected),
+            candidate.AmbiguityGroup);
+    }
+
     private static CodeExploreResult CreateUnanchoredCodeExploreResult(
         AdvancedSemanticSnapshot snapshot,
-        string query)
+        string query,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreDiscoverySummary? discovery,
+        IReadOnlyList<CodeExploreCandidateSummary> candidateSummaries)
     {
-        var reason = "The initial code_explore capability requires an exact C# symbol, stable symbol id, or confined C# path anchor; natural-language discovery is not enabled yet.";
+        var reason = "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
         var resolution = new CodeExploreAnchorResolution(
             query,
             CodeExploreAnchorKind.Query,
-            CodeExploreResolutionOutcome.Unsupported,
+            CodeExploreResolutionOutcome.NotFound,
             null,
             null,
             [],
@@ -2913,7 +3797,472 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             [],
             new CodeExploreCoverage(false, snapshot.Confidence == SemanticConfidenceLevel.FullSemantic, false, true, [reason]),
             [reason],
+            [],
+            QueryInterpretation: interpretation,
+            Discovery: discovery,
+            CandidateSummaries: candidateSummaries,
+            Allocation: new CodeExploreAllocationSummary(0, 0, 0, "no source allocated", []));
+    }
+
+    private static CodeExploreQueryInterpretation InterpretCodeExploreQuery(string query)
+    {
+        var identifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var qualifiedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stableIds = new HashSet<string>(StringComparer.Ordinal);
+        var paths = new HashSet<string>(PathComparer);
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in ExtractCodeExploreTokens(query))
+        {
+            if (LooksLikeDocumentationId(token))
+            {
+                stableIds.Add(token);
+                continue;
+            }
+
+            if (IsCSharpPathSpan(token))
+            {
+                paths.Add(token);
+                continue;
+            }
+
+            var normalizedToken = NormalizeComparableName(token);
+            if (IsQualifiedIdentifierName(normalizedToken))
+            {
+                qualifiedNames.Add(normalizedToken);
+            }
+
+            foreach (var part in token.Split(['.', ':', '/', '\\', '-', '+'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmedPart = TrimCodeExploreToken(part);
+                if (NaturalLanguageStopWords.Contains(trimmedPart))
+                {
+                    ignored.Add(trimmedPart.ToLowerInvariant());
+                    continue;
+                }
+
+                if (IsCodeExploreExactIdentifier(trimmedPart))
+                {
+                    identifiers.Add(trimmedPart);
+                }
+
+                AddCodeExploreTerms(terms, ignored, trimmedPart);
+            }
+        }
+
+        return new CodeExploreQueryInterpretation(
+            identifiers.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            qualifiedNames.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            stableIds.Order(StringComparer.Ordinal).ToArray(),
+            paths.Order(PathComparer).ToArray(),
+            terms.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ignored.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
             []);
+    }
+
+    private static bool ShouldUseNaturalLanguageDiscovery(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.PathLikeSpans.Count > 0
+            || interpretation.StableSymbolIds.Count > 0
+            || interpretation.QualifiedNames.Count > 0
+            || interpretation.ExactIdentifiers.Count > 0
+            || interpretation.Terms.Count > 0;
+    }
+
+    private static IEnumerable<string> ExtractCodeExploreTokens(string query)
+    {
+        var builder = new StringBuilder(query.Length);
+        foreach (var character in query)
+        {
+            if (char.IsLetterOrDigit(character) || character is '_' or '.' or ':' or '/' or '\\' or '-' or '`' or '+')
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                var token = TrimCodeExploreToken(builder.ToString());
+                if (token.Length > 0)
+                {
+                    yield return token;
+                }
+
+                builder.Clear();
+            }
+        }
+
+        if (builder.Length > 0)
+        {
+            var token = TrimCodeExploreToken(builder.ToString());
+            if (token.Length > 0)
+            {
+                yield return token;
+            }
+        }
+    }
+
+    private static string TrimCodeExploreToken(string token)
+    {
+        return token.Trim(' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '<', '>', '"', '\'', '`');
+    }
+
+    private static bool IsCodeExploreExactIdentifier(string value)
+    {
+        return value.Length > 1
+            && SyntaxFacts.IsValidIdentifier(value)
+            && (value.Any(char.IsUpper)
+                || value.Any(char.IsDigit)
+                || value.Contains('_', StringComparison.Ordinal));
+    }
+
+    private static bool IsQualifiedIdentifierName(string value)
+    {
+        return value.Contains('.')
+            && value.Split('.', StringSplitOptions.RemoveEmptyEntries).All(part => SyntaxFacts.IsValidIdentifier(part));
+    }
+
+    private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, long generation)
+    {
+        return $"{workspaceId.Value:D}:{generation}";
+    }
+
+    private static string NormalizeComparableName(string value)
+    {
+        var normalized = NormalizeSymbolAnchor(value)
+            .Replace("global::", string.Empty, StringComparison.Ordinal)
+            .Replace('+', '.')
+            .Trim();
+        return normalized.ToLowerInvariant();
+    }
+
+    private static void AddCodeExploreTerms(HashSet<string> terms, string value)
+    {
+        var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddCodeExploreTerms(terms, ignored, value);
+    }
+
+    private static void AddCodeExploreTerms(
+        HashSet<string> terms,
+        HashSet<string> ignored,
+        string value)
+    {
+        foreach (var part in SplitCodeExploreWords(value))
+        {
+            foreach (var segment in SplitIdentifierSegments(part))
+            {
+                var term = segment.ToLowerInvariant();
+                if (term.Length < 2)
+                {
+                    continue;
+                }
+
+                if (NaturalLanguageStopWords.Contains(term))
+                {
+                    ignored.Add(term);
+                    continue;
+                }
+
+                AddNormalizedCodeExploreTerm(terms, term);
+            }
+        }
+    }
+
+    private static void AddNormalizedCodeExploreTerm(HashSet<string> terms, string term)
+    {
+        foreach (var variant in CreateCodeExploreTermVariants(term))
+        {
+            terms.Add(variant);
+        }
+    }
+
+    private static IReadOnlyList<string> CreateCodeExploreTermVariants(string term)
+    {
+        var variants = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { term };
+        if (term.Length > 4 && term.EndsWith('s') && !term.EndsWith("ss", StringComparison.Ordinal) && !term.EndsWith("is", StringComparison.Ordinal))
+        {
+            variants.Add(term[..^1]);
+        }
+
+        if (term.Length > 5 && term.EndsWith("ing", StringComparison.Ordinal))
+        {
+            var stem = term[..^3];
+            variants.Add(stem);
+            variants.Add(stem + "e");
+        }
+
+        if (term.Length > 4 && term.EndsWith("ed", StringComparison.Ordinal))
+        {
+            var stem = term[..^2];
+            variants.Add(stem);
+            variants.Add(stem + "e");
+        }
+
+        if (term.Length > 6 && term.EndsWith("ment", StringComparison.Ordinal))
+        {
+            variants.Add(term[..^4]);
+        }
+
+        return variants.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IEnumerable<string> SplitCodeExploreWords(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (char.IsLetterOrDigit(character) || character == '_')
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                yield return builder.ToString();
+                builder.Clear();
+            }
+        }
+
+        if (builder.Length > 0)
+        {
+            yield return builder.ToString();
+        }
+    }
+
+    private static IEnumerable<string> SplitIdentifierSegments(string value)
+    {
+        foreach (var part in value.Split('_', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part.Length == 0)
+            {
+                continue;
+            }
+
+            var start = 0;
+            for (var index = 1; index < part.Length; index++)
+            {
+                var previous = part[index - 1];
+                var current = part[index];
+                var next = index + 1 < part.Length ? part[index + 1] : '\0';
+                var startsNewWord = (char.IsUpper(current) && (char.IsLower(previous) || (char.IsUpper(previous) && char.IsLower(next))))
+                    || (char.IsDigit(current) && !char.IsDigit(previous))
+                    || (!char.IsDigit(current) && char.IsDigit(previous));
+                if (!startsNewWord)
+                {
+                    continue;
+                }
+
+                if (index > start)
+                {
+                    yield return part[start..index];
+                }
+
+                start = index;
+            }
+
+            if (start < part.Length)
+            {
+                yield return part[start..];
+            }
+        }
+    }
+
+    private static bool IsCSharpPathSpan(string value)
+    {
+        return !value.Any(char.IsWhiteSpace)
+            && value.Contains(".cs", StringComparison.OrdinalIgnoreCase)
+            && (value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || value.Contains('/')
+                || value.Contains('\\'));
+    }
+
+    private static bool CandidateCoversTerm(CodeExploreDeclarationCatalogEntry entry, string term)
+    {
+        var variants = CreateCodeExploreTermVariants(term);
+        return entry.Terms.Any(candidate => variants.Any(variant => string.Equals(candidate, variant, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string CanonicalCodeExploreTerm(string term)
+    {
+        return CreateCodeExploreTermVariants(term)
+            .OrderBy(variant => variant.Length)
+            .ThenBy(variant => variant, StringComparer.OrdinalIgnoreCase)
+            .First();
+    }
+
+    private static bool PathSpanMatchesEntry(string path, CodeExploreDeclarationCatalogEntry entry)
+    {
+        var normalized = path.Replace('\\', '/').Trim('/');
+        var relative = entry.RelativeFilePath.Replace('\\', '/').Trim('/');
+        return relative.Equals(normalized, StringComparison.OrdinalIgnoreCase)
+            || relative.EndsWith('/' + normalized, StringComparison.OrdinalIgnoreCase)
+            || Path.GetFileName(relative).Equals(normalized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IdentifierMatchesEntry(string identifier, CodeExploreDeclarationCatalogEntry entry)
+    {
+        return string.Equals(NormalizeComparableName(entry.Name), identifier, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(NormalizeComparableName(entry.MetadataName), identifier, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(NormalizeComparableName(StripParameters(entry.DisplayName)), identifier, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCommonCodeExploreTerm(
+        string term,
+        IReadOnlyDictionary<string, int> termCounts,
+        int catalogEntryCount)
+    {
+        var count = termCounts.GetValueOrDefault(term);
+        var threshold = Math.Max(25, catalogEntryCount / 12);
+        return count > threshold;
+    }
+
+    private static bool HasContainingTypeCorroboration(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var containerTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(entry.ContainingType))
+        {
+            AddCodeExploreTerms(containerTerms, entry.ContainingType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.ContainingNamespace))
+        {
+            AddCodeExploreTerms(containerTerms, entry.ContainingNamespace);
+        }
+
+        return containerTerms.Count > 0
+            && interpretation.Terms.Any(containerTerms.Contains)
+            && interpretation.Terms.Any(term => CandidateCoversTerm(entry, term));
+    }
+
+    private static bool HasTestFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(term => term is "test" or "tests" or "testing")
+            || interpretation.ExactIdentifiers.Any(identifier => identifier.Contains("Test", StringComparison.Ordinal));
+    }
+
+    private static bool HasGeneratedFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(term => term is "generated" or "generator" or "sourcegenerated");
+    }
+
+    private static bool HasKindFocus(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var kind = entry.Kind.ToLowerInvariant();
+        return interpretation.Terms.Any(term => term switch
+        {
+            "class" or "type" => kind is "class" or "struct" or "record" or "interface" or "namedtype",
+            "interface" => kind == "interface",
+            "method" or "function" => kind is "method" or "constructor" or "localfunction",
+            "property" => kind == "property",
+            "field" => kind == "field",
+            "enum" => kind == "enum",
+            "delegate" => kind == "delegate",
+            _ => false,
+        });
+    }
+
+    private static CodeExploreCandidateTier MinTier(
+        CodeExploreCandidateTier left,
+        CodeExploreCandidateTier right)
+    {
+        return (int)left <= (int)right ? left : right;
+    }
+
+    private static int KindSortRank(string kind)
+    {
+        return kind.ToLowerInvariant() switch
+        {
+            "class" or "interface" or "struct" or "record" or "namedtype" => 0,
+            "constructor" => 1,
+            "method" or "localfunction" => 2,
+            "property" => 3,
+            "field" => 4,
+            "enum" or "delegate" => 5,
+            _ => 6,
+        };
+    }
+
+    private static IReadOnlyList<string> CreateAmbiguityGroups(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlySet<string> selectedIds)
+    {
+        return ranked
+            .GroupBy(candidate => candidate.AmbiguityGroup, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1 && group.Any(candidate => selectedIds.Contains(candidate.Entry.Identity.Id)))
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(16)
+            .Select(group => $"{group.Key}: {group.Count()} candidates")
+            .ToArray();
+    }
+
+    private static string CreateAmbiguityKey(CodeExploreDeclarationCatalogEntry entry)
+    {
+        var container = entry.ContainingType ?? entry.ContainingNamespace ?? entry.ProjectName;
+        return string.IsNullOrWhiteSpace(container)
+            ? entry.Name
+            : $"{container}.{entry.Name}";
+    }
+
+    private static string CreateNaturalLanguageSelectionReason(
+        CodeExploreRankedCandidate candidate,
+        bool selected)
+    {
+        var prefix = selected ? "Selected" : "Retained";
+        return $"{prefix} natural-language candidate in {candidate.Tier} tier: {FormatSelectionReasons(candidate.Reasons)}.";
+    }
+
+    private static string FormatSelectionReasons(CodeExploreSelectionReason reasons)
+    {
+        var names = Enum.GetValues<CodeExploreSelectionReason>()
+            .Where(reason => reason != CodeExploreSelectionReason.None && (reasons & reason) == reason)
+            .Select(reason => reason.ToString())
+            .ToArray();
+        return names.Length == 0 ? "no exposed reason" : string.Join(", ", names);
+    }
+
+    private static int ResolveNaturalLanguageCandidateSummaryLimit(
+        int maximumSourceCharacters,
+        int pinnedSummaryCount)
+    {
+        var budgetedSummaries = Math.Max(1, maximumSourceCharacters / 512);
+        return Math.Max(
+            0,
+            Math.Min(MaximumNaturalLanguageCandidateSummaries, budgetedSummaries) - pinnedSummaryCount);
+    }
+
+    private static int EstimateReservedCodeExploreCharacters(
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreDiscoverySummary? discovery)
+    {
+        var reserved = 256
+            + (interpretation.Terms.Count * 16)
+            + (interpretation.PathLikeSpans.Count * 48)
+            + ((discovery?.SelectedCount ?? 0) * 64);
+        return Math.Min(4096, reserved);
+    }
+
+    private static bool IsUsefulCodeExploreSection(CodeExploreFileSection section)
+    {
+        if (section.Source.NumberedLines.Count == 0)
+        {
+            return false;
+        }
+
+        return section.Source.Completeness == CodeExploreSourceCompleteness.Complete
+            || section.Source.NumberedLines.Sum(line => line.Length) >= MinimumUsefulSourceCharacters;
+    }
+
+    private static bool IsTestProjectNameOrPath(string projectName, string relativePath)
+    {
+        return projectName.Contains("Test", StringComparison.OrdinalIgnoreCase)
+            || relativePath.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || Path.GetFileName(relativePath).Contains("Test", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolIdAsync(
@@ -3223,6 +4572,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 EffectiveSelectionMode(anchor),
                 anchor.ExpectedFileSha256,
                 anchor.ExpectedWorkspaceGeneration,
+                anchor.AllocationRank,
                 SourceText.From(sourceText.Text, Encoding.UTF8),
                 sourceText.FileSha256));
             return new(false);
@@ -3525,7 +4875,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
 
             var declaration = await reference.GetSyntaxAsync(cancellationToken);
-            var document = snapshot.Solution.GetDocument(declaration.SyntaxTree);
+            var document = await FindDocumentForSyntaxTreeAsync(
+                snapshot,
+                declaration.SyntaxTree,
+                cancellationToken);
             if (document is null)
             {
                 continue;
@@ -3550,6 +4903,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExplorePathSelectionMode.Auto,
                 null,
                 null,
+                anchor.AllocationRank,
                 null,
                 null));
         }
@@ -3575,7 +4929,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 continue;
             }
 
-            var document = snapshot.Solution.GetDocument(location.SourceTree);
+            var document = await FindDocumentForSyntaxTreeAsync(
+                snapshot,
+                location.SourceTree,
+                cancellationToken);
             candidates.Add(new CodeExploreSectionCandidate(
                 document,
                 sourceLocation.FilePath,
@@ -3592,6 +4949,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExplorePathSelectionMode.Auto,
                 null,
                 null,
+                anchor.AllocationRank,
                 null,
                 null));
         }
@@ -3684,6 +5042,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             EffectiveSelectionMode(anchor),
             anchor.ExpectedFileSha256,
             anchor.ExpectedWorkspaceGeneration,
+            anchor.AllocationRank,
             null,
             null);
     }
@@ -3828,6 +5187,40 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 candidate.Location?.IsLinked ?? false,
                 candidate.SelectionReason);
             return new(drifted, 0, []);
+        }
+
+        if (sourceCharacterBudget < MinimumUsefulSourceCharacters && span.Value.Length > sourceCharacterBudget)
+        {
+            var startLine = text.Lines.GetLineFromPosition(Math.Min(span.Value.Start, text.Length)).LineNumber + 1;
+            var endLine = GetSpanEndLine(text, span.Value);
+            var source = new CodeExploreSourceRange(
+                new SourceRange(startLine, 1, endLine, 1),
+                [],
+                fileIdentity.FileSha256,
+                null,
+                CodeExploreSourceCompleteness.Omitted,
+                [$"L{startLine}-L{endLine} omitted because the remaining per-file budget is below the minimum useful source section size."],
+                relativePath);
+            var omitted = new CodeExploreFileSection(
+                relativePath,
+                projectName,
+                targetFramework,
+                CreateSectionIdentities(candidate),
+                source,
+                IsGeneratedPath(candidate.FilePath),
+                candidate.Location?.IsLinked ?? false,
+                candidate.SelectionReason);
+            return new(omitted, 0, [new CodeExploreContinuationTarget(
+                CodeExploreAnchorKind.Path,
+                relativePath,
+                relativePath,
+                startLine,
+                endLine,
+                false,
+                CodeExplorePathSelectionMode.ExactLineRange,
+                fileIdentity.FileSha256,
+                snapshot.Generation,
+                "Retry with this path anchor after increasing source limits; the remaining budget was too small for useful source.")]);
         }
 
         var projected = ProjectSourceRange(
@@ -4368,9 +5761,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool QueryLooksLikePath(string query)
     {
-        return query.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-            || query.Contains('/')
-            || query.Contains('\\');
+        var trimmed = query.Trim();
+        return !trimmed.Any(char.IsWhiteSpace)
+            && (trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || trimmed.Contains('/')
+                || trimmed.Contains('\\'));
     }
 
     private static bool LooksLikeDocumentationId(string value)
@@ -4749,14 +6144,62 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return location is null ? null : await CreateLocationAsync(snapshot, projection, location, cancellationToken);
     }
 
-    private static Task<SemanticSourceLocation?> CreateLocationAsync(
+    private static async Task<SemanticSourceLocation?> CreateLocationAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         Location location,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(CreateLocation(snapshot, projection, location));
+        if (!location.IsInSource || location.SourceTree is null)
+        {
+            return null;
+        }
+
+        var document = await FindDocumentForSyntaxTreeAsync(
+            snapshot,
+            location.SourceTree,
+            cancellationToken);
+        return document is null
+            ? null
+            : CreateDocumentLocation(document, location.SourceTree, location.SourceSpan, projection);
+    }
+
+    private static async Task<Document?> FindDocumentForSyntaxTreeAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SyntaxTree syntaxTree,
+        CancellationToken cancellationToken)
+    {
+        var document = snapshot.Solution.GetDocument(syntaxTree);
+        if (document is not null)
+        {
+            return document;
+        }
+
+        foreach (var project in snapshot.Solution.Projects
+            .Where(project => snapshot.CompiledProjects.Contains(project.Id))
+            .OrderBy(project => project.Name, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IEnumerable<Document> generatedDocuments = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
+            foreach (var generatedDocument in generatedDocuments.OrderBy(item => item.FilePath ?? item.Name, PathComparer))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var root = await generatedDocument.GetSyntaxRootAsync(cancellationToken);
+                if (root is null)
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(root.SyntaxTree, syntaxTree)
+                    || string.Equals(root.SyntaxTree.FilePath, syntaxTree.FilePath, PathComparison))
+                {
+                    return generatedDocument;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static SemanticSourceLocation? CreateLocation(

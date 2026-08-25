@@ -3,6 +3,7 @@ namespace Threadsmith.NativeTools.Tests;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
@@ -359,6 +360,204 @@ public sealed class Plan81CodeExploreToolTests
         Assert.Contains(result.Omissions, omission => omission.Contains("capped", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>Natural-language discovery ranks compiler-known multi-term declarations and allocates usable source.</summary>
+    [Fact]
+    public async Task CodeExplore_NaturalLanguageQuery_RanksCandidatesAndAllocatesSource()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "default temporal filtering response transparency",
+                Mode = CodeExploreMode.Survey,
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var discovery = result.Discovery ?? throw new InvalidOperationException("Expected natural-language discovery metadata.");
+        Assert.Empty(result.QueryInterpretation?.ExactIdentifiers ?? []);
+        Assert.True(discovery.CandidateCount > 0);
+        Assert.Contains(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol?.DisplayName.Contains("BuildDefaultTemporalTransparency", StringComparison.Ordinal) == true
+            && summary.Reasons.HasFlag(CodeExploreSelectionReason.MultiTerm));
+        Assert.Contains(result.FileSections, section =>
+            section.FilePath == "src/Library/Code.cs"
+            && section.Source.NumberedLines.Any(line =>
+                line.Contains("BuildDefaultTemporalTransparency", StringComparison.Ordinal)));
+        Assert.True(result.Allocation?.SpentSourceCharacters > 0);
+    }
+
+    /// <summary>Natural-language ranking statistics use only entries allowed by the invocation path policy.</summary>
+    [Fact]
+    public async Task CodeExplore_NaturalLanguageQuery_UsesAllowedEntriesForRankingStatistics()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var request = new CodeExploreRequest
+        {
+            Query = "secret temporal transparency",
+            Mode = CodeExploreMode.Survey,
+            Limits = CreateWideLimits(),
+        };
+
+        var unrestricted = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var restricted = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader("secret/**"),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(restricted.Discovery?.CatalogEntryCount < unrestricted.Discovery?.CatalogEntryCount);
+        Assert.DoesNotContain(restricted.CandidateSummaries ?? [], summary =>
+            summary.Location?.FilePath.StartsWith("secret/", StringComparison.OrdinalIgnoreCase) == true
+            || summary.FilePath?.StartsWith("secret/", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain(restricted.FileSections, section =>
+            section.FilePath.StartsWith("secret/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Local functions are not cataloged as top-level natural-language candidates with unresolvable stable ids.</summary>
+    [Fact]
+    public async Task CodeExplore_NaturalLanguageQuery_DoesNotSelectUnresolvableLocalFunctions()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "hidden local temporal helper",
+                Mode = CodeExploreMode.Survey,
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
+            summary.Symbol?.DisplayName.Contains("HiddenLocalTemporalHelper", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(result.ResolvedAnchors, resolution =>
+            resolution.Input.Contains("HiddenLocalTemporalHelper", StringComparison.Ordinal));
+    }
+
+    /// <summary>The adapter bounds oversized code-explore metadata to the selected model budget.</summary>
+    [Fact]
+    public async Task CodeExploreTool_MetadataExceedsModelBudget_IsTrimmedConsistently()
+    {
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan83-adapter-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repositoryPath);
+        try
+        {
+            var identity = new SemanticSymbolIdentity("M:Example.Large.Item", "Example.Large.Item", "Method");
+            var location = new CodeExploreLocation(
+                "Example",
+                "net10.0",
+                "src/Example.cs",
+                new SourceRange(1, 1, 1, 10),
+                false,
+                false);
+            var fileSections = Enumerable.Range(0, 8)
+                .Select(index => new CodeExploreFileSection(
+                    $"src/Example{index}.cs",
+                    "Example",
+                    "net10.0",
+                    [identity],
+                    new CodeExploreSourceRange(
+                        new SourceRange(1, 1, 1, 10),
+                        [$"1: {new string('x', 400)}"],
+                        new string('a', 64),
+                        new string('b', 64),
+                        CodeExploreSourceCompleteness.Complete,
+                        [],
+                        null),
+                    false,
+                    false,
+                    "large test section"))
+                .ToArray();
+            var summaries = Enumerable.Range(0, 80)
+                .Select(index => new CodeExploreCandidateSummary(
+                    identity,
+                    location,
+                    location.FilePath,
+                    CodeExploreCandidateTier.MultiTermStructural,
+                    CodeExploreSelectionReason.MultiTerm,
+                    index + 1,
+                    index < 8,
+                    new string('r', 200),
+                    $"group-{index}"))
+                .ToArray();
+            var result = new CodeExploreResult(
+                1,
+                SemanticConfidenceLevel.FullSemantic,
+                [new CodeExploreAnchorResolution("Example", CodeExploreAnchorKind.SymbolName, CodeExploreResolutionOutcome.Resolved, identity, location, [], "resolved")],
+                fileSections,
+                new CodeExploreCoverage(true, true, true, true, []),
+                [],
+                [],
+                Flow: new CodeExploreFlow(
+                    [],
+                    [new CodeExploreFlowNode(identity, CodeExploreFlowNodeRole.NamedAnchor, 0, 7, true, false, [location])],
+                    [],
+                    [new CodeExploreDispatchBranch(identity, null, [new CodeExploreDispatchTarget(identity, location, 7)], 1, 1, [])],
+                    [],
+                    new SemanticTraversalSummary(1, 0, true, false, false, false, false, [])),
+                QueryInterpretation: new CodeExploreQueryInterpretation([], [], [], [], ["large"], [], []),
+                Discovery: new CodeExploreDiscoverySummary(80, 80, 8, true, false, [], "test"),
+                CandidateSummaries: summaries,
+                Allocation: new CodeExploreAllocationSummary(
+                    50_000,
+                    0,
+                    fileSections.Sum(section => section.Source.NumberedLines.Sum(line => line.Length)),
+                    "test",
+                    fileSections.Select(section => new CodeExploreAllocationFileSummary(
+                        section.FilePath,
+                        16_384,
+                        section.Source.NumberedLines.Sum(line => line.Length),
+                        section.Source.Completeness,
+                        true,
+                        null)).ToArray()));
+            var context = new ToolExecutionContext(
+                ToolInvocationId.New(),
+                SessionId.New(),
+                RunId.New(),
+                new ToolInvocationContext
+                {
+                    RepositoryPath = repositoryPath,
+                    WorkspaceId = WorkspaceId.New(),
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    ApprovedRoots = ["."],
+                    RequestedBy = "plan-83-tests",
+                    ModelEffectiveInputBudgetTokens = 600,
+                });
+
+            var execution = await new CodeExploreTool(new StubCodeExploreService(result)).ExecuteAsync(
+                new CodeExploreRequest { Query = "large" },
+                context,
+                TestContext.Current.CancellationToken);
+
+            var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(execution.Value);
+            Assert.InRange(jsonBytes.Length, 0, 600 * 3);
+            Assert.Contains(execution.Value.Omissions, omission => omission.Contains("selected model request budget", StringComparison.Ordinal));
+            var retainedSectionCount = execution.Value.FileSections.Count;
+            Assert.All(execution.Value.Flow?.Nodes ?? [], node =>
+                Assert.True(node.SourceSectionIndex is null || node.SourceSectionIndex < retainedSectionCount));
+            Assert.All(execution.Value.Flow?.DispatchBranches ?? [], branch =>
+                Assert.All(branch.Implementations, target =>
+                    Assert.True(target.SourceSectionIndex is null || target.SourceSectionIndex < retainedSectionCount)));
+            Assert.All(execution.Value.Allocation?.Files ?? [], file =>
+                Assert.Contains(execution.Value.FileSections, section => section.FilePath == file.FilePath));
+        }
+        finally
+        {
+            Directory.Delete(repositoryPath, recursive: true);
+        }
+    }
+
     /// <summary>The tool adapter fails closed for null-location symbol metadata returned across the service boundary.</summary>
     [Fact]
     public async Task CodeExploreTool_NullLocationSymbolMetadata_IsOmittedByPolicyAdapter()
@@ -633,6 +832,29 @@ public sealed class Plan81CodeExploreToolTests
                     public string Run()
                     {
                         return "ok";
+                    }
+                }
+
+                public sealed class TemporalTransparencyFlow
+                {
+                    public string BuildDefaultTemporalTransparency()
+                    {
+                        return ApplyDefaultTemporalFilter(CreateResponseTransparency());
+
+                        static string HiddenLocalTemporalHelper()
+                        {
+                            return "local";
+                        }
+                    }
+
+                    private static string ApplyDefaultTemporalFilter(string responseTransparency)
+                    {
+                        return $"temporal:{responseTransparency}";
+                    }
+
+                    private static string CreateResponseTransparency()
+                    {
+                        return "transparent";
                     }
                 }
 

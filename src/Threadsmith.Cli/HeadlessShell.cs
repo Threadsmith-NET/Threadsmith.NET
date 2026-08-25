@@ -553,152 +553,54 @@ public sealed class HeadlessShell
             var runId = await _dispatcher.DispatchAsync(
                 new SubmitRequestCommand(sessionId, request),
                 cancellationToken);
-            var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
-            SessionProjection? state;
-            while (true)
-            {
-                state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
-                if (state?.Phase is RunPhase.AwaitingPlanApproval
-                    or RunPhase.Completion
-                    or RunPhase.Failed
-                    or RunPhase.Cancelled
-                    or RunPhase.RolledBack)
-                {
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
-            }
-
-            var pendingPlan = state?.Phase == RunPhase.AwaitingPlanApproval;
-            var succeeded = !pendingPlan && await _dispatcher.DispatchAsync(
-                new WaitForRunCommand(runId),
-                cancellationToken);
-            if (state is null)
-            {
-                return 1;
-            }
-
-            foreach (var line in state.Activity)
-            {
-                await _output.WriteAsync(line.AsMemory(), cancellationToken);
-            }
-
-            foreach (var tool in state.ToolActivity.Where(tool => tool.RunId == runId))
-            {
-                var status = tool.IsCompleted
-                    ? tool.Succeeded ? "succeeded" : "failed"
-                    : "running";
-                await _output.WriteLineAsync(
-                    $"Tool {tool.ToolName}: {status}".AsMemory(),
-                    cancellationToken);
-                if (tool.ResultPreview is not null)
-                {
-                    await _output.WriteLineAsync(
-                        tool.ResultPreview.AsMemory(),
-                        cancellationToken);
-                }
-
-                if (!tool.Succeeded && tool.Error is not null)
-                {
-                    await _output.WriteLineAsync(
-                        $"Tool error: {tool.Error}".AsMemory(),
-                        cancellationToken);
-                }
-            }
-
-            foreach (var approval in state.PendingApprovals)
-            {
-                await _output.WriteLineAsync(
-                    $"Approval pending: {approval.Action}".AsMemory(),
-                    cancellationToken);
-            }
-
-            if (state.Plan is { } plan)
-            {
-                await _output.WriteLineAsync(
-                    $"Plan revision {plan.Plan.Revision} ({plan.Status}): {plan.Plan.Summary}"
-                        .AsMemory(),
-                    cancellationToken);
-                foreach (var step in plan.Plan.Steps)
-                {
-                    await _output.WriteLineAsync(
-                        $"- {step.Title}: {step.ExpectedOutcome}".AsMemory(),
-                        cancellationToken);
-                }
-            }
-
-            if (state.ContextInspection is { } inspection)
-            {
-                await _output.WriteLineAsync(
-                    ($"Context: logical {inspection.LogicalTokens}, wire "
-                        + $"{inspection.WireInputTokens}/{inspection.TokenBudget} tokens; "
-                        + $"stable-prefix {inspection.StablePrefixTokens}; tools {inspection.ToolTransportMode}")
-                        .AsMemory(),
-                    cancellationToken);
-            }
-
-            foreach (var diagnostic in state.Diagnostics)
-            {
-                await _output.WriteLineAsync(
-                    $"Diagnostic {diagnostic.Severity} {diagnostic.Code} "
-                        .AsMemory(),
-                    cancellationToken);
-                await _output.WriteLineAsync(
-                    $"[{diagnostic.Classification}; {diagnostic.Confidence}]: {diagnostic.Message}"
-                        .AsMemory(),
-                    cancellationToken);
-            }
-
-            if (state.TestValidation is { } tests)
-            {
-                await _output.WriteLineAsync(
-                    $"Tests: {tests.Passed} passed, {tests.Failed} failed, {tests.Skipped} skipped"
-                        .AsMemory(),
-                    cancellationToken);
-                foreach (var reason in tests.Selection.Rationale)
-                {
-                    await _output.WriteLineAsync(
-                        $"Selection: {reason}".AsMemory(),
-                        cancellationToken);
-                }
-            }
-
-            if (state.Mutation is { } mutation)
-            {
-                await _output.WriteLineAsync(
-                    $"Mutation set {mutation.MutationSetId}: "
-                        .AsMemory(),
-                    cancellationToken);
-                foreach (var lifecycle in mutation.Preview.LifecycleChanges)
-                {
-                    var destination = lifecycle.DestinationPath is null
-                        ? string.Empty
-                        : $" -> {lifecycle.DestinationPath}";
-                    var casing = lifecycle.IsCaseOnlyMove ? ", case-only" : string.Empty;
-                    var lifecycleText = $"Lifecycle {lifecycle.Type}: "
-                        + $"{lifecycle.SourcePath}{destination} [{lifecycle.Risk}{casing}]";
-                    await _output.WriteLineAsync(
-                        lifecycleText.AsMemory(),
-                        cancellationToken);
-                }
-
-                await _output.WriteAsync(
-                    mutation.Preview.UnifiedDiff.AsMemory(),
-                    cancellationToken);
-            }
-
-            var directAuthorizationRequired = state.ToolActivity.Any(tool =>
-                tool.RunId == runId
-                && !tool.Succeeded
-                && tool.Error?.StartsWith("DirectAuthorizationRequired", StringComparison.Ordinal) == true);
-            return directAuthorizationRequired
-                ? DirectAuthorizationRequiredExitCode
-                : pendingPlan ? 2 : succeeded ? 0 : 1;
+            return await WaitAndWriteRunAsync(sessionId, runId, cancellationToken);
         }
         catch (OperationCanceledException)
         {
             return 130;
+        }
+    }
+
+    /// <summary>Opens a repository, selects a solution, captures a baseline, and runs one scripted request.</summary>
+    public async Task<int> RunRepositoryRequestAsync(
+        string sessionName,
+        string repositoryPath,
+        RepositoryTrustLevel trustLevel,
+        string? solutionPath,
+        string request,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var sessionId = await _dispatcher.DispatchAsync(
+                new CreateSessionCommand(sessionName),
+                cancellationToken);
+            var repositoryReady = await OpenRepositoryForHeadlessRunAsync(
+                sessionId,
+                repositoryPath,
+                trustLevel,
+                solutionPath,
+                cancellationToken);
+            if (!repositoryReady)
+            {
+                return 2;
+            }
+
+            var runId = await _dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, request),
+                cancellationToken);
+            return await WaitAndWriteRunAsync(sessionId, runId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return 130;
+        }
+        catch (Exception exception)
+        {
+            await _output.WriteLineAsync(
+                $"Repository request failed: {exception.Message}".AsMemory(),
+                cancellationToken);
+            return 1;
         }
     }
 
@@ -850,77 +752,14 @@ public sealed class HeadlessShell
             var sessionId = await _dispatcher.DispatchAsync(
                 new CreateSessionCommand(sessionName),
                 cancellationToken);
-            var opened = await _dispatcher.DispatchAsync(
-                new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel),
-                cancellationToken);
-            await _output.WriteLineAsync(
-                $"Repository: {opened.RepositoryPath}".AsMemory(),
-                cancellationToken);
-            await _output.WriteLineAsync(
-                $"Trust: {opened.Trust.Level}".AsMemory(),
-                cancellationToken);
-            if (opened.Environment is not null)
-            {
-                await _output.WriteLineAsync(
-                    $"SDK: {opened.Environment.SdkVersion}".AsMemory(),
-                    cancellationToken);
-            }
-
-            if (opened.Trust.Level < RepositoryTrustLevel.TrustedRead)
-            {
-                await _output.WriteLineAsync(
-                    "TrustedRead is required to select a solution and capture a baseline.".AsMemory(),
-                    cancellationToken);
-                foreach (var candidate in opened.SolutionCandidates)
-                {
-                    await _output.WriteLineAsync($"Candidate: {candidate}".AsMemory(), cancellationToken);
-                }
-
-                return 2;
-            }
-
-            var useRememberedSolution = solutionPath is null
-                && !string.IsNullOrWhiteSpace(opened.Configuration.SolutionPath);
-            var effectiveSolutionPath = solutionPath ?? opened.Configuration.SolutionPath;
-            if (effectiveSolutionPath is null && opened.SolutionCandidates.Count > 1)
-            {
-                await _output.WriteLineAsync(
-                    "Multiple solution candidates were found; specify --solution with one of:".AsMemory(),
-                    cancellationToken);
-                foreach (var candidate in opened.SolutionCandidates)
-                {
-                    await _output.WriteLineAsync(
-                        $"Candidate: {candidate}".AsMemory(),
-                        cancellationToken);
-                }
-
-                return 2;
-            }
-
-            var selectedPath = effectiveSolutionPath
-                ?? opened.SolutionCandidates.SingleOrDefault()
-                ?? throw new InvalidOperationException("No solution or project candidate was found.");
-            if (useRememberedSolution)
-            {
-                await _output.WriteLineAsync(
-                    $"Loading remembered solution: {opened.Configuration.SolutionPath}".AsMemory(),
-                    cancellationToken);
-            }
-
-            var selected = await _dispatcher.DispatchAsync(
-                new SelectSolutionCommand(sessionId, opened.WorkspaceId, selectedPath),
-                cancellationToken);
-            var baseline = await _dispatcher.DispatchAsync(
-                new RecordBaselineCommand(sessionId, opened.WorkspaceId),
-                cancellationToken);
-            await _output.WriteLineAsync($"Solution: {selected.SolutionPath}".AsMemory(), cancellationToken);
-            await _output.WriteLineAsync(
-                $"Target frameworks: {string.Join(", ", selected.TargetFrameworks)}".AsMemory(),
-                cancellationToken);
-            await _output.WriteLineAsync(
-                $"Baseline files: {baseline.Files.Count}".AsMemory(),
-                cancellationToken);
-            return 0;
+            return await OpenRepositoryForHeadlessRunAsync(
+                sessionId,
+                repositoryPath,
+                trustLevel,
+                solutionPath,
+                cancellationToken)
+                ? 0
+                : 2;
         }
         catch (OperationCanceledException)
         {
@@ -933,5 +772,272 @@ public sealed class HeadlessShell
                 cancellationToken);
             return 1;
         }
+    }
+
+    private async Task<int> WaitAndWriteRunAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken)
+    {
+        var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
+        SessionProjection? state;
+        while (true)
+        {
+            state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
+            if (state?.Phase is RunPhase.AwaitingPlanApproval
+                or RunPhase.Completion
+                or RunPhase.Failed
+                or RunPhase.Cancelled
+                or RunPhase.RolledBack)
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+        }
+
+        var pendingPlan = state?.Phase == RunPhase.AwaitingPlanApproval;
+        var succeeded = !pendingPlan && await _dispatcher.DispatchAsync(
+            new WaitForRunCommand(runId),
+            cancellationToken);
+        if (state is null)
+        {
+            return 1;
+        }
+
+        foreach (var line in state.Activity)
+        {
+            await _output.WriteAsync(line.AsMemory(), cancellationToken);
+        }
+
+        foreach (var tool in state.ToolActivity.Where(tool => tool.RunId == runId))
+        {
+            var status = tool.IsCompleted
+                ? tool.Succeeded ? "succeeded" : "failed"
+                : "running";
+            await _output.WriteLineAsync(
+                $"Tool {tool.ToolName}: {status}".AsMemory(),
+                cancellationToken);
+            if (tool.ResultPreview is not null)
+            {
+                await _output.WriteLineAsync(
+                    tool.ResultPreview.AsMemory(),
+                    cancellationToken);
+            }
+
+            if (!tool.Succeeded && tool.Error is not null)
+            {
+                await _output.WriteLineAsync(
+                    $"Tool error: {tool.Error}".AsMemory(),
+                    cancellationToken);
+            }
+        }
+
+        foreach (var approval in state.PendingApprovals)
+        {
+            await _output.WriteLineAsync(
+                $"Approval pending: {approval.Action}".AsMemory(),
+                cancellationToken);
+        }
+
+        if (state.Plan is { } plan)
+        {
+            await _output.WriteLineAsync(
+                $"Plan revision {plan.Plan.Revision} ({plan.Status}): {plan.Plan.Summary}"
+                    .AsMemory(),
+                cancellationToken);
+            foreach (var step in plan.Plan.Steps)
+            {
+                await _output.WriteLineAsync(
+                    $"- {step.Title}: {step.ExpectedOutcome}".AsMemory(),
+                    cancellationToken);
+            }
+        }
+
+        if (state.ContextInspection is { } inspection)
+        {
+            await _output.WriteLineAsync(
+                ($"Context: logical {inspection.LogicalTokens}, wire "
+                    + $"{inspection.WireInputTokens}/{inspection.TokenBudget} tokens; "
+                    + $"stable-prefix {inspection.StablePrefixTokens}; tools {inspection.ToolTransportMode}")
+                    .AsMemory(),
+                cancellationToken);
+        }
+
+        foreach (var diagnostic in state.Diagnostics)
+        {
+            await _output.WriteLineAsync(
+                $"Diagnostic {diagnostic.Severity} {diagnostic.Code} "
+                    .AsMemory(),
+                cancellationToken);
+            await _output.WriteLineAsync(
+                $"[{diagnostic.Classification}; {diagnostic.Confidence}]: {diagnostic.Message}"
+                    .AsMemory(),
+                cancellationToken);
+        }
+
+        if (state.TestValidation is { } tests)
+        {
+            await _output.WriteLineAsync(
+                $"Tests: {tests.Passed} passed, {tests.Failed} failed, {tests.Skipped} skipped"
+                    .AsMemory(),
+                cancellationToken);
+            foreach (var reason in tests.Selection.Rationale)
+            {
+                await _output.WriteLineAsync(
+                    $"Selection: {reason}".AsMemory(),
+                    cancellationToken);
+            }
+        }
+
+        if (state.Mutation is { } mutation)
+        {
+            await _output.WriteLineAsync(
+                $"Mutation set {mutation.MutationSetId}: "
+                    .AsMemory(),
+                cancellationToken);
+            foreach (var lifecycle in mutation.Preview.LifecycleChanges)
+            {
+                var destination = lifecycle.DestinationPath is null
+                    ? string.Empty
+                    : $" -> {lifecycle.DestinationPath}";
+                var casing = lifecycle.IsCaseOnlyMove ? ", case-only" : string.Empty;
+                var lifecycleText = $"Lifecycle {lifecycle.Type}: "
+                    + $"{lifecycle.SourcePath}{destination} [{lifecycle.Risk}{casing}]";
+                await _output.WriteLineAsync(
+                    lifecycleText.AsMemory(),
+                    cancellationToken);
+            }
+
+            await _output.WriteAsync(
+                mutation.Preview.UnifiedDiff.AsMemory(),
+                cancellationToken);
+        }
+
+        var directAuthorizationRequired = state.ToolActivity.Any(tool =>
+            tool.RunId == runId
+            && !tool.Succeeded
+            && tool.Error?.StartsWith("DirectAuthorizationRequired", StringComparison.Ordinal) == true);
+        return directAuthorizationRequired
+            ? DirectAuthorizationRequiredExitCode
+            : pendingPlan ? 2 : succeeded ? 0 : 1;
+    }
+
+    private async Task<bool> OpenRepositoryForHeadlessRunAsync(
+        SessionId sessionId,
+        string repositoryPath,
+        RepositoryTrustLevel trustLevel,
+        string? solutionPath,
+        CancellationToken cancellationToken)
+    {
+        var opened = await _dispatcher.DispatchAsync(
+            new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel),
+            cancellationToken);
+        await _output.WriteLineAsync(
+            $"Repository: {opened.RepositoryPath}".AsMemory(),
+            cancellationToken);
+        await _output.WriteLineAsync(
+            $"Trust: {opened.Trust.Level}".AsMemory(),
+            cancellationToken);
+        if (opened.Environment is not null)
+        {
+            await _output.WriteLineAsync(
+                $"SDK: {opened.Environment.SdkVersion}".AsMemory(),
+                cancellationToken);
+        }
+
+        if (opened.Trust.Level < RepositoryTrustLevel.TrustedRead)
+        {
+            await _output.WriteLineAsync(
+                "TrustedRead is required to select a solution and capture a baseline.".AsMemory(),
+                cancellationToken);
+            foreach (var candidate in opened.SolutionCandidates)
+            {
+                await _output.WriteLineAsync($"Candidate: {candidate}".AsMemory(), cancellationToken);
+            }
+
+            return false;
+        }
+
+        var useRememberedSolution = solutionPath is null
+            && !string.IsNullOrWhiteSpace(opened.Configuration.SolutionPath);
+        var effectiveSolutionPath = solutionPath ?? opened.Configuration.SolutionPath;
+        if (effectiveSolutionPath is null && opened.SolutionCandidates.Count > 1)
+        {
+            await _output.WriteLineAsync(
+                "Multiple solution candidates were found; specify --solution with one of:".AsMemory(),
+                cancellationToken);
+            foreach (var candidate in opened.SolutionCandidates)
+            {
+                await _output.WriteLineAsync(
+                    $"Candidate: {candidate}".AsMemory(),
+                    cancellationToken);
+            }
+
+            return false;
+        }
+
+        var selectedPath = effectiveSolutionPath
+            ?? opened.SolutionCandidates.SingleOrDefault()
+            ?? throw new InvalidOperationException("No solution or project candidate was found.");
+        if (useRememberedSolution)
+        {
+            await _output.WriteLineAsync(
+                $"Loading remembered solution: {opened.Configuration.SolutionPath}".AsMemory(),
+                cancellationToken);
+        }
+
+        var selected = await _dispatcher.DispatchAsync(
+            new SelectSolutionCommand(sessionId, opened.WorkspaceId, selectedPath),
+            cancellationToken);
+        var baseline = await _dispatcher.DispatchAsync(
+            new RecordBaselineCommand(sessionId, opened.WorkspaceId),
+            cancellationToken);
+        await _output.WriteLineAsync($"Solution: {selected.SolutionPath}".AsMemory(), cancellationToken);
+        await _output.WriteLineAsync(
+            $"Target frameworks: {string.Join(", ", selected.TargetFrameworks)}".AsMemory(),
+            cancellationToken);
+        await _output.WriteLineAsync(
+            $"Baseline files: {baseline.Files.Count}".AsMemory(),
+            cancellationToken);
+        var semanticConfidence = await WaitForSemanticReadinessAsync(sessionId, cancellationToken);
+        await _output.WriteLineAsync(
+            $"Semantic confidence: {semanticConfidence}".AsMemory(),
+            cancellationToken);
+        if (semanticConfidence < SemanticConfidenceLevel.PartialCompilation)
+        {
+            await _output.WriteLineAsync(
+                "Semantic tools require PartialCompilation; repository request was not submitted.".AsMemory(),
+                cancellationToken);
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task<SemanticConfidenceLevel> WaitForSemanticReadinessAsync(
+        SessionId sessionId,
+        CancellationToken cancellationToken)
+    {
+        var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        var confidence = SemanticConfidenceLevel.None;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
+            if (state is not null)
+            {
+                confidence = state.SemanticConfidence;
+                if (confidence >= SemanticConfidenceLevel.PartialCompilation
+                    || state.IsSemanticLoadComplete)
+                {
+                    return confidence;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+
+        return confidence;
     }
 }

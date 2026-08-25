@@ -43,8 +43,9 @@ Expected: source suppression occurs only when exact unchanged ranges are demonst
 4. Confirm the result allocates usable line-numbered bodies or call-site windows to named and flow-spine files, returns compact pointers for relevant material that did not fit, and does not fill the budget merely because many files contain one common word.
 5. Repeat with CamelCase/snake_case terms, namespace-qualified names, overloads, a test-focused query, generated-code focus, a large repository, reduced output budget, partial compilation, timeout, and cancellation.
 6. Run the same fixed question several times with the same repository generation and configuration. Compare selected anchors, order, source allocation, rounds, follow-up reads/searches, duration, and answer correctness.
+7. Run a headless fixed question with explicit repository, trust, and solution arguments, for example `Threadsmith.App --repository <repo> --trust TrustedBuild --solution <solution> "<fixed natural-language C# question>"`. Confirm setup records a baseline, reaches at least `PartialCompilation` before the request is submitted, advertises `code_explore`, and fails closed without model submission if semantic readiness remains below `PartialCompilation`.
 
-Expected: natural-language exploration remains deterministic, Roslyn-backed, bounded, and explainable. Structural evidence governs ranking, source allocation remains useful under pressure, ambiguity and omissions are explicit, and repeated fixed inputs do not produce arbitrary retrieval order.
+Expected: natural-language exploration remains deterministic, Roslyn-backed, bounded, and explainable. Structural evidence governs ranking, source allocation remains useful under pressure, ambiguity and omissions are explicit, headless repository requests do not advertise unusable semantic tools, and repeated fixed inputs do not produce arbitrary retrieval order.
 
 
 ## MTP-249 — Multi-anchor semantic flow and dispatch branches

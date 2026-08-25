@@ -410,7 +410,8 @@ public sealed class Plan82CodeExploreFlowTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_result);

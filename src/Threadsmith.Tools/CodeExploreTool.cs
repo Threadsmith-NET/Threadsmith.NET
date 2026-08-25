@@ -41,7 +41,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             ?? throw new InvalidOperationException("Code exploration requires an opened workspace.");
         var sourceReader = new PolicyCodeExploreSourceReader(context.Invocation);
         var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
-        var result = await _service.QueryCodeExploreAsync(workspaceId, effectiveInput, sourceReader, cancellationToken);
+        var result = await _service.QueryCodeExploreAsync(
+            workspaceId,
+            effectiveInput,
+            sourceReader,
+            cancellationToken,
+            context.Invocation.VisibleSourceFrontier);
         result = ApplyBudgetSource(result, budgetSource);
         result = Confine(result, context.Invocation);
         result = BoundResultForModelBudget(result, context.Invocation);
@@ -230,6 +235,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
         bounded = TrimFlow(bounded, maximumSerializedBytes);
         bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
+        bounded = TrimBackReferences(bounded, maximumSerializedBytes);
+        bounded = TrimEmissions(bounded, maximumSerializedBytes);
         bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
         bounded = TrimFileSections(bounded, maximumSerializedBytes);
         if (GetSerializedByteCount(bounded) <= maximumSerializedBytes)
@@ -244,6 +251,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             Flow = null,
             BlastRadius = null,
             CandidateSummaries = [],
+            BackReferences = [],
+            Emissions = [],
             Allocation = bounded.Allocation is null
                 ? null
                 : bounded.Allocation with
@@ -364,6 +373,55 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             result = result with
             {
                 ContinuationTargets = result.ContinuationTargets.Take(result.ContinuationTargets.Count / 2).ToArray(),
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimBackReferences(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var backReferences = result.BackReferences;
+        while (backReferences is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            backReferences = backReferences.Take(backReferences.Count / 2).ToArray();
+            result = result with
+            {
+                BackReferences = backReferences,
+                Deduplication = result.Deduplication is null
+                    ? null
+                    : result.Deduplication with { SuppressedRanges = backReferences.Count },
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimEmissions(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var emissions = result.Emissions;
+        while (emissions is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            emissions = emissions.Take(emissions.Count / 2).ToArray();
+            result = result with
+            {
+                Emissions = emissions,
                 Omissions = AddResultBoundOmission(result.Omissions),
                 Coverage = result.Coverage with
                 {
@@ -530,6 +588,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         var blastRadius = Confine(result.BlastRadius, context, out var blastRadiusOmitted);
         var candidateSummaries = Confine(result.CandidateSummaries, context, out var candidateSummaryOmitted);
         var allocation = Confine(result.Allocation, context, out var allocationOmitted);
+        var backReferences = ConfineBackReferences(result.BackReferences, context, out var backReferenceOmitted);
+        var emissions = ConfineEmissions(result.Emissions, context, out var emissionOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
@@ -540,7 +600,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || flowOmitted
             || blastRadiusOmitted
             || candidateSummaryOmitted
-            || allocationOmitted;
+            || allocationOmitted
+            || backReferenceOmitted
+            || emissionOmitted;
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
@@ -551,6 +613,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             BlastRadius = blastRadius,
             CandidateSummaries = candidateSummaries,
             Allocation = allocation,
+            BackReferences = backReferences,
+            Emissions = emissions,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
@@ -559,6 +623,42 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 Omissions = AddPolicyOmission(result.Coverage.Omissions, omitted),
             },
         };
+    }
+
+    private static IReadOnlyList<CodeExploreBackReference>? ConfineBackReferences(
+        IReadOnlyList<CodeExploreBackReference>? backReferences,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (backReferences is null)
+        {
+            return null;
+        }
+
+        var confined = backReferences
+            .Where(reference => IsAllowed(reference.FilePath, context))
+            .ToArray();
+        omitted = confined.Length != backReferences.Count;
+        return confined;
+    }
+
+    private static IReadOnlyList<CodeExploreEmissionRecord>? ConfineEmissions(
+        IReadOnlyList<CodeExploreEmissionRecord>? emissions,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (emissions is null)
+        {
+            return null;
+        }
+
+        var confined = emissions
+            .Where(emission => IsAllowed(emission.FilePath, context))
+            .ToArray();
+        omitted = confined.Length != emissions.Count;
+        return confined;
     }
 
     private static CodeExploreAnchorResolution Confine(

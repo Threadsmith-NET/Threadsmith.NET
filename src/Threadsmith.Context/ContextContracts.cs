@@ -249,6 +249,17 @@ public interface IContextAssembler
         return Task.CompletedTask;
     }
 
+    /// <summary>Records request-local visible source frontier counts without source content.</summary>
+    Task UpdateVisibleSourceFrontierInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        VisibleSourceFrontierInspectionProjection visibleSourceFrontier,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
     /// <summary>Invalidates every cached inspection after a shared model-selection change.</summary>
     void InvalidateInspections();
 }

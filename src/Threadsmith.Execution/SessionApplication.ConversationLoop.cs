@@ -190,6 +190,24 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
+        invocationContext = AttachVisibleSourceFrontierToInvocationContext(
+            invocationContext,
+            requestEnvelope.Messages,
+            loopState.HistoryRewriteGeneration);
+        if (_contextAssembler is not null && invocationContext?.VisibleSourceFrontier is { } frontier)
+        {
+            await _contextAssembler.UpdateVisibleSourceFrontierInspectionAsync(
+                registration.SessionId,
+                runId,
+                new VisibleSourceFrontierInspectionProjection(
+                    frontier.EntryCount,
+                    frontier.RangeCount,
+                    frontier.SourceCharacters,
+                    frontier.FrontierGeneration,
+                    "Derived only from verbatim code_explore tool results in the current canonical request."),
+                cancellationToken);
+        }
+
         var modelRequest = CreateModelStreamRequest(
             runId,
             registration,
@@ -1529,6 +1547,24 @@ public sealed partial class SessionApplication
             requestMessages,
             wireEstimate,
             emergencyReductionApplied);
+    }
+
+    private static ToolInvocationContext? AttachVisibleSourceFrontierToInvocationContext(
+        ToolInvocationContext? invocationContext,
+        IReadOnlyList<ModelMessage> requestMessages,
+        long historyRewriteGeneration)
+    {
+        if (invocationContext is null)
+        {
+            return null;
+        }
+
+        var frontier = ModelVisibleSourceFrontierBuilder.Build(
+            requestMessages,
+            invocationContext.RepositoryPath,
+            invocationContext.WorkspaceId,
+            historyRewriteGeneration);
+        return invocationContext with { VisibleSourceFrontier = frontier };
     }
 
     private static ToolInvocationContext? AttachModelBudgetToInvocationContext(

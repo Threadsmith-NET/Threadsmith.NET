@@ -558,6 +558,268 @@ public sealed class Plan81CodeExploreToolTests
         }
     }
 
+    /// <summary>Repeated complete unchanged source can be replaced with a precise current-request back-reference.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierSuppressesCompleteUnchangedSource()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var request = new CodeExploreRequest
+        {
+            Query = "Code.cs",
+            PathAnchors = [new CodeExplorePathAnchor { Path = "src/Library/Code.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+            Limits = CreateWideLimits(),
+        };
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        Assert.Empty(repeated.FileSections);
+        var backReference = Assert.Single(repeated.BackReferences ?? []);
+        Assert.Equal("src/Library/Code.cs", backReference.FilePath);
+        Assert.Equal(first.FileSections[0].Source.FileSha256, backReference.FileSha256);
+        Assert.Equal(first.FileSections[0].Source.Range, backReference.Range);
+        Assert.Equal(1, repeated.Deduplication?.SuppressedRanges);
+        Assert.True(repeated.Deduplication?.ReclaimedCharacters > 0);
+    }
+
+    /// <summary>A covered subset back-reference hashes the exact advertised line range, not the larger covering section.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierSubsetBackReference_UsesSubsetRangeDigest()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Code.cs",
+                PathAnchors = [new CodeExplorePathAnchor { Path = "src/Library/Code.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+        var lines = await File.ReadAllLinesAsync(fixture.ResolvePath("src/Library/Code.cs"), TestContext.Current.CancellationToken);
+        const int startLine = 1;
+        const int endLine = 30;
+        Assert.True(lines.Length > endLine);
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Code.cs subset",
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor
+                    {
+                        Path = "src/Library/Code.cs",
+                        Line = startLine,
+                        EndLine = endLine,
+                        SelectionMode = CodeExplorePathSelectionMode.ExactLineRange,
+                    },
+                ],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        Assert.Empty(repeated.FileSections);
+        var backReference = Assert.Single(repeated.BackReferences ?? []);
+        Assert.Equal(new SourceRange(startLine, 1, endLine, lines[endLine - 1].Length + 1), backReference.Range);
+        Assert.Equal(ComputeLineRangeSha256(fixture, "src/Library/Code.cs", startLine, endLine), backReference.RangeSha256);
+        Assert.NotEqual(first.FileSections[0].Source.RangeSha256, backReference.RangeSha256);
+        Assert.Equal(1, repeated.Deduplication?.SuppressedRanges);
+        Assert.Equal(0, repeated.Deduplication?.UsedForNewSourceCharacters);
+    }
+
+    /// <summary>Suppression reports only the later source admitted by the reclaimed budget, capped by reclaimed capacity.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierSuppression_ReportsReclaimedBudgetUsedForLaterSource()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Code.cs",
+                PathAnchors = [new CodeExplorePathAnchor { Path = "src/Library/Code.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+        const string laterPath = "src/Library/Deeply/Nested/Verbose/Context/DeduplicationFragmentationCandidateWithExtraLongRepositoryRelativePath.cs";
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "reclaimed source budget",
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor { Path = "src/Library/Code.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile },
+                    new CodeExplorePathAnchor { Path = laterPath, SelectionMode = CodeExplorePathSelectionMode.WholeFile },
+                ],
+                Limits = CreateLimits(maximumSourceCharacters: 900, maximumPerFileSourceCharacters: 900),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        Assert.DoesNotContain(repeated.FileSections, section => section.FilePath == "src/Library/Code.cs");
+        Assert.Contains(repeated.FileSections, section => section.FilePath == laterPath);
+        Assert.Single(repeated.BackReferences ?? []);
+        var deduplication = Assert.IsType<CodeExploreDedupSummary>(repeated.Deduplication);
+        Assert.True(deduplication.ReclaimedCharacters > 0);
+        Assert.InRange(deduplication.UsedForNewSourceCharacters, 1, deduplication.ReclaimedCharacters);
+        Assert.True(deduplication.UsedForNewSourceCharacters <= repeated.Allocation?.SpentSourceCharacters);
+    }
+
+    /// <summary>Changed current file content invalidates visible frontier coverage and omits stale source without counting re-emission.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierDigestMismatch_OmitsStaleSourceWithoutReEmissionCount()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var request = new CodeExploreRequest
+        {
+            Query = "Code.cs",
+            PathAnchors = [new CodeExplorePathAnchor { Path = "src/Library/Code.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+            Limits = CreateWideLimits(),
+        };
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+        await File.AppendAllTextAsync(
+            fixture.ResolvePath("src/Library/Code.cs"),
+            Environment.NewLine + "// edited after visible source" + Environment.NewLine,
+            TestContext.Current.CancellationToken);
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        var section = Assert.Single(repeated.FileSections);
+        Assert.Empty(repeated.BackReferences ?? []);
+        Assert.Equal(CodeExploreSourceCompleteness.Drifted, section.Source.Completeness);
+        Assert.Empty(section.Source.NumberedLines);
+        Assert.NotEqual(first.FileSections[0].Source.FileSha256, section.Source.FileSha256);
+        Assert.Equal(0, repeated.Deduplication?.ReEmittedRanges);
+        Assert.Equal(0, repeated.Deduplication?.UsedForNewSourceCharacters);
+        Assert.Empty(repeated.Emissions ?? []);
+        Assert.Contains(repeated.Deduplication?.Reasons ?? [], reason =>
+            reason.Contains("Current file identity could not be proven", StringComparison.Ordinal)
+            || reason.Contains("No exact unchanged visible source coverage", StringComparison.Ordinal));
+    }
+
+    /// <summary>Subset coverage is re-emitted when a back-reference would be larger than the candidate source.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierPartialOverlap_ReEmitsWhenPointerWouldFragment()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        const string path = "src/Library/Deeply/Nested/Verbose/Context/DeduplicationFragmentationCandidateWithExtraLongRepositoryRelativePath.cs";
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "fragmentation whole file",
+                PathAnchors = [new CodeExplorePathAnchor { Path = path, SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+        var lines = await File.ReadAllLinesAsync(fixture.ResolvePath(path), TestContext.Current.CancellationToken);
+        var startLine = Array.FindIndex(lines, line => line.Contains("fragmentation-one", StringComparison.Ordinal)) + 1;
+        Assert.True(startLine > 0);
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "fragmentation subset",
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor
+                    {
+                        Path = path,
+                        Line = startLine,
+                        EndLine = startLine + 2,
+                        SelectionMode = CodeExplorePathSelectionMode.ExactLineRange,
+                    },
+                ],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        Assert.NotEmpty(repeated.FileSections);
+        Assert.Empty(repeated.BackReferences ?? []);
+        Assert.Equal(1, repeated.Deduplication?.ReEmittedRanges);
+        Assert.Equal(0, repeated.Deduplication?.ReclaimedCharacters);
+        Assert.Equal(0, repeated.Deduplication?.UsedForNewSourceCharacters);
+        Assert.NotEmpty(repeated.Emissions ?? []);
+        Assert.Contains(repeated.Deduplication?.Reasons ?? [], reason =>
+            reason.Contains("would not save context", StringComparison.Ordinal));
+    }
+
+    /// <summary>Short repeated source spans are re-emitted instead of fragmented into larger pointers.</summary>
+    [Fact]
+    public async Task CodeExplore_VisibleFrontierShortSpan_ReEmitsSource()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var request = new CodeExploreRequest
+        {
+            Query = "Code.cs line",
+            PathAnchors =
+            [
+                new CodeExplorePathAnchor
+                {
+                    Path = "src/Library/Code.cs",
+                    Line = 1,
+                    SelectionMode = CodeExplorePathSelectionMode.SingleLine,
+                },
+            ],
+            Limits = CreateWideLimits(),
+        };
+        var first = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        var frontier = CreateVisibleFrontier(fixture, first);
+
+        var repeated = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            request,
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken,
+            frontier);
+
+        Assert.NotEmpty(repeated.FileSections);
+        Assert.Empty(repeated.BackReferences ?? []);
+        Assert.Equal(0, repeated.Deduplication?.UsedForNewSourceCharacters);
+        Assert.Contains(repeated.Deduplication?.Reasons ?? [], reason =>
+            reason.Contains("too small", StringComparison.Ordinal));
+    }
+
     /// <summary>The tool adapter fails closed for null-location symbol metadata returned across the service boundary.</summary>
     [Fact]
     public async Task CodeExploreTool_NullLocationSymbolMetadata_IsOmittedByPolicyAdapter()
@@ -665,6 +927,64 @@ public sealed class Plan81CodeExploreToolTests
         Assert.All(value, character => Assert.True(Uri.IsHexDigit(character)));
     }
 
+    private static ModelVisibleSourceFrontier CreateVisibleFrontier(
+        CodeExploreFixture fixture,
+        CodeExploreResult result)
+    {
+        var entries = result.FileSections
+            .Where(section => section.Source.Completeness == CodeExploreSourceCompleteness.Complete
+                && section.Source.FileSha256 is not null)
+            .Select(section => new ModelVisibleSourceEntry(
+                "tool-result",
+                "visible-tool-call",
+                fixture.RepositoryPath,
+                fixture.WorkspaceId,
+                result.WorkspaceGeneration,
+                section.FilePath,
+                section.Source.Range,
+                section.Source.FileSha256 ?? string.Empty,
+                section.Source.RangeSha256,
+                CountNumberedLineCharacters(section.Source.NumberedLines)))
+            .ToArray();
+        return new ModelVisibleSourceFrontier(
+            fixture.RepositoryPath,
+            fixture.WorkspaceId,
+            0,
+            entries,
+            entries.Length,
+            entries.Length,
+            entries.Sum(entry => entry.EmittedCharacters));
+    }
+
+    private static string ComputeLineRangeSha256(
+        CodeExploreFixture fixture,
+        string path,
+        int startLine,
+        int endLine)
+    {
+        var fileText = File.ReadAllText(fixture.ResolvePath(path));
+        var sourceText = SourceText.From(fileText, Encoding.UTF8);
+        var returnedSpan = TextSpan.FromBounds(
+            sourceText.Lines[startLine - 1].Start,
+            sourceText.Lines[endLine - 1].EndIncludingLineBreak);
+        return ComputeSha256(sourceText.GetSubText(returnedSpan).ToString());
+    }
+
+    private static int CountNumberedLineCharacters(IReadOnlyList<string> numberedLines)
+    {
+        var total = 0;
+        for (var index = 0; index < numberedLines.Count; index++)
+        {
+            total += numberedLines[index].Length;
+            if (index > 0)
+            {
+                total += Environment.NewLine.Length;
+            }
+        }
+
+        return total;
+    }
+
     private static string ComputeSha256(string content)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
@@ -685,7 +1005,8 @@ public sealed class Plan81CodeExploreToolTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_result);
@@ -806,6 +1127,8 @@ public sealed class Plan81CodeExploreToolTests
 
         public WorkspaceId WorkspaceId { get; }
 
+        public string RepositoryPath => _repositoryPath;
+
         public static async Task<CodeExploreFixture> CreateAsync()
         {
             var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan81-{Guid.NewGuid():N}");
@@ -875,6 +1198,20 @@ public sealed class Plan81CodeExploreToolTests
                     public string Inspect(in int value, ref readonly string name)
                     {
                         return $"{value}:{name}";
+                    }
+                }
+                """);
+            Write(repositoryPath, "src/Library/Deeply/Nested/Verbose/Context/DeduplicationFragmentationCandidateWithExtraLongRepositoryRelativePath.cs", """
+                namespace Example.Deeply.Nested.Verbose.Context;
+
+                public sealed class DeduplicationFragmentationCandidateWithExtraLongRepositoryRelativePath
+                {
+                    public string FragmentationCandidate()
+                    {
+                        // fragmentation-one alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu
+                        // fragmentation-two alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu
+                        // fragmentation-three alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu
+                        return "fragment";
                     }
                 }
                 """);

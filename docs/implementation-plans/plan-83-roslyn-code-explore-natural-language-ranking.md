@@ -1,6 +1,6 @@
 # Implementation Plan 83: Roslyn Code Explore Natural-Language Ranking
 
-**Status:** Planned
+**Status:** Active. Production implementation, focused automated coverage, user/operator documentation, and a headless MTP-250 smoke pass are in place; repeated deterministic evaluation, interactive MTP-250 evidence, Scenario AO review, and broader gates remain before completion.
 
 **Delivery track:** Milestone 28 — deterministic discovery and source allocation
 **Strategy source:** Shared Context §A.1, §A.2, §A.5, §C, and §G; Milestone 28; Scenario AO
@@ -45,9 +45,9 @@ The local repository at `C:\source\repos\codegraph` is available only as a funct
 
 ## 5. Current State
 
-`find_symbol` accepts one declaration-name query. Text search handles exact repository content but is prohibited as a substitute for applicable semantic tools. Plans 81–82 will accept exact anchors and compose source/flow, but the model must already know those anchors. Threadsmith has no deterministic host-owned natural-language declaration catalog or structural relevance allocator for semantic source results.
+`find_symbol` accepts one declaration-name query. Text search handles exact repository content but is prohibited as a substitute for applicable semantic tools. Plans 81–82 accept exact anchors and compose source/flow, but the model must already know those anchors.
 
-Context guidance already tells the model to prefer semantic tools, batch independent work, avoid repeated searches/adjacent reads, and stop when evidence is sufficient. The missing part is a semantic result shaped to make that stopping condition achievable for an ordinary prose question.
+Threadsmith now has a deterministic host-owned natural-language declaration catalog and structural relevance allocator for semantic source results. Remaining acceptance work is evaluation and closure: repeated fixed-task comparison, interactive MTP-250 evidence, Scenario AO review, and broader regression gates.
 
 ## 6. Proposed Design
 
@@ -128,7 +128,9 @@ Expected areas:
 
 ## 10. Testing
 
-Automated tests must verify exact-before-fuzzy priority, identifier segmentation, qualified/container resolution, path pinning, stop-word boundaries, multi-term/co-location evidence, structural connectivity, incidental-collision demotion, generated/test focus exceptions, deterministic ranking, stable tie-breaking, catalog invalidation, incomplete compilations, result/source budgets, useful minimum sections, pointer coverage, cancellation, timeouts, schema/provider parity, prompt/context guidance, redaction, and unchanged granular tools.
+Focused automated coverage now verifies natural-language candidate ranking/source allocation, allowed-path-only ranking statistics, omission of unresolvable local functions from the natural-language catalog, selected-model metadata/result bounding, and headless fail-closed behavior when semantic readiness remains below `PartialCompilation`. Existing Plan 81/82 coverage continues to verify exact anchors, source identity, path policy, continuations, flow, dispatch, impact, generated content, semantic-first descriptions, and granular fallback tools.
+
+Remaining acceptance coverage must still include broader exact-before-fuzzy priority, identifier segmentation, qualified/container resolution, path pinning, stop-word boundaries, generated/test focus exceptions, deterministic repeated ranking, stable tie-breaking, catalog invalidation, cancellation/timeouts, schema/provider parity, prompt/context guidance, redaction, unchanged granular tools, Scenario AO, and full MTP-250 interactive/headless evidence.
 
 Repeated fixed-task evaluation must compare round count, calls, cumulative input, result bytes, latency, next-action sufficiency, recall misses, rereads of returned files, allocation usefulness, residual context, and independently reviewed answer correctness.
 

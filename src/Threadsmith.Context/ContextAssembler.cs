@@ -208,8 +208,11 @@ public sealed record ContextAssemblerOptions
         + "or coding guardrails. Tool selection is mandatory: MUST use an advertised semantic tool whenever "
         + "it covers the repository question. Text search is allowed only when no applicable semantic tool is "
         + "advertised or after the applicable semantic tool fails or explicitly reports incomplete or degraded "
-        + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Prefer semantic/source "
-        + "inspection over raw line slices when it can answer the question, batch independent lookups, and merge adjacent "
+        + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Tool descriptions are capability "
+        + "hints, not implementation evidence; do not describe repository implementation, tool availability, or source state "
+        + "from tool descriptions or prior assumptions. Inspect the repository and cite returned files/declarations before answering such questions. Use code_explore first for ordinary C# architecture, behavior, source, flow, "
+        + "or compact-impact survey questions, including natural-language queries when exact anchors are not known. Prefer semantic/source inspection over raw line slices when it can answer "
+        + "the question, batch independent lookups, and merge adjacent "
         + "ranges for the same file into the fewest raw reads. Once evidence resolves "
         + "the requested change and no correctness ambiguity remains, stop calling tools and propose the plan rather "
         + "than investigating unrelated patterns or references. Never perform mutations during governed planning.";

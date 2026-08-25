@@ -108,6 +108,12 @@ Open a specific repository and solution:
 dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedRead --solution src\MyRepo.sln
 ```
 
+Run a headless request against a specific trusted solution:
+
+```powershell
+dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedBuild --solution src\MyRepo.sln "explain the request pipeline"
+```
+
 The current directory is the default repository. Interactive startup guides trust and ambiguous solution selection, remembers successful solution choices, and can initialize minimal `.threadsmith/config.json` configuration for an empty repository. Adjust any of the other flags to personal preference of immediate need.
 
 ### SQLite
@@ -141,7 +147,7 @@ Threadsmith registers built-in runtime tools. Repository configuration, trust, i
 | `test_discover` | Discover bounded stable test identities in a selected test project. |
 | `test_run_targeted` | Run one host-issued test identity with a generated exact filter. |
 | `find_symbol` | Find compiler symbols with stable identity and semantic confidence. |
-| `code_explore` | Resolve exact C# symbol, stable-ID, or path anchors and return bounded current line-numbered source with digests, confidence, omissions, and continuations. |
+| `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, allocation metadata, current line-numbered source, digests, confidence, omissions, and continuations. |
 | `find_references` | Find references to a compiler symbol. |
 | `find_implementations` | Find implementations of a compiler symbol. |
 | `call_hierarchy` | Traverse bounded incoming/outgoing compiler-known calls with dispatch, cycles, confidence, and omissions. |

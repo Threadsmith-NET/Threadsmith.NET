@@ -3257,6 +3257,43 @@ public static class Milestone1Tests
         Assert.Equal(tui.Workspace, writer.ToString());
     }
 
+    /// <summary>Headless repository requests fail closed before submission when semantic tools cannot run.</summary>
+    [Fact]
+    public static async Task HeadlessShell_RepositoryRequestWithoutSemanticReadiness_DoesNotSubmitRequest()
+    {
+        var sessionId = SessionId.New();
+        var workspaceId = WorkspaceId.New();
+        var projections = new InMemoryProjectionStore();
+        projections.ReplaceSession(new SessionProjection
+        {
+            Key = new ProjectionKey("session", sessionId.Value.ToString("D")),
+            SessionId = sessionId,
+            Name = "headless-semantic-timeout",
+            Phase = RunPhase.RepositoryDiscovery,
+            WorkspaceId = workspaceId,
+            RepositoryPath = "C:\\repo",
+            RepositoryTrust = RepositoryTrustLevel.TrustedBuild,
+            SolutionPath = "C:\\repo\\Repo.sln",
+            SemanticConfidence = SemanticConfidenceLevel.None,
+            IsSemanticLoadComplete = true,
+        });
+        await using var writer = new StringWriter();
+        var dispatcher = new SemanticUnavailableRepositoryDispatcher(sessionId, workspaceId);
+        var shell = new HeadlessShell(dispatcher, projections, writer);
+
+        var exitCode = await shell.RunRepositoryRequestAsync(
+            "CLI",
+            "C:\\repo",
+            RepositoryTrustLevel.TrustedBuild,
+            "Repo.sln",
+            "inspect repository",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, exitCode);
+        Assert.False(dispatcher.SubmitRequestObserved);
+        Assert.Contains("Semantic tools require PartialCompilation", writer.ToString(), StringComparison.Ordinal);
+    }
+
     /// <summary>Headless direct-authorization exit status ignores failures from earlier runs.</summary>
     [Fact]
     public static async Task HeadlessShell_DirectAuthorizationExitCode_IsScopedToCurrentRun()
@@ -4441,6 +4478,65 @@ public static class Milestone1Tests
                 _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
             };
             return Task.FromResult((TResponse)response);
+        }
+    }
+
+    private sealed class SemanticUnavailableRepositoryDispatcher : ICommandDispatcher
+    {
+        private readonly SessionId _sessionId;
+        private readonly WorkspaceId _workspaceId;
+
+        public SemanticUnavailableRepositoryDispatcher(SessionId sessionId, WorkspaceId workspaceId)
+        {
+            _sessionId = sessionId;
+            _workspaceId = workspaceId;
+        }
+
+        public bool SubmitRequestObserved { get; private set; }
+
+        public Task<TResponse> DispatchAsync<TResponse>(
+            ICommand<TResponse> command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            object response = command switch
+            {
+                CreateSessionCommand => _sessionId,
+                OpenRepositoryCommand open => new RepositoryOpenResult(
+                    _workspaceId,
+                    open.RepositoryPath,
+                    new RepositoryTrustState(open.RepositoryPath, open.RequestedTrust, DateTimeOffset.UtcNow),
+                    new RepositoryConfigurationSnapshot(null, ["."], []),
+                    new MsBuildEnvironmentSnapshot(
+                        "dotnet",
+                        "10.0.100",
+                        null,
+                        null,
+                        null,
+                        "Debug",
+                        "AnyCPU",
+                        RepositoryRestoreState.NotAttempted,
+                        new Dictionary<string, string>()),
+                    ["Repo.sln"]),
+                SelectSolutionCommand select => new SolutionSelectionResult(
+                    select.WorkspaceId,
+                    Path.Combine("C:\\repo", select.SolutionPath),
+                    ["net10.0"]),
+                RecordBaselineCommand baseline => new WorkspaceBaseline(
+                    baseline.WorkspaceId,
+                    "C:\\repo",
+                    DateTimeOffset.UtcNow,
+                    []),
+                SubmitRequestCommand => ObserveUnexpectedSubmitRequest(),
+                _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
+            };
+            return Task.FromResult((TResponse)response);
+        }
+
+        private object ObserveUnexpectedSubmitRequest()
+        {
+            SubmitRequestObserved = true;
+            return RunId.New();
         }
     }
 

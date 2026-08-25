@@ -125,6 +125,81 @@ public enum CodeExploreSourceCompleteness
     Drifted,
 }
 
+/// <summary>Deterministic ranking tier assigned to an inferred code-exploration candidate.</summary>
+public enum CodeExploreCandidateTier
+{
+    /// <summary>The candidate was explicitly pinned by a path, stable id, or exact anchor.</summary>
+    Pinned,
+
+    /// <summary>The candidate matched an exact qualified declaration identity.</summary>
+    ExactQualified,
+
+    /// <summary>The candidate matched a distinctive declaration identifier.</summary>
+    DistinctiveIdentifier,
+
+    /// <summary>The candidate matched multiple independent declaration, path, project, or container terms.</summary>
+    MultiTermStructural,
+
+    /// <summary>The candidate is connected to higher-ranked selected anchors through compiler-known structure.</summary>
+    GraphConnected,
+
+    /// <summary>The candidate is a lower-ranked single-term or peripheral match.</summary>
+    Peripheral,
+}
+
+/// <summary>Closed reason flags explaining why an inferred candidate was selected or retained.</summary>
+[Flags]
+public enum CodeExploreSelectionReason
+{
+    /// <summary>No selection reason was recorded.</summary>
+    None = 0,
+
+    /// <summary>The candidate was explicitly pinned by the request.</summary>
+    Pinned = 1 << 0,
+
+    /// <summary>The candidate matched an exact declaration identifier.</summary>
+    ExactIdentifier = 1 << 1,
+
+    /// <summary>The candidate matched an exact qualified name or container-qualified name.</summary>
+    QualifiedName = 1 << 2,
+
+    /// <summary>The candidate's containing type or namespace corroborated another query term.</summary>
+    ContainingType = 1 << 3,
+
+    /// <summary>The candidate covered multiple independent query terms.</summary>
+    MultiTerm = 1 << 4,
+
+    /// <summary>Multiple candidates in the same file corroborated one another.</summary>
+    CoLocated = 1 << 5,
+
+    /// <summary>The candidate was connected to selected anchors through compiler-known graph evidence.</summary>
+    GraphConnected = 1 << 6,
+
+    /// <summary>The candidate is part of the returned flow spine.</summary>
+    FlowSpine = 1 << 7,
+
+    /// <summary>The candidate is a compiler-known implementation or override branch.</summary>
+    Implementation = 1 << 8,
+
+    /// <summary>The candidate is a compiler-known caller of a selected anchor.</summary>
+    Caller = 1 << 9,
+
+    /// <summary>The candidate's project or file classification matched explicit user focus.</summary>
+    UserFocus = 1 << 10,
+
+    /// <summary>The candidate is in a test project or test-classified path.</summary>
+    Test = 1 << 11,
+
+    /// <summary>The candidate is in generated source.</summary>
+    Generated = 1 << 12,
+
+    /// <summary>The candidate matched a repository-relative C# path span.</summary>
+    Path = 1 << 13,
+
+    /// <summary>The candidate remained only as peripheral follow-up evidence.</summary>
+    Peripheral = 1 << 14,
+}
+
 /// <summary>Explicit limits for one source-bearing code exploration.</summary>
 public sealed record CodeExploreLimits
 {
@@ -215,6 +290,26 @@ public sealed record CodeExploreRequest
     public CodeExploreLimits Limits { get; init; } = new();
 }
 
+/// <summary>Bounded deterministic interpretation of a natural-language code-exploration query.</summary>
+public sealed record CodeExploreQueryInterpretation(
+    IReadOnlyList<string> ExactIdentifiers,
+    IReadOnlyList<string> QualifiedNames,
+    IReadOnlyList<string> StableSymbolIds,
+    IReadOnlyList<string> PathLikeSpans,
+    IReadOnlyList<string> Terms,
+    IReadOnlyList<string> IgnoredTerms,
+    IReadOnlyList<string> UnresolvedTerms);
+
+/// <summary>Bounded summary of declaration-catalog and candidate discovery for a code-exploration query.</summary>
+public sealed record CodeExploreDiscoverySummary(
+    int CatalogEntryCount,
+    int CandidateCount,
+    int SelectedCount,
+    bool CatalogComplete,
+    bool CandidateLimitReached,
+    IReadOnlyList<string> AmbiguityGroups,
+    string BudgetSource);
+
 /// <summary>Repository-relative semantic location returned by code exploration.</summary>
 public sealed record CodeExploreLocation(
     string ProjectName,
@@ -280,6 +375,35 @@ public sealed record CodeExploreCoverage(
     bool SourceComplete,
     bool OutputComplete,
     IReadOnlyList<string> Omissions);
+
+/// <summary>One selected or omitted deterministic candidate considered by natural-language code exploration.</summary>
+public sealed record CodeExploreCandidateSummary(
+    SemanticSymbolIdentity? Symbol,
+    CodeExploreLocation? Location,
+    string? FilePath,
+    CodeExploreCandidateTier Tier,
+    CodeExploreSelectionReason Reasons,
+    int Rank,
+    bool Selected,
+    string Reason,
+    string? AmbiguityGroup);
+
+/// <summary>Per-section source allocation outcome for code exploration.</summary>
+public sealed record CodeExploreAllocationFileSummary(
+    string FilePath,
+    int AllowedCharacters,
+    int SpentCharacters,
+    CodeExploreSourceCompleteness Completeness,
+    bool UsefulSection,
+    string? OmissionReason);
+
+/// <summary>Source-budget allocation summary for one code-exploration result.</summary>
+public sealed record CodeExploreAllocationSummary(
+    int TotalSourceCharacters,
+    int ReservedCharacters,
+    int SpentSourceCharacters,
+    string BudgetSource,
+    IReadOnlyList<CodeExploreAllocationFileSummary> Files);
 
 /// <summary>One selected compiler-proven path between exact anchors.</summary>
 public sealed record CodeExploreFlowPath(
@@ -377,7 +501,11 @@ public sealed record CodeExploreResult(
     IReadOnlyList<string> Omissions,
     IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets,
     CodeExploreFlow? Flow = null,
-    CodeExploreBlastRadius? BlastRadius = null);
+    CodeExploreBlastRadius? BlastRadius = null,
+    CodeExploreQueryInterpretation? QueryInterpretation = null,
+    CodeExploreDiscoverySummary? Discovery = null,
+    IReadOnlyList<CodeExploreCandidateSummary>? CandidateSummaries = null,
+    CodeExploreAllocationSummary? Allocation = null);
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(

@@ -303,6 +303,14 @@ public sealed record ActiveTurnCompactionInspectionProjection
     public required string Rationale { get; init; }
 }
 
+/// <summary>Inspectable source-frontier counts for request-local code-explore deduplication.</summary>
+public sealed record VisibleSourceFrontierInspectionProjection(
+    int EntryCount,
+    int RangeCount,
+    int SourceCharacters,
+    long FrontierGeneration,
+    string Rationale);
+
 /// <summary>Inspectable record of one governed context assembly.</summary>
 public sealed record ContextInspectionProjection
 {
@@ -367,6 +375,9 @@ public sealed record ContextInspectionProjection
 
     /// <summary>Whether compaction should run at the next safe turn boundary.</summary>
     public bool CompactionRecommended { get; init; }
+
+    /// <summary>Request-local visible source frontier used for conservative code-explore deduplication.</summary>
+    public VisibleSourceFrontierInspectionProjection? VisibleSourceFrontier { get; init; }
 
     /// <summary>Inspectable reason for the next compaction decision.</summary>
     public string? CompactionRationale { get; init; }

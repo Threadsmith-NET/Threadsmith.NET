@@ -491,6 +491,58 @@ public sealed record CodeExploreBlastRadius(
     IReadOnlyList<string> Omissions,
     IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets);
 
+/// <summary>One exact source range currently visible in the canonical model request.</summary>
+public sealed record ModelVisibleSourceEntry(
+    string HolderId,
+    string ToolCallId,
+    string RepositoryPath,
+    WorkspaceId? WorkspaceId,
+    long WorkspaceGeneration,
+    string FilePath,
+    SourceRange Range,
+    string FileSha256,
+    string? RangeSha256,
+    int EmittedCharacters);
+
+/// <summary>Request-local host-owned frontier of verbatim source visible to the model.</summary>
+public sealed record ModelVisibleSourceFrontier(
+    string RepositoryPath,
+    WorkspaceId? WorkspaceId,
+    long FrontierGeneration,
+    IReadOnlyList<ModelVisibleSourceEntry> Entries,
+    int EntryCount,
+    int RangeCount,
+    int SourceCharacters);
+
+/// <summary>Actual source range emitted by a code-explore result.</summary>
+public sealed record CodeExploreEmissionRecord(
+    string FilePath,
+    SourceRange Range,
+    string FileSha256,
+    string? RangeSha256,
+    int EmittedCharacters);
+
+/// <summary>Precise reference to unchanged source already present in the current model request.</summary>
+public sealed record CodeExploreBackReference(
+    string HolderId,
+    string ToolCallId,
+    string FilePath,
+    SourceRange Range,
+    string FileSha256,
+    string? RangeSha256,
+    IReadOnlyList<string> SymbolIds,
+    string Reason);
+
+/// <summary>Bounded source deduplication accounting for one code-explore result.</summary>
+public sealed record CodeExploreDedupSummary(
+    int CandidateRanges,
+    int CoveredRanges,
+    int SuppressedRanges,
+    int ReEmittedRanges,
+    int ReclaimedCharacters,
+    int UsedForNewSourceCharacters,
+    IReadOnlyList<string> Reasons);
+
 /// <summary>Source-bearing exact code exploration result fenced to one semantic workspace generation.</summary>
 public sealed record CodeExploreResult(
     long WorkspaceGeneration,
@@ -505,7 +557,10 @@ public sealed record CodeExploreResult(
     CodeExploreQueryInterpretation? QueryInterpretation = null,
     CodeExploreDiscoverySummary? Discovery = null,
     IReadOnlyList<CodeExploreCandidateSummary>? CandidateSummaries = null,
-    CodeExploreAllocationSummary? Allocation = null);
+    CodeExploreAllocationSummary? Allocation = null,
+    IReadOnlyList<CodeExploreBackReference>? BackReferences = null,
+    CodeExploreDedupSummary? Deduplication = null,
+    IReadOnlyList<CodeExploreEmissionRecord>? Emissions = null);
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(
@@ -534,5 +589,6 @@ public interface ICodeExploreService
         WorkspaceId workspaceId,
         CodeExploreRequest request,
         ICodeExploreSourceReader sourceReader,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        ModelVisibleSourceFrontier? visibleSourceFrontier = null);
 }

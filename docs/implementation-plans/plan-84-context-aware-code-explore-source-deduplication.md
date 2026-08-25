@@ -1,6 +1,6 @@
 # Implementation Plan 84: Context-Aware Code Explore Source Deduplication
 
-**Status:** Planned
+**Status:** Active. Production implementation, focused automated coverage, request-local inspection counts, user/operator documentation, clean reviewer pass, and headless MTP-251-style smoke evidence for repeated, subset, reclaimed-budget, short-range, and semantic-readiness paths are in place; full interactive MTP-251 evidence, Scenario AO dedup review, comparative repeated-run evidence, and broader gates remain before completion.
 
 **Delivery track:** Milestone 28 — safe repeated-exploration context efficiency
 **Strategy source:** Shared Context §A.2, §A.5, §E, and §G; Milestone 28; Scenario AO
@@ -44,15 +44,15 @@ The local repository at `C:\source\repos\codegraph` is a functional reference on
 
 ## 5. Current State
 
-The conversation loop rejects exact duplicate invocations, but different `code_explore` queries may overlap substantially. Plan 80 will compact older active-turn tool groups when pressure rises. Existing session/evidence state can prove that a tool ran, but not by itself that exact source text remains in the request currently sent to the model.
+The conversation loop rejects exact duplicate invocations, but different `code_explore` queries may overlap substantially. Plan 80 compacts older active-turn tool groups when pressure rises. Existing session/evidence state can prove that a tool ran, but not by itself that exact source text remains in the request currently sent to the model.
 
-Plans 81–83 will provide source digests, exact ranges, result identities, and ranked remaining candidates. No current contract connects those emissions to canonical request inclusion for safe range-level suppression.
+Plans 81–83 provide source digests, exact ranges, result identities, and ranked remaining candidates. Threadsmith now derives a bounded request-local visible-source frontier from complete verbatim `code_explore` tool results in the canonical request, passes that host-owned frontier to `code_explore`, and suppresses only sufficiently large complete unchanged ranges with matching repository, workspace, generation, path, and file digest.
 
 ## 6. Proposed Design
 
 ### 6.1 Visible-source frontier
 
-During canonical request assembly, derive a bounded `ModelVisibleSourceFrontier` from verbatim retained `code_explore` results only. Each entry maps a result/evidence/message identity to exact path/range/digest coverage. Structured summaries, archived-but-not-selected evidence, provider-side history not represented in the canonical request, and ordinary session records do not qualify.
+During canonical request assembly, derive a bounded `ModelVisibleSourceFrontier` from verbatim retained `code_explore` results only. Each entry maps a result/evidence/message identity to exact path/range/digest coverage. Structurally incomplete but valid reduced JSON, structured summaries, archived-but-not-selected evidence, provider-side history not represented in the canonical request, and ordinary session records do not qualify.
 
 ### 6.2 Conservative range coverage
 
@@ -60,7 +60,7 @@ Before rendering a new result, intersect candidate ranges with the visible front
 
 ### 6.3 Pointers and budget reuse
 
-Back-references identify the current-request holder and exact source span, state that the source is unchanged and already present, and never imply the whole file was seen. Pointer text/JSON is bounded and provider-neutral. Freed source allowance and file slots flow back through Plan 83 allocation so lower-ranked new evidence can enter.
+Back-references identify the current-request holder and exact source span, state that the source is unchanged and already present, and never imply the whole file was seen. Their range digest is computed over the exact advertised span, and suppression proceeds only when the serialized back-reference is smaller than the source it replaces. Pointer text/JSON is bounded and provider-neutral. Freed source allowance and file slots flow back through Plan 83 allocation so lower-ranked new evidence can enter; diagnostics count only the later source that actually used reclaimed capacity.
 
 ### 6.4 Context and provider lifecycle
 
@@ -107,7 +107,9 @@ Expected areas:
 
 ## 10. Testing
 
-Automated tests must verify exact visible full coverage, partial overlap, short-span non-suppression, digest mismatch, edits and invalidation, different repositories/workspaces, metadata truncation/eviction, compaction removal, verbatim retained groups, provider restart/cache identity, stateful continuation, resumed/cloned/new sessions, pointer size, pointer-only avoidance, reclaimed budget reuse, hard output ceiling, actual-survivor accounting after truncation, cancellation, deterministic order, audit preservation, redaction, and interactive/headless equivalence.
+Focused automated coverage now verifies that the visible-source frontier admits only complete verbatim `code_explore` source with digests; skips partial, malformed, structurally incomplete reduced, and non-`code_explore` tool results; suppresses a repeated complete unchanged range with an exact back-reference; hashes subset back-references over the exact advertised range; rejects pointers whose actual serialized size would not save context; re-emits changed or short content without overstating re-emission counts; emits audit records only for actual source lines; and reports reclaimed-budget use only for later source admitted because suppression freed capacity. Existing Plan 83 tests continue to verify result metadata bounding, path-policy filtering, ranking, and source allocation. Headless CLI smokes against this repository have covered repeated range suppression, larger-range-to-subset suppression, overlap plus new source using reclaimed budget, short-range re-emission, and fail-closed semantic readiness.
+
+Remaining acceptance coverage must still include repository/workspace mismatch, metadata eviction, compaction removal, provider restart/cache identity, resumed/cloned/new sessions, cancellation, deterministic order, audit preservation, redaction, full interactive/headless equivalence, and comparative repeated-run measurements.
 
 The user-testable checkpoint is [MTP-251](manual-test-plan.md#mtp-251--context-proven-exploration-source-deduplication). It blocks Plan 85.
 

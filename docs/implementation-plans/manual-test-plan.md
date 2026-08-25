@@ -26,11 +26,11 @@ Expected: associated non-C# material is a confined, bounded, relationship-labele
 ## MTP-251 — Context-proven exploration source deduplication
 
 1. In a disposable trusted C# repository, run `code_explore` for a flow that returns source from at least three files, then issue an overlapping follow-up that also reaches one new file.
-2. Confirm unchanged source ranges that are still present verbatim in the current model-visible continuation are replaced by precise file/symbol/range back-references and the reclaimed source budget is allocated to new relevant material.
-3. Confirm short overlaps, uncertain coverage, different content digests, incomplete prior ranges, or ranges absent from the current request are re-emitted rather than suppressed.
+2. Confirm unchanged source ranges that are still present verbatim in the current model-visible continuation are replaced by precise `BackReferences` entries naming file, symbol, exact advertised range, exact range digest, file digest, and prior tool-call holder, and that `Deduplication` reports only reclaimed source budget actually allocated to new relevant material.
+3. Confirm short overlaps, uncertain coverage, different content digests, incomplete prior ranges, ranges whose serialized pointer would be larger than re-emitted source, or ranges absent from the current request are re-emitted rather than suppressed, with actual emitted source reflected in `Emissions` and omitted/drifted source not counted as re-emitted.
 4. Edit one previously returned file between calls and apply semantic invalidation. Confirm the changed file is emitted with a new digest and no pointer claims the earlier copy remains current.
 5. Trigger active-turn compaction or another governed reduction that removes the exact earlier source, then repeat the query. Confirm deduplication consults the actual assembled request/evidence frontier and emits the source again.
-6. Repeat across a new session, resumed session, cloned session, and repository switch. Cancel during coverage accounting and inspect context diagnostics, cache/stateful-continuation resets, events, telemetry, persistence, and support bundles.
+6. Repeat across a new session, resumed session, cloned session, and repository switch. Cancel during coverage accounting and inspect context diagnostics including visible-source-frontier counts, cache/stateful-continuation resets, events, telemetry, persistence, and support bundles.
 
 Expected: source suppression occurs only when exact unchanged ranges are demonstrably present in the model's current context. Deduplication is bounded, content-addressed, inspectable, and conservative across edits, compaction, invalidation, cancellation, session lifecycle, and provider continuation changes.
 

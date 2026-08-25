@@ -304,6 +304,9 @@ public sealed record ToolInvocationContext
     /// <summary>Effective selected-model input budget after output reserve, when model resolution has occurred.</summary>
     public int? ModelEffectiveInputBudgetTokens { get; init; }
 
+    /// <summary>Host-derived source ranges already visible in the current canonical model request.</summary>
+    public ModelVisibleSourceFrontier? VisibleSourceFrontier { get; init; }
+
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
 }

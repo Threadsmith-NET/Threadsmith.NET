@@ -843,20 +843,60 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     /// <inheritdoc />
-    public async Task UpdateActiveTurnInspectionAsync(
+    public Task UpdateActiveTurnInspectionAsync(
         SessionId sessionId,
         RunId runId,
         ActiveTurnCompactionInspectionProjection activeTurn,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(activeTurn);
+        return UpdateInspectionAsync(
+            sessionId,
+            runId,
+            inspection => inspection with { ActiveTurnCompaction = activeTurn },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task UpdateVisibleSourceFrontierInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        VisibleSourceFrontierInspectionProjection visibleSourceFrontier,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(visibleSourceFrontier);
+        return UpdateInspectionAsync(
+            sessionId,
+            runId,
+            inspection => inspection with { VisibleSourceFrontier = visibleSourceFrontier },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public void InvalidateInspections()
+    {
+        lock (_gate)
+        {
+            _inspections.Clear();
+            _inspectionOrder.Clear();
+            _inspectionNodes.Clear();
+        }
+    }
+
+    private async Task UpdateInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        Func<ContextInspectionProjection, ContextInspectionProjection> update,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(update);
         cancellationToken.ThrowIfCancellationRequested();
         ContextInspectionProjection? updated = null;
         lock (_gate)
         {
             if (_inspections.TryGetValue(runId, out var inspection))
             {
-                updated = inspection with { ActiveTurnCompaction = activeTurn };
+                updated = update(inspection);
                 _inspections[runId] = updated;
                 if (_inspectionNodes.TryGetValue(runId, out var node))
                 {
@@ -871,17 +911,6 @@ public sealed class ContextAssembler : IContextAssembler
             await _events.PublishAsync(
                 new ContextAssembled(sessionId, DateTimeOffset.UtcNow, updated),
                 cancellationToken);
-        }
-    }
-
-    /// <inheritdoc />
-    public void InvalidateInspections()
-    {
-        lock (_gate)
-        {
-            _inspections.Clear();
-            _inspectionOrder.Clear();
-            _inspectionNodes.Clear();
         }
     }
 

@@ -449,7 +449,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             switch (message.Role)
             {
                 case ModelMessageRole.System:
-                    messages.Add(new OpenAiMessage { Role = "system", Content = content });
+                    AddSystemMessage(messages, content);
                     break;
                 case ModelMessageRole.Developer:
                     AddUserMessage(
@@ -491,6 +491,21 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         return messages;
+    }
+
+    private static void AddSystemMessage(List<OpenAiMessage> messages, string content)
+    {
+        if (messages.Count > 0 && messages[^1].Role == "system")
+        {
+            var previous = messages[^1];
+            messages[^1] = previous with
+            {
+                Content = string.Concat(previous.Content, "\n\n", content),
+            };
+            return;
+        }
+
+        messages.Add(new OpenAiMessage { Role = "system", Content = content });
     }
 
     private static void AddAssistantToolCall(

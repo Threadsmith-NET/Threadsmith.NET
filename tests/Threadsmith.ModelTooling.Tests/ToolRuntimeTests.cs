@@ -197,6 +197,70 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Code exploration declares optional Git inventory use to executable policy and scheduling.</summary>
+    [Fact]
+    public static async Task CodeExplore_AssociatedExactNameLookup_RequiresGitExecutablePolicy()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var processManager = new StubProcessManager(new ProcessExecutionResult(
+                1,
+                0,
+                string.Empty,
+                string.Empty,
+                false,
+                false,
+                false,
+                TimeSpan.Zero));
+            var tool = new CodeExploreTool(new NoopCodeExploreService(), processManager);
+            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}");
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                WorkspaceId = WorkspaceId.New(),
+            };
+
+            var claims = tool.GetSchedulingClaims(input, context);
+            Assert.Contains(claims, claim => claim.ResourceKind == ToolResourceKind.ProcessPool
+                && claim.AccessMode == ToolAccessMode.Execute);
+            var disabledInput = input with
+            {
+                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Disabled,
+            };
+            var disabledClaims = tool.GetSchedulingClaims(disabledInput, context);
+            Assert.DoesNotContain(disabledClaims, claim => claim.ResourceKind == ToolResourceKind.ProcessPool);
+
+            var pipeline = CreatePipeline(events, [tool]);
+            var denied = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "code_explore",
+                ArgumentsJson = "{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}",
+                Context = context,
+            });
+            var allowed = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "code_explore",
+                ArgumentsJson = "{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}",
+                Context = context with { AllowedExecutables = ["git"] },
+            });
+
+            Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
+            Assert.Contains("git", denied.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.True(allowed.Succeeded, allowed.Error);
+            Assert.Equal(0, processManager.ExecutionCount);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Unix path containment does not ignore case.</summary>
     [Fact]
     public static async Task Policy_LinuxPathContainment_IsCaseSensitive()
@@ -1390,6 +1454,58 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>
+    [Fact]
+    public static async Task ProcessManager_NullDelimitedJsonArray_PreservesRecordBoundariesThroughSanitization()
+    {
+        var shell = OperatingSystem.IsWindows()
+            ? IsExecutableAvailable("pwsh") ? "pwsh" : "powershell.exe"
+            : "sh";
+        if (!IsExecutableAvailable(shell))
+        {
+            Assert.Skip($"{shell} is not available on PATH.");
+        }
+
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var manager = new ProcessManager(
+                new SecretOutputSanitizer(),
+                NullLogger<ProcessManager>.Instance);
+            string[] arguments = OperatingSystem.IsWindows()
+                ?
+                [
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$bytes = [byte[]](102,105,114,115,116,0,115,101,99,111,110,100,0); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+                ]
+                : ["-c", "printf 'first\\000second\\000'"];
+
+            var result = await manager.RunAsync(new ProcessExecutionRequest
+            {
+                ToolInvocationId = ToolInvocationId.New(),
+                RunId = RunId.New(),
+                FileName = shell,
+                Arguments = arguments,
+                WorkingDirectory = repository,
+                Timeout = TimeSpan.FromSeconds(10),
+                MaximumOutputCharacters = 1024,
+                StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
+                Origin = ProcessRequestOrigin.Host,
+            });
+
+            var records = JsonSerializer.Deserialize<string[]>(result.StandardOutput) ?? [];
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(["first", "second"], records);
+            Assert.DoesNotContain("\0", result.StandardOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>The default read window returns an ordinary source file in one complete result.</summary>
     [Fact]
     public static async Task ReadFileTool_DefaultWindow_ReturnsOrdinaryFileCompletely()
@@ -2336,6 +2452,27 @@ public static class ToolRuntimeTests
         return commandEnd >= 0
             && status.Length > commandEnd + 2
             && status[commandEnd + 2] == 'Z';
+    }
+
+    private sealed class NoopCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new CodeExploreResult(
+                1,
+                SemanticConfidenceLevel.FullSemantic,
+                [],
+                [],
+                new CodeExploreCoverage(true, true, true, true, []),
+                [],
+                []));
+        }
     }
 
     private sealed class StubCSharpScriptEngine : ICSharpScriptEngine

@@ -1152,6 +1152,45 @@ public static class Milestone3Tests
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
     }
 
+    /// <summary>Adjacent host-owned system messages are coalesced before OpenAI-compatible projection for endpoints that require one leading system message.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_AdjacentSystemMessages_AreMergedBeforeUserMessages()
+    {
+        string? requestBody = null;
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return Response(HttpStatusCode.OK, "data: [DONE]\n");
+        });
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(handler),
+            CreateProfile(_capableProfileId, "system-merge", toolCalls: true, combinedCost: 1));
+
+        await CollectAsync(provider, new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "ignored when structured messages are present",
+            Messages =
+            [
+                CreateStructuredMessage(ModelMessageRole.System, "host-policy", "Host policy."),
+                CreateStructuredMessage(ModelMessageRole.System, "phase-policy", "Phase policy."),
+                CreateStructuredMessage(ModelMessageRole.Developer, "context", "Use available tools."),
+                CreateStructuredMessage(ModelMessageRole.User, "request", "Inspect the repository."),
+            ],
+        });
+
+        Assert.NotNull(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
+        var messages = document.RootElement.GetProperty("messages").EnumerateArray().ToArray();
+        Assert.Equal("system", messages[0].GetProperty("role").GetString());
+        Assert.Contains("Host policy.", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Phase policy.", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(messages.Skip(1), message => message.GetProperty("role").GetString() == "system");
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        Assert.Contains("threadsmith_host_context", messages[1].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Inspect the repository.", messages[1].GetProperty("content").GetString(), StringComparison.Ordinal);
+    }
+
     /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>
     [Fact]
     public static async Task OpenAiAdapter_ProviderUnsafeToolNames_AreAliasedAndMappedBack()
@@ -2571,6 +2610,19 @@ public static class Milestone3Tests
         }
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    }
+
+    private static ModelMessage CreateStructuredMessage(
+        ModelMessageRole role,
+        string sectionId,
+        string content)
+    {
+        return new ModelMessage
+        {
+            Role = role,
+            SectionId = sectionId,
+            Content = [new ModelContentPart { Content = content }],
+        };
     }
 
     private static ModelProfile CreateProfile(

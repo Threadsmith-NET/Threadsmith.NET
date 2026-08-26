@@ -147,7 +147,7 @@ Threadsmith registers built-in runtime tools. Repository configuration, trust, i
 | `test_discover` | Discover bounded stable test identities in a selected test project. |
 | `test_run_targeted` | Run one host-issued test identity with a generated exact filter. |
 | `find_symbol` | Find compiler symbols with stable identity and semantic confidence. |
-| `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, allocation metadata, current line-numbered source or safe current-context back-references, digests, confidence, omissions, and continuations. |
+| `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, current line-numbered source or safe current-context back-references, flow/impact evidence, associated prompt/config/project artifacts, digests, confidence, omissions, and continuations. |
 | `find_references` | Find references to a compiler symbol. |
 | `find_implementations` | Find implementations of a compiler symbol. |
 | `call_hierarchy` | Traverse bounded incoming/outgoing compiler-known calls with dispatch, cycles, confidence, and omissions. |

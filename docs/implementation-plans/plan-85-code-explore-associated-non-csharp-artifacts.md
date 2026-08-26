@@ -1,6 +1,6 @@
 # Implementation Plan 85: Code Explore Associated Non-C# Artifacts
 
-**Status:** Planned
+**Status:** Active. Production implementation, focused automated artifact/security/provider coverage, user/operator documentation, and headless MTP-252-style CLI smoke evidence for associated artifacts, bounds, natural discovery, flow, impact, and provider compatibility are in place; full interactive MTP-252 evidence, Scenario AO review, repeated comparative evaluation, and broader gates remain before completion.
 
 **Delivery track:** Milestone 28 — bounded prompt, configuration, and project-artifact context
 **Strategy source:** Shared Context §A.1, §A.3, §A.5, §C, and §G; Milestone 28; Scenario AO
@@ -22,10 +22,10 @@ The local repository at `C:\source\repos\codegraph` is available solely as a fun
 
 ## 3. Scope
 
-- Define closed relationship kinds for compiler/project-proven associated artifacts, such as Roslyn additional/analyzer-config documents, explicit project items/resources, source-literal repository-relative paths, resource identifiers with project metadata support, and configuration/prompt names referenced by selected C# declarations.
+- Define closed relationship kinds for associated artifacts, such as Roslyn additional/analyzer-config documents, loaded project metadata files, weaker bounded project-item/resource text references, source-literal repository-relative paths, resource identifiers with project metadata support, and configuration/prompt names referenced by selected C# declarations.
 - Discover candidates only from the already-selected Plan 83/84 semantic slice plus bounded project metadata and confined exact-name/path inspection.
 - Require a relationship explanation and source anchor for every associated candidate; ordinary lexical similarity alone cannot make an artifact authoritative.
-- Rank explicit/pinned paths and compiler/project-proven relationships ahead of bounded exact-name candidates.
+- Rank explicit/pinned paths and selected-source relationships ahead of broad project metadata and bounded exact-name candidates unless the latter are the only specific evidence.
 - Support a closed allowlist of bounded textual media/extensions appropriate to prompts, JSON/configuration, XML/project metadata, schemas, Markdown/text, and similar inert source artifacts.
 - Optionally project bounded current text with one-based ranges, digest, media classification, truncation, and continuation metadata under existing read/path/sensitivity policy.
 - Keep associated artifacts in a separate result collection with their own confidence/completeness; never merge them into C# flow nodes or call edges.
@@ -113,7 +113,7 @@ Expected areas:
 
 ## 10. Testing
 
-Automated coverage must verify explicit paths, additional/analyzer-config documents, project items/resources, selected-source literal names/paths, bounded exact inference, relationship/source provenance, deterministic ranking, independent budgets, safe text media/encoding, line/range/digest/truncation output, current-content race, prohibited/reparse/secret/Git/build-output/binary/oversized exclusions, no recursion, no external entity/include execution, partial compilation, unavailable project metadata, cancellation, timeout, Plan 84 visibility rules, provider/schema parity, redaction, and interactive/headless equivalence.
+Automated coverage must verify explicit paths, additional/analyzer-config documents, loaded project metadata plus weaker textual project item/resource references, selected-source literal names/paths, bounded exact inference, relationship/source provenance, deterministic ranking, independent budgets, safe text media/encoding, line/range/digest/truncation output, current-content race, prohibited/reparse/secret/Git/build-output/binary/oversized exclusions, no recursion, no external entity/include execution, partial compilation, unavailable project metadata, cancellation, timeout, Plan 84 visibility rules, provider/schema parity, redaction, and interactive/headless equivalence.
 
 The user-testable checkpoint is [MTP-252](manual-test-plan.md#mtp-252--associated-prompt-configuration-and-project-artifacts). Milestone exit additionally requires the complete [Scenario AO](acceptance-scenarios.md#scenario-ao---roslyn-backed-task-sufficient-code-exploration) and repeated fixed-task comparison.
 

@@ -875,7 +875,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             new DiagnosticQueryTool(nativeValidation),
             new TestDiscoveryTool(nativeValidation),
             new TargetedTestTool(nativeValidation),
-            new CodeExploreTool(codeExplore),
+            new CodeExploreTool(codeExplore, processManager),
             new CallHierarchyTool(advancedSemanticQueries),
             new SymbolImpactTool(advancedSemanticQueries),
             new CSharpPatternSearchTool(advancedSemanticQueries),

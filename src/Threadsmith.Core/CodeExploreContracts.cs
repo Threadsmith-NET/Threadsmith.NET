@@ -125,6 +125,97 @@ public enum CodeExploreSourceCompleteness
     Drifted,
 }
 
+/// <summary>Request policy for associated non-C# artifacts returned by code exploration.</summary>
+public enum CodeExploreAssociatedArtifactsMode
+{
+    /// <summary>Discover bounded artifacts automatically when the selected C# slice provides relationship evidence.</summary>
+    Auto,
+
+    /// <summary>Do not discover or project associated non-C# artifacts.</summary>
+    Disabled,
+
+    /// <summary>Discover and project associated artifacts whenever relationship evidence is available.</summary>
+    Enabled,
+}
+
+/// <summary>Closed relationship between a selected C# source anchor and an associated artifact.</summary>
+public enum CodeExploreArtifactRelationshipKind
+{
+    /// <summary>The artifact path was explicitly supplied by the request.</summary>
+    ExplicitPath,
+
+    /// <summary>The artifact is a Roslyn additional document in the selected project.</summary>
+    AdditionalDocument,
+
+    /// <summary>The artifact is a Roslyn analyzer configuration document in the selected project.</summary>
+    AnalyzerConfiguration,
+
+    /// <summary>The artifact is project metadata associated with the selected project.</summary>
+    ProjectItem,
+
+    /// <summary>The artifact is a project resource associated with the selected project.</summary>
+    ProjectResource,
+
+    /// <summary>The artifact path or file name came from a selected C# source literal.</summary>
+    SourceLiteralPath,
+
+    /// <summary>The selected C# source references a configuration key, section, or checked-in configuration artifact.</summary>
+    ConfigurationReference,
+
+    /// <summary>The selected C# source references a prompt, template, or response artifact.</summary>
+    PromptReference,
+
+    /// <summary>The artifact was found by bounded exact-name lookup from a proven source literal.</summary>
+    BoundedExactNameInference,
+}
+
+/// <summary>Evidence strength for an associated artifact relationship.</summary>
+public enum CodeExploreArtifactEvidenceLevel
+{
+    /// <summary>The artifact path was explicitly requested and then confined by host policy.</summary>
+    ExplicitRequest,
+
+    /// <summary>The relationship is anchored in selected C# syntax or semantic evidence.</summary>
+    CompilerProven,
+
+    /// <summary>The relationship comes from already-loaded project or workspace metadata.</summary>
+    ProjectProven,
+
+    /// <summary>The relationship comes from a safe literal inside selected C# source.</summary>
+    SourceLiteral,
+
+    /// <summary>The relationship comes from bounded textual inference under a proven source/project scope, such as exact-name lookup or inert project metadata text.</summary>
+    BoundedTextualInference,
+}
+
+/// <summary>Closed textual media classification for associated artifacts.</summary>
+public enum CodeExploreArtifactMediaKind
+{
+    /// <summary>JSON or JSON-with-comments source data.</summary>
+    Json,
+
+    /// <summary>XML source data, including project and resource metadata.</summary>
+    Xml,
+
+    /// <summary>.NET project metadata source such as project, props, or targets files.</summary>
+    ProjectMetadata,
+
+    /// <summary>Markdown source text.</summary>
+    Markdown,
+
+    /// <summary>Prompt or template source text.</summary>
+    Prompt,
+
+    /// <summary>Configuration source text.</summary>
+    Configuration,
+
+    /// <summary>Schema source text.</summary>
+    Schema,
+
+    /// <summary>Other inert bounded text.</summary>
+    Text,
+}
+
 /// <summary>Deterministic ranking tier assigned to an inferred code-exploration candidate.</summary>
 public enum CodeExploreCandidateTier
 {
@@ -239,6 +330,24 @@ public sealed record CodeExploreLimits
     /// <summary>Maximum compact blast-radius items returned.</summary>
     public int MaximumBlastRadiusItems { get; init; } = 32;
 
+    /// <summary>Maximum associated non-C# artifacts returned.</summary>
+    public int MaximumAssociatedArtifacts { get; init; } = 4;
+
+    /// <summary>Maximum associated artifact candidates considered before ranking and projection.</summary>
+    public int MaximumAssociatedArtifactCandidates { get; init; } = 24;
+
+    /// <summary>Maximum total associated artifact characters returned.</summary>
+    public int MaximumAssociatedArtifactCharacters { get; init; } = 12_000;
+
+    /// <summary>Maximum associated artifact characters returned for one artifact.</summary>
+    public int MaximumPerAssociatedArtifactCharacters { get; init; } = 4_096;
+
+    /// <summary>Maximum bytes read from one associated artifact for content identity and projection.</summary>
+    public int MaximumAssociatedArtifactBytes { get; init; } = 128 * 1024;
+
+    /// <summary>Maximum exact-name artifact matches retained from one bounded directory lookup.</summary>
+    public int MaximumAssociatedArtifactNameMatches { get; init; } = 8;
+
     /// <summary>Maximum elapsed query time in milliseconds.</summary>
     public int TimeoutMilliseconds { get; init; } = 10_000;
 }
@@ -268,6 +377,25 @@ public sealed record CodeExplorePathAnchor
     public long? ExpectedWorkspaceGeneration { get; init; }
 }
 
+/// <summary>Repository-relative associated-artifact path anchor for source-bearing code exploration.</summary>
+public sealed record CodeExploreArtifactPathAnchor
+{
+    /// <summary>Repository-relative path to a supported textual artifact.</summary>
+    public required string Path { get; init; }
+
+    /// <summary>Optional one-based start line for an exact artifact range.</summary>
+    public int? Line { get; init; }
+
+    /// <summary>Optional inclusive one-based end line for an exact artifact range.</summary>
+    public int? EndLine { get; init; }
+
+    /// <summary>Optional expected file digest copied from a prior artifact continuation target.</summary>
+    public string? ExpectedFileSha256 { get; init; }
+
+    /// <summary>Optional expected semantic workspace generation copied from a prior artifact continuation target.</summary>
+    public long? ExpectedWorkspaceGeneration { get; init; }
+}
+
 /// <summary>Exact source-bearing code exploration request.</summary>
 public sealed record CodeExploreRequest
 {
@@ -277,6 +405,9 @@ public sealed record CodeExploreRequest
     /// <summary>Exploration intent applied after exact anchors resolve.</summary>
     public CodeExploreMode Mode { get; init; }
 
+    /// <summary>Associated non-C# artifact discovery policy.</summary>
+    public CodeExploreAssociatedArtifactsMode AssociatedArtifacts { get; init; }
+
     /// <summary>Exact simple, qualified, metadata, or documentation-comment symbol anchors.</summary>
     public IReadOnlyList<string> ExactSymbolAnchors { get; init; } = [];
 
@@ -285,6 +416,9 @@ public sealed record CodeExploreRequest
 
     /// <summary>Repository-relative C# path and optional line anchors.</summary>
     public IReadOnlyList<CodeExplorePathAnchor> PathAnchors { get; init; } = [];
+
+    /// <summary>Explicit repository-relative non-C# artifact path anchors.</summary>
+    public IReadOnlyList<CodeExploreArtifactPathAnchor> AssociatedArtifactPathAnchors { get; init; } = [];
 
     /// <summary>Explicit result, source, ambiguity, and time limits.</summary>
     public CodeExploreLimits Limits { get; init; } = new();
@@ -404,6 +538,58 @@ public sealed record CodeExploreAllocationSummary(
     int SpentSourceCharacters,
     string BudgetSource,
     IReadOnlyList<CodeExploreAllocationFileSummary> Files);
+
+/// <summary>Bounded textual content returned for an associated artifact.</summary>
+public sealed record CodeExploreArtifactContent(
+    SourceRange Range,
+    IReadOnlyList<string> NumberedLines,
+    string FileSha256,
+    string? RangeSha256,
+    CodeExploreSourceCompleteness Completeness,
+    IReadOnlyList<string> OmittedRanges,
+    string? ContinuationAnchor,
+    int ReturnedCharacters);
+
+/// <summary>One continuation target for omitted or partially returned associated artifact content.</summary>
+public sealed record CodeExploreArtifactContinuationTarget(
+    string FilePath,
+    int? StartLine,
+    int? EndLine,
+    string? ExpectedFileSha256,
+    long? WorkspaceGeneration,
+    string Reason);
+
+/// <summary>One non-C# artifact or logical prompt/configuration reference associated with a selected C# semantic source anchor.</summary>
+public sealed record CodeExploreAssociatedArtifact(
+    string? FilePath,
+    CodeExploreArtifactMediaKind MediaKind,
+    string ProjectName,
+    string? OriginSymbolId,
+    string OriginFilePath,
+    SourceRange OriginRange,
+    CodeExploreArtifactRelationshipKind Relationship,
+    CodeExploreArtifactEvidenceLevel Evidence,
+    IReadOnlyList<string> SelectionReasons,
+    CodeExploreArtifactContent? Content,
+    IReadOnlyList<string> Omissions,
+    string? LogicalName = null);
+
+/// <summary>Independent completeness and accounting for associated artifact discovery.</summary>
+public sealed record CodeExploreArtifactCoverage(
+    int InspectedSourceAnchors,
+    int InspectedProjects,
+    int InspectedDirectories,
+    int CandidateCount,
+    int ReturnedCount,
+    int OmittedCount,
+    int SpentCharacters,
+    bool Complete,
+    bool CandidateLimitReached,
+    bool FileLimitReached,
+    bool CharacterLimitReached,
+    bool TimeLimitReached,
+    IReadOnlyList<string> Omissions,
+    IReadOnlyList<CodeExploreArtifactContinuationTarget> ContinuationTargets);
 
 /// <summary>One selected compiler-proven path between exact anchors.</summary>
 public sealed record CodeExploreFlowPath(
@@ -560,13 +746,40 @@ public sealed record CodeExploreResult(
     CodeExploreAllocationSummary? Allocation = null,
     IReadOnlyList<CodeExploreBackReference>? BackReferences = null,
     CodeExploreDedupSummary? Deduplication = null,
-    IReadOnlyList<CodeExploreEmissionRecord>? Emissions = null);
+    IReadOnlyList<CodeExploreEmissionRecord>? Emissions = null,
+    IReadOnlyList<CodeExploreAssociatedArtifact>? AssociatedArtifacts = null,
+    CodeExploreArtifactCoverage? ArtifactCoverage = null);
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(
     string Path,
     string Text,
     string FileSha256);
+
+/// <summary>Bounded current associated artifact text read through the host tool policy boundary.</summary>
+public sealed record CodeExploreArtifactText(
+    string Path,
+    string Text,
+    string FileSha256,
+    CodeExploreArtifactMediaKind MediaKind,
+    long LengthBytes);
+
+/// <summary>One supported artifact path found by bounded exact-name lookup.</summary>
+public sealed record CodeExploreArtifactFileMatch(
+    string Path,
+    CodeExploreArtifactMediaKind MediaKind);
+
+/// <summary>Result of a bounded exact-name associated-artifact lookup.</summary>
+public sealed record CodeExploreArtifactFileSearchResult(
+    IReadOnlyList<CodeExploreArtifactFileMatch> Matches,
+    int InspectedEntries,
+    bool Truncated);
+
+/// <summary>Safe policy classification for one candidate associated-artifact path.</summary>
+public sealed record CodeExploreArtifactPathProbe(
+    bool IsSupported,
+    CodeExploreArtifactMediaKind? MediaKind,
+    string? RejectionReason);
 
 /// <summary>Policy-owned source reader used by code exploration for current file identity checks.</summary>
 public interface ICodeExploreSourceReader
@@ -578,6 +791,29 @@ public interface ICodeExploreSourceReader
     Task<CodeExploreSourceText> ReadTextAsync(
         string path,
         int maximumBytes,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Policy-owned artifact reader used by code exploration for associated non-C# evidence.</summary>
+public interface ICodeExploreArtifactReader
+{
+    /// <summary>Returns whether the path is a supported textual artifact under current policy.</summary>
+    bool IsSupportedTextArtifactPath(string path);
+
+    /// <summary>Returns a safe policy classification for one candidate artifact path without reading file content.</summary>
+    CodeExploreArtifactPathProbe ProbeArtifactPath(string path);
+
+    /// <summary>Reads a bounded current artifact after policy, regular-file, media, and size checks.</summary>
+    Task<CodeExploreArtifactText> ReadArtifactTextAsync(
+        string path,
+        int maximumBytes,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Finds supported artifact files by exact file name below a bounded policy-checked directory.</summary>
+    Task<CodeExploreArtifactFileSearchResult> FindArtifactFilesByNameAsync(
+        string directoryPath,
+        string fileName,
+        int maximumMatches,
         CancellationToken cancellationToken = default);
 }
 

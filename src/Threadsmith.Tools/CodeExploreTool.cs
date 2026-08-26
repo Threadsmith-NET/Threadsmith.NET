@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,12 +20,16 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         1024 * 1024);
 
     private readonly ICodeExploreService _service;
+    private readonly IProcessManager? _processManager;
 
     /// <summary>Initializes a new instance of the <see cref="CodeExploreTool"/> class.</summary>
-    public CodeExploreTool(ICodeExploreService service)
+    public CodeExploreTool(
+        ICodeExploreService service,
+        IProcessManager? processManager = null)
     {
         ArgumentNullException.ThrowIfNull(service);
         _service = service;
+        _processManager = processManager;
     }
 
     /// <inheritdoc />
@@ -39,7 +44,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
         var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Code exploration requires an opened workspace.");
-        var sourceReader = new PolicyCodeExploreSourceReader(context.Invocation);
+        var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager);
         var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
         var result = await _service.QueryCodeExploreAsync(
             workspaceId,
@@ -55,6 +60,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 "file",
                 section.FilePath,
                 $"L{section.Source.Range.StartLine}-L{section.Source.Range.EndLine}")),
+            .. CreateAssociatedArtifactProvenanceSources(result.AssociatedArtifacts),
             new("semantic-workspace", workspaceId.Value.ToString("D")),
         ];
         return new(result, sources, IsTruncated(result));
@@ -83,6 +89,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         if (!Enum.IsDefined(input.Mode))
         {
             throw new ToolArgumentValidationException("code exploration mode is not supported.");
+        }
+
+        if (!Enum.IsDefined(input.AssociatedArtifacts))
+        {
+            throw new ToolArgumentValidationException("associated artifact mode is not supported.");
         }
 
         ValidateLimits(input.Limits);
@@ -129,6 +140,35 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 throw new ToolArgumentValidationException("expectedFileSha256 must be a 64-character lowercase or uppercase SHA-256 hex digest.");
             }
         }
+
+        if (input.AssociatedArtifactPathAnchors.Count > input.Limits.MaximumAssociatedArtifactCandidates)
+        {
+            throw new ToolArgumentValidationException("associated artifact path anchor count must not exceed maximumAssociatedArtifactCandidates.");
+        }
+
+        foreach (var anchor in input.AssociatedArtifactPathAnchors)
+        {
+            ArgumentNullException.ThrowIfNull(anchor);
+            ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
+            if (anchor.Path.Length > 4096
+                || anchor.Line is <= 0
+                || anchor.EndLine is <= 0
+                || anchor.EndLine < anchor.Line
+                || (anchor.EndLine is not null && anchor.Line is null))
+            {
+                throw new ToolArgumentValidationException("associated artifact path anchors must be bounded and use valid positive one-based line ranges.");
+            }
+
+            if (anchor.ExpectedWorkspaceGeneration is < 0)
+            {
+                throw new ToolArgumentValidationException("associated artifact expectedWorkspaceGeneration must be non-negative.");
+            }
+
+            if (anchor.ExpectedFileSha256 is { } expectedFileSha256 && !IsSha256Hex(expectedFileSha256))
+            {
+                throw new ToolArgumentValidationException("associated artifact expectedFileSha256 must be a 64-character lowercase or uppercase SHA-256 hex digest.");
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -138,12 +178,24 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     {
         var paths = new List<string> { context.RepositoryPath };
         paths.AddRange(input.PathAnchors.Select(anchor => anchor.Path));
+        paths.AddRange(input.AssociatedArtifactPathAnchors.Select(anchor => anchor.Path));
         if (QueryLooksLikePath(input.Query))
         {
             paths.Add(input.Query);
         }
 
         return paths;
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreRequest input)
+    {
+        return _processManager is not null
+            && input.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
+            && input.Limits.MaximumAssociatedArtifacts > 0
+            && input.Limits.MaximumAssociatedArtifactNameMatches > 0
+            ? "git"
+            : null;
     }
 
     private static void ValidateLimits(CodeExploreLimits limits)
@@ -160,6 +212,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || limits.MaximumFlowEdges is < 1 or > 5000
             || limits.MaximumDispatchBranches is < 0 or > 200
             || limits.MaximumBlastRadiusItems is < 0 or > 200
+            || limits.MaximumAssociatedArtifacts is < 0 or > 16
+            || limits.MaximumAssociatedArtifactCandidates is < 0 or > 128
+            || limits.MaximumAssociatedArtifactCharacters is < 0 or > 100_000
+            || limits.MaximumPerAssociatedArtifactCharacters is < 0 or > 65_536
+            || limits.MaximumAssociatedArtifactBytes is < 1 or > 1024 * 1024
+            || limits.MaximumAssociatedArtifactNameMatches is < 0 or > 64
             || limits.TimeoutMilliseconds is < 1 or > 60_000)
         {
             throw new ToolArgumentValidationException("code exploration bounds are outside host limits.");
@@ -235,6 +293,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
         bounded = TrimFlow(bounded, maximumSerializedBytes);
         bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
+        bounded = TrimAssociatedArtifacts(bounded, maximumSerializedBytes);
         bounded = TrimBackReferences(bounded, maximumSerializedBytes);
         bounded = TrimEmissions(bounded, maximumSerializedBytes);
         bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
@@ -253,6 +312,22 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             CandidateSummaries = [],
             BackReferences = [],
             Emissions = [],
+            AssociatedArtifacts = [],
+            ArtifactCoverage = bounded.ArtifactCoverage is null
+                ? null
+                : bounded.ArtifactCoverage with
+                {
+                    ReturnedCount = 0,
+                    OmittedCount = Math.Max(
+                        bounded.ArtifactCoverage.OmittedCount,
+                        bounded.ArtifactCoverage.CandidateCount),
+                    SpentCharacters = 0,
+                    Complete = false,
+                    FileLimitReached = true,
+                    CharacterLimitReached = true,
+                    Omissions = AddResultBoundOmission(bounded.ArtifactCoverage.Omissions),
+                    ContinuationTargets = [],
+                },
             Allocation = bounded.Allocation is null
                 ? null
                 : bounded.Allocation with
@@ -383,6 +458,182 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         }
 
         return result;
+    }
+
+    private static IEnumerable<ToolProvenanceSource> CreateAssociatedArtifactProvenanceSources(
+        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts)
+    {
+        if (artifacts is null)
+        {
+            yield break;
+        }
+
+        foreach (var artifact in artifacts)
+        {
+            if (artifact is not { Content: { } content, FilePath: { } filePath })
+            {
+                continue;
+            }
+
+            yield return new ToolProvenanceSource(
+                "artifact",
+                filePath,
+                $"L{content.Range.StartLine}-L{content.Range.EndLine}");
+        }
+    }
+
+    private static CodeExploreResult TrimAssociatedArtifacts(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var artifacts = result.AssociatedArtifacts;
+        var artifactContinuations = result.ArtifactCoverage?.ContinuationTargets.ToList() ?? [];
+        while (artifacts is { Count: > 0 }
+            && artifacts.Any(artifact => artifact.Content is not null)
+            && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            artifacts = artifacts
+                .Select(artifact => TrimAssociatedArtifactContent(
+                    artifact,
+                    artifactContinuations,
+                    result.WorkspaceGeneration))
+                .ToArray();
+            result = result with
+            {
+                AssociatedArtifacts = artifacts,
+                ArtifactCoverage = UpdateArtifactCoverageAfterTrim(
+                    result.ArtifactCoverage,
+                    artifacts,
+                    artifactContinuations,
+                    fileLimitReached: false,
+                    characterLimitReached: true),
+                Omissions = AddResultBoundOmission(result.Omissions),
+            };
+        }
+
+        while (artifacts is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            var retainedCount = artifacts.Count / 2;
+            foreach (var artifact in artifacts.Skip(retainedCount))
+            {
+                AddTrimmedArtifactContentContinuation(
+                    artifactContinuations,
+                    artifact,
+                    result.WorkspaceGeneration);
+            }
+
+            artifacts = artifacts.Take(retainedCount).ToArray();
+            result = result with
+            {
+                AssociatedArtifacts = artifacts,
+                ArtifactCoverage = UpdateArtifactCoverageAfterTrim(
+                    result.ArtifactCoverage,
+                    artifacts,
+                    artifactContinuations,
+                    fileLimitReached: true,
+                    characterLimitReached: false),
+                Omissions = AddResultBoundOmission(result.Omissions),
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreAssociatedArtifact TrimAssociatedArtifactContent(
+        CodeExploreAssociatedArtifact artifact,
+        List<CodeExploreArtifactContinuationTarget> continuationTargets,
+        long workspaceGeneration)
+    {
+        if (artifact.Content is null)
+        {
+            return artifact;
+        }
+
+        AddTrimmedArtifactContentContinuation(
+            continuationTargets,
+            artifact,
+            workspaceGeneration);
+        return artifact with
+        {
+            Content = null,
+            Omissions = AddResultBoundOmission(artifact.Omissions),
+        };
+    }
+
+    private static void AddTrimmedArtifactContentContinuation(
+        List<CodeExploreArtifactContinuationTarget> continuationTargets,
+        CodeExploreAssociatedArtifact artifact,
+        long workspaceGeneration)
+    {
+        if (artifact is not { FilePath: { } filePath, Content: { ReturnedCharacters: > 0 } content })
+        {
+            return;
+        }
+
+        var target = new CodeExploreArtifactContinuationTarget(
+            filePath,
+            content.Range.StartLine,
+            content.Range.EndLine,
+            content.FileSha256,
+            workspaceGeneration,
+            "Retry with this explicit associated artifact path anchor and digest; artifact content was omitted to fit the selected model request budget.");
+        if (!continuationTargets.Any(existing => IsSameArtifactContinuation(existing, target)))
+        {
+            continuationTargets.Add(target);
+        }
+    }
+
+    private static CodeExploreArtifactCoverage? UpdateArtifactCoverageAfterTrim(
+        CodeExploreArtifactCoverage? coverage,
+        IReadOnlyList<CodeExploreAssociatedArtifact> artifacts,
+        IReadOnlyList<CodeExploreArtifactContinuationTarget> continuationTargets,
+        bool fileLimitReached,
+        bool characterLimitReached)
+    {
+        if (coverage is null)
+        {
+            return null;
+        }
+
+        var incompleteReturned = artifacts.Count(IsIncompleteAssociatedArtifact);
+        return coverage with
+        {
+            ReturnedCount = artifacts.Count,
+            OmittedCount = Math.Max(
+                coverage.OmittedCount,
+                Math.Max(0, coverage.CandidateCount - artifacts.Count) + incompleteReturned),
+            SpentCharacters = artifacts.Sum(static artifact => artifact.Content?.ReturnedCharacters ?? 0),
+            Complete = false,
+            FileLimitReached = coverage.FileLimitReached || fileLimitReached,
+            CharacterLimitReached = coverage.CharacterLimitReached || characterLimitReached,
+            Omissions = AddResultBoundOmission(coverage.Omissions),
+            ContinuationTargets = continuationTargets
+                .DistinctBy(static target => $"{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}")
+                .ToArray(),
+        };
+    }
+
+    private static bool IsIncompleteAssociatedArtifact(CodeExploreAssociatedArtifact artifact)
+    {
+        if (artifact.FilePath is null && artifact.LogicalName is not null)
+        {
+            return artifact.Omissions.Count > 0;
+        }
+
+        return artifact.Content is null
+            || artifact.Content.Completeness != CodeExploreSourceCompleteness.Complete
+            || artifact.Omissions.Count > 0;
+    }
+
+    private static bool IsSameArtifactContinuation(
+        CodeExploreArtifactContinuationTarget left,
+        CodeExploreArtifactContinuationTarget right)
+    {
+        return string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && left.StartLine == right.StartLine
+            && left.EndLine == right.EndLine
+            && string.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256, StringComparison.OrdinalIgnoreCase)
+            && left.WorkspaceGeneration == right.WorkspaceGeneration;
     }
 
     private static CodeExploreResult TrimBackReferences(
@@ -588,12 +839,14 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         var blastRadius = Confine(result.BlastRadius, context, out var blastRadiusOmitted);
         var candidateSummaries = Confine(result.CandidateSummaries, context, out var candidateSummaryOmitted);
         var allocation = Confine(result.Allocation, context, out var allocationOmitted);
+        var associatedArtifacts = ConfineAssociatedArtifacts(result.AssociatedArtifacts, context, out var associatedArtifactOmitted);
+        var artifactCoverage = ConfineArtifactCoverage(result.ArtifactCoverage, associatedArtifacts, context, associatedArtifactOmitted);
         var backReferences = ConfineBackReferences(result.BackReferences, context, out var backReferenceOmitted);
         var emissions = ConfineEmissions(result.Emissions, context, out var emissionOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
-        var omitted = sections.Length != result.FileSections.Count
+        var csharpOmitted = sections.Length != result.FileSections.Count
             || alternativesOmitted
             || resolutions.Any(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Omitted)
             || continuations.Length != result.ContinuationTargets.Count
@@ -603,6 +856,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || allocationOmitted
             || backReferenceOmitted
             || emissionOmitted;
+        var omitted = csharpOmitted || associatedArtifactOmitted;
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
@@ -613,14 +867,16 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             BlastRadius = blastRadius,
             CandidateSummaries = candidateSummaries,
             Allocation = allocation,
+            AssociatedArtifacts = associatedArtifacts,
+            ArtifactCoverage = artifactCoverage,
             BackReferences = backReferences,
             Emissions = emissions,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
-                SourceComplete = result.Coverage.SourceComplete && !omitted,
-                OutputComplete = result.Coverage.OutputComplete && !omitted,
-                Omissions = AddPolicyOmission(result.Coverage.Omissions, omitted),
+                SourceComplete = result.Coverage.SourceComplete && !csharpOmitted,
+                OutputComplete = result.Coverage.OutputComplete && !csharpOmitted,
+                Omissions = AddPolicyOmission(result.Coverage.Omissions, csharpOmitted),
             },
         };
     }
@@ -912,6 +1168,51 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         return allocation with { Files = files };
     }
 
+    private static IReadOnlyList<CodeExploreAssociatedArtifact>? ConfineAssociatedArtifacts(
+        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (artifacts is null)
+        {
+            return null;
+        }
+
+        var confined = artifacts
+            .Where(artifact => IsAllowed(artifact.OriginFilePath, context)
+                && (artifact.FilePath is null
+                    ? !string.IsNullOrWhiteSpace(artifact.LogicalName)
+                    : IsAllowed(artifact.FilePath, context)))
+            .ToArray();
+        omitted = confined.Length != artifacts.Count;
+        return confined;
+    }
+
+    private static CodeExploreArtifactCoverage? ConfineArtifactCoverage(
+        CodeExploreArtifactCoverage? coverage,
+        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts,
+        ToolInvocationContext context,
+        bool alreadyOmitted)
+    {
+        if (coverage is null)
+        {
+            return null;
+        }
+
+        var continuations = coverage.ContinuationTargets
+            .Where(target => IsAllowed(target.FilePath, context))
+            .ToArray();
+        var omitted = alreadyOmitted || continuations.Length != coverage.ContinuationTargets.Count;
+        return coverage with
+        {
+            ReturnedCount = artifacts?.Count ?? 0,
+            ContinuationTargets = continuations,
+            Complete = coverage.Complete && !omitted,
+            Omissions = AddPolicyOmission(coverage.Omissions, omitted),
+        };
+    }
+
     private static bool IsCandidateSummaryAllowed(
         CodeExploreCandidateSummary summary,
         ToolInvocationContext context)
@@ -975,7 +1276,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 || blastRadius.ReturnedTests < blastRadius.TotalTests);
         var flowBranchTruncated = result.Flow is { } flow
             && flow.DispatchBranches.Any(branch => branch.ReturnedCount < branch.TotalCount || branch.Omissions.Count > 0);
-        return !result.Coverage.SymbolResolutionComplete
+        var artifactsTruncated = result.ArtifactCoverage is { Complete: false }
+            || (result.AssociatedArtifacts is { } artifacts && artifacts.Any(artifact => artifact.Omissions.Count > 0
+                || artifact.Content is { Completeness: not CodeExploreSourceCompleteness.Complete }));
+        return artifactsTruncated
+            || !result.Coverage.SymbolResolutionComplete
             || !result.Coverage.CompiledProjectCoverageComplete
             || !result.Coverage.SourceComplete
             || !result.Coverage.OutputComplete
@@ -1011,16 +1316,33 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         return value.Length <= 120 ? value : value[..120];
     }
 
-    private sealed class PolicyCodeExploreSourceReader : ICodeExploreSourceReader
+    private sealed class PolicyCodeExploreSourceReader : ICodeExploreSourceReader, ICodeExploreArtifactReader
     {
         private const int MaximumReadableFileBytes = 1024 * 1024;
+        private const int MaximumArtifactEnumerationEntries = 5000;
+        private const int MaximumGitInventoryOutputCharacters = 512 * 1024;
 
+        private static readonly HashSet<string> ArtifactExcludedDirectories = new(
+            [".codegraph", ".git", ".hg", ".svn", ".vs", ".idea", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults", "artifacts", "dist", "out", "coverage"],
+            StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<string> SensitiveArtifactNames = new(
+            [".env", ".env.local", ".env.development", ".env.production", "secrets.json", "appsettings.secrets.json", "credentials.json"],
+            StringComparer.OrdinalIgnoreCase);
+
+        private readonly ToolExecutionContext _executionContext;
         private readonly ToolInvocationContext _context;
+        private readonly IProcessManager? _processManager;
+        private readonly Dictionary<string, CodeExploreArtifactDirectoryInventory> _artifactInventories = new(HostPathComparer);
 
-        internal PolicyCodeExploreSourceReader(ToolInvocationContext context)
+        internal PolicyCodeExploreSourceReader(
+            ToolExecutionContext context,
+            IProcessManager? processManager)
         {
             ArgumentNullException.ThrowIfNull(context);
-            _context = context;
+            _executionContext = context;
+            _context = context.Invocation;
+            _processManager = processManager;
         }
 
         public bool IsPathAllowed(string path)
@@ -1038,6 +1360,51 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 or System.Security.SecurityException)
             {
                 return false;
+            }
+        }
+
+        public bool IsSupportedTextArtifactPath(string path)
+        {
+            return ProbeArtifactPath(path).IsSupported;
+        }
+
+        public CodeExploreArtifactPathProbe ProbeArtifactPath(string path)
+        {
+            try
+            {
+                var normalized = ToolPathRules.NormalizeAndValidate(path, _context);
+                if (GetArtifactPathPolicyRejectionReason(normalized) is { } policyReason)
+                {
+                    return RejectedArtifactPath(policyReason);
+                }
+
+                if (!TryClassifyArtifactMedia(normalized, out var mediaKind))
+                {
+                    return RejectedArtifactPath("media type is not supported for associated artifacts.");
+                }
+
+                var info = new FileInfo(normalized);
+                if (!info.Exists)
+                {
+                    return RejectedArtifactPath("file does not exist.");
+                }
+
+                if (!IsExistingRegularFile(info))
+                {
+                    return RejectedArtifactPath("path is not a regular non-reparse file.");
+                }
+
+                return new CodeExploreArtifactPathProbe(true, mediaKind, null);
+            }
+            catch (Exception exception) when (exception is ToolArgumentValidationException
+                or UnauthorizedAccessException
+                or IOException
+                or ArgumentException
+                or NotSupportedException
+                or PathTooLongException
+                or System.Security.SecurityException)
+            {
+                return RejectedArtifactPath("path was denied by repository path policy.");
             }
         }
 
@@ -1071,6 +1438,71 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             return new CodeExploreSourceText(normalized, text, ComputeSha256(bytes));
         }
 
+        public async Task<CodeExploreArtifactText> ReadArtifactTextAsync(
+            string path,
+            int maximumBytes,
+            CancellationToken cancellationToken = default)
+        {
+            var normalized = ToolPathRules.NormalizeAndValidate(path, _context);
+            var effectiveMaximumBytes = Math.Min(maximumBytes, MaximumReadableFileBytes);
+            var mediaKind = ValidateReadableArtifactFile(normalized, effectiveMaximumBytes);
+            var before = new FileInfo(normalized);
+            var beforeLength = before.Length;
+            var beforeLastWriteTimeUtc = before.LastWriteTimeUtc;
+            await using var stream = new FileStream(
+                normalized,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite,
+                bufferSize: 8192,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (!stream.CanSeek)
+            {
+                throw new UnauthorizedAccessException("Code exploration reads only seekable regular artifact files.");
+            }
+
+            if (stream.Length > effectiveMaximumBytes)
+            {
+                throw new InvalidOperationException($"The associated artifact exceeds the {effectiveMaximumBytes}-byte code exploration read limit.");
+            }
+
+            var bytes = await ReadBoundedBytesAsync(stream, effectiveMaximumBytes, cancellationToken);
+            var after = new FileInfo(normalized);
+            if (beforeLength != after.Length || beforeLastWriteTimeUtc != after.LastWriteTimeUtc)
+            {
+                throw new InvalidOperationException("The associated artifact changed while it was being read; content was omitted as stale.");
+            }
+
+            var text = await DecodeSourceTextAsync(bytes, cancellationToken);
+            ValidateTextualArtifactShape(text);
+            return new CodeExploreArtifactText(normalized, text, ComputeSha256(bytes), mediaKind, beforeLength);
+        }
+
+        public async Task<CodeExploreArtifactFileSearchResult> FindArtifactFilesByNameAsync(
+            string directoryPath,
+            string fileName,
+            int maximumMatches,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+            if (maximumMatches <= 0 || !IsSafeExactArtifactFileName(fileName))
+            {
+                return new CodeExploreArtifactFileSearchResult([], 0, maximumMatches <= 0);
+            }
+
+            var directory = ToolPathRules.NormalizeAndValidate(directoryPath, _context);
+            if (!Directory.Exists(directory) || !IsArtifactSearchDirectory(directory))
+            {
+                return new CodeExploreArtifactFileSearchResult([], 0, false);
+            }
+
+            return await FindArtifactFilesByNameFromGitInventoryAsync(
+                directory,
+                fileName,
+                maximumMatches,
+                cancellationToken);
+        }
+
         private static void ValidateReadableSourceFile(string normalized, int effectiveMaximumBytes)
         {
             var info = new FileInfo(normalized);
@@ -1090,6 +1522,397 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             }
         }
 
+        private CodeExploreArtifactMediaKind ValidateReadableArtifactFile(string normalized, int effectiveMaximumBytes)
+        {
+            var info = new FileInfo(normalized);
+            if (!info.Exists)
+            {
+                throw new FileNotFoundException("The requested associated artifact does not exist.", normalized);
+            }
+
+            if (!IsExistingRegularFile(info))
+            {
+                throw new UnauthorizedAccessException("Code exploration reads only regular non-reparse artifact files.");
+            }
+
+            if (!IsArtifactPathInspectable(normalized) || !TryClassifyArtifactMedia(normalized, out var mediaKind))
+            {
+                throw new UnauthorizedAccessException("The associated artifact path or media type is not supported by code exploration policy.");
+            }
+
+            if (info.Length > effectiveMaximumBytes)
+            {
+                throw new InvalidOperationException($"The associated artifact exceeds the {effectiveMaximumBytes}-byte code exploration read limit.");
+            }
+
+            return mediaKind;
+        }
+
+        private static bool IsExistingRegularFile(string normalized)
+        {
+            return IsExistingRegularFile(new FileInfo(normalized));
+        }
+
+        private static bool IsExistingRegularFile(FileSystemInfo info)
+        {
+            return info.Exists
+                && (info.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) == 0;
+        }
+
+        private bool IsArtifactPathInspectable(string normalized)
+        {
+            return GetArtifactPathPolicyRejectionReason(normalized) is null;
+        }
+
+        private string? GetArtifactPathPolicyRejectionReason(string normalized)
+        {
+            var relative = Path.GetRelativePath(_context.RepositoryPath, normalized).Replace('\\', '/');
+            if (relative.StartsWith("..", StringComparison.Ordinal)
+                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths))
+            {
+                return "path is outside the approved repository scope or is prohibited by invocation policy.";
+            }
+
+            var parts = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                return "path does not identify a repository file.";
+            }
+
+            if (parts.Any(ArtifactExcludedDirectories.Contains))
+            {
+                return "path is in a Git, generated, dependency, or build-output directory.";
+            }
+
+            if (parts.Any(IsSensitiveArtifactNameOrSegment))
+            {
+                return "path is excluded by secret or credential sensitivity policy.";
+            }
+
+            if (ToolPathRules.ContainsReservedWindowsDeviceName(relative))
+            {
+                return "path contains a reserved Windows device name.";
+            }
+
+            return null;
+        }
+
+        private static CodeExploreArtifactPathProbe RejectedArtifactPath(string reason)
+        {
+            return new CodeExploreArtifactPathProbe(false, null, reason);
+        }
+
+        private bool IsArtifactSearchDirectory(string normalizedDirectory)
+        {
+            var info = new DirectoryInfo(normalizedDirectory);
+            if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return false;
+            }
+
+            var relative = Path.GetRelativePath(_context.RepositoryPath, normalizedDirectory).Replace('\\', '/');
+            if (relative.StartsWith("..", StringComparison.Ordinal)
+                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths))
+            {
+                return false;
+            }
+
+            return relative.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .All(part => !ArtifactExcludedDirectories.Contains(part)
+                    && !IsSensitiveArtifactNameOrSegment(part));
+        }
+
+        private static bool IsSensitiveArtifactNameOrSegment(string value)
+        {
+            return SensitiveArtifactNames.Contains(value)
+                || value.Contains("secret", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("credential", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("token", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSafeExactArtifactFileName(string fileName)
+        {
+            return !string.IsNullOrWhiteSpace(fileName)
+                && fileName.Length <= 255
+                && fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+                && !fileName.Contains('/')
+                && !fileName.Contains('\\')
+                && !SensitiveArtifactNames.Contains(fileName)
+                && !IsSensitiveArtifactNameOrSegment(fileName)
+                && TryClassifyArtifactMedia(fileName, out _);
+        }
+
+        private async Task<CodeExploreArtifactFileSearchResult> FindArtifactFilesByNameFromGitInventoryAsync(
+            string directory,
+            string fileName,
+            int maximumMatches,
+            CancellationToken cancellationToken)
+        {
+            var inventory = await GetArtifactDirectoryInventoryFromGitAsync(directory, cancellationToken);
+            var sortedMatches = inventory.Files
+                .Where(match => string.Equals(Path.GetFileName(match.Path), fileName, HostPathComparison))
+                .OrderBy(match => match.Path, HostPathComparer)
+                .ToArray();
+            var limitedMatches = sortedMatches.Take(maximumMatches).ToArray();
+            var truncated = inventory.Truncated || limitedMatches.Length < sortedMatches.Length;
+            return new CodeExploreArtifactFileSearchResult(
+                limitedMatches,
+                inventory.InspectedEntries,
+                truncated);
+        }
+
+        private async Task<CodeExploreArtifactDirectoryInventory> GetArtifactDirectoryInventoryFromGitAsync(
+            string directory,
+            CancellationToken cancellationToken)
+        {
+            var inventoryKey = Path.GetFullPath(directory);
+            if (_artifactInventories.TryGetValue(inventoryKey, out var cachedInventory))
+            {
+                return cachedInventory;
+            }
+
+            var inventory = await LoadArtifactDirectoryInventoryFromGitAsync(
+                directory,
+                cancellationToken);
+            _artifactInventories[inventoryKey] = inventory;
+            return inventory;
+        }
+
+        private async Task<CodeExploreArtifactDirectoryInventory> LoadArtifactDirectoryInventoryFromGitAsync(
+            string directory,
+            CancellationToken cancellationToken)
+        {
+            if (_processManager is null)
+            {
+                return new CodeExploreArtifactDirectoryInventory([], 0, true);
+            }
+
+            var relativeDirectory = Path.GetRelativePath(_context.RepositoryPath, directory).Replace('\\', '/');
+            if (relativeDirectory.Length == 0 || relativeDirectory == ".")
+            {
+                relativeDirectory = ".";
+            }
+
+            ProcessExecutionResult result;
+            try
+            {
+                result = await _processManager.RunAsync(
+                    new ProcessExecutionRequest
+                    {
+                        ToolInvocationId = _executionContext.ToolInvocationId,
+                        RunId = _executionContext.RunId,
+                        FileName = "git",
+                        Arguments =
+                        [
+                            "--no-pager",
+                            "--literal-pathspecs",
+                            "-c",
+                            "color.ui=false",
+                            "-c",
+                            "core.pager=cat",
+                            "-c",
+                            "core.quotepath=false",
+                            "-c",
+                            "core.fsmonitor=false",
+                            "ls-files",
+                            "--cached",
+                            "--others",
+                            "--exclude-standard",
+                            "-z",
+                            "--",
+                            relativeDirectory,
+                        ],
+                        WorkingDirectory = _context.RepositoryPath,
+                        Timeout = TimeSpan.FromSeconds(10),
+                        MaximumOutputCharacters = MaximumGitInventoryOutputCharacters,
+                        StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
+                        EnvironmentVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["GIT_OPTIONAL_LOCKS"] = "0",
+                            ["GIT_TERMINAL_PROMPT"] = "0",
+                            ["GIT_CONFIG_NOSYSTEM"] = "1",
+                        },
+                        Origin = ProcessRequestOrigin.Host,
+                    },
+                    cancellationToken);
+            }
+            catch (FileNotFoundException)
+            {
+                return new CodeExploreArtifactDirectoryInventory([], 0, true);
+            }
+            catch (Win32Exception exception) when (exception.NativeErrorCode is 2 or 3)
+            {
+                return new CodeExploreArtifactDirectoryInventory([], 0, true);
+            }
+
+            if (result.TimedOut || result.ExitCode != 0)
+            {
+                return new CodeExploreArtifactDirectoryInventory([], 0, true);
+            }
+
+            string[] relativePaths;
+            try
+            {
+                relativePaths = JsonSerializer.Deserialize<string[]>(result.StandardOutput) ?? [];
+            }
+            catch (JsonException)
+            {
+                return new CodeExploreArtifactDirectoryInventory([], 0, true);
+            }
+
+            var inspected = 0;
+            var files = new List<CodeExploreArtifactFileMatch>();
+            foreach (var relativePath in relativePaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (relativePath.Length == 0)
+                {
+                    continue;
+                }
+
+                inspected++;
+                if (inspected > MaximumArtifactEnumerationEntries)
+                {
+                    var cappedFiles = files
+                        .OrderBy(match => match.Path, HostPathComparer)
+                        .ToArray();
+                    return new CodeExploreArtifactDirectoryInventory(cappedFiles, inspected, true);
+                }
+
+                if (relativePath.Any(char.IsControl))
+                {
+                    continue;
+                }
+
+                string normalizedPath;
+                try
+                {
+                    normalizedPath = ToolPathRules.NormalizeAndValidate(relativePath, _context);
+                }
+                catch (Exception exception) when (exception is ToolArgumentValidationException
+                    or UnauthorizedAccessException
+                    or IOException)
+                {
+                    continue;
+                }
+
+                if (!IsSupportedTextArtifactPath(normalizedPath)
+                    || !TryClassifyArtifactMedia(normalizedPath, out var mediaKind))
+                {
+                    continue;
+                }
+
+                files.Add(new CodeExploreArtifactFileMatch(normalizedPath, mediaKind));
+            }
+
+            var sortedFiles = files
+                .OrderBy(match => match.Path, HostPathComparer)
+                .ToArray();
+            return new CodeExploreArtifactDirectoryInventory(
+                sortedFiles,
+                inspected,
+                result.StandardOutputTruncated);
+        }
+
+        private sealed record CodeExploreArtifactDirectoryInventory(
+            IReadOnlyList<CodeExploreArtifactFileMatch> Files,
+            int InspectedEntries,
+            bool Truncated);
+
+        private static StringComparison HostPathComparison
+            => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        private static StringComparer HostPathComparer
+            => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+        private static bool TryClassifyArtifactMedia(
+            string path,
+            out CodeExploreArtifactMediaKind mediaKind)
+        {
+            var fileName = Path.GetFileName(path);
+            var extension = Path.GetExtension(path);
+            if (fileName.Equals(".editorconfig", StringComparison.OrdinalIgnoreCase)
+                || fileName.Equals(".globalconfig", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".config", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.Configuration;
+                return true;
+            }
+
+            if (extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".jsonc", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = fileName.Contains("schema", StringComparison.OrdinalIgnoreCase)
+                    ? CodeExploreArtifactMediaKind.Schema
+                    : fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)
+                        ? CodeExploreArtifactMediaKind.Configuration
+                        : CodeExploreArtifactMediaKind.Json;
+                return true;
+            }
+
+            if (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.ProjectMetadata;
+                return true;
+            }
+
+            if (extension.Equals(".xml", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".resx", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".ruleset", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.Xml;
+                return true;
+            }
+
+            if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = fileName.Contains("prompt", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Contains("template", StringComparison.OrdinalIgnoreCase)
+                        ? CodeExploreArtifactMediaKind.Prompt
+                        : CodeExploreArtifactMediaKind.Markdown;
+                return true;
+            }
+
+            if (extension.Equals(".prompt", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".prompty", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".tmpl", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".template", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".liquid", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".scriban", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".mustache", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".handlebars", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.Prompt;
+                return true;
+            }
+
+            if (extension.Equals(".schema", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".graphql", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".gql", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.Schema;
+                return true;
+            }
+
+            if (extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".http", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".rest", StringComparison.OrdinalIgnoreCase))
+            {
+                mediaKind = CodeExploreArtifactMediaKind.Text;
+                return true;
+            }
+
+            mediaKind = CodeExploreArtifactMediaKind.Text;
+            return false;
+        }
+
         private static async Task<byte[]> ReadBoundedBytesAsync(
             Stream stream,
             int maximumBytes,
@@ -1107,23 +1930,85 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 
                 if (output.Length + read > maximumBytes)
                 {
-                    throw new InvalidOperationException($"The source file exceeds the {maximumBytes}-byte code exploration read limit.");
+                    throw new InvalidOperationException($"The file exceeds the {maximumBytes}-byte code exploration read limit.");
                 }
 
                 await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
             }
         }
 
-        private static async Task<string> DecodeSourceTextAsync(
+        private static Task<string> DecodeSourceTextAsync(
             byte[] bytes,
             CancellationToken cancellationToken)
         {
-            await using var stream = new MemoryStream(bytes);
-            using var reader = new StreamReader(
-                stream,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
-                detectEncodingFromByteOrderMarks: true);
-            return await reader.ReadToEndAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var encoding = DetectStrictTextEncoding(bytes, out var offset);
+            var text = encoding.GetString(bytes, offset, bytes.Length - offset);
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(text);
+        }
+
+        private static Encoding DetectStrictTextEncoding(byte[] bytes, out int offset)
+        {
+            offset = 0;
+            if (bytes.Length >= 4
+                && bytes[0] == 0xFF
+                && bytes[1] == 0xFE
+                && bytes[2] == 0x00
+                && bytes[3] == 0x00)
+            {
+                offset = 4;
+                return new UTF32Encoding(bigEndian: false, byteOrderMark: true, throwOnInvalidCharacters: true);
+            }
+
+            if (bytes.Length >= 4
+                && bytes[0] == 0x00
+                && bytes[1] == 0x00
+                && bytes[2] == 0xFE
+                && bytes[3] == 0xFF)
+            {
+                offset = 4;
+                return new UTF32Encoding(bigEndian: true, byteOrderMark: true, throwOnInvalidCharacters: true);
+            }
+
+            if (bytes.Length >= 3
+                && bytes[0] == 0xEF
+                && bytes[1] == 0xBB
+                && bytes[2] == 0xBF)
+            {
+                offset = 3;
+                return new UTF8Encoding(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true);
+            }
+
+            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+            {
+                offset = 2;
+                return new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
+            }
+
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+            {
+                offset = 2;
+                return new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
+            }
+
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        }
+
+        private static void ValidateTextualArtifactShape(string text)
+        {
+            foreach (var character in text)
+            {
+                if (character is '\t' or '\n' or '\r' or '\f')
+                {
+                    continue;
+                }
+
+                if (char.IsControl(character))
+                {
+                    throw new InvalidOperationException("The associated artifact decoded as UTF-8 but contains binary-shaped control data.");
+                }
+            }
         }
 
         private static string ComputeSha256(byte[] bytes)

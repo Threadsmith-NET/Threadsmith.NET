@@ -3,6 +3,7 @@ namespace Threadsmith.Tools;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 
@@ -27,6 +28,9 @@ public enum ProcessStandardOutputFormat
 
     /// <summary>Ripgrep JSON events whose raw path metadata remains available for host authorization.</summary>
     RipgrepJsonLines,
+
+    /// <summary>NUL-delimited text records parsed before sanitization and returned as a sanitized JSON string array.</summary>
+    NullDelimitedJsonArray,
 }
 
 /// <summary>Bounded child-process execution request.</summary>
@@ -314,6 +318,10 @@ public sealed class ProcessManager : IProcessManager
                     stdout.Text,
                     stdout.IsTruncated,
                     _sanitizer),
+                ProcessStandardOutputFormat.NullDelimitedJsonArray => SanitizeNullDelimitedRecords(
+                    stdout.Text,
+                    stdout.IsTruncated,
+                    _sanitizer),
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(request),
                     request.StandardOutputFormat,
@@ -342,6 +350,35 @@ public sealed class ProcessManager : IProcessManager
         {
             _active.TryRemove(processId, out _);
         }
+    }
+
+    private static string SanitizeNullDelimitedRecords(
+        string text,
+        bool isTruncated,
+        IOutputSanitizer sanitizer)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        var records = text.Split('\0');
+        var recordCount = records.Length;
+        if (isTruncated && !text.EndsWith('\0'))
+        {
+            recordCount--;
+        }
+
+        var sanitized = new List<string>(Math.Max(0, recordCount));
+        for (var index = 0; index < recordCount; index++)
+        {
+            var record = records[index];
+            if (record.Length == 0)
+            {
+                continue;
+            }
+
+            sanitized.Add(sanitizer.Sanitize(record));
+        }
+
+        return JsonSerializer.Serialize(sanitized);
     }
 
     private static async Task<(string Text, bool IsTruncated)> ReadBoundedAsync(

@@ -176,51 +176,64 @@ public sealed class MutationProposalApplication :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var current = command;
-        var maximumAttempts = Math.Max(1, _limits.MaxMutationProposalRepairAttempts);
-        for (var attempt = 0; attempt < maximumAttempts; attempt++)
+        var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
+        var retainedMessages = new List<ModelMessage>();
+        if (!string.IsNullOrWhiteSpace(command.CorrectionEvidence))
+        {
+            retainedMessages.Add(CorrectiveMessageFactory.CreateHostValidationMessage(
+                "post-apply-validation",
+                _sanitizer.Sanitize(command.CorrectionEvidence),
+                Math.Max(1, command.CorrectionAttempt),
+                Math.Max(1, command.CorrectionLimit),
+                "Propose a corrected mutation set that preserves the approved plan."));
+        }
+
+        var continuationMessages = new List<ModelMessage>(retainedMessages);
+
+        for (var modelRound = 1; ; modelRound++)
         {
             await _events.PublishAsync(
                 new MutationProposalStarted(
-                    current.SessionId,
+                    command.SessionId,
                     DateTimeOffset.UtcNow,
-                    current.RunId,
-                    attempt + 1,
-                    maximumAttempts),
+                    command.RunId,
+                    modelRound,
+                    correctiveTurns.MaximumTurns + 1),
                 cancellationToken);
             try
             {
-                return await HandleCoreAsync(current, cancellationToken);
-            }
-            catch (MalformedModelOutputException exception)
-                when (attempt + 1 < maximumAttempts
-                    && IsRepairableMutationProposalFailure(exception))
-            {
-                var message = _sanitizer.Sanitize(exception.Message);
-                var correctionEvidence = FormatMutationProposalCorrectionEvidence(message);
-                await _events.PublishAsync(
-                    new MutationProposalRepairAttempted(
-                        current.SessionId,
-                        DateTimeOffset.UtcNow,
-                        current.RunId,
-                        attempt + 2,
-                        maximumAttempts,
-                        message),
+                return await HandleCoreAsync(
+                    command,
+                    continuationMessages,
+                    modelRound,
                     cancellationToken);
-                current = current with
+            }
+            catch (MutationProposalCorrectionException exception)
+            {
+                if (!correctiveTurns.TryBeginAttempt(out var attemptNumber))
                 {
-                    CorrectionEvidence = string.IsNullOrWhiteSpace(current.CorrectionEvidence)
-                        ? correctionEvidence
-                        : current.CorrectionEvidence + Environment.NewLine + correctionEvidence,
-                };
+                    throw new MalformedModelOutputException(
+                        "The mutation proposal remained invalid after the corrective-turn budget was exhausted.",
+                        exception);
+                }
+
+                var message = _sanitizer.Sanitize(exception.Message);
+                continuationMessages.Clear();
+                continuationMessages.AddRange(retainedMessages);
+                continuationMessages.Add(CorrectiveMessageFactory.CreateHostValidationMessage(
+                    "mutation",
+                    message,
+                    attemptNumber,
+                    correctiveTurns.MaximumTurns,
+                    CreateMutationRetryInstruction(exception.Kind)));
             }
         }
-
-        throw new InvalidOperationException("Mutation proposal attempts did not execute.");
     }
 
     private async Task<StagedMutationSet> HandleCoreAsync(
         ProposeMutationSetCommand command,
+        IReadOnlyList<ModelMessage> continuationMessages,
+        int modelRound,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -253,23 +266,13 @@ public sealed class MutationProposalApplication :
                 "The transactional resolver returned a baseline for a different workspace.");
         }
 
-        var effectiveTask = command.CorrectionEvidence is null
-            ? command.Task
-            : command.Task with
-            {
-                UserConstraints =
-                [
-                    .. command.Task.UserConstraints ?? [],
-                    $"Correction evidence: {_sanitizer.Sanitize(command.CorrectionEvidence)}",
-                ],
-            };
         var context = await _contextAssembler.AssembleAsync(
             new ContextAssemblyRequest
             {
                 SessionId = command.SessionId,
                 RunId = command.RunId,
                 Phase = command.Phase,
-                Task = effectiveTask,
+                Task = command.Task,
                 RepositoryPath = baseline.RepositoryPath,
                 WorkingScope = RepositoryWorkingScope.Resolve(
                     baseline.RepositoryPath,
@@ -295,6 +298,15 @@ public sealed class MutationProposalApplication :
             },
             cancellationToken);
         IReadOnlyList<ModelToolDefinition> modelTools = [ProposeMutationsTool];
+        IReadOnlyList<ModelMessage> requestMessages = [.. (context.Messages ?? []), .. continuationMessages];
+        var wireEstimate = context.Layout is { } layout
+            ? ModelWireEstimator.Estimate(
+                requestMessages,
+                modelTools,
+                ToolTransportMode.Native,
+                layout.StablePrefixMessageCount,
+                context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0)
+            : context.WireEstimate;
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
@@ -302,7 +314,7 @@ public sealed class MutationProposalApplication :
         var usageRequestId = new ModelRequestUsageId(
             command.RunId,
             "mutation",
-            0,
+            modelRound - 1,
             Guid.NewGuid());
         ModelUsage? reportedUsage = null;
         try
@@ -324,10 +336,10 @@ public sealed class MutationProposalApplication :
                     ?? ReasoningLevel.None,
                 Tools = modelTools,
                 AllowMultipleToolCalls = false,
-                Messages = context.Messages ?? [],
+                Messages = requestMessages,
                 Layout = context.Layout,
                 ToolTransportMode = ToolTransportMode.Native,
-                WireEstimate = context.WireEstimate,
+                WireEstimate = wireEstimate,
             },
             cancellationToken))
             {
@@ -343,7 +355,18 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Output is MutationSetModelOutput mutationOutput)
                 {
-                    ModelOutputValidator.Validate(mutationOutput);
+                    try
+                    {
+                        ModelOutputValidator.Validate(mutationOutput);
+                    }
+                    catch (MalformedModelOutputException exception)
+                    {
+                        throw CreateMutationCorrection(
+                            MutationCorrectionKind.Schema,
+                            _sanitizer.Sanitize(exception.Message),
+                            exception);
+                    }
+
                     structured = mutationOutput;
                 }
                 else if (chunk.Output is ToolRequestModelOutput toolRequest)
@@ -377,14 +400,16 @@ public sealed class MutationProposalApplication :
                         var path = string.IsNullOrWhiteSpace(exception.Path)
                             ? "$"
                             : _sanitizer.Sanitize(exception.Path);
-                        throw new MalformedModelOutputException(
+                        throw CreateMutationCorrection(
+                            MutationCorrectionKind.Schema,
                             $"The propose_mutations arguments did not match schema 1 at '{path}'.",
                             exception);
                     }
 
                     if (envelope is null)
                     {
-                        throw new MalformedModelOutputException(
+                        throw CreateMutationCorrection(
+                            MutationCorrectionKind.Schema,
                             "The propose_mutations arguments were empty.");
                     }
                 }
@@ -453,7 +478,21 @@ public sealed class MutationProposalApplication :
                 "Implementation and correction must call propose_mutations exactly once.");
         }
 
-        structured ??= ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim());
+        if (structured is null)
+        {
+            try
+            {
+                structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim());
+            }
+            catch (MalformedModelOutputException exception)
+            {
+                throw CreateMutationCorrection(
+                    MutationCorrectionKind.Schema,
+                    _sanitizer.Sanitize(exception.Message),
+                    exception);
+            }
+        }
+
         var proposed = structured.MutationSet;
         if (proposed.SessionId != command.SessionId
             || proposed.RunId != command.RunId
@@ -512,7 +551,19 @@ public sealed class MutationProposalApplication :
             proposed,
             cancellationToken);
 
-        var staged = await _workspaces.StageAsync(proposed, cancellationToken);
+        StagedMutationSet staged;
+        try
+        {
+            staged = await _workspaces.StageAsync(proposed, cancellationToken);
+        }
+        catch (MalformedModelOutputException exception)
+        {
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.ExactText,
+                "The mutation proposal did not match the immutable workspace baseline.",
+                exception);
+        }
+
         return staged with { PlanStepIds = envelope?.PlanStepIds.ToArray() ?? [] };
     }
 
@@ -573,34 +624,30 @@ public sealed class MutationProposalApplication :
             : $"{source} -> {NormalizeProposalPath(mutation.DestinationRelativePath)}";
     }
 
-    private static bool IsRepairableMutationProposalFailure(MalformedModelOutputException exception)
+    private static MutationProposalCorrectionException CreateMutationCorrection(
+        MutationCorrectionKind kind,
+        string message,
+        Exception? innerException = null)
     {
-        ArgumentNullException.ThrowIfNull(exception);
-        return exception.Message.Contains("propose_mutations arguments did not match schema", StringComparison.Ordinal)
-            || exception.Message.Contains("ReplaceText", StringComparison.Ordinal)
-            || exception.Message.Contains("RenameSymbol", StringComparison.Ordinal)
-            || exception.Message.Contains("expectedText", StringComparison.Ordinal)
-            || exception.Message.Contains("expected different text", StringComparison.OrdinalIgnoreCase)
-            || exception.Message.Contains("Pre-mutation Roslyn", StringComparison.Ordinal);
+        return innerException is null
+            ? new MutationProposalCorrectionException(kind, message)
+            : new MutationProposalCorrectionException(kind, message, innerException);
     }
 
-    private static string FormatMutationProposalCorrectionEvidence(string message)
+    private static string CreateMutationRetryInstruction(MutationCorrectionKind kind)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        var prefix = $"Previous propose_mutations failed host validation before staging: {message}.";
-        if (message.Contains("propose_mutations arguments did not match schema", StringComparison.Ordinal))
+        return kind switch
         {
-            return prefix
-                + " Use exactly the advertised propose_mutations schema: mutationSet.rationale is required;"
+            MutationCorrectionKind.Schema => "Use exactly the advertised propose_mutations schema: mutationSet.rationale is required;"
                 + " each mutation item must use type and relativePath, not kind or path;"
                 + " use baselineSha256, not baselineHash;"
                 + " keep per-change prose such as rationale, risk, or validation out of mutation items;"
-                + " call propose_mutations once with expectedText copied exactly from the current file evidence.";
-        }
-
-        return prefix
-            + " Re-read the exact target text already present in the file evidence and call propose_mutations once"
-            + " with expectedText copied exactly from the current file.";
+                + " call propose_mutations once with expectedText copied exactly from current file evidence.",
+            MutationCorrectionKind.ExactText => "Re-read the exact target text already present in file evidence and call propose_mutations once with exact expectedText and offsets.",
+            MutationCorrectionKind.SemanticRename => "Correct the RenameSymbol request using current semantic symbol evidence, or use an approved exact text mutation when semantic rename is unavailable.",
+            MutationCorrectionKind.PreMutationDiagnostics => "Correct only the reported compiler-backed defects while preserving the approved plan, then call propose_mutations once.",
+            MutationCorrectionKind.General => "Emit one corrected propose_mutations request that remains within the approved plan and preserves host-owned identities.",
+        };
     }
 
     private async Task AnalyzePreMutationAsync(
@@ -653,7 +700,9 @@ public sealed class MutationProposalApplication :
         if (result.Decision == PreMutationGateDecision.RepairableDiagnostics
             || result.Diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
         {
-            throw new MalformedModelOutputException(FormatPreMutationCorrection(result));
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.PreMutationDiagnostics,
+                FormatPreMutationCorrection(result));
         }
     }
 
@@ -789,12 +838,14 @@ public sealed class MutationProposalApplication :
     {
         if (current is null)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.ExactText,
                 $"ReplaceText target '{relativePath}' was not present in the immutable baseline.");
         }
 
         var expected = mutation.ExpectedText
-            ?? throw new MalformedModelOutputException(
+            ?? throw CreateMutationCorrection(
+                MutationCorrectionKind.ExactText,
                 $"ReplaceText target '{relativePath}' requires exact expectedText.");
         var exactRange = mutation.StartOffset >= 0
             && mutation.Length >= 0
@@ -807,14 +858,16 @@ public sealed class MutationProposalApplication :
         {
             if (expected.Length == 0)
             {
-                throw new MalformedModelOutputException(
+                throw CreateMutationCorrection(
+                    MutationCorrectionKind.ExactText,
                     $"ReplaceText insertion in '{relativePath}' requires the exact offset.");
             }
 
             var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
             if (firstMatch < 0)
             {
-                throw new MalformedModelOutputException(
+                throw CreateMutationCorrection(
+                    MutationCorrectionKind.ExactText,
                     $"ReplaceText expectedText was not found in '{relativePath}'.");
             }
 
@@ -824,7 +877,8 @@ public sealed class MutationProposalApplication :
                 StringComparison.Ordinal);
             if (secondMatch >= 0)
             {
-                throw new MalformedModelOutputException(
+                throw CreateMutationCorrection(
+                    MutationCorrectionKind.ExactText,
                     $"ReplaceText expectedText is ambiguous in '{relativePath}'; provide the exact offset.");
             }
 
@@ -921,24 +975,28 @@ public sealed class MutationProposalApplication :
 
         if (_semanticMutations is null)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 "RenameSymbol requires an available semantic mutation engine; use exact ReplaceText only when semantic rename is unavailable.");
         }
 
         if (semanticRenameRequests.Length > 1)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 "A mutation proposal may contain only one RenameSymbol operation.");
         }
 
         var semanticRequest = semanticRenameRequests[0];
         var symbolId = semanticRequest.RelatedSymbolId
-            ?? throw new MalformedModelOutputException(
+            ?? throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 "RenameSymbol requires relatedSymbolId from semantic symbol evidence.");
         var newName = semanticRequest.ReplacementText;
         if (string.IsNullOrWhiteSpace(newName))
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 "RenameSymbol requires replacementText set to the new symbol name.");
         }
 
@@ -960,19 +1018,22 @@ public sealed class MutationProposalApplication :
         }
         catch (KeyNotFoundException exception)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 $"RenameSymbol proposal is invalid: {_sanitizer.Sanitize(exception.Message)}",
                 exception);
         }
         catch (ArgumentException exception)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 $"RenameSymbol proposal is invalid: {_sanitizer.Sanitize(exception.Message)}",
                 exception);
         }
         catch (InvalidOperationException exception)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 $"RenameSymbol proposal cannot be applied: {_sanitizer.Sanitize(exception.Message)}",
                 exception);
         }
@@ -996,7 +1057,8 @@ public sealed class MutationProposalApplication :
             .FirstOrDefault(semanticPaths.Contains);
         if (overlappingTextMutation is not null)
         {
-            throw new MalformedModelOutputException(
+            throw CreateMutationCorrection(
+                MutationCorrectionKind.SemanticRename,
                 $"RenameSymbol already edits '{overlappingTextMutation}'; do not combine it with another text mutation for the same file.");
         }
 
@@ -1082,12 +1144,14 @@ public sealed class MutationProposalApplication :
 
             if (current is null)
             {
-                throw new MalformedModelOutputException(
+                throw CreateMutationCorrection(
+                    MutationCorrectionKind.ExactText,
                     $"ReplaceText target '{path}' was not present in the immutable baseline.");
             }
 
             var expected = mutation.ExpectedText
-                ?? throw new MalformedModelOutputException(
+                ?? throw CreateMutationCorrection(
+                    MutationCorrectionKind.ExactText,
                     $"ReplaceText target '{path}' requires exact expectedText.");
             var exactRange = mutation.StartOffset >= 0
                 && mutation.Length >= 0
@@ -1099,14 +1163,16 @@ public sealed class MutationProposalApplication :
             {
                 if (expected.Length == 0)
                 {
-                    throw new MalformedModelOutputException(
+                    throw CreateMutationCorrection(
+                        MutationCorrectionKind.ExactText,
                         $"ReplaceText insertion in '{path}' requires the exact offset.");
                 }
 
                 var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
                 if (firstMatch < 0)
                 {
-                    throw new MalformedModelOutputException(
+                    throw CreateMutationCorrection(
+                        MutationCorrectionKind.ExactText,
                         $"ReplaceText expectedText was not found in '{path}'.");
                 }
 
@@ -1116,7 +1182,8 @@ public sealed class MutationProposalApplication :
                     StringComparison.Ordinal);
                 if (secondMatch >= 0)
                 {
-                    throw new MalformedModelOutputException(
+                    throw CreateMutationCorrection(
+                        MutationCorrectionKind.ExactText,
                         $"ReplaceText expectedText is ambiguous in '{path}'; provide the exact offset.");
                 }
 
@@ -1220,5 +1287,36 @@ public sealed class MutationProposalApplication :
             throw new MalformedModelOutputException(
                 "Mutation proposal outcomes and validation expectations cannot contain empty values.");
         }
+    }
+
+    private enum MutationCorrectionKind
+    {
+        Schema,
+        ExactText,
+        SemanticRename,
+        PreMutationDiagnostics,
+        General,
+    }
+
+    private sealed class MutationProposalCorrectionException : MalformedModelOutputException
+    {
+        private MutationProposalCorrectionException(
+            MutationCorrectionKind kind,
+            string message)
+            : base(message)
+        {
+            Kind = kind;
+        }
+
+        private MutationProposalCorrectionException(
+            MutationCorrectionKind kind,
+            string message,
+            Exception innerException)
+            : base(message, innerException)
+        {
+            Kind = kind;
+        }
+
+        private MutationCorrectionKind Kind { get; }
     }
 }

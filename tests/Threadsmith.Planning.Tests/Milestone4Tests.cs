@@ -1469,7 +1469,7 @@ public static class Milestone4Tests
             budget,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
             planSanityChecker: new PlanSanityChecker(),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
@@ -1523,7 +1523,7 @@ public static class Milestone4Tests
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
             evidenceStore: evidence,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
             planSanityChecker: new PlanSanityChecker(),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
@@ -1556,8 +1556,14 @@ public static class Milestone4Tests
         var revision = Assert.Single(observed.OfType<PlanRevisionRequested>());
         Assert.DoesNotContain("sk-AbCdEfGhIjKlMnOp", revision.Instructions, StringComparison.Ordinal);
         Assert.Contains("[REDACTED]", revision.Instructions, StringComparison.Ordinal);
-        Assert.Contains("Plan sanity repair request:", model.Requests[1].Input, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", model.Requests[1].Input, StringComparison.Ordinal);
+        var correction = Assert.Single(
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith(
+                "active-turn-correction-plan-sanity:",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            correction.Content,
+            part => part.Content.Contains("[REDACTED]", StringComparison.Ordinal));
         Assert.Single(observed.OfType<ApprovalRequested>());
         Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
@@ -1593,7 +1599,7 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
             planSanityChecker: new PlanSanityChecker(),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest

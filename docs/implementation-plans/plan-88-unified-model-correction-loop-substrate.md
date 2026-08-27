@@ -1,6 +1,6 @@
 # Implementation Plan 88: Conversation-Native Corrective Turns
 
-**Status:** Active — conversation-loop corrective turns implemented through behavior signoff; later plan-sanity, mutation-proposal, post-apply validation, and obsolete-helper migration remain.
+**Status:** Complete — conversation, plan-sanity, mutation-proposal, and post-apply validation corrections use bounded model-visible corrective messages; obsolete retry helpers and legacy limits are removed.
 
 **Delivery track:** Maintenance — graceful recovery from malformed or invalid model requests
 **Strategy source:** Shared Context §A.1, §A.2, §A.5, §C, and §G; execution, model, planning, mutation, and validation contracts
@@ -97,13 +97,13 @@ See `plan88_plan.md` for the authoritative implementation file list. Primary are
 5. Migrate ordinary tool and `propose_plan` correction in the conversation loop.
 6. Stop for behavior signoff.
 7. Add focused tests. **Done for the signed-off conversation-loop/provider/tool-batch slice.**
-8. Migrate plan sanity, mutation proposal, and post-apply validation correction. **Deferred.**
-9. Remove obsolete bespoke helper loops and counters. **Deferred with the remaining migrations.**
+8. Migrate plan sanity, mutation proposal, and post-apply validation correction. **Done.**
+9. Remove obsolete bespoke helper loops and counters. **Done; historical durable event types remain readable but are not emitted by the migrated paths.**
 10. Update user/operator docs only after behavior signoff. **Done for the signed-off slice.**
 
 ## 10. Testing
 
-Focused tests now cover provider-boundary malformed arguments, provider-safe tool-name aliasing, batch preflight/prepared invocation, conversation-level invalid-batch rejection, `propose_plan` correction, null plan schema diagnostics, and config binding for the signed-off slice. Add or migrate tests for plan sanity, mutation proposal, post-apply validation correction, obsolete helper-loop removal, and their exhaustion/cancellation cases when those deferred migrations are implemented.
+Focused tests cover provider-boundary malformed arguments, provider-safe tool-name aliasing, batch preflight/prepared invocation, conversation-level invalid-batch rejection, `propose_plan` correction, null plan schema diagnostics, plan-sanity continuation, typed mutation correction, post-apply validation evidence, and config binding. Obsolete standalone validation-loop tests were removed with their unused production helpers.
 
 ## 11. Security/Permissions
 

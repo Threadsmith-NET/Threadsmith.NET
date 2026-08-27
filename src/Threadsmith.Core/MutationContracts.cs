@@ -484,7 +484,14 @@ public sealed record ProposeMutationSetCommand(
     TaskSpecification Task,
     ImplementationPlan ApprovedPlan,
     RunPhase Phase = RunPhase.MutationPreparation,
-    string? CorrectionEvidence = null) : ICommand<StagedMutationSet>;
+    string? CorrectionEvidence = null) : ICommand<StagedMutationSet>
+{
+    /// <summary>One-based approved-plan validation correction cycle, when applicable.</summary>
+    public int CorrectionAttempt { get; init; }
+
+    /// <summary>Maximum approved-plan validation correction cycles, when applicable.</summary>
+    public int CorrectionLimit { get; init; }
+}
 
 /// <summary>Parameters for compiler-aware symbol rename.</summary>
 public sealed record RenameSymbolMutationRequest

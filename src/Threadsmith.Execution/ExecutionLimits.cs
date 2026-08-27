@@ -34,22 +34,6 @@ public sealed record ExecutionLimits
     public int MaxCorrectiveTurns { get; init; } = 3;
 
     /// <summary>
-    /// Legacy malformed <c>propose_plan</c> repair budget retained for compatibility until tests and
-    /// checkpoint-facing contracts finish migrating to <see cref="MaxCorrectiveTurns"/>.
-    /// </summary>
-    public int MaxPlanProposalRepairAttempts { get; init; } = 3;
-
-    /// <summary>
-    /// Legacy plan-revision repair budget retained for compatibility until plan-sanity repair migrates.
-    /// </summary>
-    public int MaxPlanRevisionRepairAttempts { get; init; } = 3;
-
-    /// <summary>
-    /// Legacy mutation-proposal repair budget retained for compatibility until mutation correction migrates.
-    /// </summary>
-    public int MaxMutationProposalRepairAttempts { get; init; } = 3;
-
-    /// <summary>
     /// Maximum characters of structured (JSON) mutation output the host accumulates from a
     /// streaming model before rejecting it as malformed. Historical default: 8 MiB.
     /// </summary>

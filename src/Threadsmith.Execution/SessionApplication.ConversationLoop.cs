@@ -17,16 +17,21 @@ public sealed partial class SessionApplication
         RunId runId,
         RunRegistration registration,
         RunPhase phase,
+        ModelMessage? initialCorrection,
         CancellationToken cancellationToken)
     {
         var maximumModelRounds = _limits.MaxModelRounds;
         var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
-        var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
+        var correctiveTurns = registration.CorrectiveTurns;
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
             _activeTurnCompactionPolicy.MaximumSourcesPerGroup);
+        if (initialCorrection is not null)
+        {
+            loopState.CommitStandaloneMessage(0, initialCorrection, purgeAfterCorrection: true);
+        }
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {

@@ -681,7 +681,11 @@ public sealed class ExecutionOrchestrator :
                     active.Request.Task,
                     active.Request.ApprovedPlan,
                     RunPhase.CorrectionModelTurn,
-                    correctionEvidence),
+                    correctionEvidence)
+                {
+                    CorrectionAttempt = applied.CorrectionAttempts + 1,
+                    CorrectionLimit = applied.CorrectionBudget,
+                },
                 cancellationToken);
             var correctionDiff = await _artifacts.PublishAsync(
                 request.SessionId,

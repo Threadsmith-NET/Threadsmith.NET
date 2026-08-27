@@ -781,8 +781,11 @@ public static class Milestone5Tests
         Assert.Equal(2, model.Requests.Count);
         Assert.Equal(2, semanticMutations.RenameRequests.Count);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("RenameSymbol proposal is invalid", StringComparison.Ordinal));
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith("active-turn-correction-mutation:", StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "RenameSymbol proposal is invalid",
+                    StringComparison.Ordinal)));
         Assert.Contains("IRetrieval", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
 
         string CreateArguments(string relatedSymbolId)
@@ -900,11 +903,13 @@ public static class Milestone5Tests
         Assert.DoesNotContain("Broken", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Contains("Fixed", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Contains("Pre-mutation Roslyn analysis", retry.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(observed, item => item is MutationProposalRepairAttempted);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("Pre-mutation Roslyn analysis", StringComparison.Ordinal));
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith("active-turn-correction-mutation:", StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "Pre-mutation Roslyn analysis",
+                    StringComparison.Ordinal)));
         PreMutationAnalysisCompleted[] analysisEvents = [.. observed.OfType<PreMutationAnalysisCompleted>()];
         Assert.Equal(2, analysisEvents.Length);
         Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, analysisEvents[0].Decision);
@@ -1567,20 +1572,33 @@ public static class Milestone5Tests
             repository.WorkspaceId,
             new TaskSpecification("Change Name", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.CorrectionModelTurn,
+            "Post-apply validation reported an introduced compiler error.")
+        {
+            CorrectionAttempt = 1,
+            CorrectionLimit = 3,
+        });
 
         Assert.Equal(2, model.Requests.Count);
         MutationProposalStarted[] starts = [.. observed.OfType<MutationProposalStarted>()];
         Assert.Equal([1, 2], [.. starts.Select(item => item.AttemptNumber)]);
-        Assert.All(starts, start => Assert.Equal(3, start.MaximumAttempts));
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Equal(runId, retry.RunId);
-        Assert.Equal(2, retry.AttemptNumber);
-        Assert.Equal(3, retry.MaximumAttempts);
-        Assert.Contains("expectedText was not found", retry.Reason, StringComparison.Ordinal);
+        Assert.All(starts, start => Assert.Equal(4, start.MaximumAttempts));
+        Assert.DoesNotContain(observed, item => item is MutationProposalRepairAttempted);
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("expectedText was not found", StringComparison.Ordinal));
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith("active-turn-correction-mutation:", StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "expectedText was not found",
+                    StringComparison.Ordinal)));
+        Assert.Contains(
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith(
+                "active-turn-correction-post-apply-validation:",
+                StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "introduced compiler error",
+                    StringComparison.Ordinal)));
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments(string expectedText, string replacementText)
@@ -1717,14 +1735,12 @@ public static class Milestone5Tests
             RunPhase.ImplementationModelTurn));
 
         Assert.Equal(2, model.Requests.Count);
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Equal(runId, retry.RunId);
-        Assert.Equal(2, retry.AttemptNumber);
-        Assert.Contains("did not match schema", retry.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(observed, item => item is MutationProposalRepairAttempted);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("type and relativePath", StringComparison.Ordinal)
-                && constraint.Contains("baselineSha256", StringComparison.Ordinal));
+            model.Requests[1].Messages,
+            message => message.SectionId.StartsWith("active-turn-correction-mutation:", StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains("type and relativePath", StringComparison.Ordinal)
+                    && part.Content.Contains("baselineSha256", StringComparison.Ordinal)));
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments()

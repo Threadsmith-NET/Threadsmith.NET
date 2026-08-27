@@ -287,7 +287,13 @@ public sealed partial class SessionApplication :
         var machine = new RunStateMachine(command.SessionId, runId, _events);
         var runBudget = _budgetFactory()
             ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
-        var registration = new RunRegistration(command.SessionId, linkedSource, task, machine, runBudget);
+        var registration = new RunRegistration(
+            command.SessionId,
+            linkedSource,
+            task,
+            machine,
+            runBudget,
+            _limits.MaxCorrectiveTurns);
         if (!_runs.TryAdd(runId, registration))
         {
             linkedSource.Dispose();
@@ -495,12 +501,14 @@ public sealed partial class SessionApplication :
                 ],
             };
             registration.PendingApprovalId = null;
+            registration.ResetCorrectiveTurns(_limits.MaxCorrectiveTurns);
             try
             {
                 var revisedPlan = await GeneratePlanAsync(
                     command.RunId,
                     registration,
                     RunPhase.AwaitingPlanApproval,
+                    initialCorrection: null,
                     cancellationToken) ?? throw new MalformedModelOutputException(
                         "The revision response did not contain a structured plan.");
                 await PrepareAndPublishPlanAsync(
@@ -660,6 +668,7 @@ public sealed partial class SessionApplication :
                 runId,
                 registration,
                 registration.Machine.Phase,
+                initialCorrection: null,
                 registration.Cancellation.Token);
 
             var elapsed = registration.Budget.Accrue(
@@ -1433,8 +1442,7 @@ public sealed partial class SessionApplication :
         CancellationToken cancellationToken)
     {
         var currentPlan = initialPlan;
-        var maximumRepairs = Math.Max(0, _limits.MaxPlanRevisionRepairAttempts);
-        for (var attempt = 0; attempt <= maximumRepairs; attempt++)
+        while (true)
         {
             var evaluation = await CheckPlanSanityAsync(
                 registration,
@@ -1460,8 +1468,14 @@ public sealed partial class SessionApplication :
                     "The plan violates a non-repairable sanity-check guardrail.");
             }
 
-            if (sanity.HasRepairableBlockingIssues && attempt < maximumRepairs)
+            if (sanity.HasRepairableBlockingIssues)
             {
+                if (!registration.CorrectiveTurns.TryBeginAttempt(out var attemptNumber))
+                {
+                    throw new MalformedModelOutputException(
+                        "The plan still has repairable sanity-check failures after the corrective-turn budget was exhausted.");
+                }
+
                 var repair = _sanitizer.Sanitize(CreatePlanRepairInstructions(sanity));
                 await _events.PublishAsync(
                     new PlanRevisionRequested(
@@ -1470,33 +1484,23 @@ public sealed partial class SessionApplication :
                         runId,
                         repair),
                     cancellationToken);
-                registration.Task = registration.Task with
-                {
-                    UserConstraints =
-                    [
-                        .. registration.Task.UserConstraints ?? [],
-                        $"Plan sanity repair request: {repair}",
-                    ],
-                };
                 registration.PendingPlan = currentPlan;
                 var repairStopwatch = Stopwatch.StartNew();
                 var repairedPlan = await GeneratePlanAsync(
                     runId,
                     registration,
                     RunPhase.AwaitingPlanApproval,
+                    CorrectiveMessageFactory.CreateHostValidationMessage(
+                        "plan-sanity",
+                        repair,
+                        attemptNumber,
+                        registration.CorrectiveTurns.MaximumTurns,
+                        "Emit one corrected propose_plan request."),
                     cancellationToken);
                 AccrueRepairWallClock(registration, repairStopwatch.Elapsed);
                 currentPlan = repairedPlan ?? throw new MalformedModelOutputException(
                     "The plan sanity repair response did not contain a structured plan.");
                 continue;
-            }
-
-            if (!sanity.Passed)
-            {
-                var reason = sanity.HasRepairableBlockingIssues
-                    ? "The plan still has repairable sanity-check failures after the revision budget was exhausted."
-                    : "The plan violates a non-repairable sanity-check guardrail.";
-                throw new MalformedModelOutputException(reason);
             }
 
             var decision = evaluation.CanAutoApprove
@@ -1926,13 +1930,15 @@ public sealed partial class SessionApplication :
             CancellationTokenSource cancellation,
             TaskSpecification task,
             RunStateMachine machine,
-            IBudget budget)
+            IBudget budget,
+            int maximumCorrectiveTurns)
         {
             SessionId = sessionId;
             Cancellation = cancellation;
             Task = task;
             Machine = machine;
             Budget = budget;
+            CorrectiveTurns = new CorrectiveTurnState(Math.Max(0, maximumCorrectiveTurns));
         }
 
         public IBudget Budget { get; }
@@ -1944,6 +1950,8 @@ public sealed partial class SessionApplication :
         public IReadOnlyList<string> CurrentTurnHostContext { get; set; } = [];
 
         public ConversationContextMode ConversationMode { get; set; } = ConversationContextMode.ConversationAware;
+
+        public CorrectiveTurnState CorrectiveTurns { get; private set; }
 
         public TaskCompletionSource<bool> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1965,6 +1973,11 @@ public sealed partial class SessionApplication :
         public ConversationMessage? SourceMessage { get; set; }
 
         public TaskSpecification Task { get; set; }
+
+        public void ResetCorrectiveTurns(int maximumCorrectiveTurns)
+        {
+            CorrectiveTurns = new CorrectiveTurnState(Math.Max(0, maximumCorrectiveTurns));
+        }
     }
 }
 

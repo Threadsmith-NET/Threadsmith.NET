@@ -1126,58 +1126,6 @@ public sealed class Milestone6Tests
         }
     }
 
-    /// <summary>The correction loop stops exactly at its configured attempt budget.</summary>
-    [Fact]
-    public async Task CorrectionLoop_PersistentError_StopsAtBudget()
-    {
-        var diagnostic = CreateDiagnostic("introduced", "CS1503", "Cannot convert argument") with
-        {
-            Classification = DiagnosticClassification.Introduced,
-        };
-        var callbackCount = 0;
-
-        var result = await CorrectionLoop.RunAsync(
-            "Changed();",
-            "Preserve the public contract.",
-            [diagnostic],
-            2,
-            (context, _) =>
-            {
-                callbackCount++;
-                Assert.Equal(callbackCount, context.Attempt);
-                Assert.Equal("Changed();", context.ChangedCode);
-                Assert.Equal("Preserve the public contract.", context.Contract);
-                return Task.FromResult(new CorrectionAttemptResult(context.ChangedCode, [diagnostic]));
-            });
-
-        Assert.False(result.Succeeded);
-        Assert.True(result.BudgetExhausted);
-        Assert.Equal(2, result.Attempts);
-        Assert.Equal(2, callbackCount);
-    }
-
-    /// <summary>A successful corrective mutation recompiles once and ends the loop.</summary>
-    [Fact]
-    public async Task CorrectionLoop_CorrectedError_StopsAfterSuccess()
-    {
-        var diagnostic = CreateDiagnostic("introduced", "CS1503", "Cannot convert argument") with
-        {
-            Classification = DiagnosticClassification.Introduced,
-        };
-
-        var result = await CorrectionLoop.RunAsync(
-            "Changed();",
-            "Preserve the public contract.",
-            [diagnostic],
-            3,
-            (_, _) => Task.FromResult(new CorrectionAttemptResult("Corrected();", [])));
-
-        Assert.True(result.Succeeded);
-        Assert.False(result.BudgetExhausted);
-        Assert.Equal(1, result.Attempts);
-        Assert.Empty(result.Diagnostics);
-    }
-
     /// <summary>Structured diagnostic events flow into the host projection and diagnostics TUI view.</summary>
     [Fact]
     public async Task DiagnosticObserved_StructuredPayload_RendersInTui()
@@ -1588,49 +1536,6 @@ public sealed class Milestone6Tests
 
         Assert.Contains("Tests (2 passed, 0 failed, 0 skipped)", snapshot.Workspace, StringComparison.Ordinal);
         Assert.Contains("references affected", snapshot.Workspace, StringComparison.Ordinal);
-    }
-
-    /// <summary>Persistent selected-test failures stop exactly at the configured correction budget.</summary>
-    [Fact]
-    public async Task TestCorrectionLoop_PersistentFailure_StopsAtBudget()
-    {
-        var failing = CreateTestValidation(TestOutcome.Failed);
-        var contexts = new List<TestCorrectionContext>();
-
-        var result = await TestCorrectionLoop.RunAsync(
-            "changed code",
-            "preserve contract",
-            failing,
-            maximumAttempts: 2,
-            (context, _) =>
-            {
-                contexts.Add(context);
-                return Task.FromResult(new TestCorrectionAttemptResult("changed code", failing));
-            });
-
-        Assert.False(result.Succeeded);
-        Assert.True(result.BudgetExhausted);
-        Assert.Equal(2, result.Attempts);
-        Assert.Equal([1, 2], contexts.Select(context => context.Attempt));
-        Assert.All(contexts, context => Assert.Equal("Tests", context.Failure.Project.Name));
-    }
-
-    /// <summary>A successful selected-test rerun stops correction after one attempt.</summary>
-    [Fact]
-    public async Task TestCorrectionLoop_PassingRerun_StopsAfterSuccess()
-    {
-        var passing = CreateTestValidation(TestOutcome.Passed);
-
-        var result = await TestCorrectionLoop.RunAsync(
-            "changed code",
-            "preserve contract",
-            CreateTestValidation(TestOutcome.Failed),
-            maximumAttempts: 3,
-            (_, _) => Task.FromResult(new TestCorrectionAttemptResult("corrected code", passing)));
-
-        Assert.True(result.Succeeded);
-        Assert.False(result.BudgetExhausted);
-        Assert.Equal(1, result.Attempts);
     }
 
     private static TestValidationResult CreateTestValidation(TestOutcome outcome)

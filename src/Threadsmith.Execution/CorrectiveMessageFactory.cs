@@ -29,6 +29,32 @@ internal static class CorrectiveMessageFactory
         };
     }
 
+    /// <summary>Creates a bounded correction for host validation performed after a structured response.</summary>
+    public static ModelMessage CreateHostValidationMessage(
+        string category,
+        string safeReason,
+        int attemptNumber,
+        int maximumAttempts,
+        string retryInstruction)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(category);
+        ArgumentException.ThrowIfNullOrWhiteSpace(safeReason);
+        ArgumentException.ThrowIfNullOrWhiteSpace(retryInstruction);
+        var reason = BoundSingleLine(safeReason, MaximumReasonCharacters);
+        var instruction = BoundSingleLine(retryInstruction, MaximumReasonCharacters);
+        var content = $"Corrective turn {FormatAttempt(attemptNumber, maximumAttempts)}: "
+            + "The previous model request failed host validation and was not accepted or executed. "
+            + reason
+            + " "
+            + instruction;
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.Developer,
+            SectionId = $"active-turn-correction-{category}:{attemptNumber.ToString(CultureInfo.InvariantCulture)}",
+            Content = [CreateTextContentPart(content)],
+        };
+    }
+
     /// <summary>Creates one correlated tool result for an atomically rejected batch.</summary>
     public static ModelMessage CreateRejectedToolResultMessage(
         string toolCallId,

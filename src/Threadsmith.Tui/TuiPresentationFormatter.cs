@@ -195,6 +195,28 @@ internal static class TuiPresentationFormatter
             ]));
     }
 
+    /// <summary>Formats one generic model correction attempt as a guided interactive lifecycle block.</summary>
+    /// <param name="correction">The host-owned model correction attempt event.</param>
+    /// <returns>A terminal-neutral TUI presentation block.</returns>
+    internal static string FormatModelCorrectionAttempt(ModelCorrectionAttempted correction)
+    {
+        ArgumentNullException.ThrowIfNull(correction);
+
+        return FormatBlock(new TuiBlockPresentation(
+            new TuiBlockHeader(
+                "CORRECTION",
+                "Retrying model request",
+                Outcome: null,
+                ElapsedText: null,
+                TuiTextRole.Warning,
+                TuiTextRole.Warning),
+            [
+                new TuiBlockLine(TuiBlockLineKind.Body, FormatAttempt(correction.AttemptNumber, correction.MaximumAttempts), TuiTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Item, $"Category: {correction.Category}", TuiTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {correction.SafeReason}", TuiTextRole.Muted),
+            ]));
+    }
+
     /// <summary>Formats post-apply mutation validation start as a guided interactive lifecycle block.</summary>
     /// <param name="stages">Configured validation stages that will provide post-apply evidence.</param>
     /// <returns>A terminal-neutral TUI presentation block.</returns>

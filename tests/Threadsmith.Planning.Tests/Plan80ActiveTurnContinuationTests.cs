@@ -58,7 +58,7 @@ public static class Plan80ActiveTurnContinuationTests
                 MinimumSavingsTokens = 1,
                 RetainedRecentTokens = 1_000,
             };
-            var candidateProvider = new RequestCandidateProvider();
+            var candidateProvider = new RequestCandidateProvider(TimeSpan.FromMilliseconds(500));
             var compactionProfileId = ModelProfileId.New();
             var compactionProfile = CreateCompactionCandidateProfile(compactionProfileId);
             var activityEvents = new List<IDomainEvent>();
@@ -210,6 +210,9 @@ public static class Plan80ActiveTurnContinuationTests
                 delta.Tokens == 0
                 && delta.Calls == 1
                 && delta.WallClock > TimeSpan.Zero);
+            Assert.Single(
+                operationBudget.Accruals,
+                delta => delta.WallClock >= TimeSpan.FromMilliseconds(400));
         }
         finally
         {
@@ -480,6 +483,18 @@ public static class Plan80ActiveTurnContinuationTests
 
     private sealed class RequestCandidateProvider : IActiveTurnCompactionCandidateProvider
     {
+        private readonly TimeSpan _delay;
+
+        public RequestCandidateProvider(TimeSpan delay = default)
+        {
+            if (delay < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(delay));
+            }
+
+            _delay = delay;
+        }
+
         public List<ActiveTurnCompactionRequest> Requests { get; } = [];
 
         public IActiveTurnCompactionCandidateAttempt PrepareCandidate(
@@ -503,10 +518,15 @@ public static class Plan80ActiveTurnContinuationTests
 
             public ModelUsage? ObservedUsage => null;
 
-            public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
+            public async Task<ActiveTurnCandidateGeneration> ExecuteAsync(
                 CancellationToken cancellationToken = default)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (_owner._delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(_owner._delay, cancellationToken);
+                }
+
                 _owner.Requests.Add(_request);
                 var covered = (_request.PriorSummary?.CoveredGroupSequences ?? [])
                     .Concat(_request.EligiblePrefix.Select(group => group.Sequence))
@@ -528,7 +548,7 @@ public static class Plan80ActiveTurnContinuationTests
                     FilesRead = filesRead,
                     FilesChanged = filesChanged,
                 };
-                return Task.FromResult(new ActiveTurnCandidateGeneration(candidate, null));
+                return new ActiveTurnCandidateGeneration(candidate, null);
             }
         }
     }

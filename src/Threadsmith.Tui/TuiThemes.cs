@@ -252,7 +252,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static ThemeJsonLocation LocateTheme(byte[] original)
     {
-        var prefixLength = original.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
+        var prefixLength = GetUtf8BomPrefixLength(original);
         var reader = new Utf8JsonReader(original.AsSpan(prefixLength), new JsonReaderOptions
         {
             AllowTrailingCommas = true,
@@ -467,7 +467,8 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         }
 
         var bytes = await File.ReadAllBytesAsync(_configurationPath, cancellationToken).ConfigureAwait(false);
-        var node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
+        var prefixLength = GetUtf8BomPrefixLength(bytes);
+        var node = JsonNode.Parse(bytes.AsSpan(prefixLength), documentOptions: new JsonDocumentOptions
         {
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
@@ -476,6 +477,11 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         return node is JsonObject root
             ? (bytes, root)
             : throw new InvalidOperationException("The user configuration root must be an object.");
+    }
+
+    private static int GetUtf8BomPrefixLength(byte[] bytes)
+    {
+        return bytes.AsSpan().StartsWith([(byte)0xEF, (byte)0xBB, (byte)0xBF]) ? 3 : 0;
     }
 
     private enum ObjectPurpose

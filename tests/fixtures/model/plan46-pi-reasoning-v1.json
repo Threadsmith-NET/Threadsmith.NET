@@ -12,7 +12,7 @@
     { "id": "cloud-glm-5-2", "modelId": "glm-5.2:cloud", "mode": "mappedEffort", "levels": ["none", "high"], "response": "reasoningContent" },
     { "id": "cloud-kimi-k2-5", "modelId": "kimi-k2.5:cloud", "mode": "mappedEffort", "levels": ["none", "high"], "response": "reasoningContent" },
     { "id": "cloud-deepseek-v4-pro", "modelId": "deepseek-v4-pro:cloud", "mode": "mappedEffort", "levels": ["none", "high"], "response": "reasoningContent" },
-    { "id": "cloud-kimi-k2-7-code", "modelId": "kimi-k2.7-code:cloud", "mode": "standardEffort", "levels": ["none", "minimal", "low", "medium", "high"], "response": "reasoningContent" },
+    { "id": "cloud-kimi-k2-7-code", "modelId": "kimi-k2.7-code:cloud", "mode": "standardEffort", "levels": ["none", "minimal", "low", "medium", "high"], "response": "knownFields" },
     { "id": "cloud-kimi-k2-6", "modelId": "kimi-k2.6:cloud", "mode": "standardEffort", "levels": ["none", "minimal", "low", "medium", "high"], "response": "reasoningContent" },
     { "id": "cloud-minimax-m3", "modelId": "minimax-m3:cloud", "mode": "standardEffort", "levels": ["none", "minimal", "low", "medium", "high"], "response": "reasoningContent" }
   ]

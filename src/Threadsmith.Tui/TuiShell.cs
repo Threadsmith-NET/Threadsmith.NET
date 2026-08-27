@@ -2067,6 +2067,10 @@ internal sealed class ConversationTranscript
                 _activeMutationProposalRunId = repair.RunId;
                 AppendLifecycleBlock(TuiPresentationFormatter.FormatMutationProposalRepairAttempt(repair));
                 return true;
+            case ModelCorrectionAttempted correction:
+                _activeMutationProposalRunId = correction.RunId;
+                AppendLifecycleBlock(TuiPresentationFormatter.FormatModelCorrectionAttempt(correction));
+                return true;
             case MutationSetProposed proposed:
                 _mutationApprovalLevels[proposed.MutationSetId] = proposed.RequiredApproval;
                 _planStepDetailsByMutationSet[proposed.MutationSetId] = CreateMutationSetPlanStepDetails();

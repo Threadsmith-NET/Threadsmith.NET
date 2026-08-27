@@ -345,64 +345,6 @@ public sealed record AcceptanceGateResult(
     AcceptanceGateStatus Status,
     IReadOnlyList<string> Reasons);
 
-/// <summary>Minimal governed input for one compilation-correction attempt.</summary>
-/// <param name="ChangedCode">Only the relevant changed source fragment.</param>
-/// <param name="Diagnostic">The introduced diagnostic being corrected.</param>
-/// <param name="Contract">The task or code contract that the correction must preserve.</param>
-/// <param name="Attempt">One-based attempt number.</param>
-public sealed record CorrectionContext(
-    string ChangedCode,
-    Diagnostic Diagnostic,
-    string Contract,
-    int Attempt);
-
-/// <summary>Validation evidence returned after one corrective mutation and recompile.</summary>
-/// <param name="ChangedCode">Relevant changed fragment for a possible next attempt.</param>
-/// <param name="Diagnostics">Recompiled and classified diagnostics.</param>
-public sealed record CorrectionAttemptResult(
-    string ChangedCode,
-    IReadOnlyList<Diagnostic> Diagnostics);
-
-/// <summary>Bounded correction-loop result.</summary>
-/// <param name="Succeeded">Whether no introduced errors remain.</param>
-/// <param name="Attempts">Number of corrective attempts performed.</param>
-/// <param name="BudgetExhausted">Whether introduced errors remain after the configured attempt budget.</param>
-/// <param name="Diagnostics">Final classified diagnostics.</param>
-public sealed record CorrectionLoopResult(
-    bool Succeeded,
-    int Attempts,
-    bool BudgetExhausted,
-    IReadOnlyList<Diagnostic> Diagnostics);
-
-/// <summary>Minimal governed input for one test-failure correction attempt.</summary>
-/// <param name="ChangedCode">Only the relevant changed source fragment.</param>
-/// <param name="Failure">One normalized failed selected-project result.</param>
-/// <param name="Contract">The task or code contract that the correction must preserve.</param>
-/// <param name="Attempt">One-based attempt number.</param>
-public sealed record TestCorrectionContext(
-    string ChangedCode,
-    TestResult Failure,
-    string Contract,
-    int Attempt);
-
-/// <summary>Test evidence returned after one corrective mutation and rerun.</summary>
-/// <param name="ChangedCode">Relevant changed fragment for a possible next attempt.</param>
-/// <param name="Validation">Rerun selection and normalized results.</param>
-public sealed record TestCorrectionAttemptResult(
-    string ChangedCode,
-    TestValidationResult Validation);
-
-/// <summary>Bounded test-correction result.</summary>
-/// <param name="Succeeded">Whether selected tests complete without a failed result.</param>
-/// <param name="Attempts">Number of corrective attempts performed.</param>
-/// <param name="BudgetExhausted">Whether failures remain after the configured attempt budget.</param>
-/// <param name="Validation">Final normalized test evidence.</param>
-public sealed record TestCorrectionLoopResult(
-    bool Succeeded,
-    int Attempts,
-    bool BudgetExhausted,
-    TestValidationResult Validation);
-
 /// <summary>Captures compiler diagnostics against the immutable pre-mutation baseline.</summary>
 /// <param name="Request">Trusted baseline validation request.</param>
 public sealed record CaptureBaselineBuildCommand(

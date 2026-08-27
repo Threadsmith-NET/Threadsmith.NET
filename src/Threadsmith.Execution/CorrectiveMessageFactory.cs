@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using System.Globalization;
 using System.Text;
+using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Creates bounded model-visible messages for active-turn corrective retries.</summary>
@@ -20,7 +21,8 @@ internal static class CorrectiveMessageFactory
         var content = $"Corrective turn {FormatAttempt(attemptNumber, maximumAttempts)}: "
             + "Nothing from the invalid model request was executed. "
             + reason
-            + " Emit a corrected request using a valid tool name and JSON-object arguments, or answer without tools.";
+            + " Emit a corrected request using a valid tool name and JSON-object arguments. "
+            + "Do not answer from unsupported repository assumptions; if a required tool cannot be called, say so.";
         return new ModelMessage
         {
             Role = ModelMessageRole.Developer,
@@ -64,6 +66,56 @@ internal static class CorrectiveMessageFactory
             + " Expected propose_plan arguments: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
     }
 
+    /// <summary>Creates a standalone developer correction for plan sanity failures.</summary>
+    public static ModelMessage CreatePlanSanityDeveloperMessage(
+        string safeReason,
+        int attemptNumber,
+        int maximumAttempts,
+        RunPhase phase)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(safeReason);
+        var reason = BoundSingleLine(safeReason, MaximumReasonCharacters);
+        var retryInstruction = phase == RunPhase.EvidenceCollection
+            ? "Re-emit propose_plan once with corrected fileIntents and plan scope."
+            : "Return one corrected structured PlanModelOutput JSON response as assistant text; do not call propose_plan in this phase.";
+        var content = $"Corrective turn {FormatAttempt(attemptNumber, maximumAttempts)}: "
+            + "The structured plan was rejected before approval. Nothing from the rejected plan was accepted. "
+            + reason
+            + " "
+            + retryInstruction;
+        return CreateDeveloperCorrectionMessage("active-turn-plan-sanity-correction", attemptNumber, content);
+    }
+
+    /// <summary>Creates a standalone developer correction for mutation proposal failures.</summary>
+    public static ModelMessage CreateMutationProposalDeveloperMessage(
+        MalformedInvocationDiagnostic diagnostic,
+        int attemptNumber,
+        int maximumAttempts)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+        var reason = BoundSingleLine(diagnostic.SafeMessage, MaximumReasonCharacters);
+        var content = $"Corrective turn {FormatAttempt(attemptNumber, maximumAttempts)}: "
+            + "The mutation proposal was rejected before staging, approval, or execution. "
+            + reason
+            + " Call propose_mutations exactly once using the advertised schema and the approved plan scope.";
+        return CreateDeveloperCorrectionMessage("active-turn-mutation-correction", attemptNumber, content);
+    }
+
+    /// <summary>Creates a standalone developer correction from a host-owned mutation correction context.</summary>
+    public static ModelMessage CreateMutationCorrectionDeveloperMessage(MutationCorrectionContext correction)
+    {
+        ArgumentNullException.ThrowIfNull(correction);
+        var reason = BoundSingleLine(correction.SafeReason, MaximumReasonCharacters);
+        var content = $"Corrective turn {FormatAttempt(correction.AttemptNumber, correction.MaximumAttempts)}: "
+            + "The previous approved mutation was applied and then rejected by host validation. "
+            + reason
+            + " Propose a correction mutation only within the approved plan scope; it will still require exact diff approval.";
+        return CreateDeveloperCorrectionMessage(
+            "active-turn-post-apply-correction",
+            correction.AttemptNumber,
+            content);
+    }
+
     /// <summary>Creates a short batch-preflight failure summary without raw arguments.</summary>
     public static string CreateToolBatchFailureSummary(
         int? failedOrdinal,
@@ -99,6 +151,21 @@ internal static class CorrectiveMessageFactory
             ToolName = string.IsNullOrWhiteSpace(failedToolId) ? null : BoundSingleLine(failedToolId, 128),
             ToolOrdinal = failedOrdinal,
             ToolCallCount = toolCallCount,
+        };
+    }
+
+    private static ModelMessage CreateDeveloperCorrectionMessage(
+        string sectionPrefix,
+        int attemptNumber,
+        string content)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sectionPrefix);
+        ArgumentException.ThrowIfNullOrWhiteSpace(content);
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.Developer,
+            SectionId = $"{sectionPrefix}:{attemptNumber.ToString(CultureInfo.InvariantCulture)}",
+            Content = [CreateTextContentPart(content)],
         };
     }
 

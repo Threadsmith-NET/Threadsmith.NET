@@ -13,7 +13,7 @@ using Threadsmith.Tools;
 public sealed partial class SessionApplication
 {
 #pragma warning restore SA1601
-    private async Task<ImplementationPlan?> GeneratePlanAsync(
+    private async Task<PlanPublication?> GeneratePlanAsync(
         RunId runId,
         RunRegistration registration,
         RunPhase phase,
@@ -56,7 +56,25 @@ public sealed partial class SessionApplication
                 _sanitizer);
             if (plan is not null)
             {
-                return plan;
+                var evaluation = await EvaluatePlanCandidateAsync(
+                    runId,
+                    registration,
+                    plan,
+                    phase,
+                    loopState,
+                    correctiveTurns,
+                    maximumModelRounds,
+                    modelRound,
+                    cancellationToken);
+                if (evaluation.Publication is not null)
+                {
+                    return evaluation.Publication;
+                }
+
+                if (evaluation.CorrectionRequested)
+                {
+                    continue;
+                }
             }
 
             if (!outcome.ToolInvoked)
@@ -254,32 +272,65 @@ public sealed partial class SessionApplication
             round.ModelRequest.ContainsSensitiveData,
             round.ModelRequest.Tools.Count);
         await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
+        BudgetStatus? modelWallClockBudget = null;
 
         try
         {
+            var requestStopwatch = Stopwatch.StartNew();
             try
             {
-                await foreach (var chunk in _model.StreamAsync(round.ModelRequest, cancellationToken))
+                try
                 {
-                    await ProcessModelChunkAsync(
-                        chunk,
+                    await foreach (var chunk in _model.StreamAsync(round.ModelRequest, cancellationToken))
+                    {
+                        await ProcessModelChunkAsync(
+                            chunk,
+                            round,
+                            loopState,
+                            streamState,
+                            maximumModelRounds,
+                            correctiveTurns,
+                            cancellationToken);
+                    }
+                }
+                catch (MalformedInvocationException exception)
+                {
+                    if (!TryAppendDeveloperCorrection(
                         round,
                         loopState,
                         streamState,
-                        maximumModelRounds,
                         correctiveTurns,
+                        maximumModelRounds,
+                        exception.Diagnostic,
+                        out var attemptNumber))
+                    {
+                        throw;
+                    }
+
+                    await PublishModelCorrectionAttemptedAsync(
+                        round,
+                        ModelCorrectionCategory.ProviderInvocation,
+                        attemptNumber,
+                        correctiveTurns.MaximumTurns,
+                        exception.Diagnostic.SafeMessage,
                         cancellationToken);
                 }
             }
-            catch (MalformedInvocationException exception)
-                when (TryAppendDeveloperCorrection(
-                    round,
-                    loopState,
-                    streamState,
-                    correctiveTurns,
-                    maximumModelRounds,
-                    exception.Diagnostic))
+            finally
             {
+                requestStopwatch.Stop();
+                var requestElapsed = requestStopwatch.Elapsed;
+                modelWallClockBudget = round.Registration.Budget.Accrue(new BudgetDimensions(
+                    0,
+                    0,
+                    requestElapsed));
+                round.Registration.ModelRequestWallClockAccrued += requestElapsed;
+            }
+
+            if (modelWallClockBudget?.IsExhausted == true)
+            {
+                throw new BudgetExceededException(
+                    modelWallClockBudget.Reason ?? "Execution budget exhausted.");
             }
 
             if (!streamState.CorrectiveTurnRequested
@@ -410,7 +461,7 @@ public sealed partial class SessionApplication
         }
     }
 
-    private static Task ProcessToolRequestAsync(
+    private async Task ProcessToolRequestAsync(
         ToolRequestModelOutput tool,
         ConversationRound round,
         ConversationLoopState loopState,
@@ -430,14 +481,41 @@ public sealed partial class SessionApplication
 
         if (isProposePlanTool)
         {
-            ProcessPlanToolRequest(
-                tool,
-                round,
-                loopState,
-                streamState,
-                maximumModelRounds,
-                correctiveTurns);
-            return Task.CompletedTask;
+            try
+            {
+                await ProcessPlanToolRequestAsync(
+                    tool,
+                    round,
+                    loopState,
+                    streamState,
+                    maximumModelRounds,
+                    correctiveTurns,
+                    cancellationToken);
+            }
+            catch (MalformedInvocationException exception)
+            {
+                if (!TryAppendDeveloperCorrection(
+                    round,
+                    loopState,
+                    streamState,
+                    correctiveTurns,
+                    maximumModelRounds,
+                    exception.Diagnostic,
+                    out var attemptNumber))
+                {
+                    throw;
+                }
+
+                await PublishModelCorrectionAttemptedAsync(
+                    round,
+                    ModelCorrectionCategory.PlanSchema,
+                    attemptNumber,
+                    correctiveTurns.MaximumTurns,
+                    exception.Diagnostic.SafeMessage,
+                    cancellationToken);
+            }
+
+            return;
         }
 
         try
@@ -445,29 +523,42 @@ public sealed partial class SessionApplication
             ModelOutputValidator.ValidateInvocation(tool);
         }
         catch (MalformedInvocationException exception)
-            when (TryAppendDeveloperCorrection(
+        {
+            if (!TryAppendDeveloperCorrection(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                exception.Diagnostic))
-        {
-            return Task.CompletedTask;
+                exception.Diagnostic,
+                out var attemptNumber))
+            {
+                throw;
+            }
+
+            await PublishModelCorrectionAttemptedAsync(
+                round,
+                ModelCorrectionCategory.ProviderInvocation,
+                attemptNumber,
+                correctiveTurns.MaximumTurns,
+                exception.Diagnostic.SafeMessage,
+                cancellationToken);
+            return;
         }
 
         EnqueueToolRequest(tool, round, loopState, streamState);
-        return Task.CompletedTask;
     }
 
-    private static void ProcessPlanToolRequest(
+    private async Task ProcessPlanToolRequestAsync(
         ToolRequestModelOutput tool,
         ConversationRound round,
         ConversationLoopState loopState,
         ModelRoundStreamState streamState,
         int maximumModelRounds,
-        CorrectiveTurnState correctiveTurns)
+        CorrectiveTurnState correctiveTurns,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (round.Phase != RunPhase.EvidenceCollection)
         {
             var diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
@@ -484,14 +575,26 @@ public sealed partial class SessionApplication
             ModelOutputValidator.ValidateInvocation(tool);
         }
         catch (MalformedInvocationException exception)
-            when (TryAppendDeveloperCorrection(
+        {
+            if (!TryAppendDeveloperCorrection(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                exception.Diagnostic))
-        {
+                exception.Diagnostic,
+                out var attemptNumber))
+            {
+                throw;
+            }
+
+            await PublishModelCorrectionAttemptedAsync(
+                round,
+                ModelCorrectionCategory.PlanSchema,
+                attemptNumber,
+                correctiveTurns.MaximumTurns,
+                exception.Diagnostic.SafeMessage,
+                cancellationToken);
             return;
         }
 
@@ -500,15 +603,29 @@ public sealed partial class SessionApplication
             streamState.Plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson).Plan;
         }
         catch (MalformedInvocationException exception)
-            when (TryAppendSingleToolCorrection(
+        {
+            var failureSummary = CorrectiveMessageFactory.CreatePlanSchemaFailureSummary(
+                exception.Diagnostic);
+            if (!TryAppendSingleToolCorrection(
                 tool,
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                CorrectiveMessageFactory.CreatePlanSchemaFailureSummary(exception.Diagnostic)))
-        {
+                failureSummary,
+                out var attemptNumber))
+            {
+                throw;
+            }
+
+            await PublishModelCorrectionAttemptedAsync(
+                round,
+                ModelCorrectionCategory.PlanSchema,
+                attemptNumber,
+                correctiveTurns.MaximumTurns,
+                failureSummary,
+                cancellationToken);
         }
     }
 
@@ -550,13 +667,14 @@ public sealed partial class SessionApplication
             streamState.PendingToolCalls,
             out var conversationPreflight))
         {
-            return AppendToolBatchCorrectionOrThrow(
+            return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                conversationPreflight);
+                conversationPreflight,
+                cancellationToken);
         }
 
         if (_toolPipeline is null || round.InvocationContext is null)
@@ -567,13 +685,14 @@ public sealed partial class SessionApplication
                 streamState.PendingToolCalls[0].ToolName,
                 "No tool invocation pipeline is available in this model round.",
                 streamState.PendingToolCalls.Count);
-            return AppendToolBatchCorrectionOrThrow(
+            return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                diagnostic);
+                diagnostic,
+                cancellationToken);
         }
 
         var invocationContext = round.InvocationContext;
@@ -600,13 +719,14 @@ public sealed partial class SessionApplication
                 preflight.FailedToolId,
                 preflight.SafeReason ?? "The tool batch failed preflight.",
                 streamState.PendingToolCalls.Count);
-            return AppendToolBatchCorrectionOrThrow(
+            return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                diagnostic);
+                diagnostic,
+                cancellationToken);
         }
 
         var preparation = preflight.Preparation;
@@ -618,13 +738,14 @@ public sealed partial class SessionApplication
                 failedToolId: streamState.PendingToolCalls[0].ToolName,
                 "The tool batch preflight did not return a prepared invocation snapshot.",
                 streamState.PendingToolCalls.Count);
-            return AppendToolBatchCorrectionOrThrow(
+            return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
                 loopState,
                 streamState,
                 correctiveTurns,
                 maximumModelRounds,
-                diagnostic);
+                diagnostic,
+                cancellationToken);
         }
 
         foreach (var call in streamState.PendingToolCalls)
@@ -770,13 +891,14 @@ public sealed partial class SessionApplication
         return false;
     }
 
-    private static bool AppendToolBatchCorrectionOrThrow(
+    private async Task<bool> AppendToolBatchCorrectionOrThrowAsync(
         ConversationRound round,
         ConversationLoopState loopState,
         ModelRoundStreamState streamState,
         CorrectiveTurnState correctiveTurns,
         int maximumModelRounds,
-        MalformedInvocationDiagnostic diagnostic)
+        MalformedInvocationDiagnostic diagnostic,
+        CancellationToken cancellationToken)
     {
         if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
         {
@@ -800,7 +922,39 @@ public sealed partial class SessionApplication
         }
 
         streamState.MarkCorrectiveTurnRequested();
+        await PublishModelCorrectionAttemptedAsync(
+            round,
+            ModelCorrectionCategory.ToolBatch,
+            attemptNumber,
+            correctiveTurns.MaximumTurns,
+            failureSummary,
+            cancellationToken);
         return true;
+    }
+
+    private async Task PublishModelCorrectionAttemptedAsync(
+        ConversationRound round,
+        ModelCorrectionCategory category,
+        int attemptNumber,
+        int maximumAttempts,
+        string safeReason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(safeReason);
+        var sanitized = _sanitizer.Sanitize(safeReason);
+        var boundedReason = string.IsNullOrWhiteSpace(sanitized)
+            ? "The model request was rejected before execution."
+            : BoundPlanCorrectionReason(sanitized);
+        await _events.PublishAsync(
+            new ModelCorrectionAttempted(
+                round.Registration.SessionId,
+                DateTimeOffset.UtcNow,
+                round.RunId,
+                category,
+                attemptNumber,
+                maximumAttempts,
+                boundedReason),
+            cancellationToken);
     }
 
     private static bool TryAppendSingleToolCorrection(
@@ -810,9 +964,10 @@ public sealed partial class SessionApplication
         ModelRoundStreamState streamState,
         CorrectiveTurnState correctiveTurns,
         int maximumModelRounds,
-        string failureSummary)
+        string failureSummary,
+        out int attemptNumber)
     {
-        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
+        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out attemptNumber))
         {
             return false;
         }
@@ -839,9 +994,10 @@ public sealed partial class SessionApplication
         ModelRoundStreamState streamState,
         CorrectiveTurnState correctiveTurns,
         int maximumModelRounds,
-        MalformedInvocationDiagnostic diagnostic)
+        MalformedInvocationDiagnostic diagnostic,
+        out int attemptNumber)
     {
-        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
+        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out attemptNumber))
         {
             return false;
         }
@@ -1686,12 +1842,149 @@ public sealed partial class SessionApplication
         return plan;
     }
 
+    private async Task<PlanCandidateEvaluation> EvaluatePlanCandidateAsync(
+        RunId runId,
+        RunRegistration registration,
+        ImplementationPlan plan,
+        RunPhase phase,
+        ConversationLoopState loopState,
+        CorrectiveTurnState correctiveTurns,
+        int maximumModelRounds,
+        int modelRound,
+        CancellationToken cancellationToken)
+    {
+        var evaluation = await CheckPlanSanityAsync(
+            registration,
+            plan,
+            cancellationToken);
+        var sanity = evaluation.Result;
+        await _events.PublishAsync(
+            new PlanSanityCheckCompleted(
+                registration.SessionId,
+                DateTimeOffset.UtcNow,
+                runId,
+                plan.Revision,
+                sanity.Risk,
+                sanity.Issues.Count,
+                sanity.Issues.Count(issue => issue.IsBlocking),
+                sanity.Issues.Count(issue => issue.IsBlocking && issue.IsRepairable),
+                sanity.NormalizedAffectedPaths.Count),
+            cancellationToken);
+
+        if (sanity.HasNonRepairableBlockingIssues)
+        {
+            throw new MalformedModelOutputException(
+                "The plan violates a non-repairable sanity-check guardrail.");
+        }
+
+        if (sanity.HasRepairableBlockingIssues)
+        {
+            var safeReason = FormatPlanSanityCorrectionReason(sanity);
+            if (!TryBeginCorrectiveTurn(
+                correctiveTurns,
+                modelRound,
+                maximumModelRounds,
+                out var attemptNumber))
+            {
+                throw new MalformedModelOutputException(
+                    "The plan still has repairable sanity-check failures after the corrective-turn budget was exhausted.");
+            }
+
+            await _events.PublishAsync(
+                new ModelCorrectionAttempted(
+                    registration.SessionId,
+                    DateTimeOffset.UtcNow,
+                    runId,
+                    ModelCorrectionCategory.PlanSanity,
+                    attemptNumber,
+                    correctiveTurns.MaximumTurns,
+                    safeReason),
+                cancellationToken);
+
+            loopState.CommitStandaloneMessage(
+                modelRound,
+                CorrectiveMessageFactory.CreatePlanSanityDeveloperMessage(
+                    safeReason,
+                    attemptNumber,
+                    correctiveTurns.MaximumTurns,
+                    phase),
+                purgeAfterCorrection: true);
+            return new PlanCandidateEvaluation(null, CorrectionRequested: true);
+        }
+
+        if (!sanity.Passed)
+        {
+            throw new MalformedModelOutputException(
+                "The plan violates a non-repairable sanity-check guardrail.");
+        }
+
+        var decision = evaluation.CanAutoApprove
+            ? _planApprovalPolicy?.Decide(sanity, ResolveTrust(registration))
+                ?? RequireManualPlanReview(
+                    sanity,
+                    PlanApprovalPolicy.ReviewAll,
+                    "Plan approval policy is not configured; manual review is required.")
+            : RequireManualPlanReview(
+                sanity,
+                _planApprovalPolicy?.CurrentPolicy ?? PlanApprovalPolicy.ReviewAll,
+                "Required plan sanity evidence is unavailable; policy auto-approval is forbidden.");
+        if (decision.Kind == PlanApprovalDecisionKind.Blocked)
+        {
+            throw new UnauthorizedAccessException(decision.Reason);
+        }
+
+        return new PlanCandidateEvaluation(new PlanPublication(plan, decision), CorrectionRequested: false);
+    }
+
+    private string FormatPlanSanityCorrectionReason(PlanSanityCheckResult sanity)
+    {
+        ArgumentNullException.ThrowIfNull(sanity);
+        string[] issueSummaries =
+        [
+            .. sanity.Issues
+                .Where(issue => issue.IsBlocking && issue.IsRepairable)
+                .Take(6)
+                .Select(issue => issue.RelativePath is null
+                    ? $"{issue.Kind}: {issue.Message}"
+                    : $"{issue.Kind} ({issue.RelativePath}): {issue.Message}"),
+        ];
+        var reason = issueSummaries.Length == 0
+            ? "Plan sanity found repairable blocking issues."
+            : "Plan sanity found repairable blocking issues: " + string.Join("; ", issueSummaries);
+        var sanitized = _sanitizer.Sanitize(reason);
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "Plan sanity found repairable blocking issues."
+            : BoundPlanCorrectionReason(sanitized);
+    }
+
+    private static string BoundPlanCorrectionReason(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var normalized = value.ReplaceLineEndings(" ");
+        var builder = new StringBuilder(Math.Min(normalized.Length, 512));
+        foreach (var character in normalized)
+        {
+            if (builder.Length == 512)
+            {
+                break;
+            }
+
+            builder.Append(char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
+    }
+
     private static string CreateNextToolCallId(int modelRound, ModelRoundStreamState streamState)
     {
         streamState.ToolCallOrdinal++;
         return $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
             + streamState.ToolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    private sealed record PlanCandidateEvaluation(
+        PlanPublication? Publication,
+        bool CorrectionRequested);
 
     private sealed record ConversationRound(
         RunId RunId,
@@ -1814,6 +2107,7 @@ public sealed partial class SessionApplication
                     1,
                     duration,
                     usage?.EstimatedCost ?? 0));
+                _registration.ModelRequestWallClockAccrued += duration;
                 if (budgetUsage.IsExhausted)
                 {
                     throw new BudgetExceededException(

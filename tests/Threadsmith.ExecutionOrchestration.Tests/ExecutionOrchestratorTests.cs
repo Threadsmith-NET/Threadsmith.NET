@@ -540,6 +540,12 @@ public sealed class ExecutionOrchestratorTests
         // Arrange
         var fixture = CreateFixture(includeCorrection: true);
         await using var events = fixture.Events;
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
         await fixture.Orchestrator.StartAsync(fixture.StartRequest);
         var correctionPending = await fixture.Orchestrator.ContinueAsync(
             CreateContinuation(fixture, fixture.Staged));
@@ -558,6 +564,13 @@ public sealed class ExecutionOrchestratorTests
         Assert.Contains("-old", finalDiff, StringComparison.Ordinal);
         Assert.Contains("+fixed", finalDiff, StringComparison.Ordinal);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        var correctionCommand = Assert.Single(
+            fixture.ProposalHandler.Commands,
+            command => command.Correction is not null);
+        Assert.Equal(ModelCorrectionCategory.PostApplyValidation, correctionCommand.Correction?.Category);
+        Assert.Contains("Correction required", correctionCommand.Correction?.SafeReason, StringComparison.Ordinal);
+        var correctionEvent = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.PostApplyValidation, correctionEvent.Category);
     }
 
     /// <summary>Verifies execution startup failure terminalizes the approved run and unblocks waiters.</summary>
@@ -947,6 +960,7 @@ public sealed class ExecutionOrchestratorTests
             checkpoints,
             artifacts,
             events,
+            new SecretOutputSanitizer(),
             NullLogger<ExecutionOrchestrator>.Instance);
         var start = new ExecutionStartRequest
         {
@@ -1061,6 +1075,8 @@ public sealed class ExecutionOrchestratorTests
             }
         }
 
+        public List<ProposeMutationSetCommand> Commands { get; } = [];
+
         public Task FirstHandleEntered => _firstHandleEntered.Task;
 
         public void ReleaseFirstHandle()
@@ -1072,6 +1088,7 @@ public sealed class ExecutionOrchestratorTests
             ProposeMutationSetCommand command,
             CancellationToken cancellationToken = default)
         {
+            Commands.Add(command);
             if (_blockFirstProposal && !_firstHandled)
             {
                 _firstHandled = true;

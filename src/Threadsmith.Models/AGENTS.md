@@ -44,7 +44,7 @@ Normalize model identity, capabilities, streaming output, tool requests, usage, 
 
 - Preserve the `IModelProvider.StreamAsync` signature.
 - Keep provider wire DTOs and protocol-specific configuration in dedicated provider projects.
-- Never log request content, response content, authorization headers, or resolved credentials by default. The only exception is an explicit user-enabled, process-scoped raw model exchange diagnostic path; repository-local paths must be proven untracked, unstaged, and effectively Git-ignored before any raw request/response content is persisted, and credentials/authorization headers remain forbidden.
+- Never log request content, response content, authorization headers, or resolved credentials by default. The only exception is an explicit user-enabled, process-scoped raw model exchange diagnostic path; repository-local paths must be proven untracked, unstaged, and effectively Git-ignored before any raw request/response content is persisted, and credentials/authorization headers remain forbidden. Failure entries may include safe malformed-invocation metadata such as kind, tool name/ordinal, argument length/hash, and JSON parse location, but never raw arguments.
 - Propagate `CancellationToken` through request, retry delay, response stream, and parsing boundaries.
 
 ## Verification

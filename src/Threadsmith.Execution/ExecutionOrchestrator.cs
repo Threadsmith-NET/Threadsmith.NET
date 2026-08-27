@@ -27,6 +27,7 @@ public sealed class ExecutionOrchestrator :
     private readonly ICommandHandler<CommitMutationSetCommand, MutationCommitResult> _commits;
     private readonly IDomainEventStream _events;
     private readonly ILogger<ExecutionOrchestrator> _logger;
+    private readonly IOutputSanitizer _sanitizer;
     private readonly ICommandHandler<ProposeMutationSetCommand, StagedMutationSet> _proposals;
     private readonly ConcurrentDictionary<RunId, ActiveExecution> _runs = new();
     private readonly ConcurrentDictionary<RunId, RunContinuationGate> _runContinuationGates = new();
@@ -45,6 +46,7 @@ public sealed class ExecutionOrchestrator :
         IExecutionCheckpointStore checkpoints,
         IExecutionArtifactPublisher artifacts,
         IDomainEventStream events,
+        IOutputSanitizer sanitizer,
         ILogger<ExecutionOrchestrator> logger)
     {
         ArgumentNullException.ThrowIfNull(proposals);
@@ -55,6 +57,7 @@ public sealed class ExecutionOrchestrator :
         ArgumentNullException.ThrowIfNull(checkpoints);
         ArgumentNullException.ThrowIfNull(artifacts);
         ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
         _proposals = proposals;
         _commits = commits;
@@ -64,6 +67,7 @@ public sealed class ExecutionOrchestrator :
         _checkpoints = checkpoints;
         _artifacts = artifacts;
         _events = events;
+        _sanitizer = sanitizer;
         _logger = logger;
     }
 
@@ -672,7 +676,20 @@ public sealed class ExecutionOrchestrator :
         var succeeded = validation.Gate.Status == AcceptanceGateStatus.Passed;
         if (!succeeded && applied.CorrectionAttempts < applied.CorrectionBudget)
         {
-            var correctionEvidence = CreateCorrectionEvidence(validation);
+            var correctionContext = CreateValidationCorrectionContext(
+                validation,
+                applied.CorrectionAttempts + 1,
+                applied.CorrectionBudget);
+            await _events.PublishAsync(
+                new ModelCorrectionAttempted(
+                    request.SessionId,
+                    DateTimeOffset.UtcNow,
+                    request.RunId,
+                    correctionContext.Category,
+                    correctionContext.AttemptNumber,
+                    correctionContext.MaximumAttempts,
+                    correctionContext.SafeReason),
+                cancellationToken);
             var correction = await _proposals.HandleAsync(
                 new ProposeMutationSetCommand(
                     request.SessionId,
@@ -681,7 +698,7 @@ public sealed class ExecutionOrchestrator :
                     active.Request.Task,
                     active.Request.ApprovedPlan,
                     RunPhase.CorrectionModelTurn,
-                    correctionEvidence),
+                    correctionContext),
                 cancellationToken);
             var correctionDiff = await _artifacts.PublishAsync(
                 request.SessionId,
@@ -1216,23 +1233,68 @@ public sealed class ExecutionOrchestrator :
                 .Select(file => $"{file.RelativePath}:{file.Sha256}")));
     }
 
-    private static string CreateCorrectionEvidence(MutationValidationResult validation)
+    private MutationCorrectionContext CreateValidationCorrectionContext(
+        MutationValidationResult validation,
+        int attemptNumber,
+        int maximumAttempts)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(attemptNumber);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumAttempts);
+        return new MutationCorrectionContext(
+            ModelCorrectionCategory.PostApplyValidation,
+            attemptNumber,
+            maximumAttempts,
+            CreateValidationCorrectionReason(validation));
+    }
+
+    private string CreateValidationCorrectionReason(MutationValidationResult validation)
     {
         var diagnostic = validation.Diagnostics.FirstOrDefault(item =>
             item.Severity == DiagnosticSeverity.Error && !item.IsBaselineDiagnostic);
         if (diagnostic is not null)
         {
-            return $"Compiler {diagnostic.Code} in {diagnostic.File ?? diagnostic.Project}: {diagnostic.Message}";
+            return SanitizeAndBoundCorrectionReason(
+                $"Compiler {diagnostic.Code} in {diagnostic.File ?? diagnostic.Project}: {diagnostic.Message}");
         }
 
         var failedTest = validation.Tests.Results.FirstOrDefault(item =>
             item.Outcome == TestOutcome.Failed);
         if (failedTest is not null)
         {
-            return $"Selected test project {failedTest.Project.Name} failed with {failedTest.Failed} failing tests.";
+            return SanitizeAndBoundCorrectionReason(
+                $"Selected test project {failedTest.Project.Name} failed with {failedTest.Failed} failing tests.");
         }
 
-        return $"Validation gate requires correction: {string.Join("; ", validation.Gate.Reasons.Take(3))}";
+        return SanitizeAndBoundCorrectionReason(
+            $"Validation gate requires correction: {string.Join("; ", validation.Gate.Reasons.Take(3))}");
+    }
+
+    private string SanitizeAndBoundCorrectionReason(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var sanitized = _sanitizer.Sanitize(value);
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "Validation gate requires correction."
+            : BoundCorrectionReason(sanitized);
+    }
+
+    private static string BoundCorrectionReason(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var normalized = value.ReplaceLineEndings(" ");
+        var builder = new StringBuilder(Math.Min(normalized.Length, 512));
+        foreach (var character in normalized)
+        {
+            if (builder.Length == 512)
+            {
+                break;
+            }
+
+            builder.Append(char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private async Task<RunContinuationGateLease> EnterRunContinuationGateAsync(

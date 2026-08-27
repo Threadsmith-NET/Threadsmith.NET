@@ -495,18 +495,22 @@ public sealed partial class SessionApplication :
                 ],
             };
             registration.PendingApprovalId = null;
+            var stopwatch = Stopwatch.StartNew();
             try
             {
-                var revisedPlan = await GeneratePlanAsync(
+                var revisedPublication = await GeneratePlanAsync(
                     command.RunId,
                     registration,
                     RunPhase.AwaitingPlanApproval,
                     cancellationToken) ?? throw new MalformedModelOutputException(
                         "The revision response did not contain a structured plan.");
-                await PrepareAndPublishPlanAsync(
+                stopwatch.Stop();
+                AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+                await PublishPlanAsync(
                     command.RunId,
                     registration,
-                    revisedPlan,
+                    revisedPublication.Plan,
+                    revisedPublication.Decision,
                     cancellationToken);
                 return true;
             }
@@ -656,20 +660,15 @@ public sealed partial class SessionApplication :
                 "request accepted",
                 registration.Cancellation.Token);
 
-            var plan = await GeneratePlanAsync(
+            var publication = await GeneratePlanAsync(
                 runId,
                 registration,
                 registration.Machine.Phase,
                 registration.Cancellation.Token);
+            stopwatch.Stop();
+            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
 
-            var elapsed = registration.Budget.Accrue(
-                new BudgetDimensions(0, 0, stopwatch.Elapsed));
-            if (elapsed.IsExhausted)
-            {
-                throw new BudgetExceededException(elapsed.Reason ?? "Execution budget exhausted.");
-            }
-
-            if (plan is not null)
+            if (publication is not null)
             {
                 if (registration.Machine.Phase == RunPhase.EvidenceCollection)
                 {
@@ -679,10 +678,11 @@ public sealed partial class SessionApplication :
                         registration.Cancellation.Token);
                 }
 
-                await PrepareAndPublishPlanAsync(
+                await PublishPlanAsync(
                     runId,
                     registration,
-                    plan,
+                    publication.Plan,
+                    publication.Decision,
                     registration.Cancellation.Token);
                 return;
             }
@@ -965,6 +965,32 @@ public sealed partial class SessionApplication :
             .. unresolvedQuestions.Select(content => (RepositoryMemoryKind.UnresolvedQuestion, content)),
             .. completedWork.Select(content => (RepositoryMemoryKind.WorkflowFact, content)),
         ];
+    }
+
+    private static void AccrueUnchargedWallClockOrThrow(
+        RunRegistration registration,
+        TimeSpan elapsed)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        var chargedModelWallClock = registration.ModelRequestWallClockAccrued
+            - registration.ModelRequestWallClockSettled;
+        if (chargedModelWallClock < TimeSpan.Zero)
+        {
+            chargedModelWallClock = TimeSpan.Zero;
+        }
+
+        var unchargedWallClock = elapsed > chargedModelWallClock
+            ? elapsed - chargedModelWallClock
+            : TimeSpan.Zero;
+        registration.ModelRequestWallClockSettled = registration.ModelRequestWallClockAccrued;
+        var elapsedStatus = registration.Budget.Accrue(new BudgetDimensions(
+            0,
+            0,
+            unchargedWallClock));
+        if (elapsedStatus.IsExhausted)
+        {
+            throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
+        }
     }
 
     private static string RenderLegacyContinuation(
@@ -1407,119 +1433,6 @@ public sealed partial class SessionApplication :
             cancellationToken);
     }
 
-    private async Task PrepareAndPublishPlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan plan,
-        CancellationToken cancellationToken)
-    {
-        var publication = await RunPlanSanityAndPolicyAsync(
-            runId,
-            registration,
-            plan,
-            cancellationToken);
-        await PublishPlanAsync(
-            runId,
-            registration,
-            publication.Plan,
-            publication.Decision,
-            cancellationToken);
-    }
-
-    private async Task<PlanPublication> RunPlanSanityAndPolicyAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan initialPlan,
-        CancellationToken cancellationToken)
-    {
-        var currentPlan = initialPlan;
-        var maximumRepairs = Math.Max(0, _limits.MaxPlanRevisionRepairAttempts);
-        for (var attempt = 0; attempt <= maximumRepairs; attempt++)
-        {
-            var evaluation = await CheckPlanSanityAsync(
-                registration,
-                currentPlan,
-                cancellationToken);
-            var sanity = evaluation.Result;
-            await _events.PublishAsync(
-                new PlanSanityCheckCompleted(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    currentPlan.Revision,
-                    sanity.Risk,
-                    sanity.Issues.Count,
-                    sanity.Issues.Count(issue => issue.IsBlocking),
-                    sanity.Issues.Count(issue => issue.IsBlocking && issue.IsRepairable),
-                    sanity.NormalizedAffectedPaths.Count),
-                cancellationToken);
-
-            if (sanity.HasNonRepairableBlockingIssues)
-            {
-                throw new MalformedModelOutputException(
-                    "The plan violates a non-repairable sanity-check guardrail.");
-            }
-
-            if (sanity.HasRepairableBlockingIssues && attempt < maximumRepairs)
-            {
-                var repair = _sanitizer.Sanitize(CreatePlanRepairInstructions(sanity));
-                await _events.PublishAsync(
-                    new PlanRevisionRequested(
-                        registration.SessionId,
-                        DateTimeOffset.UtcNow,
-                        runId,
-                        repair),
-                    cancellationToken);
-                registration.Task = registration.Task with
-                {
-                    UserConstraints =
-                    [
-                        .. registration.Task.UserConstraints ?? [],
-                        $"Plan sanity repair request: {repair}",
-                    ],
-                };
-                registration.PendingPlan = currentPlan;
-                var repairStopwatch = Stopwatch.StartNew();
-                var repairedPlan = await GeneratePlanAsync(
-                    runId,
-                    registration,
-                    RunPhase.AwaitingPlanApproval,
-                    cancellationToken);
-                AccrueRepairWallClock(registration, repairStopwatch.Elapsed);
-                currentPlan = repairedPlan ?? throw new MalformedModelOutputException(
-                    "The plan sanity repair response did not contain a structured plan.");
-                continue;
-            }
-
-            if (!sanity.Passed)
-            {
-                var reason = sanity.HasRepairableBlockingIssues
-                    ? "The plan still has repairable sanity-check failures after the revision budget was exhausted."
-                    : "The plan violates a non-repairable sanity-check guardrail.";
-                throw new MalformedModelOutputException(reason);
-            }
-
-            var decision = evaluation.CanAutoApprove
-                ? _planApprovalPolicy?.Decide(sanity, ResolveTrust(registration))
-                    ?? RequireManualPlanReview(
-                        sanity,
-                        PlanApprovalPolicy.ReviewAll,
-                        "Plan approval policy is not configured; manual review is required.")
-                : RequireManualPlanReview(
-                    sanity,
-                    _planApprovalPolicy?.CurrentPolicy ?? PlanApprovalPolicy.ReviewAll,
-                    "Required plan sanity evidence is unavailable; policy auto-approval is forbidden.");
-            if (decision.Kind == PlanApprovalDecisionKind.Blocked)
-            {
-                throw new UnauthorizedAccessException(decision.Reason);
-            }
-
-            return new PlanPublication(currentPlan, decision);
-        }
-
-        throw new UnreachableException();
-    }
-
     private async Task<PlanSanityEvaluation> CheckPlanSanityAsync(
         RunRegistration registration,
         ImplementationPlan plan,
@@ -1580,31 +1493,6 @@ public sealed partial class SessionApplication :
             Risk = sanity.Risk,
             Reason = reason,
         };
-    }
-
-    private static void AccrueRepairWallClock(RunRegistration registration, TimeSpan elapsed)
-    {
-        var status = registration.Budget.Accrue(new BudgetDimensions(0, 0, elapsed));
-        if (status.IsExhausted)
-        {
-            throw new BudgetExceededException(
-                status.Reason ?? "Execution wall-clock budget exhausted during plan repair.");
-        }
-    }
-
-    private static string CreatePlanRepairInstructions(PlanSanityCheckResult sanity)
-    {
-        string[] issueSummaries =
-        [
-            .. sanity.Issues
-                .Where(issue => issue.IsBlocking && issue.IsRepairable)
-                .Take(6)
-                .Select(issue => issue.RelativePath is null
-                    ? $"{issue.Kind}: {issue.Message}"
-                    : $"{issue.Kind} ({issue.RelativePath}): {issue.Message}"),
-        ];
-        return "Revise the structured plan before approval. Use exact repository-relative fileIntents and fix: "
-            + string.Join("; ", issueSummaries);
     }
 
     private static RepositoryTrustLevel ResolveTrust(RunRegistration registration)
@@ -1951,6 +1839,10 @@ public sealed partial class SessionApplication :
         public SemaphoreSlim Gate { get; } = new(1, 1);
 
         public RunStateMachine Machine { get; }
+
+        public TimeSpan ModelRequestWallClockAccrued { get; set; }
+
+        public TimeSpan ModelRequestWallClockSettled { get; set; }
 
         public ApprovalId? PendingApprovalId { get; set; }
 

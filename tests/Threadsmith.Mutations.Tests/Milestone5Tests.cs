@@ -710,7 +710,7 @@ public static class Milestone5Tests
 
     /// <summary>A stale model-authored semantic rename symbol is repairable model output.</summary>
     [Fact]
-    public static async Task ModelMutationProposal_RenameSymbolFailure_ReasksWithCorrectionEvidence()
+    public static async Task ModelMutationProposal_RenameSymbolFailure_ReasksWithCorrectiveMessage()
     {
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
         {
@@ -733,6 +733,12 @@ public static class Milestone5Tests
                 Usage = new ModelUsage(100, 50),
             });
         await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
         await using var workspaces = new TransactionalWorkspaceCoordinator(events);
         await workspaces.RegisterBaselineAsync(repository.Baseline);
         var sanitizer = new PassthroughSanitizer();
@@ -780,9 +786,14 @@ public static class Milestone5Tests
 
         Assert.Equal(2, model.Requests.Count);
         Assert.Equal(2, semanticMutations.RenameRequests.Count);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
+        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("RenameSymbol proposal is invalid", StringComparison.Ordinal));
+            "RenameSymbol proposal is invalid",
+            GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
+            StringComparison.Ordinal);
         Assert.Contains("IRetrieval", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
 
         string CreateArguments(string relatedSymbolId)
@@ -900,11 +911,15 @@ public static class Milestone5Tests
         Assert.DoesNotContain("Broken", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Contains("Fixed", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Contains("Pre-mutation Roslyn analysis", retry.Reason, StringComparison.Ordinal);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.PreMutationAnalysis, correction.Category);
+        Assert.Contains("Pre-mutation Roslyn analysis", correction.SafeReason, StringComparison.Ordinal);
+        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("Pre-mutation Roslyn analysis", StringComparison.Ordinal));
+            "Pre-mutation Roslyn analysis",
+            GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
+            StringComparison.Ordinal);
         PreMutationAnalysisCompleted[] analysisEvents = [.. observed.OfType<PreMutationAnalysisCompleted>()];
         Assert.Equal(2, analysisEvents.Length);
         Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, analysisEvents[0].Decision);
@@ -1495,9 +1510,9 @@ public static class Milestone5Tests
         Assert.Equal(content, mutation.ReplacementText);
     }
 
-    /// <summary>A bad model-authored expectedText receives correction evidence and can repair.</summary>
+    /// <summary>A bad model-authored expectedText receives corrective feedback and can repair.</summary>
     [Fact]
-    public static async Task ModelMutationProposal_BadExpectedText_ReasksWithCorrectionEvidence()
+    public static async Task ModelMutationProposal_BadExpectedText_ReasksWithCorrectiveMessage()
     {
         const string source = "public override string Name => StandardizerName;";
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
@@ -1572,15 +1587,27 @@ public static class Milestone5Tests
         Assert.Equal(2, model.Requests.Count);
         MutationProposalStarted[] starts = [.. observed.OfType<MutationProposalStarted>()];
         Assert.Equal([1, 2], [.. starts.Select(item => item.AttemptNumber)]);
-        Assert.All(starts, start => Assert.Equal(3, start.MaximumAttempts));
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Equal(runId, retry.RunId);
-        Assert.Equal(2, retry.AttemptNumber);
-        Assert.Equal(3, retry.MaximumAttempts);
-        Assert.Contains("expectedText was not found", retry.Reason, StringComparison.Ordinal);
+        Assert.All(starts, start => Assert.Equal(4, start.MaximumAttempts));
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(runId, correction.RunId);
+        Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
+        Assert.Equal(1, correction.AttemptNumber);
+        Assert.Equal(3, correction.MaximumAttempts);
+        Assert.Contains("expectedText was not found", correction.SafeReason, StringComparison.Ordinal);
+        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        var additionalMessage = Assert.Single(context.Requests[1].AdditionalMessages);
+        Assert.StartsWith("active-turn-mutation-correction:", additionalMessage.SectionId, StringComparison.Ordinal);
         Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("expectedText was not found", StringComparison.Ordinal));
+            "expectedText was not found",
+            GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
+            StringComparison.Ordinal);
+        var initialWireEstimate = model.Requests[0].WireEstimate
+            ?? throw new InvalidOperationException("The initial mutation request should have a wire estimate.");
+        var retryWireEstimate = model.Requests[1].WireEstimate
+            ?? throw new InvalidOperationException("The corrected mutation request should have a wire estimate.");
+        Assert.Contains("active-turn-mutation-correction:1", retryWireEstimate.SectionTokens.Keys);
+        Assert.True(retryWireEstimate.WireInputTokens > initialWireEstimate.WireInputTokens);
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments(string expectedText, string replacementText)
@@ -1619,9 +1646,255 @@ public static class Milestone5Tests
         }
     }
 
-    /// <summary>Legacy-shaped mutation tool arguments receive schema correction evidence and can repair.</summary>
+    /// <summary>Request-local correction messages participate in assembly-time budget reduction.</summary>
     [Fact]
-    public static async Task ModelMutationProposal_LegacyMutationItemShape_ReasksWithSchemaCorrectionEvidence()
+    public static async Task MutationContextAssembly_CorrectionMessagesReserveBudgetBeforeEvidenceSelection()
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/Example.cs"] = "old",
+        });
+        var sessionId = repository.SessionId;
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var baseline = repository.Baseline;
+        var plan = new ImplementationPlan
+        {
+            Summary = "Change Example.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Edit Example",
+                    Description = "Update the example.",
+                    FileIntents = ModifyIntents("src/Example.cs"),
+                    ExpectedOutcome = "Example is updated.",
+                },
+            ],
+        };
+        var correctionMessage = new ModelMessage
+        {
+            Role = ModelMessageRole.Developer,
+            SectionId = "active-turn-post-apply-correction:1",
+            Content =
+            [
+                new ModelContentPart
+                {
+                    Content = "Corrective turn 1 of 3: validation failed; propose a bounded correction.",
+                },
+            ],
+        };
+
+        var withoutCorrection = await AssembleMutationContextAsync(
+            32_000,
+            includeEvidence: true,
+            includeCorrection: false);
+        var correctionWithoutEvidence = await AssembleMutationContextAsync(
+            32_000,
+            includeEvidence: false,
+            includeCorrection: true);
+        var targetBudget = withoutCorrection.WireEstimate?.WireInputTokens
+            ?? throw new InvalidOperationException("Expected a wire estimate.");
+        var correctionWithoutEvidenceEstimate = correctionWithoutEvidence.WireEstimate
+            ?? throw new InvalidOperationException("Expected a correction wire estimate.");
+        Assert.True(correctionWithoutEvidenceEstimate.WireInputTokens < targetBudget);
+
+        var reduced = await AssembleMutationContextAsync(
+            targetBudget,
+            includeEvidence: true,
+            includeCorrection: true);
+
+        var reducedEstimate = reduced.WireEstimate
+            ?? throw new InvalidOperationException("Expected a reduced wire estimate.");
+        Assert.True(reducedEstimate.WireInputTokens <= reduced.Inspection.TokenBudget);
+        Assert.Contains(correctionMessage.SectionId, reducedEstimate.SectionTokens.Keys);
+        Assert.Contains(reduced.Messages ?? [], message =>
+            string.Equals(message.SectionId, correctionMessage.SectionId, StringComparison.Ordinal));
+        Assert.Contains(reduced.Inspection.Evidence, evidence => !evidence.Included);
+
+        async Task<ContextAssemblyResult> AssembleMutationContextAsync(
+            int maximumTokens,
+            bool includeEvidence,
+            bool includeCorrection)
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new PassthroughSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            if (includeEvidence)
+            {
+                var content = new string('e', 12_000);
+                await evidence.AddAsync(new Evidence
+                {
+                    EvidenceId = EvidenceId.New(),
+                    SessionId = sessionId,
+                    RunId = runId,
+                    Kind = EvidenceKind.SourceExcerpt,
+                    Content = content,
+                    Provenance = new EvidenceProvenance { Source = "test" },
+                    CollectedAt = DateTimeOffset.UtcNow,
+                    Relevance = 0.1,
+                    EstimatedTokens = TokenEstimator.Estimate(content),
+                });
+            }
+
+            var assembler = new ContextAssembler(
+                evidence,
+                new TokenEstimator(),
+                new ContextPolicy(),
+                new PromptAppendLoader(sanitizer),
+                sanitizer,
+                events,
+                new ContextAssemblerOptions { MaximumTokens = maximumTokens });
+            return await assembler.AssembleAsync(new ContextAssemblyRequest
+            {
+                SessionId = sessionId,
+                RunId = runId,
+                Phase = RunPhase.CorrectionModelTurn,
+                Task = new TaskSpecification("Change Example", []),
+                RepositoryPath = repository.Root,
+                WorkingScope = "src/Example.cs",
+                ApprovedPlan = plan,
+                MutationBaseline = baseline,
+                ToolSchemas =
+                [
+                    new ContextToolSchema(
+                        "propose_mutations",
+                        "Submit a mutation proposal.",
+                        "{\"type\":\"object\"}",
+                        PreferStrictArguments: true),
+                ],
+                AdditionalMessages = includeCorrection ? [correctionMessage] : [],
+            });
+        }
+    }
+
+    /// <summary>Repairable mutation proposal failures fail closed when the corrective-turn budget is exhausted.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_ExpectedTextExhaustion_FailsWithoutStaging()
+    {
+        const string source = "public override string Name => StandardizerName;";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/SectorEntityStandardizer.cs"] = source,
+        });
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var baselineFile = Assert.Single(repository.Baseline.Files);
+        var badArguments = CreateArguments("nameof(IEntityStandardizer).Sector", "\"Test\"");
+        var model = new QueueModelProvider(
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", badArguments),
+                Usage = new ModelUsage(100, 50),
+            },
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", badArguments),
+                Usage = new ModelUsage(100, 50),
+            });
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
+        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
+        await workspaces.RegisterBaselineAsync(repository.Baseline);
+        var sanitizer = new PassthroughSanitizer();
+        var context = new RecordingContextAssembler(new ContextAssembler(
+            new EvidenceStore(events, sanitizer),
+            new TokenEstimator(),
+            new ContextPolicy(),
+            new PromptAppendLoader(sanitizer),
+            sanitizer,
+            events,
+            new ContextAssemblerOptions()));
+        var application = new MutationProposalApplication(
+            model,
+            context,
+            workspaces,
+            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
+            sanitizer,
+            events,
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 });
+        var plan = new ImplementationPlan
+        {
+            Summary = "Change the Name property.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Edit Name",
+                    Description = "Return the requested literal.",
+                    FileIntents = ModifyIntents("src/SectorEntityStandardizer.cs"),
+                    ExpectedOutcome = "Name returns Test.",
+                },
+            ],
+        };
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            application.HandleAsync(new ProposeMutationSetCommand(
+                repository.SessionId,
+                runId,
+                repository.WorkspaceId,
+                new TaskSpecification("Change Name", []),
+                plan,
+                RunPhase.ImplementationModelTurn)));
+
+        Assert.Contains("corrective-turn budget was exhausted", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("expectedText was not found", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
+        Assert.Empty(observed.OfType<MutationSetProposed>());
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        Assert.Contains(
+            "expectedText was not found",
+            GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
+            StringComparison.Ordinal);
+
+        string CreateArguments(string expectedText, string replacementText)
+        {
+            var envelope = new MutationProposalEnvelope
+            {
+                PlanRevision = 1,
+                PlanStepIds = [stepId],
+                MutationSet = new MutationProposalSet
+                {
+                    Mutations =
+                    [
+                        new MutationProposalChange
+                        {
+                            Type = MutationType.ReplaceText,
+                            RelativePath = "src/SectorEntityStandardizer.cs",
+                            BaselineSha256 = baselineFile.Sha256,
+                            StartOffset = 0,
+                            Length = expectedText.Length,
+                            ExpectedText = expectedText,
+                            ReplacementText = replacementText,
+                        },
+                    ],
+                    Rationale = "Return the requested literal.",
+                    Risk = MutationRisk.Low,
+                },
+            };
+            return JsonSerializer.Serialize(
+                envelope,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                    Converters = { new JsonStringEnumConverter() },
+                });
+        }
+    }
+
+    /// <summary>Legacy-shaped mutation tool arguments receive schema corrective feedback and can repair.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_LegacyMutationItemShape_ReasksWithSchemaCorrectiveMessage()
     {
         const string source = "public override string Name => StandardizerName;";
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
@@ -1717,14 +1990,16 @@ public static class Milestone5Tests
             RunPhase.ImplementationModelTurn));
 
         Assert.Equal(2, model.Requests.Count);
-        var retry = Assert.Single(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Equal(runId, retry.RunId);
-        Assert.Equal(2, retry.AttemptNumber);
-        Assert.Contains("did not match schema", retry.Reason, StringComparison.Ordinal);
-        Assert.Contains(
-            context.Requests[1].Task.UserConstraints ?? [],
-            constraint => constraint.Contains("type and relativePath", StringComparison.Ordinal)
-                && constraint.Contains("baselineSha256", StringComparison.Ordinal));
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(runId, correction.RunId);
+        Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
+        Assert.Equal(1, correction.AttemptNumber);
+        Assert.Contains("schema", correction.SafeReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
+        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        var correctionText = GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:");
+        Assert.Contains("propose_mutations", correctionText, StringComparison.Ordinal);
+        Assert.Contains("advertised schema", correctionText, StringComparison.Ordinal);
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments()
@@ -1835,6 +2110,111 @@ public static class Milestone5Tests
         Assert.False(staged.Conflicts.HasConflicts);
         Assert.Contains("+new", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.DoesNotContain("private", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+    }
+
+    /// <summary>Mutation proposal path confinement failures fail closed without corrective retry.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_PathConfinementViolation_FailsWithoutCorrection()
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/Example.cs"] = "old",
+        });
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var baselineFile = Assert.Single(repository.Baseline.Files);
+        var envelope = new MutationProposalEnvelope
+        {
+            PlanRevision = 1,
+            PlanStepIds = [stepId],
+            MutationSet = new MutationProposalSet
+            {
+                Mutations =
+                [
+                    new MutationProposalChange
+                    {
+                        Type = MutationType.ReplaceText,
+                        RelativePath = "../escape.cs",
+                        BaselineSha256 = baselineFile.Sha256,
+                        StartOffset = 0,
+                        Length = 3,
+                        ExpectedText = "old",
+                        ReplacementText = "new",
+                    },
+                ],
+                Rationale = "Attempt to escape the repository.",
+                Risk = MutationRisk.Low,
+            },
+        };
+        var model = new QueueModelProvider(new ModelChunk
+        {
+            Output = new ToolRequestModelOutput(
+                "propose_mutations",
+                JsonSerializer.Serialize(
+                    envelope,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                        Converters = { new JsonStringEnumConverter() },
+                    })),
+        });
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
+        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
+        await workspaces.RegisterBaselineAsync(repository.Baseline);
+        var sanitizer = new PassthroughSanitizer();
+        var application = new MutationProposalApplication(
+            model,
+            new ContextAssembler(
+                new EvidenceStore(events, sanitizer),
+                new TokenEstimator(),
+                new ContextPolicy(),
+                new PromptAppendLoader(sanitizer),
+                sanitizer,
+                events,
+                new ContextAssemblerOptions()),
+            workspaces,
+            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
+            sanitizer,
+            events,
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+        var plan = new ImplementationPlan
+        {
+            Revision = 1,
+            Summary = "Change Example.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Edit Example",
+                    Description = "Replace the value.",
+                    FileIntents = ModifyIntents("src/Example.cs"),
+                    ExpectedOutcome = "Example is updated.",
+                },
+            ],
+        };
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            application.HandleAsync(new ProposeMutationSetCommand(
+                repository.SessionId,
+                runId,
+                repository.WorkspaceId,
+                new TaskSpecification("Change Example", []),
+                plan,
+                RunPhase.ImplementationModelTurn)));
+
+        Assert.Contains("path confinement", exception.Message, StringComparison.Ordinal);
+        Assert.Single(model.Requests);
+        Assert.Empty(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Empty(observed.OfType<MutationSetProposed>());
+        Assert.Equal("old", await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
     }
 
     /// <summary>Model proposals cannot stage files that are outside the accepted plan.</summary>
@@ -3475,6 +3855,17 @@ public static class Milestone5Tests
             Directory.Delete(normalized, recursive: true);
             return ValueTask.CompletedTask;
         }
+    }
+
+    private static string GetCorrectionMessageText(
+        ModelStreamRequest request,
+        string sectionPrefix)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sectionPrefix);
+        var message = Assert.Single(request.Messages, candidate =>
+            candidate.SectionId?.StartsWith(sectionPrefix, StringComparison.Ordinal) == true);
+        return string.Join(" ", message.Content.Select(part => part.Content));
     }
 
     private sealed class QueueModelProvider : IModelProvider

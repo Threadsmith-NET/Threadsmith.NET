@@ -358,6 +358,8 @@ public sealed class ContextAssembler : IContextAssembler
         [
             .. request.CurrentTurnHostContext.Select(_sanitizer.Sanitize),
         ];
+        var additionalMessages = SanitizeAdditionalMessages(request.AdditionalMessages);
+        var additionalMessageContent = RenderAdditionalMessages(additionalMessages);
         var structuredTaskStateJson = Escape(JsonSerializer.Serialize(new
         {
             sanitizedTask.AcceptanceCriteria,
@@ -462,6 +464,7 @@ public sealed class ContextAssembler : IContextAssembler
             ["retrievedMemory"] = TokenEstimator.Estimate(conversation.RetrievedContent),
             ["repositoryMemory"] = TokenEstimator.Estimate(repositoryMemory.Content),
             ["governedState"] = TokenEstimator.Estimate(governedState),
+            ["additionalMessages"] = TokenEstimator.Estimate(additionalMessageContent),
             ["toolSchemas"] = TokenEstimator.Estimate(toolSchemas),
             ["nativeToolSchemas"] = request.ToolTransportMode == ToolTransportMode.Native
                 ? TokenEstimator.Estimate(JsonSerializer.Serialize(canonicalTools))
@@ -573,11 +576,9 @@ public sealed class ContextAssembler : IContextAssembler
             governedState,
             evidenceContent,
             toolSchemas,
-            outputSchema);
-        var totalTokens = EstimateWireInputTokens(
-            modelInput,
-            tokensByCategory["nativeToolSchemas"],
-            tokensByCategory["wireFraming"]);
+            outputSchema,
+            additionalMessageContent);
+        var totalTokens = EstimateCompleteInputTokens(modelInput, evidenceContent);
         while (totalTokens > tokenBudget
             && (conversation.CanReduce || repositoryMemory.CanReduce || selected.Count > 0))
         {
@@ -592,11 +593,9 @@ public sealed class ContextAssembler : IContextAssembler
                     governedState,
                     evidenceContent,
                     toolSchemas,
-                    outputSchema);
-                totalTokens = EstimateWireInputTokens(
-                    modelInput,
-                    tokensByCategory["nativeToolSchemas"],
-                    tokensByCategory["wireFraming"]);
+                    outputSchema,
+                    additionalMessageContent);
+                totalTokens = EstimateCompleteInputTokens(modelInput, evidenceContent);
                 continue;
             }
 
@@ -625,11 +624,37 @@ public sealed class ContextAssembler : IContextAssembler
                 governedState,
                 evidenceContent,
                 toolSchemas,
-                outputSchema);
-            totalTokens = EstimateWireInputTokens(
-                modelInput,
+                outputSchema,
+                additionalMessageContent);
+            totalTokens = EstimateCompleteInputTokens(modelInput, evidenceContent);
+        }
+
+        int EstimateCompleteInputTokens(string currentModelInput, string currentEvidenceContent)
+        {
+            var legacyTokens = EstimateWireInputTokens(
+                currentModelInput,
                 tokensByCategory["nativeToolSchemas"],
                 tokensByCategory["wireFraming"]);
+            var currentMessages = BuildStructuredMessages(
+                appendContent,
+                phaseInstructions,
+                structuredTaskStateJson,
+                conversation,
+                repositoryMemory,
+                governedState,
+                currentEvidenceContent,
+                toolSchemas,
+                outputSchema,
+                additionalMessages);
+            var stablePrefixCount = Math.Min(3, currentMessages.Count);
+            var wireTokens = ModelWireEstimator.Estimate(
+                currentMessages,
+                canonicalTools,
+                request.ToolTransportMode,
+                stablePrefixCount,
+                modelResolution?.EffectiveRequestOutputTokenReserve ?? 0)
+                .WireInputTokens;
+            return Math.Max(legacyTokens, wireTokens);
         }
 
         if (totalTokens > tokenBudget)
@@ -682,7 +707,8 @@ public sealed class ContextAssembler : IContextAssembler
             governedState,
             evidenceContent,
             toolSchemas,
-            outputSchema);
+            outputSchema,
+            additionalMessages);
         var stablePrefixMessageCount = Math.Min(3, messages.Count);
         var stablePrefixDigest = ComputeMessageDigest(messages.Take(stablePrefixMessageCount));
         var cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:{request.Phase}:"
@@ -1403,7 +1429,8 @@ public sealed class ContextAssembler : IContextAssembler
         string governedState,
         string evidenceContent,
         string toolSchemas,
-        string outputSchema)
+        string outputSchema,
+        IReadOnlyList<ModelMessage> additionalMessages)
     {
         var repositoryInstructions = string.IsNullOrWhiteSpace(appendContent)
             ? "No repository instruction assets apply to this working scope."
@@ -1452,7 +1479,32 @@ public sealed class ContextAssembler : IContextAssembler
             ModelMessageRole.User,
             "current-user",
             conversation.CurrentTurnContent));
+        messages.AddRange(additionalMessages);
         return messages;
+    }
+
+    private IReadOnlyList<ModelMessage> SanitizeAdditionalMessages(
+        IReadOnlyList<ModelMessage> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        return [.. messages.Select(message => message with
+        {
+            Content = [.. message.Content.Select(part => part with
+            {
+                Content = _sanitizer.Sanitize(part.Content),
+            })],
+        })];
+    }
+
+    private static string RenderAdditionalMessages(IReadOnlyList<ModelMessage> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        return string.Join(
+            "\n",
+            messages.Select(message =>
+                $"<request_local_message role=\"{message.Role}\" section=\"{Escape(message.SectionId)}\">"
+                + Escape(string.Concat(message.Content.Select(part => part.Content)))
+                + "</request_local_message>"));
     }
 
     private static ModelMessage CreateTextMessage(
@@ -1477,7 +1529,8 @@ public sealed class ContextAssembler : IContextAssembler
         string governedState,
         string evidenceContent,
         string toolSchemas,
-        string outputSchema)
+        string outputSchema,
+        string additionalMessageContent)
     {
         return string.Join(
             "\n\n",
@@ -1488,6 +1541,7 @@ public sealed class ContextAssembler : IContextAssembler
                 $"<phase_instructions>{Escape(phaseInstructions)}</phase_instructions>",
                 $"<task>{taskJson}</task>",
                 $"<current_turn untrusted=\"true\">{Escape(conversation.CurrentTurnContent)}</current_turn>",
+                additionalMessageContent,
                 conversation.RecentTurnsContent,
                 conversation.SummaryContent,
                 conversation.RetrievedContent,

@@ -245,9 +245,6 @@ internal sealed class HostFoundation : IAsyncDisposable
                 "execution:maxPlanningToolRounds",
                 ExecutionLimits.DefaultMaxPlanningToolRounds),
             MaxCorrectiveTurns = maximumCorrectiveTurns,
-            MaxPlanProposalRepairAttempts = maximumCorrectiveTurns,
-            MaxPlanRevisionRepairAttempts = maximumCorrectiveTurns,
-            MaxMutationProposalRepairAttempts = maximumCorrectiveTurns,
             MaxStructuredOutputCharacters = configuration.GetValue(
                 "execution:maxStructuredOutputCharacters",
                 8 * 1024 * 1024),

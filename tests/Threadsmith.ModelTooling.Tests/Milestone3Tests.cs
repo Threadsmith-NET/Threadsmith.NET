@@ -2,6 +2,7 @@ namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -1093,6 +1094,66 @@ public static class Milestone3Tests
         Assert.Single(catalog.Profiles);
     }
 
+    /// <summary>Malformed tool-call failures record safe diagnostic metadata without raw arguments.</summary>
+    [Fact]
+    public static async Task ModelExchangeLog_MalformedInvocationFailure_RecordsSafeDiagnosticMetadata()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"threadsmith-model-log-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var log = new JsonlModelExchangeLog(path);
+            var runId = RunId.New();
+            const string rawArguments = "{\"path\":\"secret argument\"";
+            var argumentSha256 = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(rawArguments))).ToLowerInvariant();
+            var exception = new MalformedInvocationException(new MalformedInvocationDiagnostic
+            {
+                Kind = MalformedInvocationFailureKind.InvalidJsonArguments,
+                SafeMessage = "Tool arguments are not valid JSON.",
+                ToolName = "read_file",
+                ToolOrdinal = 1,
+                ToolCallCount = 2,
+                ProviderFamily = "openai-compatible",
+                ArgumentCharacterCount = rawArguments.Length,
+                ArgumentSha256 = argumentSha256,
+                JsonPath = "$.path",
+                JsonLineNumber = 3,
+                JsonBytePositionInLine = 7,
+            });
+
+            await log.AppendFailureAsync(runId, 2, exception);
+
+            var line = Assert.Single(await File.ReadAllLinesAsync(path));
+            Assert.DoesNotContain("secret argument", line, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            Assert.Equal("failure", root.GetProperty("Kind").GetString());
+            Assert.Equal("MalformedInvocationException", root.GetProperty("ErrorType").GetString());
+            var malformed = root.GetProperty("Payload").GetProperty("MalformedInvocation");
+            Assert.Equal("InvalidJsonArguments", malformed.GetProperty("Kind").GetString());
+            Assert.Equal("Tool arguments are not valid JSON.", malformed.GetProperty("SafeMessage").GetString());
+            Assert.Equal("read_file", malformed.GetProperty("ToolName").GetString());
+            Assert.Equal(1, malformed.GetProperty("ToolOrdinal").GetInt32());
+            Assert.Equal(2, malformed.GetProperty("ToolCallCount").GetInt32());
+            Assert.Equal("openai-compatible", malformed.GetProperty("ProviderFamily").GetString());
+            Assert.Equal(rawArguments.Length, malformed.GetProperty("ArgumentCharacterCount").GetInt32());
+            Assert.Equal(argumentSha256, malformed.GetProperty("ArgumentSha256").GetString());
+            Assert.Equal("$.path", malformed.GetProperty("JsonPath").GetString());
+            Assert.Equal(3, malformed.GetProperty("JsonLineNumber").GetInt64());
+            Assert.Equal(7, malformed.GetProperty("JsonBytePositionInLine").GetInt64());
+            Assert.False(malformed.TryGetProperty("ArgumentsJson", out _));
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
     /// <summary>The adapter sends host-authorized tools using the OpenAI function-tool contract.</summary>
     [Fact]
     public static async Task OpenAiAdapter_ModelTools_AreSentAsFunctionDefinitions()
@@ -2059,6 +2120,45 @@ public static class Milestone3Tests
         var reasoningChunk = Assert.Single(chunks, chunk => chunk.Reasoning is not null);
         Assert.Equal("legacy thinking", reasoningChunk.Reasoning);
         Assert.Null(reasoningChunk.Text);
+    }
+
+    /// <summary>The <c>reasoning_text</c> delta alias is parsed into <see cref="ModelChunk.Reasoning" />.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_ReasoningText_ProducesReasoningChunk()
+    {
+        const string stream =
+            "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\"text thinking\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+            + "data: [DONE]\n";
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+
+        var chunks = await CollectAsync(provider);
+
+        var reasoningChunk = Assert.Single(chunks, chunk => chunk.Reasoning is not null);
+        Assert.Equal("text thinking", reasoningChunk.Reasoning);
+        Assert.Null(reasoningChunk.Text);
+    }
+
+    /// <summary>When no explicit compatibility mode is configured, known reasoning fields use Pi-compatible priority.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_KnownReasoningFields_UsesPiCompatiblePriority()
+    {
+        const string stream =
+            "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\"low\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{\"reasoning\":\"mid\",\"reasoning_text\":\"ignored\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"high\",\"reasoning\":\"ignored\",\"reasoning_text\":\"ignored\"},\"finish_reason\":\"stop\"}]}\n\n"
+            + "data: [DONE]\n";
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+
+        var chunks = await CollectAsync(provider);
+
+        Assert.Equal(
+            "lowmidhigh",
+            string.Concat(chunks.Where(chunk => chunk.Reasoning is not null).Select(chunk => chunk.Reasoning)));
     }
 
     /// <summary>A reasoning model sends <c>reasoning_effort</c>; a non-reasoning model omits it.</summary>

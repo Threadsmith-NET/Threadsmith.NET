@@ -135,7 +135,7 @@ internal static class TuiEventSegments
             case MutationProposalStarted:
                 AppendLifecycleBlock(segments, text, TuiTextRole.Status);
                 return;
-            case MutationProposalRepairAttempted:
+            case MutationProposalRepairAttempted or ModelCorrectionAttempted:
                 AppendLifecycleBlock(segments, text, TuiTextRole.Warning);
                 return;
             case MutationApplied:

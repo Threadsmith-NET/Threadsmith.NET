@@ -686,9 +686,16 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             OpenAiReasoningResponseMode.None => null,
             OpenAiReasoningResponseMode.ReasoningContent => delta.ReasoningContent,
             OpenAiReasoningResponseMode.Reasoning => delta.Reasoning,
-            null => delta.Reasoning ?? delta.ReasoningContent,
+            OpenAiReasoningResponseMode.ReasoningText => delta.ReasoningText,
+            OpenAiReasoningResponseMode.KnownFields => ResolveKnownReasoningDelta(delta),
+            null => ResolveKnownReasoningDelta(delta),
             _ => throw new MalformedModelOutputException("The configured reasoning response mode is invalid."),
         };
+    }
+
+    private static string? ResolveKnownReasoningDelta(OpenAiDelta delta)
+    {
+        return delta.ReasoningContent ?? delta.Reasoning ?? delta.ReasoningText;
     }
 
     private static IReadOnlyList<ModelChunk> DrainToolCalls(
@@ -957,6 +964,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         [JsonPropertyName("reasoning_content")]
         public string? ReasoningContent { get; init; }
+
+        [JsonPropertyName("reasoning_text")]
+        public string? ReasoningText { get; init; }
 
         [JsonPropertyName("tool_calls")]
         public IReadOnlyList<OpenAiToolCallDelta> ToolCalls { get; init; } = [];

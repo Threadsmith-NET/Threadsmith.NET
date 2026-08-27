@@ -1064,7 +1064,7 @@ Set `tui:renderMarkdown=false` to restore terminal-safe model-source chunk caden
 
 The setting follows normal layered configuration precedence and is snapshotted by the interactive shell. It does not affect reasoning, tool/MCP markers, diffs, status, historical transcript restoration, or headless output.
 
-When a model emits recoverable malformed or invalid tool requests, Threadsmith appends bounded corrective feedback to the active turn and asks the model to retry rather than silently repairing the request. If one sibling in a tool batch is invalid before execution, the whole batch is rejected before any sibling runs; after a successful correction, rejected corrective messages are removed from future model history while successful executed evidence remains.
+When a model emits recoverable malformed or invalid tool, plan, mutation, pre-mutation, or post-apply validation output, Threadsmith appends bounded corrective feedback to the active turn and asks the model to retry rather than silently repairing the request. If one sibling in a tool batch is invalid before execution, the whole batch is rejected before any sibling runs; after a successful correction, rejected corrective messages are removed from future model history while successful executed evidence remains. `execution:maxCorrectiveTurns` is the single correction budget; exhaustion fails closed without approving, staging, or executing invalid output.
 
 Operation durations are enabled by default through `tui:showOperationDurations`. One Boolean controls interactive request, ordinary-tool, extension-tool, and MCP duration text together. Active request timing covers the complete accepted turn and resumes from the original start after a tool continuation. Ordinary-tool completion timing covers only `ITool.ExecuteAsync`; MCP completion timing covers the remote transport invocation. Completed rows use compact invariant formatting (`47ms`, `8.6s`, `1:02`, `1:02:03`). Missing or invalid legacy timing is omitted rather than shown as zero.
 
@@ -1078,7 +1078,7 @@ Tool activity also includes concise context when a built-in explicitly defines a
    └ dotnet test src/Threadsmith.sln
 ```
 
-Structured plan proposals, plan auto-approval notices, mutation proposal status, and applied mutation notices use the same one-character-indented interactive lifecycle block family. Proposal bodies, steps, mutation-attempt rows, correction reasons, and applied-mutation detail are guided muted text; auto-approval shows plan-approval provenance and, when prior TUI context explains the classification, a concise risk basis. It does not imply mutation approval.
+Structured plan proposals, plan auto-approval notices, mutation proposal status, generic correction status, and applied mutation notices use the same one-character-indented interactive lifecycle block family. Proposal bodies, steps, mutation-attempt rows, correction reasons, and applied-mutation detail are guided muted text; auto-approval shows plan-approval provenance and, when prior TUI context explains the classification, a concise risk basis. It does not imply mutation approval.
 
 ```text
  PLAN: revision 1
@@ -1095,10 +1095,11 @@ Structured plan proposals, plan auto-approval notices, mutation proposal status,
  └ Reason: Policy AutoApproveAllValid approved a High risk plan after sanity checks.
 
  MUTATION: Preparing preview
- └ Attempt: 1/2
+ └ Attempt: 1/4
 
- MUTATION: Retrying proposal with correction evidence
- │ Attempt: 2/2
+ CORRECTION: Retrying model request
+ │ Attempt: 1/3
+ ├ Category: MutationProposal
  └ Reason: ReplaceText expectedText was not found in 'src/File.cs'.
 
  MUTATION: Applied under the active approval policy

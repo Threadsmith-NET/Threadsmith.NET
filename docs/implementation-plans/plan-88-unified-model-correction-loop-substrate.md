@@ -1,6 +1,6 @@
 # Implementation Plan 88: Conversation-Native Corrective Turns
 
-**Status:** Active — conversation-loop corrective turns implemented through behavior signoff; later plan-sanity, mutation-proposal, post-apply validation, and obsolete-helper migration remain.
+**Status:** Completed — Plan 88 substrate and Plan 88.1 follow-up migration are implemented.
 
 **Delivery track:** Maintenance — graceful recovery from malformed or invalid model requests
 **Strategy source:** Shared Context §A.1, §A.2, §A.5, §C, and §G; execution, model, planning, mutation, and validation contracts
@@ -46,7 +46,7 @@ Plan 88 folds these into one simpler conversation-based corrective-turn pattern.
 
 ## 5. Current State
 
-The current repair behavior is fragmented and uses separate counters, hidden task-constraint injection, and message-substring classification in places. Provider-boundary malformed native tool-call arguments can fail before the conversation loop can ask for correction. Tool batches are not preflighted as one atomic unit before execution.
+Plan 88 is implemented. Recoverable malformed provider/tool/plan/mutation/pre-mutation/post-apply validation failures route through bounded conversation-native corrective messages controlled by `execution:maxCorrectiveTurns`; obsolete helper loops and legacy repair counters have been removed. `PlanRevisionRequested` and `MutationProposalRepairAttempted` remain historical durable event types for replay compatibility.
 
 ## 6. Proposed Design
 
@@ -97,7 +97,7 @@ See `plan88_plan.md` for the authoritative implementation file list. Primary are
 5. Migrate ordinary tool and `propose_plan` correction in the conversation loop.
 6. Stop for behavior signoff.
 7. Add focused tests. **Done for the signed-off conversation-loop/provider/tool-batch slice.**
-8. Migrate plan sanity, mutation proposal, and post-apply validation correction. **Deferred.**
+8. Migrate plan sanity, mutation proposal, and post-apply validation correction. **Done in Plan 88.1.**
 9. Remove obsolete bespoke helper loops and counters. **Deferred with the remaining migrations.**
 10. Update user/operator docs only after behavior signoff. **Done for the signed-off slice.**
 

@@ -180,12 +180,10 @@ public sealed class MutationProposalApplication :
         var retainedMessages = new List<ModelMessage>();
         if (!string.IsNullOrWhiteSpace(command.CorrectionEvidence))
         {
-            retainedMessages.Add(CorrectiveMessageFactory.CreateHostValidationMessage(
-                "post-apply-validation",
+            retainedMessages.Add(CorrectiveMessageFactory.CreatePostApplyValidationMessage(
                 _sanitizer.Sanitize(command.CorrectionEvidence),
                 Math.Max(1, command.CorrectionAttempt),
-                Math.Max(1, command.CorrectionLimit),
-                "Propose a corrected mutation set that preserves the approved plan."));
+                Math.Max(1, command.CorrectionLimit)));
         }
 
         var continuationMessages = new List<ModelMessage>(retainedMessages);
@@ -299,6 +297,9 @@ public sealed class MutationProposalApplication :
             cancellationToken);
         IReadOnlyList<ModelToolDefinition> modelTools = [ProposeMutationsTool];
         IReadOnlyList<ModelMessage> requestMessages = [.. (context.Messages ?? []), .. continuationMessages];
+        var legacyInput = context.Messages is null && continuationMessages.Count > 0
+            ? AppendLegacyCorrections(context.ModelInput, continuationMessages)
+            : context.ModelInput;
         var wireEstimate = context.Layout is { } layout
             ? ModelWireEstimator.Estimate(
                 requestMessages,
@@ -323,7 +324,7 @@ public sealed class MutationProposalApplication :
             new ModelStreamRequest
             {
                 RunId = command.RunId,
-                Input = context.ModelInput,
+                Input = legacyInput,
 
                 // Fixed seed preserves deterministic scripted-provider chunking and reproducible proposal tests.
                 Seed = 42,
@@ -551,19 +552,7 @@ public sealed class MutationProposalApplication :
             proposed,
             cancellationToken);
 
-        StagedMutationSet staged;
-        try
-        {
-            staged = await _workspaces.StageAsync(proposed, cancellationToken);
-        }
-        catch (MalformedModelOutputException exception)
-        {
-            throw CreateMutationCorrection(
-                MutationCorrectionKind.ExactText,
-                "The mutation proposal did not match the immutable workspace baseline.",
-                exception);
-        }
-
+        var staged = await _workspaces.StageAsync(proposed, cancellationToken);
         return staged with { PlanStepIds = envelope?.PlanStepIds.ToArray() ?? [] };
     }
 
@@ -632,6 +621,27 @@ public sealed class MutationProposalApplication :
         return innerException is null
             ? new MutationProposalCorrectionException(kind, message)
             : new MutationProposalCorrectionException(kind, message, innerException);
+    }
+
+    private static string AppendLegacyCorrections(
+        string modelInput,
+        IReadOnlyList<ModelMessage> continuationMessages)
+    {
+        ArgumentNullException.ThrowIfNull(modelInput);
+        ArgumentNullException.ThrowIfNull(continuationMessages);
+        var builder = new StringBuilder(modelInput);
+        builder.AppendLine();
+        builder.AppendLine();
+        builder.AppendLine("Current-turn host correction:");
+        foreach (var message in continuationMessages)
+        {
+            foreach (var part in message.Content)
+            {
+                builder.AppendLine(part.Content);
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static string CreateMutationRetryInstruction(MutationCorrectionKind kind)

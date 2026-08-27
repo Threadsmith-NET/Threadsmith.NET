@@ -55,6 +55,27 @@ internal static class CorrectiveMessageFactory
         };
     }
 
+    /// <summary>Creates bounded evidence for a separately approved mutation that failed post-apply validation.</summary>
+    public static ModelMessage CreatePostApplyValidationMessage(
+        string safeReason,
+        int attemptNumber,
+        int maximumAttempts)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(safeReason);
+        var reason = BoundSingleLine(safeReason, MaximumReasonCharacters);
+        var content = $"Approved correction cycle {FormatAttempt(attemptNumber, maximumAttempts)}: "
+            + "The previous mutation was applied through the governed transaction, but post-apply validation failed. "
+            + reason
+            + " Propose a new correction mutation set that preserves the approved plan. "
+            + "The new exact diff still requires ordinary mutation authorization before it can be applied.";
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.Developer,
+            SectionId = $"active-turn-correction-post-apply-validation:{attemptNumber.ToString(CultureInfo.InvariantCulture)}",
+            Content = [CreateTextContentPart(content)],
+        };
+    }
+
     /// <summary>Creates one correlated tool result for an atomically rejected batch.</summary>
     public static ModelMessage CreateRejectedToolResultMessage(
         string toolCallId,

@@ -1,6 +1,6 @@
 # Plan 88 Implementation Blueprint: Conversation-Native Corrective Turns
 
-**Status:** Complete implementation record — all model-authored correction paths use bounded model-visible corrective messages; obsolete standalone validation loops and legacy limits are removed.
+**Status:** Complete implementation record — all model-authored correction paths use bounded model-visible corrective messages; obsolete standalone validation loops are retired from production, their public shapes remain compatibility-only, and legacy limits are removed.
 
 **Delivery track:** Maintenance — detailed implementation guide for Plan 88
 **Prerequisites:** Parent Plan 88 accepted; existing correction paths inventoried; behavior signoff before deferred tests and user/operator docs
@@ -28,13 +28,13 @@ For batched tool requests, the batch is atomic at the correction boundary: if an
 | Area | Current files/symbols | Current behavior | Change target |
 |---|---|---|---|
 | Main planning/tool loop | `src/Threadsmith.Execution/SessionApplication.ConversationLoop.cs`: `GeneratePlanAsync`, `ExecuteConversationRoundAsync`, `ProcessModelChunkAsync`, `ProcessToolRequestAsync`, `InvokePendingToolBatchAsync`, `ConversationLoopState` | Plan generation, ordinary tools, malformed provider invocations, `propose_plan`, and atomic batch rejection share one bounded corrective-turn state and purgeable continuation groups. | Implemented. |
-| Plan sanity repair | `src/Threadsmith.Execution/SessionApplication.cs`: `RunPlanSanityAndPolicyAsync`, `CreatePlanRepairInstructions`, `AccrueRepairWallClock`; `SessionApplication.ConversationLoop.cs` | Repairable sanity failures consume the run-owned corrective-turn budget and continue with a transient developer correction. | Implemented; user-requested plan revision starts a fresh logical corrective-turn budget. |
+| Plan sanity repair | `src/Threadsmith.Execution/SessionApplication.cs`: `RunPlanSanityAndPolicyAsync`, `CreatePlanRepairInstructions`; `SessionApplication.ConversationLoop.cs` | Repairable sanity failures consume the run-owned corrective-turn budget and continue with a transient developer correction that remains visible through intervening inspection rounds. Repair calls use ordinary run/model accounting and are not charged through a second wall-clock path. | Implemented; user-requested plan revision starts a fresh logical corrective-turn budget. |
 | Mutation proposal repair | `src/Threadsmith.Execution/MutationProposalApplication.cs`: `HandleAsync`, `HandleCoreAsync`, typed `MutationCorrectionKind`, `AnalyzePreMutationAsync`, `ResolveModelReplaceTextRangesAsync` | Typed repairable failures continue through bounded transient developer messages; task constraints remain unchanged. | Implemented; raw invalid arguments and replacement text are not copied into correction history. |
 | Approved-plan validation correction | `src/Threadsmith.Execution/ExecutionOrchestrator.cs`: `ValidateAndCompleteAsync`, `CreateCorrectionEvidence`; `ExecutionContinuation.CorrectionAttempts/CorrectionBudget` | The orchestrator supplies bounded validation evidence and explicit cycle accounting to the conversation-native mutation correction path before returning to mutation approval. | Implemented; checkpoint, exact-diff, separate approval, and resume semantics remain authoritative. |
 | Provider-boundary tool assembly | OpenAI-compatible and Codex provider adapters plus `MalformedInvocationDiagnostic` | Provider adapters surface bounded safe malformed-invocation diagnostics without silently repairing arguments; execution converts them into developer corrective messages. | Implemented. |
 | Model output validation | `src/Threadsmith.Models/ModelOutputValidator.cs`; `src/Threadsmith.Models/ModelContracts.cs`; typed mutation correction kinds in Execution | Provider/tool failures carry safe diagnostic kinds, and mutation validation maps repairable boundaries to closed local kinds without substring classification. | Implemented while preserving base exception compatibility. |
 | Tool batch execution | `src/Threadsmith.Tools/ToolInvocationPipeline.cs`, `ToolBatchScheduler.cs`, `ToolContracts.cs` | No-side-effect preflight validates the complete sibling set before scheduling; one invalid call rejects every sibling with correlated corrective results. | Implemented. |
-| Unused validation correction loops | Removed from `Threadsmith.Validation` and `Threadsmith.Core`; production correction remains execution-owned. | No standalone validation-owned model retry helpers remain. | Implemented; focused tests now target production planning, mutation, and orchestration paths. |
+| Unused validation correction loops | Retained as obsolete compatibility-only types in `Threadsmith.Validation` and `Threadsmith.Core`; production correction remains execution-owned. | No standalone validation-owned model retry helper is used by production; obsolete public helper shapes remain for source and binary compatibility. | Implemented; focused tests target production planning, mutation, and orchestration paths while compatibility types remain unchanged. |
 | Config | `src/Threadsmith.Execution/ExecutionLimits.cs`; `src/Threadsmith.App/HostFoundation.cs`; `src/Threadsmith.App/ConfigurationBootstrap.cs`; `src/Threadsmith.App/ApplicationComposition.cs` | `execution:maxCorrectiveTurns` is the single correction setting; approved-plan checkpoints record their explicitly scoped cycle count and limit. | Implemented; no legacy plan- or mutation-specific execution-limit properties remain. |
 | Tests/projections | `tests/Threadsmith.Planning.Tests/Milestone4Tests.cs`, `tests/Threadsmith.Mutations.Tests/Milestone5Tests.cs`, `tests/Threadsmith.ExecutionOrchestration.Tests/ExecutionOrchestratorTests.cs`, `tests/Threadsmith.Architecture.Tests/RepoConfigTests.cs`; historical event projections | Focused tests assert transient corrective messages and unchanged task constraints; historical repair events remain deserializable and renderable. | Implemented; obsolete standalone validation-loop tests were removed. |
 
@@ -449,11 +449,11 @@ Changes:
 
 ### 6.17 `src/Threadsmith.Validation/*`
 
-Removal target after production paths and tests are migrated:
+Compatibility retirement target after production paths and tests are migrated:
 
-- delete `CorrectionLoop.cs` and `TestCorrectionLoop.cs` if no production code uses them;
-- remove `CorrectionContext`, `CorrectionAttemptResult`, `CorrectionLoopResult`, `TestCorrectionContext`, `TestCorrectionAttemptResult`, and `TestCorrectionLoopResult` from `ValidationContracts.cs` if no longer referenced;
-- remove or rewrite tests in `tests/Threadsmith.Validation.Tests/Milestone6Tests.cs` that cover only those unused helpers.
+- retain `CorrectionLoop.cs` and `TestCorrectionLoop.cs` as obsolete public compatibility helpers, but keep all production composition and execution references removed;
+- retain the existing public correction DTO shapes in `ValidationContracts.cs` for source and binary compatibility;
+- remove or rewrite tests in `tests/Threadsmith.Validation.Tests/Milestone6Tests.cs` that cover only the unused helper behavior; production correction tests belong to Execution.
 
 ### 6.18 Events/projections/TUI
 
@@ -490,7 +490,7 @@ Use it for all corrective turns. Existing events such as `MutationProposalRepair
 9. Migrate plan sanity repair from task-constraint injection to corrective messages.
 10. Migrate mutation proposal repair from task-constraint injection and substring matching to corrective messages.
 11. Migrate approved-plan validation correction evidence to the same message path.
-12. Remove unused validation correction helper classes and obsolete tests.
+12. Retire unused validation correction helpers from production, preserve their public compatibility shapes, and remove obsolete behavior tests.
 13. Update user/operator docs only after behavior is signed off.
 
 ## 8. Tests to add/update after behavior signoff
@@ -545,7 +545,7 @@ File: `tests/Threadsmith.ExecutionOrchestration.Tests/ExecutionOrchestratorTests
 
 ### Cleanup tests
 
-- Remove or rewrite `CorrectionLoop_*` and `TestCorrectionLoop_*` tests after deleting unused helper classes.
+- Remove or rewrite `CorrectionLoop_*` and `TestCorrectionLoop_*` tests after retiring the unused helpers from production; keep compatibility shapes compileable.
 - Update `RepoConfigTests` to assert `execution:maxCorrectiveTurns` binding/defaults instead of the three bespoke repair keys.
 
 ## 9. Validation commands

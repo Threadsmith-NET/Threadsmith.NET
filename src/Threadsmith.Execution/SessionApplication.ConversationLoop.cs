@@ -27,7 +27,8 @@ public sealed partial class SessionApplication
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
-            _activeTurnCompactionPolicy.MaximumSourcesPerGroup);
+            _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
+            retainInitialCorrectionUntilPlan: initialCorrection is not null);
         if (initialCorrection is not null)
         {
             loopState.CommitStandaloneMessage(0, initialCorrection, purgeAfterCorrection: true);
@@ -301,7 +302,8 @@ public sealed partial class SessionApplication
 
             loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
             loopState.CommitCurrentGroup(round.ModelRound, streamState.CurrentGroupPurgeAfterCorrection);
-            if (!streamState.CurrentGroupPurgeAfterCorrection)
+            if (!streamState.CurrentGroupPurgeAfterCorrection
+                && (!loopState.RetainInitialCorrectionUntilPlan || streamState.Plan is not null))
             {
                 loopState.PurgeCorrectionGroups();
             }
@@ -1867,11 +1869,13 @@ public sealed partial class SessionApplication
 
         public ConversationLoopState(
             int maximumOutputCharacters,
-            int maximumSourcesPerGroup)
+            int maximumSourcesPerGroup,
+            bool retainInitialCorrectionUntilPlan = false)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSourcesPerGroup);
             MaximumOutputCharacters = maximumOutputCharacters;
             _maximumSourcesPerGroup = maximumSourcesPerGroup;
+            RetainInitialCorrectionUntilPlan = retainInitialCorrectionUntilPlan;
         }
 
         public int AssessmentSequence { get; private set; }
@@ -1897,6 +1901,8 @@ public sealed partial class SessionApplication
         public int RawGroupCount => _groups.Count;
 
         public int RawGroupTokens => _groups.Sum(group => group.EstimatedTokens);
+
+        public bool RetainInitialCorrectionUntilPlan { get; }
 
         public bool SemanticToolAttempted { get; set; }
 

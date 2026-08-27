@@ -1599,6 +1599,17 @@ public static class Milestone5Tests
                 && message.Content.Any(part => part.Content.Contains(
                     "introduced compiler error",
                     StringComparison.Ordinal)));
+        Assert.Contains(
+            model.Requests[0].Messages,
+            message => message.SectionId.StartsWith(
+                "active-turn-correction-post-apply-validation:",
+                StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "previous mutation was applied",
+                    StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain(
+            model.Requests[0].Messages.SelectMany(message => message.Content),
+            part => part.Content.Contains("was not accepted or executed", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments(string expectedText, string replacementText)
@@ -1702,7 +1713,8 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
-            new ContextAssemblerOptions()));
+            new ContextAssemblerOptions()),
+            omitStructuredMessages: true);
         var application = new MutationProposalApplication(
             model,
             context,
@@ -1741,6 +1753,8 @@ public static class Milestone5Tests
             message => message.SectionId.StartsWith("active-turn-correction-mutation:", StringComparison.Ordinal)
                 && message.Content.Any(part => part.Content.Contains("type and relativePath", StringComparison.Ordinal)
                     && part.Content.Contains("baselineSha256", StringComparison.Ordinal)));
+        Assert.Contains("Current-turn host correction:", model.Requests[1].Input, StringComparison.Ordinal);
+        Assert.Contains("type and relativePath", model.Requests[1].Input, StringComparison.Ordinal);
         Assert.Contains("+public override string Name => \"Test\";", staged.Preview.UnifiedDiff);
 
         string CreateArguments()
@@ -3547,10 +3561,14 @@ public static class Milestone5Tests
     private sealed class RecordingContextAssembler : IContextAssembler
     {
         private readonly IContextAssembler _inner;
+        private readonly bool _omitStructuredMessages;
 
-        public RecordingContextAssembler(IContextAssembler inner)
+        public RecordingContextAssembler(
+            IContextAssembler inner,
+            bool omitStructuredMessages = false)
         {
             _inner = inner;
+            _omitStructuredMessages = omitStructuredMessages;
         }
 
         public List<ContextAssemblyRequest> Requests { get; } = [];
@@ -3560,7 +3578,10 @@ public static class Milestone5Tests
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
-            return await _inner.AssembleAsync(request, cancellationToken);
+            var result = await _inner.AssembleAsync(request, cancellationToken);
+            return _omitStructuredMessages
+                ? result with { Messages = null, Layout = null }
+                : result;
         }
 
         public ContextInspectionProjection? GetInspection(RunId runId)

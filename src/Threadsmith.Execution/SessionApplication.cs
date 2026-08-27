@@ -1485,7 +1485,6 @@ public sealed partial class SessionApplication :
                         repair),
                     cancellationToken);
                 registration.PendingPlan = currentPlan;
-                var repairStopwatch = Stopwatch.StartNew();
                 var repairedPlan = await GeneratePlanAsync(
                     runId,
                     registration,
@@ -1497,7 +1496,6 @@ public sealed partial class SessionApplication :
                         registration.CorrectiveTurns.MaximumTurns,
                         "Emit one corrected propose_plan request."),
                     cancellationToken);
-                AccrueRepairWallClock(registration, repairStopwatch.Elapsed);
                 currentPlan = repairedPlan ?? throw new MalformedModelOutputException(
                     "The plan sanity repair response did not contain a structured plan.");
                 continue;
@@ -1584,16 +1582,6 @@ public sealed partial class SessionApplication :
             Risk = sanity.Risk,
             Reason = reason,
         };
-    }
-
-    private static void AccrueRepairWallClock(RunRegistration registration, TimeSpan elapsed)
-    {
-        var status = registration.Budget.Accrue(new BudgetDimensions(0, 0, elapsed));
-        if (status.IsExhausted)
-        {
-            throw new BudgetExceededException(
-                status.Reason ?? "Execution wall-clock budget exhausted during plan repair.");
-        }
     }
 
     private static string CreatePlanRepairInstructions(PlanSanityCheckResult sanity)

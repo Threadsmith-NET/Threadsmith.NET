@@ -11,6 +11,7 @@ Own confidence-aware build/test validation, normalized evidence, mutation correl
 - `DiagnosticClassifier.cs` — baseline/introduced classification, mutation/symbol correlation, and build acceptance gate.
 - `ValidationPipeline.cs` — build, classification, correlation, event publication, metrics, gate orchestration, and failed-build test skipping.
 - `ValidationPathGuard.cs` — shared fail-closed reparse-point inspection for build, test, and discovery targets.
+- `CorrectionLoop.cs` / `TestCorrectionLoop.cs` — obsolete public compatibility helpers; no production caller may use them for model correction.
 - `TestDiscovery.cs` — supported-framework project discovery, selected-case enumeration, and conservative project-level selection rationale.
 - `TestRunner.cs` — tracked test execution, MTP/VSTest normalization, test events, metrics, and test-half orchestration.
 - `NativeValidationToolService.cs` — Tracked exploratory package health, build/analyzer/format check, bounded diagnostic index/query, stable test discovery, and targeted execution facade.
@@ -23,7 +24,7 @@ Own confidence-aware build/test validation, normalized evidence, mutation correl
 - A completed nonzero build with normalized compiler errors remains evaluable: unchanged baseline errors do not fail the gate, while degraded possibly introduced errors reach human confirmation. Nonzero builds without classified diagnostics are incomplete infrastructure failures.
 - Diagnostic fingerprints use code, project, target framework, file, range, and message. Symbol correlation requires at least `PartialCompilation`.
 - Compiler/MSBuild cancellation kills the process tree and abandons results that outlive the bounded backstop.
-- Approved-plan validation correction is coordinated by `Threadsmith.Execution`; Validation returns host-owned evidence and never owns an independent model retry loop. The execution correction cycle repeats proposal, exact-diff, approval, transaction, and validation gates against the promoted mutation baseline while preserving the original diagnostic capture.
+- Approved-plan validation correction is coordinated by `Threadsmith.Execution`; Validation returns host-owned evidence and owns no production model retry loop; obsolete public helper shapes remain compatibility-only. The execution correction cycle repeats proposal, exact-diff, approval, transaction, and validation gates against the promoted mutation baseline while preserving the original diagnostic capture.
 - Test discovery reads only confined semantic-inventory project files, recognizes only supported xUnit/Microsoft.Testing.Platform runners, and invokes MTP directly for case enumeration with runner-native trait filters without restoring or rebuilding.
 - Test execution requires `TrustedBuild`, uses the tracked process manager, selects the runner-compatible `dotnet test` syntax, and never restores or rebuilds implicitly.
 - General validation tools are always `Exploratory`; they never publish or overwrite the authoritative mutation-validation baseline, affected-project, acceptance, or correction evidence. Build/analyzer/format/discovery/test commands use closed argument construction and `--no-restore`; formatter uses verify-only mode.

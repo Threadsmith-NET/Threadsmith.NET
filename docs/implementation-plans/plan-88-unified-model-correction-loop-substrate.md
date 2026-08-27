@@ -1,6 +1,6 @@
 # Implementation Plan 88: Conversation-Native Corrective Turns
 
-**Status:** Complete — conversation, plan-sanity, mutation-proposal, and post-apply validation corrections use bounded model-visible corrective messages; obsolete retry helpers and legacy limits are removed.
+**Status:** Complete — conversation, plan-sanity, mutation-proposal, and post-apply validation corrections use bounded model-visible corrective messages; obsolete retry helpers are removed from production use, their public shapes remain as compatibility-only APIs, and legacy limits are removed.
 
 **Delivery track:** Maintenance — graceful recovery from malformed or invalid model requests
 **Strategy source:** Shared Context §A.1, §A.2, §A.5, §C, and §G; execution, model, planning, mutation, and validation contracts
@@ -103,7 +103,7 @@ See `plan88_plan.md` for the authoritative implementation file list. Primary are
 
 ## 10. Testing
 
-Focused tests cover provider-boundary malformed arguments, provider-safe tool-name aliasing, batch preflight/prepared invocation, conversation-level invalid-batch rejection, `propose_plan` correction, null plan schema diagnostics, plan-sanity continuation, typed mutation correction, post-apply validation evidence, and config binding. Obsolete standalone validation-loop tests were removed with their unused production helpers.
+Focused tests cover provider-boundary malformed arguments, provider-safe tool-name aliasing, batch preflight/prepared invocation, conversation-level invalid-batch rejection, `propose_plan` correction, null plan schema diagnostics, plan-sanity continuation, typed mutation correction, post-apply validation evidence, and config binding. Obsolete standalone validation-loop tests were removed; the unused public helpers and DTO shapes remain compatibility-only while production correction is execution-owned.
 
 ## 11. Security/Permissions
 

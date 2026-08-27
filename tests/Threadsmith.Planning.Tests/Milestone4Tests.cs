@@ -1442,9 +1442,9 @@ public static class Milestone4Tests
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
-    /// <summary>Repair model turns accrue elapsed time and fail when the wall-clock budget is exhausted.</summary>
+    /// <summary>Plan repair shares the enclosing run's wall-clock accrual instead of charging it twice.</summary>
     [Fact]
-    public static async Task SessionApplication_PlanRepair_AccruesWallClockBudget()
+    public static async Task SessionApplication_PlanRepair_DoesNotDoubleAccrueWallClockBudget()
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -1483,11 +1483,17 @@ public static class Milestone4Tests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("repair budget"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
 
-        await Assert.ThrowsAsync<BudgetExceededException>(() =>
-            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-        Assert.Equal(2, budget.WallClockAccrualCount);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!observed.OfType<ApprovalRequested>().Any())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+
+        Assert.Equal(1, budget.WallClockAccrualCount);
         Assert.Equal(2, model.Requests.Count);
-        Assert.Empty(observed.OfType<PlanProposed>());
+        Assert.Single(observed.OfType<PlanProposed>());
+        Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
+        Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
     /// <summary>Repairable plan sanity failures trigger a model revision before any approval prompt is published.</summary>

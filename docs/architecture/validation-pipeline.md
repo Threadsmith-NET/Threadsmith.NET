@@ -61,7 +61,7 @@ Selection is intentionally conservative and project-level for M6. Projects marke
 
 ## Correction loop
 
-Introduced or possibly introduced compiler errors and selected-test failures return as bounded host-owned validation evidence. Plan 37 routes that evidence through the execution-owned conversation-native mutation correction path and the same proposal, exact-diff, policy, transactional apply, and validation gates. It preserves the original diagnostic `BaselineCapture` while promoting a separate transactional mutation baseline after each reconciled application. Validation owns no independent model retry loop.
+Introduced or possibly introduced compiler errors and selected-test failures return as bounded host-owned validation evidence. Plan 37 routes that evidence through the execution-owned conversation-native mutation correction path and the same proposal, exact-diff, policy, transactional apply, and validation gates. It preserves the original diagnostic `BaselineCapture` while promoting a separate transactional mutation baseline after each reconciled application. Validation owns no production model retry loop; its obsolete public helper remains compatibility-only.
 
 ## Configuration boundary
 

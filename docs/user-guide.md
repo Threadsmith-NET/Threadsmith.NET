@@ -211,7 +211,7 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/clone` | Create and activate an independent governed copy of the current session. |
 | `/models` | Select and persist the active repository provider/model. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
-| `/thinking` | Show or hide the latest sanitized reasoning. |
+| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
 | `/theme` | Select a theme. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
@@ -244,14 +244,14 @@ A resumed session reconstructs tolerant event projections and the sanitized conv
 | `Ctrl+V` or `Shift+Insert` | Paste clipboard content as one operation. |
 | `Ctrl+C` | Cancel current input or an active run; with a native terminal selection, copy that selection. |
 | `Ctrl+Shift+C` | Copy a PrettyPrompt editor selection where supported. |
-| `Ctrl+T` | On an empty composer, show or hide the latest reasoning. |
+| `Ctrl+T` | On an empty composer, toggle future reasoning streaming. |
 | Mouse drag / terminal mark mode | Select across the native transcript and composer output. |
 
 Threadsmith deliberately retains native terminal scrollback and does not enable mouse capture. Terminal-specific selection shortcuts remain controlled by the terminal emulator.
 
 ### Reasoning display
 
-Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed. `/thinking` or `Ctrl+T` reveals the latest sanitized reasoning in `<thinking>` tags. This does not expose credentials or raw unsanitized provider content.
+Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed by default. `/thinking on` enables live streaming of future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` disables future streaming, and `/thinking` or `Ctrl+T` toggles the same in-session setting. Turning streaming off cannot remove reasoning already written to native scrollback. This does not expose credentials or raw unsanitized provider content.
 
 ### Cross-turn conversation context
 
@@ -991,7 +991,7 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `UserPrompt` | User-authored transcript content when projected by a surface; ordinary composer submissions are not redundantly echoed. |
 | `ComposerPrompt` | The interactive repository-name composer prompt. |
 | `ThinkingIndicator` | The transient `THINKING` indicator. |
-| `Reasoning` | Reasoning revealed with `/thinking` or `Ctrl+T`. |
+| `Reasoning` | Streaming reasoning enabled with `/thinking` or `Ctrl+T`. |
 | `DiffAdded` | Added diff lines. |
 | `DiffRemoved` | Removed diff lines. |
 | `DiffContext` | Neutral/context diff lines, including hunk/file headers and display-only hunk spacing. |

@@ -501,7 +501,7 @@ Expected:
 - Prior output remains ordinary terminal scrollback.
 - Startup with a selected solution immediately shows an animated `Semantic confidence: Loading...` status while semantic loading runs. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
 - The status contains no credentials, endpoint secrets, or stale repository values.
-- Help lists `/open`, `/trust`, `/help`, `/reasoning`, `/thinking`, and `/quit`, notes `Ctrl+T` for toggling the reasoning view, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
+- Help lists `/open`, `/trust`, `/help`, `/reasoning`, `/thinking [on|off]`, and `/quit`, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
 
 ### MTP-030C - Terminal-native system theme and plain-text fallback (positive and negative)
 
@@ -857,15 +857,17 @@ Expected:
 
 ### MTP-049 - Reasoning transcript phases and mutation visibility (positive)
 
-1. Stream multiple reasoning deltas followed by answer content.
-2. Confirm a transient `THINKING` spinner is visible while reasoning streams.
-3. After completion, press `Ctrl+T` on an empty composer, then press it again; repeat with `/thinking`.
-4. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
+1. Stream multiple reasoning deltas followed by answer content while `/thinking` is off.
+2. Confirm a transient `THINKING` spinner is visible while hidden reasoning streams.
+3. Run `/thinking on`, stream another reasoning answer, then run `/thinking off` and stream a third reasoning answer.
+4. Repeat the same on/off transitions with `Ctrl+T` on an empty composer and with `/thinking` without arguments.
+5. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
 
 Expected:
 
 - Reasoning content is hidden by default, transient `THINKING` disappears before final output, and the completed transcript contains no host-generated `THINKING` marker or redundant assistant label.
-- `Ctrl+T` and `/thinking` reveal the latest sanitized content inside `<thinking>` tags and toggle back to collapsed mode without enabling mouse capture.
+- `/thinking on` streams future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` suppresses future reasoning chunks, and `/thinking` plus `Ctrl+T` toggle the same in-session state without enabling mouse capture.
+- Turning streaming off does not remove reasoning already present in native scrollback.
 - Reasoning-only completion emits no empty `Threadsmith:` label.
 - Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
 
@@ -1804,11 +1806,11 @@ Expected: selectable profiles emit only their exact compiled reasoning fragment;
 
 ### MTP-205 — Reasoning response isolation and privacy migration
 
-1. Stream fragmented `reasoning_content`, legacy `reasoning`, visible content, tool calls, usage, and `[DONE]` from a deterministic server under their matching response modes.
-2. Toggle `/thinking`, complete the turn, restart Threadsmith, and inspect SQLite `domain_events`, diagnostics, telemetry, hook audit, conversation archive, memory, and context inspection.
+1. Stream fragmented `reasoning_content`, legacy `reasoning`, `reasoning_text`, visible content, tool calls, usage, and `[DONE]` from a deterministic server under their matching response modes.
+2. Enable `/thinking on`, complete the turn, disable `/thinking off`, restart Threadsmith, and inspect SQLite `domain_events`, diagnostics, telemetry, hook audit, conversation archive, memory, and context inspection.
 3. Seed a legacy `modelReasoningObserved` row containing a unique canary, run startup migration 7, and inspect the database directly.
 
-Expected: accepted reasoning appears only in the live collapsed/revealed display and is never visible content. The canary appears in no new durable or general observer output; migration 7 removes the historical row transactionally while preserving ordinary events.
+Expected: accepted reasoning appears only in live transient streaming when enabled and is never archived as visible assistant content. The canary appears in no new durable or general observer output; migration 7 removes the historical row transactionally while preserving ordinary events.
 
 
 ## MTP-243 — Claude-style metadata discovery and inspection

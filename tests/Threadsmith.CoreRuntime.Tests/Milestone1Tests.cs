@@ -1501,7 +1501,7 @@ public static class Milestone1Tests
         Assert.Contains("Current plan policy: ReviewRisky.", surface.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>Ctrl+T toggles thinking only from an empty composer so typed input is preserved.</summary>
+    /// <summary>Ctrl+T toggles thinking streaming only from an empty composer so typed input is preserved.</summary>
     [Fact]
     public static async Task PrettyPromptConsoleSurface_ControlT_MapsToThinkingToggleOnEmptyInput()
     {
@@ -2575,9 +2575,9 @@ public static class Milestone1Tests
         Assert.Null(result.Background);
     }
 
-    /// <summary>Reasoning stays collapsed by default and can be shown or hidden after completion.</summary>
+    /// <summary>Reasoning is hidden by default and streams only while the thinking toggle is enabled.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingToggle_ShowsTaggedReasoningOnDemand()
+    public static async Task ConversationalShell_ThinkingOn_StreamsFutureReasoningUntilOff()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
@@ -2590,7 +2590,7 @@ public static class Milestone1Tests
                 },
             ],
         });
-        var surface = new FakeConsoleSurface(["hello", "/thinking", "/thinking", "/quit"]);
+        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/thinking off", "hello again", "/quit"]);
         var shell = new ConversationalShell(
             new TuiPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
@@ -2599,13 +2599,95 @@ public static class Milestone1Tests
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
-        Assert.Contains("THINKING", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(surface.Output, "Consider the greeting."));
+        Assert.DoesNotContain("<thinking>", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("</thinking>", surface.Output, StringComparison.Ordinal);
         Assert.Contains(
-            $"<thinking>{Environment.NewLine}Consider the greeting.{Environment.NewLine}</thinking>",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
+            surface.Segments,
+            segment => segment.Role == TuiTextRole.Reasoning
+                && string.Equals(segment.Text, "Consider the greeting.", StringComparison.Ordinal));
+        Assert.DoesNotContain("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("// reasoning:", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Streaming reasoning takes permanent scrollback ownership from transient thinking activity.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingStreaming_DoesNotRestartTransientActivity()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        {
+            Turns =
+            [
+                new ScriptedTurn
+                {
+                    Reasoning = "Inspect the repository.",
+                    Text = "Done.",
+                },
+            ],
+        });
+        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            1,
+            surface.Lifecycle.Count(entry => string.Equals(
+                entry,
+                "activity-start:THINKING",
+                StringComparison.Ordinal)));
+        var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
+        var reasoningWritten = surface.Lifecycle.ToList().IndexOf("output:segments");
+        Assert.True(thinkingEnded >= 0 && thinkingEnded < reasoningWritten);
+        var streamedReasoning = string.Concat(surface.Segments
+            .Where(segment => segment.Role == TuiTextRole.Reasoning)
+            .Select(segment => segment.Text));
+        Assert.StartsWith(
+            $"{Environment.NewLine}Inspect the repository.",
+            streamedReasoning,
+            StringComparison.Ordinal);
+        Assert.False(streamedReasoning.StartsWith(
+            Environment.NewLine + Environment.NewLine,
+            StringComparison.Ordinal));
+    }
+
+    /// <summary><c>/thinking</c> without arguments toggles future reasoning streaming.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingNoArgument_TogglesStreamingMode()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/thinking", "/thinking", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Invalid <c>/thinking</c> arguments are rejected locally.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingInvalidArgument_ShowsUsage()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/thinking maybe", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("Usage: /thinking [on|off]", surface.Output, StringComparison.Ordinal);
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
     }
 
     /// <summary>Answer-only model turns show transient thinking status while the request is pending.</summary>
@@ -3537,6 +3619,26 @@ public static class Milestone1Tests
         }
 
         return builder.ToString();
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var count = 0;
+        for (var index = 0; index < text.Length;)
+        {
+            var match = text.IndexOf(value, index, StringComparison.Ordinal);
+            if (match < 0)
+            {
+                break;
+            }
+
+            count++;
+            index = match + value.Length;
+        }
+
+        return count;
     }
 
     private static ModelProfile CreateReasoningProfile(

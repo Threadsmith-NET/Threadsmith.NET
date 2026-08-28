@@ -1155,9 +1155,11 @@ public sealed class ConversationalShell
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, TuiActivity>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
         long? turnStartedTimestamp = null;
-        var reasoningExpanded = false;
+        var streamThinking = false;
         ContextInspectionProjection? latestContextInspection = null;
         var modelAnswerCollector = new TuiModelAnswerCollector(_displayOptions.RenderMarkdown);
+        var streamingThinkingActive = false;
+        var streamingThinkingEndedWithLineBreak = true;
 
         var drainTask = dispatcher.DrainAsync(
             async (batch, token) =>
@@ -1216,7 +1218,13 @@ public sealed class ConversationalShell
                     {
                         incomingActivity = domainEvent switch
                         {
-                            TaskIntentRecorded or ModelReasoningObserved when turnStartedTimestamp is { } turnStart =>
+                            TaskIntentRecorded when turnStartedTimestamp is { } turnStart =>
+                                new TuiActivity(
+                                    "THINKING",
+                                    turnStart,
+                                    _displayOptions.ShowOperationDurations,
+                                    _timeProvider),
+                            ModelReasoningObserved when !streamThinking && turnStartedTimestamp is { } turnStart =>
                                 new TuiActivity(
                                     "THINKING",
                                     turnStart,
@@ -1251,6 +1259,20 @@ public sealed class ConversationalShell
                         ? transcript.Text[previousLength..]
                         : string.Empty;
                     var emittedModelOutput = false;
+                    if (streamingThinkingActive && domainEvent is not ModelReasoningObserved)
+                    {
+                        if (!streamingThinkingEndedWithLineBreak)
+                        {
+                            output.Add(new TuiSegmentOutput(
+                            [
+                                new TuiTextSegment(Environment.NewLine, TuiTextRole.Reasoning),
+                            ]));
+                        }
+
+                        streamingThinkingActive = false;
+                        streamingThinkingEndedWithLineBreak = true;
+                    }
+
                     if (domainEvent is ModelOutputObserved)
                     {
                         var modelOutput = modelAnswerCollector.Append(transcriptDelta);
@@ -1269,11 +1291,29 @@ public sealed class ConversationalShell
                         }
 
                         var eventSegments = new List<TuiTextSegment>();
-                        TuiEventSegments.Append(
-                            eventSegments,
-                            domainEvent,
-                            transcriptDelta,
-                            _displayOptions.ShowOperationDurations);
+                        if (domainEvent is ModelReasoningObserved reasoning && streamThinking)
+                        {
+                            var text = TerminalControlEncoder.Encode(reasoning.Text);
+                            if (!streamingThinkingActive)
+                            {
+                                eventSegments.Add(new TuiTextSegment(
+                                    Environment.NewLine,
+                                    TuiTextRole.Reasoning));
+                                streamingThinkingActive = true;
+                            }
+
+                            streamingThinkingEndedWithLineBreak = text.EndsWith('\n');
+                            eventSegments.Add(new TuiTextSegment(text, TuiTextRole.Reasoning));
+                        }
+                        else
+                        {
+                            TuiEventSegments.Append(
+                                eventSegments,
+                                domainEvent,
+                                transcriptDelta,
+                                _displayOptions.ShowOperationDurations);
+                        }
+
                         if (eventSegments.Count > 0)
                         {
                             output.Add(new TuiSegmentOutput(eventSegments));
@@ -1283,6 +1323,7 @@ public sealed class ConversationalShell
                     var activityEnded = PrettyPromptConsoleSurface.EndsTransientActivity(
                             domainEvent,
                             emittedModelOutput)
+                        || (domainEvent is ModelReasoningObserved && streamThinking)
                         || directFetchApprovalRequested
                         || directFetchApprovalDenied
                         || domainEvent is ActiveTurnCompactionCompleted;
@@ -1481,30 +1522,39 @@ public sealed class ConversationalShell
 
                 var submittedText = input.Text;
                 var commandText = submittedText.Trim();
-                var toggleThinking = input.Kind == ConsoleInputKind.ToggleThinking
-                    || string.Equals(commandText, "/thinking", StringComparison.OrdinalIgnoreCase);
-                if (toggleThinking)
+                var thinkingCommand = input.Kind == ConsoleInputKind.ToggleThinking
+                    || (commandText.StartsWith("/thinking", StringComparison.OrdinalIgnoreCase)
+                        && (commandText.Length == 9 || char.IsWhiteSpace(commandText[9])));
+                if (thinkingCommand)
                 {
-                    var reasoning = transcript.LatestReasoning;
-                    if (string.IsNullOrWhiteSpace(reasoning))
+                    var argument = input.Kind == ConsoleInputKind.ToggleThinking || commandText.Length == 9
+                        ? string.Empty
+                        : commandText[9..].Trim();
+                    if (argument.Length == 0)
                     {
-                        await _surface.WriteAsync(
-                            "No reasoning is available for the latest response.\n",
-                            TuiTextRole.Status,
-                            lifetime.Token);
+                        streamThinking = !streamThinking;
+                    }
+                    else if (string.Equals(argument, "on", StringComparison.OrdinalIgnoreCase))
+                    {
+                        streamThinking = true;
+                    }
+                    else if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        streamThinking = false;
                     }
                     else
                     {
-                        reasoningExpanded = !reasoningExpanded;
-                        var visibilityOutput = reasoningExpanded
-                            ? $"<thinking>{Environment.NewLine}{reasoning}{Environment.NewLine}</thinking>{Environment.NewLine}"
-                            : $"THINKING collapsed.{Environment.NewLine}";
                         await _surface.WriteAsync(
-                            visibilityOutput,
-                            reasoningExpanded ? TuiTextRole.Reasoning : TuiTextRole.Muted,
+                            "Usage: /thinking [on|off]\n",
+                            TuiTextRole.Error,
                             lifetime.Token);
+                        continue;
                     }
 
+                    await _surface.WriteAsync(
+                        $"Streaming thinking is {(streamThinking ? "on" : "off")}.\n",
+                        TuiTextRole.Status,
+                        lifetime.Token);
                     continue;
                 }
 
@@ -1565,7 +1615,6 @@ public sealed class ConversationalShell
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
-                    reasoningExpanded = false;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     await _surface.WriteAsync(
                         $"Threadsmith: New session {sessionId.Value:D}.\n",
@@ -1581,7 +1630,6 @@ public sealed class ConversationalShell
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
-                    reasoningExpanded = false;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     await _surface.WriteAsync(
                         $"Threadsmith: Cloned session {result.SourceSessionId?.Value:D} as {sessionId.Value:D}.\n"
@@ -1634,7 +1682,6 @@ public sealed class ConversationalShell
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
-                    reasoningExpanded = false;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     var warnings = result.Warnings.Count == 0
                         ? string.Empty
@@ -1941,7 +1988,6 @@ public sealed class ConversationalShell
                     await EnsureCurrentUserUrlConsentAsync(submittedText, operation.Token);
                     renderedRunCompletion = new TaskCompletionSource(
                         TaskCreationOptions.RunContinuationsAsynchronously);
-                    reasoningExpanded = false;
                     _ = await controller.SubmitAsync(submittedText, operation.Token);
                     var waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
@@ -2561,7 +2607,7 @@ public sealed class ConversationalShell
             ("/models", "Select and persist the repository model"),
             ("/auth openai-codex [login|status|logout]", "Manage Codex authentication"),
             ("/reasoning [level]", "Set reasoning effort for the active model (none|minimal|low|medium|high)"),
-            ("/thinking", "Show or hide the latest reasoning (Ctrl+T on an empty composer)"),
+            ("/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
             ("/extensions", "Browse, load, and unload extensions (Up/Down, Enter)"),
             ("/tools", "Browse and toggle repository tool availability (Up/Down, Enter)"),
             ("/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),

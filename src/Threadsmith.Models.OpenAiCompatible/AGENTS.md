@@ -21,7 +21,7 @@ Isolate OpenAI-compatible configuration, HTTP/SSE wire behavior, request constru
 - App owns one application-lifetime `HttpClient`; bounded normal-layer `model:http` settings control pooled lifetime/idle timeout, connect timeout, and per-server concurrency. Cookies stay disabled and no global timeout competes with profile-linked request deadlines.
 - Legacy profiles adapt only in memory, preserve stable profile IDs and observable request settings, and never mutate configuration files.
 - Model-level `reasoningCompatibility` is schema-versioned and closed: standard/mapped effort, compiled chat-template/fixed shapes, always-on, or unsupported. Arbitrary JSON/property names are forbidden; explicit modes reject unsupported levels before network I/O, while absence preserves legacy clamping.
-- Reasoning response extraction is selected from compiled `reasoning_content`, `reasoning`, or none modes. Compatibility settings never own model, messages, tools, schemas, streaming, token, sampling, endpoint, header, or authentication fields. Requests with host-authorized tools explicitly use automatic tool selection.
+- Reasoning response extraction is selected from closed compiled modes: exact `reasoning_content`, exact `reasoning`, exact `reasoning_text`, Pi-compatible first-known-field extraction, or none. Compatibility settings never own model, messages, tools, schemas, streaming, token, sampling, endpoint, header, or authentication fields. Requests with host-authorized tools explicitly use automatic tool selection.
 
 ## Work Guidance
 

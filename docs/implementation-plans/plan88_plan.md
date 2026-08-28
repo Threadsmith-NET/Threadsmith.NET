@@ -1,9 +1,9 @@
 # Plan 88 Implementation Blueprint: Conversation-Native Corrective Turns
 
-**Status:** Active implementation record — conversation-loop/provider/tool-batch corrective turns are implemented through behavior signoff; plan-sanity, mutation-proposal, post-apply validation, and obsolete helper-loop migrations remain deferred.
+**Status:** Completed implementation record — Plan 88 substrate and Plan 88.1 migration are implemented.
 
 **Delivery track:** Maintenance — detailed implementation guide for Plan 88
-**Prerequisites:** Parent Plan 88 accepted; existing correction paths inventoried; behavior signoff before deferred tests and user/operator docs
+**Prerequisites:** Parent Plan 88 accepted; existing correction paths inventoried; behavior signoff completed before tests and user/operator docs were finalized
 **Parent work item:** Plan 88 — conversation-native corrective messages
 **Purpose:** Concrete code-change guide for replacing bespoke model-output repair loops with one bounded corrective-turn pattern.
 **Default corrective-turn budget:** 3 attempts, configurable by `execution:maxCorrectiveTurns`.
@@ -23,9 +23,9 @@ The implementation should replace scattered local repair loops with one simpler 
 
 For batched tool requests, the batch is atomic at the correction boundary: if any requested call is malformed or invalid before execution, **reject the entire batch**, execute none of its calls, and tell the model exactly which call/argument failed.
 
-## 2. Current code inventory
+## 2. Initial code inventory
 
-| Area | Current files/symbols | Current behavior | Change target |
+| Area | Initial files/symbols | Initial behavior | Change target |
 |---|---|---|---|
 | Main planning/tool loop | `src/Threadsmith.Execution/SessionApplication.ConversationLoop.cs`: `GeneratePlanAsync`, `ExecuteConversationRoundAsync`, `ProcessModelChunkAsync`, `ProcessToolRequestAsync`, `EnqueueOrAnswerToolRequestAsync`, `InvokePendingToolBatchAsync`, `ConversationLoopState` | Plan generation and ordinary conversation tools share one loop. `propose_plan` has a bespoke schema repair branch. Non-plan malformed tool requests usually fail the run. Active-turn history stores completed tool-call/result groups. | Make this the first implementation target for provider-boundary malformed calls, invalid ordinary tool calls, batched rejection, and `propose_plan` repair migration. |
 | Plan sanity repair | `src/Threadsmith.Execution/SessionApplication.cs`: `RunPlanSanityAndPolicyAsync`, `CreatePlanRepairInstructions`, `AccrueRepairWallClock`; `HandleAsync(RevisePlanCommand)` | Repairable sanity failures append text to `registration.Task.UserConstraints` and call `GeneratePlanAsync` again. Count is `MaxPlanRevisionRepairAttempts`. | Replace the loop with the corrective-turn path after ordinary tool/propose-plan correction is stable. Do not append correction text as task constraints. |
@@ -108,7 +108,7 @@ Avoid a large correction framework. Add a small set of internal helpers that the
 public int MaxCorrectiveTurns { get; init; } = 3;
 ```
 
-Composition binds `execution:maxCorrectiveTurns` once in `HostFoundation.CreateAsync`. `ApplicationComposition` passes `host.ExecutionLimits.MaxCorrectiveTurns` into `ExecutionStartRequest.CorrectionBudget` until that public request shape can be simplified. Legacy plan-revision, mutation-proposal, and validation-correction counters remain as compatibility properties only and are sourced from the same configured value until their loops migrate.
+Composition binds `execution:maxCorrectiveTurns` once in `HostFoundation.CreateAsync`. `ApplicationComposition` passes `host.ExecutionLimits.MaxCorrectiveTurns` into `ExecutionStartRequest.CorrectionBudget` until that public request shape can be simplified. Plan 88.1 removed the legacy plan-revision, mutation-proposal, and validation-correction execution-limit properties after their loops migrated.
 
 ### 4.2 Safe diagnostic shape
 
@@ -311,7 +311,7 @@ Important: `ExecuteOrAcceptAsync` is reached only after the whole response or ba
 ### 6.2 `src/Threadsmith.App/HostFoundation.cs`
 
 - Bind `execution:maxCorrectiveTurns` into `ExecutionLimits.MaxCorrectiveTurns`.
-- Do not bind the obsolete per-loop keys. Assign the `execution:maxCorrectiveTurns` value to legacy execution-limit properties only as an internal compatibility bridge until those loops migrate.
+- Do not bind obsolete per-loop keys. `execution:maxCorrectiveTurns` is the only correction-budget configuration key; Plan 88.1 removed the legacy execution-limit properties after the loops migrated.
 
 ### 6.3 `src/Threadsmith.App/ConfigurationBootstrap.cs`
 
@@ -430,7 +430,7 @@ Changes:
 
 - Replace the outer bespoke retry `for` loop in `HandleAsync` with `CorrectiveTurnState`.
 - Change `HandleCoreAsync` so it accepts a list of corrective `ModelMessage` values, not a `CorrectionEvidence` string hidden in `Task.UserConstraints`.
-- Append corrective messages to `ModelStreamRequest.Messages`; also append a bounded legacy correction block to `Input` only when `context.Messages` is empty.
+- Append corrective messages to `ModelStreamRequest.Messages`; do not append hidden correction blocks to task constraints or prompt input.
 - Replace `IsRepairableMutationProposalFailure` substring matching with diagnostic/failure-kind classification.
 - Move text from `FormatMutationProposalCorrectionEvidence` into `CorrectiveMessageFactory` and keep it bounded.
 - Preserve pre-mutation Roslyn correction content from `FormatPreMutationCorrection`, but route it as a corrective message.

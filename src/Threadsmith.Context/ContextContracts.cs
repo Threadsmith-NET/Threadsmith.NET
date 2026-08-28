@@ -203,6 +203,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Transient host context visible only to the current assembled request.</summary>
     public IReadOnlyList<string> CurrentTurnHostContext { get; init; } = [];
 
+    /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
+    public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
+
     /// <summary>Authoritative archived current user message.</summary>
     public ConversationMessageId? CurrentMessageId { get; init; }
 

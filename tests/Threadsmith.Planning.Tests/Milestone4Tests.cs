@@ -491,6 +491,47 @@ public static class Milestone4Tests
         Assert.Equal(2, model.Requests.Count);
     }
 
+    /// <summary>Malformed provider-boundary output receives a generic correction-attempt event before retrying.</summary>
+    [Fact]
+    public static async Task SessionApplication_MalformedProviderOutput_PublishesGenericCorrectionEvent()
+    {
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        var model = new MalformedProviderThenTextModelProvider();
+        var application = new SessionApplication(
+            events,
+            model,
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("provider correction"));
+        var runId = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(sessionId, "answer after a provider correction"));
+
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Equal(2, model.Requests.Count);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.ProviderInvocation, correction.Category);
+        Assert.Equal(1, correction.AttemptNumber);
+        Assert.Equal(2, correction.MaximumAttempts);
+        Assert.Contains("malformed invocation", correction.SafeReason, StringComparison.OrdinalIgnoreCase);
+        var correctionMessage = Assert.Single(
+            model.Requests[1].Messages,
+            message => message.Role == ModelMessageRole.Developer
+                && string.Equals(message.SectionId, "active-turn-correction:1", StringComparison.Ordinal));
+        var correctionText = string.Join(" ", correctionMessage.Content.Select(part => part.Content));
+        Assert.DoesNotContain("or answer without tools", correctionText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not answer from unsupported repository assumptions", correctionText, StringComparison.Ordinal);
+    }
+
     /// <summary>A same-turn propose-plan tool call enters the existing governed review workflow.</summary>
     [Fact]
     public static async Task SessionApplication_ProposePlanTool_EntersGovernedPlanning()
@@ -544,6 +585,12 @@ public static class Milestone4Tests
     public static async Task ProposePlanTool_MalformedArguments_RepairsAndEntersReview()
     {
         await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
         var projections = new InMemoryProjectionStore();
         await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
         var sanitizer = new SecretOutputSanitizer();
@@ -580,11 +627,79 @@ public static class Milestone4Tests
         Assert.Null(projection.Error);
         Assert.Equal("Repaired tool plan", projection.Plan?.Plan.Summary);
         Assert.Equal(2, model.Requests.Count);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.PlanSchema, correction.Category);
+        Assert.Equal(1, correction.AttemptNumber);
+        Assert.Equal(ExecutionLimits.Default.MaxCorrectiveTurns, correction.MaximumAttempts);
+        Assert.Contains("Tool arguments are not valid JSON", correction.SafeReason, StringComparison.Ordinal);
         var repair = Assert.Single(
             model.Requests[1].Messages,
             message => message.Role == ModelMessageRole.Developer
                 && string.Equals(message.SectionId, "active-turn-correction:1", StringComparison.Ordinal));
         Assert.Contains("Tool arguments are not valid JSON", repair.Content[0].Content, StringComparison.Ordinal);
+        Assert.True(await dispatcher.DispatchAsync(
+            new RejectPlanCommand(sessionId, runId, "test complete")));
+        Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+    }
+
+    /// <summary>Malformed JSON-object propose-plan arguments publish a plan-schema correction event.</summary>
+    [Fact]
+    public static async Task ProposePlanTool_SchemaMismatchArguments_PublishesGenericCorrectionEvent()
+    {
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        var projections = new InMemoryProjectionStore();
+        await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var plan = CreatePlan("Schema-repaired tool plan", 1);
+        var model = new MalformedProposePlanThenPlanModelProvider(plan, "{}");
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            contextAssembler: CreateAssembler(events, evidence),
+            evidenceStore: evidence);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning schema repair"));
+        var runId = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(sessionId, "Change one property with schema repair"));
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        SessionProjection? projection;
+        do
+        {
+            projection = await projections.GetAsync<SessionProjection>(
+                new ProjectionKey("session", sessionId.Value.ToString("D")),
+                timeout.Token);
+            if (projection?.Phase is not (RunPhase.AwaitingPlanApproval or RunPhase.Failed))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+        }
+        while (projection?.Phase is not (RunPhase.AwaitingPlanApproval or RunPhase.Failed));
+
+        Assert.Null(projection.Error);
+        Assert.Equal("Schema-repaired tool plan", projection.Plan?.Plan.Summary);
+        Assert.Equal(2, model.Requests.Count);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.PlanSchema, correction.Category);
+        Assert.Equal(1, correction.AttemptNumber);
+        Assert.Contains("required plan schema", correction.SafeReason, StringComparison.Ordinal);
+        Assert.Contains(
+            model.Requests[1].Messages,
+            message => message.Role == ModelMessageRole.Tool
+                && string.Equals(message.ToolName, "propose_plan", StringComparison.Ordinal)
+                && message.Content.Any(part => part.Content.Contains(
+                    "required plan schema",
+                    StringComparison.Ordinal)));
         Assert.True(await dispatcher.DispatchAsync(
             new RejectPlanCommand(sessionId, runId, "test complete")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
@@ -1442,54 +1557,6 @@ public static class Milestone4Tests
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
-    /// <summary>Repair model turns accrue elapsed time and fail when the wall-clock budget is exhausted.</summary>
-    [Fact]
-    public static async Task SessionApplication_PlanRepair_AccruesWallClockBudget()
-    {
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var capture = events.Subscribe((domainEvent, _) =>
-        {
-            observed.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        var badPlan = CreatePlan("Bad plan", 1) with
-        {
-            Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") }],
-        };
-        var fixedPlan = CreatePlan("Fixed plan", 2) with
-        {
-            Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/existing.cs") }],
-        };
-        var budget = new ExhaustOnSecondWallClockAccrualBudget();
-        var model = new QueueModelProvider([badPlan, fixedPlan]);
-        var application = new SessionApplication(
-            events,
-            model,
-            budget,
-            new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
-            planSanityChecker: new PlanSanityChecker(),
-            planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
-            planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
-            {
-                Plan = plan,
-                RepositoryRoot = Environment.CurrentDirectory,
-                Baseline = CreateBaseline(["src/existing.cs"]),
-                TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
-        var dispatcher = new CommandDispatcher([application]);
-        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("repair budget"));
-        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
-
-        await Assert.ThrowsAsync<BudgetExceededException>(() =>
-            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-        Assert.Equal(2, budget.WallClockAccrualCount);
-        Assert.Equal(2, model.Requests.Count);
-        Assert.Empty(observed.OfType<PlanProposed>());
-    }
-
     /// <summary>Repairable plan sanity failures trigger a model revision before any approval prompt is published.</summary>
     [Fact]
     public static async Task SessionApplication_PlanSanityRepair_RevisesBeforeApproval()
@@ -1523,7 +1590,7 @@ public static class Milestone4Tests
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
             evidenceStore: evidence,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
             planSanityChecker: new PlanSanityChecker(),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
@@ -1553,14 +1620,163 @@ public static class Milestone4Tests
 
         Assert.Equal("Fixed plan", projection.Plan?.Plan.Summary);
         Assert.Equal(2, model.Requests.Count);
-        var revision = Assert.Single(observed.OfType<PlanRevisionRequested>());
-        Assert.DoesNotContain("sk-AbCdEfGhIjKlMnOp", revision.Instructions, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", revision.Instructions, StringComparison.Ordinal);
-        Assert.Contains("Plan sanity repair request:", model.Requests[1].Input, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", model.Requests[1].Input, StringComparison.Ordinal);
+        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.PlanSanity, correction.Category);
+        Assert.DoesNotContain("sk-AbCdEfGhIjKlMnOp", correction.SafeReason, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", correction.SafeReason, StringComparison.Ordinal);
+        Assert.Empty(observed.OfType<PlanRevisionRequested>());
+        var correctionMessage = Assert.Single(model.Requests[1].Messages, message =>
+            message.SectionId?.StartsWith("active-turn-plan-sanity-correction:", StringComparison.Ordinal) == true);
+        var correctionText = string.Join(" ", correctionMessage.Content.Select(part => part.Content));
+        Assert.DoesNotContain("sk-AbCdEfGhIjKlMnOp", correctionText, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", correctionText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Plan sanity repair request:", model.Requests[1].Input, StringComparison.Ordinal);
         Assert.Single(observed.OfType<ApprovalRequested>());
         Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+    }
+
+    /// <summary>Repairable plan sanity failures fail closed when the corrective-turn budget is exhausted.</summary>
+    [Fact]
+    public static async Task SessionApplication_PlanSanityRepair_ExhaustionFailsBeforeApproval()
+    {
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        var badPlan = CreatePlan("Bad plan", 1) with
+        {
+            Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") }],
+        };
+        var model = new QueueModelProvider([badPlan, badPlan]);
+        var application = new SessionApplication(
+            events,
+            model,
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
+            planSanityChecker: new PlanSanityChecker(),
+            planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
+            planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
+            {
+                Plan = plan,
+                RepositoryRoot = Environment.CurrentDirectory,
+                Baseline = CreateBaseline(["src/existing.cs"]),
+                TrustLevel = RepositoryTrustLevel.TrustedMutation,
+            }));
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan sanity exhaustion"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
+
+        var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("corrective-turn budget was exhausted", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Equal(2, observed.OfType<PlanSanityCheckCompleted>().Count());
+        Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Empty(observed.OfType<PlanRevisionRequested>());
+        Assert.Empty(observed.OfType<PlanProposed>());
+        Assert.Empty(observed.OfType<ApprovalRequested>());
+    }
+
+    /// <summary>Repeated sanity corrections preserve previously executed tool evidence for later retries.</summary>
+    [Fact]
+    public static async Task SessionApplication_PlanSanityRepair_PreservesToolEvidenceAcrossRejectedPlans()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-sanity-tools-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "sample.txt"), "sample");
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(
+                100000,
+                100,
+                TimeSpan.FromMinutes(1)));
+            var registry = new ToolRegistry([new ListFilesTool()]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var badPlan = CreatePlan("Bad plan", 1) with
+            {
+                Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") }],
+            };
+            var fixedPlan = CreatePlan("Fixed plan", 1) with
+            {
+                Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/existing.cs") }],
+            };
+            var model = new ToolThenQueuedPlansModelProvider([badPlan, badPlan, fixedPlan]);
+            var projections = new InMemoryProjectionStore();
+            await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry,
+                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
+                planSanityChecker: new PlanSanityChecker(),
+                planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
+                planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
+                {
+                    Plan = plan,
+                    RepositoryRoot = Environment.CurrentDirectory,
+                    Baseline = CreateBaseline(["src/existing.cs"]),
+                    TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                }));
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("tool evidence repair"));
+            var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Inspect then plan"));
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            SessionProjection? projection;
+            do
+            {
+                projection = await projections.GetAsync<SessionProjection>(
+                    new ProjectionKey("session", sessionId.Value.ToString("D")),
+                    timeout.Token);
+                if (projection?.Phase != RunPhase.AwaitingPlanApproval)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+                }
+            }
+            while (projection?.Phase != RunPhase.AwaitingPlanApproval);
+
+            Assert.Equal("Fixed plan", projection.Plan?.Plan.Summary);
+            Assert.Equal(4, model.Requests.Count);
+            Assert.Contains(model.Requests[3].Messages, message =>
+                message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "list_files", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains("sample.txt", StringComparison.Ordinal)));
+            Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
+            Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     /// <summary>Mixed hard and repairable sanity failures fail closed instead of entering the repair loop.</summary>
@@ -1593,7 +1809,7 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxPlanRevisionRepairAttempts = 1 },
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
             planSanityChecker: new PlanSanityChecker(),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
@@ -1618,6 +1834,7 @@ public static class Milestone4Tests
         Assert.Equal(2, sanity.BlockingIssueCount);
         Assert.Equal(1, sanity.RepairableIssueCount);
         Assert.Empty(observed.OfType<PlanRevisionRequested>());
+        Assert.Empty(observed.OfType<ModelCorrectionAttempted>());
         Assert.Empty(observed.OfType<PlanProposed>());
         Assert.Empty(observed.OfType<ApprovalRequested>());
     }
@@ -2105,6 +2322,12 @@ public static class Milestone4Tests
         try
         {
             await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var capture = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
@@ -2145,6 +2368,10 @@ public static class Milestone4Tests
             Assert.Equal(0, tool.ExecutionCount);
             Assert.Empty(evidence.Snapshot(sessionId));
             Assert.Equal(2, model.Requests.Count);
+            var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+            Assert.Equal(ModelCorrectionCategory.ToolBatch, correction.Category);
+            Assert.Equal(1, correction.AttemptNumber);
+            Assert.Contains("counting_read", correction.SafeReason, StringComparison.Ordinal);
             var correctionRequest = model.Requests[1];
             ModelMessage[] assistantCalls = [.. correctionRequest.Messages
                 .Where(message => message.Role == ModelMessageRole.Assistant && message.ToolName == "counting_read")];
@@ -2198,7 +2425,7 @@ public static class Milestone4Tests
                 budget);
             var model = new ToolThenTextModelProvider(
                 "{\"path\":\".\",\"maximumEntries\":200}");
-            var assembler = CreateAssembler(events, evidence, maximumTokens: 1700);
+            var assembler = CreateAssembler(events, evidence, maximumTokens: 1800);
             var application = new SessionApplication(
                 events,
                 model,
@@ -3222,6 +3449,96 @@ public static class Milestone4Tests
         Assert.True(await revised.Dispatcher.DispatchAsync(new WaitForRunCommand(revisedRun)));
     }
 
+    /// <summary>Revision sanity repair asks for the available format and charges each model request duration.</summary>
+    [Fact]
+    public static async Task StructuredPlan_ReviseSanityRepair_UsesRevisionFormatAndChargesWallClock()
+    {
+        await using var events = new DomainEventStream();
+        var projections = new InMemoryProjectionStore();
+        var observed = new List<IDomainEvent>();
+        await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
+        await using var captureSubscription = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var initialPlan = CreatePlan("initial", 1);
+        var badRevision = CreatePlan("bad revision", 1) with
+        {
+            Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") }],
+        };
+        var fixedRevision = CreatePlan("fixed revision", 1) with
+        {
+            Steps = [CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/existing.cs") }],
+        };
+        var model = new QueueModelProvider(
+            [initialPlan, badRevision, fixedRevision],
+            TimeSpan.FromMilliseconds(20));
+        var budget = new RecordingBudget();
+        var application = new SessionApplication(
+            events,
+            model,
+            budget,
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            contextAssembler: CreateAssembler(events, evidence),
+            evidenceStore: evidence,
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
+            planSanityChecker: new PlanSanityChecker(),
+            planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
+            planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
+            {
+                Plan = plan,
+                RepositoryRoot = Environment.CurrentDirectory,
+                Baseline = CreateBaseline(["src/example.cs", "src/existing.cs"]),
+                TrustLevel = RepositoryTrustLevel.TrustedMutation,
+            }));
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("revision repair"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        SessionProjection? projection;
+        do
+        {
+            projection = await projections.GetAsync<SessionProjection>(
+                new ProjectionKey("session", sessionId.Value.ToString("D")),
+                timeout.Token);
+            if (projection?.Phase != RunPhase.AwaitingPlanApproval)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+        }
+        while (projection?.Phase != RunPhase.AwaitingPlanApproval);
+
+        Assert.True(await dispatcher.DispatchAsync(new RevisePlanCommand(
+            sessionId,
+            runId,
+            "narrow the affected files")));
+
+        Assert.Equal(3, model.Requests.Count);
+        var correctionMessage = Assert.Single(model.Requests[2].Messages, message =>
+            message.SectionId?.StartsWith("active-turn-plan-sanity-correction:", StringComparison.Ordinal) == true);
+        var correctionText = string.Join(" ", correctionMessage.Content.Select(part => part.Content));
+        Assert.Contains("do not call propose_plan", correctionText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Re-emit propose_plan", correctionText, StringComparison.Ordinal);
+        Assert.DoesNotContain(model.Requests[2].Tools, tool =>
+            string.Equals(tool.Name, "propose_plan", StringComparison.Ordinal));
+        Assert.Equal("fixed revision", (await projections.GetAsync<SessionProjection>(
+            new ProjectionKey("session", sessionId.Value.ToString("D")),
+            timeout.Token))?.Plan?.Plan.Summary);
+        Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.True(
+            budget.Accruals.Count(delta =>
+                delta.Tokens == 0
+                    && delta.Calls == 0
+                    && delta.WallClock >= TimeSpan.FromMilliseconds(15)) >= 3);
+        Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "done")));
+        Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+    }
+
     /// <summary>The stable host policy requires semantic-first tool selection and forbids redundant fallback.</summary>
     [Fact]
     public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
@@ -3436,29 +3753,38 @@ public static class Milestone4Tests
         };
     }
 
-    private sealed class ExhaustOnSecondWallClockAccrualBudget : IBudget
+    private sealed class RecordingBudget : IBudget
     {
-        private int _wallClockAccrualCount;
+        private readonly Lock _gate = new();
+        private BudgetDimensions _used = new(0, 0, TimeSpan.Zero);
 
-        public int WallClockAccrualCount => _wallClockAccrualCount;
+        public List<BudgetDimensions> Accruals { get; } = [];
 
         public BudgetStatus Accrue(BudgetDimensions delta)
         {
-            ArgumentNullException.ThrowIfNull(delta);
-            var count = delta.WallClock > TimeSpan.Zero
-                ? Interlocked.Increment(ref _wallClockAccrualCount)
-                : Volatile.Read(ref _wallClockAccrualCount);
-            var exhausted = count >= 2;
-            return new BudgetStatus(
-                exhausted,
-                delta,
-                exhausted ? "Repair wall-clock budget exhausted." : null);
+            lock (_gate)
+            {
+                Accruals.Add(delta);
+                _used = Add(_used, delta);
+                return new BudgetStatus(false, _used, null);
+            }
         }
 
         public BudgetStatus Check(BudgetDimensions delta)
         {
-            ArgumentNullException.ThrowIfNull(delta);
-            return new BudgetStatus(false, delta, null);
+            lock (_gate)
+            {
+                return new BudgetStatus(false, Add(_used, delta), null);
+            }
+        }
+
+        private static BudgetDimensions Add(BudgetDimensions current, BudgetDimensions delta)
+        {
+            return new BudgetDimensions(
+                current.Tokens + delta.Tokens,
+                current.Calls + delta.Calls,
+                current.WallClock + delta.WallClock,
+                current.Cost + delta.Cost);
         }
     }
 
@@ -3612,6 +3938,32 @@ public static class Milestone4Tests
         }
     }
 
+    private sealed class MalformedProviderThenTextModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                throw new MalformedInvocationException(new MalformedInvocationDiagnostic
+                {
+                    Kind = MalformedInvocationFailureKind.InvalidJsonArguments,
+                    SafeMessage = "The provider returned a malformed invocation.",
+                    ProviderFamily = "test",
+                    ToolCallCount = 1,
+                });
+            }
+
+            yield return new ModelChunk { Text = "Corrected after provider retry." };
+        }
+    }
+
     private sealed class ProposePlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
@@ -3642,11 +3994,16 @@ public static class Milestone4Tests
 
     private sealed class MalformedProposePlanThenPlanModelProvider : IModelProvider
     {
+        private readonly string _malformedArgumentsJson;
         private readonly ImplementationPlan _plan;
 
-        public MalformedProposePlanThenPlanModelProvider(ImplementationPlan plan)
+        public MalformedProposePlanThenPlanModelProvider(
+            ImplementationPlan plan,
+            string malformedArgumentsJson = "I have enough evidence to propose the plan.")
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(malformedArgumentsJson);
             _plan = plan;
+            _malformedArgumentsJson = malformedArgumentsJson;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -3668,7 +4025,7 @@ public static class Milestone4Tests
                 {
                     Output = new ToolRequestModelOutput(
                         "propose_plan",
-                        "I have enough evidence to propose the plan."),
+                        _malformedArgumentsJson),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;
@@ -3724,11 +4081,20 @@ public static class Milestone4Tests
 
     private sealed class QueueModelProvider : IModelProvider
     {
+        private readonly TimeSpan _delay;
         private readonly Queue<ImplementationPlan> _plans;
 
-        public QueueModelProvider(IEnumerable<ImplementationPlan> plans)
+        public QueueModelProvider(
+            IEnumerable<ImplementationPlan> plans,
+            TimeSpan delay = default)
         {
+            if (delay < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(delay));
+            }
+
             _plans = new Queue<ImplementationPlan>(plans);
+            _delay = delay;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -3740,6 +4106,11 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
+            if (_delay > TimeSpan.Zero)
+            {
+                await Task.Delay(_delay, cancellationToken);
+            }
+
             if (!_plans.TryDequeue(out var plan))
             {
                 throw new InvalidOperationException("No scripted plan remains.");
@@ -4081,6 +4452,45 @@ public static class Milestone4Tests
             }
 
             yield return new ModelChunk { Output = new PlanModelOutput(_plan) };
+        }
+    }
+
+    private sealed class ToolThenQueuedPlansModelProvider : IModelProvider
+    {
+        private readonly Queue<ImplementationPlan> _plans;
+
+        public ToolThenQueuedPlansModelProvider(IEnumerable<ImplementationPlan> plans)
+        {
+            _plans = new Queue<ImplementationPlan>(plans);
+        }
+
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "list_files",
+                        "{\"path\":\".\",\"maximumEntries\":10}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            if (!_plans.TryDequeue(out var plan))
+            {
+                throw new InvalidOperationException("No scripted plan remains.");
+            }
+
+            yield return new ModelChunk { Output = new PlanModelOutput(plan) };
         }
     }
 

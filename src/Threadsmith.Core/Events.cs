@@ -28,6 +28,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(SemanticCheckCompleted), "semanticCheckCompleted")]
 [JsonDerivedType(typeof(MutationProposalStarted), "mutationProposalStarted")]
 [JsonDerivedType(typeof(MutationProposalRepairAttempted), "mutationProposalRepairAttempted")]
+[JsonDerivedType(typeof(ModelCorrectionAttempted), "modelCorrectionAttempted")]
 [JsonDerivedType(typeof(PreMutationAnalysisCompleted), "preMutationAnalysisCompleted")]
 [JsonDerivedType(typeof(SemanticMutationWarningObserved), "semanticMutationWarningObserved")]
 [JsonDerivedType(typeof(MutationSetProposed), "mutationSetProposed")]
@@ -286,7 +287,7 @@ public sealed record SemanticCheckCompleted(
     long? ElapsedMilliseconds = null,
     string? Detail = null) : DomainEvent(SessionId, OccurredAt);
 
-/// <summary>Approved-plan execution started or retried a governed mutation proposal turn.</summary>
+/// <summary>Approved-plan execution started or retried one governed mutation proposal attempt.</summary>
 public sealed record MutationProposalStarted(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
@@ -294,7 +295,7 @@ public sealed record MutationProposalStarted(
     int AttemptNumber,
     int MaximumAttempts) : DomainEvent(SessionId, OccurredAt);
 
-/// <summary>A mutation proposal failed repairable host validation and is being retried with correction evidence.</summary>
+/// <summary>Historical mutation-proposal repair event retained for durable replay.</summary>
 public sealed record MutationProposalRepairAttempted(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
@@ -302,6 +303,41 @@ public sealed record MutationProposalRepairAttempted(
     int AttemptNumber,
     int MaximumAttempts,
     string Reason) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>Model-visible corrective retry categories.</summary>
+public enum ModelCorrectionCategory
+{
+    /// <summary>Provider-boundary malformed invocation correction.</summary>
+    ProviderInvocation,
+
+    /// <summary>Conversation tool-batch correction.</summary>
+    ToolBatch,
+
+    /// <summary>Plan schema correction.</summary>
+    PlanSchema,
+
+    /// <summary>Plan sanity correction.</summary>
+    PlanSanity,
+
+    /// <summary>Mutation proposal correction.</summary>
+    MutationProposal,
+
+    /// <summary>Pre-mutation analysis correction.</summary>
+    PreMutationAnalysis,
+
+    /// <summary>Post-apply validation correction.</summary>
+    PostApplyValidation,
+}
+
+/// <summary>A recoverable model request was rejected and retried through a bounded corrective message.</summary>
+public sealed record ModelCorrectionAttempted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelCorrectionCategory Category,
+    int AttemptNumber,
+    int MaximumAttempts,
+    string SafeReason) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>Pre-mutation Roslyn screening completed before staging or approval.</summary>
 public sealed record PreMutationAnalysisCompleted(
@@ -736,6 +772,7 @@ public static class DomainEventJson
             ["semanticCheckCompleted"] = typeof(SemanticCheckCompleted),
             ["mutationProposalStarted"] = typeof(MutationProposalStarted),
             ["mutationProposalRepairAttempted"] = typeof(MutationProposalRepairAttempted),
+            ["modelCorrectionAttempted"] = typeof(ModelCorrectionAttempted),
             ["preMutationAnalysisCompleted"] = typeof(PreMutationAnalysisCompleted),
             ["semanticMutationWarningObserved"] = typeof(SemanticMutationWarningObserved),
             ["mutationSetProposed"] = typeof(MutationSetProposed),

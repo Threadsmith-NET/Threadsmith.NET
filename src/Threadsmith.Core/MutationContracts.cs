@@ -476,6 +476,17 @@ public sealed record RollbackMutationSetCommand(
     SessionId SessionId,
     MutationSetId MutationSetId) : ICommand<MutationRollbackResult>;
 
+/// <summary>Bounded host-owned corrective context for one governed mutation proposal turn.</summary>
+/// <param name="Category">Correction category that produced the retry.</param>
+/// <param name="AttemptNumber">One-based correction attempt number.</param>
+/// <param name="MaximumAttempts">Configured maximum correction attempts.</param>
+/// <param name="SafeReason">Sanitized bounded reason that excludes raw model payloads, source bodies, and logs.</param>
+public sealed record MutationCorrectionContext(
+    ModelCorrectionCategory Category,
+    int AttemptNumber,
+    int MaximumAttempts,
+    string SafeReason);
+
 /// <summary>Requests one governed model mutation proposal against an approved plan.</summary>
 public sealed record ProposeMutationSetCommand(
     SessionId SessionId,
@@ -484,7 +495,7 @@ public sealed record ProposeMutationSetCommand(
     TaskSpecification Task,
     ImplementationPlan ApprovedPlan,
     RunPhase Phase = RunPhase.MutationPreparation,
-    string? CorrectionEvidence = null) : ICommand<StagedMutationSet>;
+    MutationCorrectionContext? Correction = null) : ICommand<StagedMutationSet>;
 
 /// <summary>Parameters for compiler-aware symbol rename.</summary>
 public sealed record RenameSymbolMutationRequest

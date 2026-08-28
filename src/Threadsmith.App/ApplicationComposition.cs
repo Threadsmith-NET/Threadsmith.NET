@@ -319,6 +319,7 @@ internal static class ApplicationComposition
                 persistence.ExecutionCheckpoints,
                 new ExecutionArtifactPublisher(persistence.ArtifactStore),
                 host.Events,
+                host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>());
             var agentScheduler = new AgentRunScheduler(new AgentSchedulerOptions
             {

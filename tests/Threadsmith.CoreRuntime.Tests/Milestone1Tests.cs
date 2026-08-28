@@ -1501,7 +1501,7 @@ public static class Milestone1Tests
         Assert.Contains("Current plan policy: ReviewRisky.", surface.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>Ctrl+T toggles thinking only from an empty composer so typed input is preserved.</summary>
+    /// <summary>Ctrl+T toggles thinking streaming only from an empty composer so typed input is preserved.</summary>
     [Fact]
     public static async Task PrettyPromptConsoleSurface_ControlT_MapsToThinkingToggleOnEmptyInput()
     {
@@ -2105,6 +2105,47 @@ public static class Milestone1Tests
         }
     }
 
+    /// <summary>Replacing an existing theme value preserves a UTF-8 BOM and source syntax.</summary>
+    [Fact]
+    public static async Task ThemePreferenceStore_ExistingDefault_WithUtf8Bom_PreservesConfigurationSyntax()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
+        var configurationPath = Path.Combine(directory, "config.json");
+        Directory.CreateDirectory(directory);
+        const string initialConfiguration = """
+            {
+              /* Keep the selected-theme rationale. */
+              "tui": {
+                "defaultTheme": /* chosen by the user */ "system",
+                "footer": { "enabled": false }
+              },
+              "other": [ 1, 2, 3 ] // Keep this annotation too.
+            }
+            """;
+        await File.WriteAllTextAsync(
+            configurationPath,
+            initialConfiguration,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        try
+        {
+            var store = new UserConfigurationThemePreferenceStore(configurationPath);
+
+            await store.SetDefaultThemeAsync("ocean");
+
+            var persistedBytes = await File.ReadAllBytesAsync(configurationPath);
+            Assert.Equal(0xEF, persistedBytes[0]);
+            Assert.Equal(0xBB, persistedBytes[1]);
+            Assert.Equal(0xBF, persistedBytes[2]);
+            var persisted = Encoding.UTF8.GetString(persistedBytes, 3, persistedBytes.Length - 3);
+            var expected = initialConfiguration.Replace("\"system\"", "\"ocean\"", StringComparison.Ordinal);
+            Assert.Equal(expected, persisted);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     /// <summary>A failed user-default write leaves the active theme unchanged.</summary>
     [Fact]
     public static async Task ConversationalShell_ThemePersistenceFailure_LeavesSelectionUnchanged()
@@ -2534,9 +2575,9 @@ public static class Milestone1Tests
         Assert.Null(result.Background);
     }
 
-    /// <summary>Reasoning stays collapsed by default and can be shown or hidden after completion.</summary>
+    /// <summary>Reasoning is hidden by default and streams only while the thinking toggle is enabled.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingToggle_ShowsTaggedReasoningOnDemand()
+    public static async Task ConversationalShell_ThinkingOn_StreamsFutureReasoningUntilOff()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
@@ -2549,7 +2590,7 @@ public static class Milestone1Tests
                 },
             ],
         });
-        var surface = new FakeConsoleSurface(["hello", "/thinking", "/thinking", "/quit"]);
+        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/thinking off", "hello again", "/quit"]);
         var shell = new ConversationalShell(
             new TuiPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
@@ -2558,13 +2599,95 @@ public static class Milestone1Tests
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
-        Assert.Contains("THINKING", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(surface.Output, "Consider the greeting."));
+        Assert.DoesNotContain("<thinking>", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("</thinking>", surface.Output, StringComparison.Ordinal);
         Assert.Contains(
-            $"<thinking>{Environment.NewLine}Consider the greeting.{Environment.NewLine}</thinking>",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
+            surface.Segments,
+            segment => segment.Role == TuiTextRole.Reasoning
+                && string.Equals(segment.Text, "Consider the greeting.", StringComparison.Ordinal));
+        Assert.DoesNotContain("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("// reasoning:", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Streaming reasoning takes permanent scrollback ownership from transient thinking activity.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingStreaming_DoesNotRestartTransientActivity()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        {
+            Turns =
+            [
+                new ScriptedTurn
+                {
+                    Reasoning = "Inspect the repository.",
+                    Text = "Done.",
+                },
+            ],
+        });
+        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            1,
+            surface.Lifecycle.Count(entry => string.Equals(
+                entry,
+                "activity-start:THINKING",
+                StringComparison.Ordinal)));
+        var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
+        var reasoningWritten = surface.Lifecycle.ToList().IndexOf("output:segments");
+        Assert.True(thinkingEnded >= 0 && thinkingEnded < reasoningWritten);
+        var streamedReasoning = string.Concat(surface.Segments
+            .Where(segment => segment.Role == TuiTextRole.Reasoning)
+            .Select(segment => segment.Text));
+        Assert.StartsWith(
+            $"{Environment.NewLine}Inspect the repository.",
+            streamedReasoning,
+            StringComparison.Ordinal);
+        Assert.False(streamedReasoning.StartsWith(
+            Environment.NewLine + Environment.NewLine,
+            StringComparison.Ordinal));
+    }
+
+    /// <summary><c>/thinking</c> without arguments toggles future reasoning streaming.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingNoArgument_TogglesStreamingMode()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/thinking", "/thinking", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Invalid <c>/thinking</c> arguments are rejected locally.</summary>
+    [Fact]
+    public static async Task ConversationalShell_ThinkingInvalidArgument_ShowsUsage()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/thinking maybe", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("Usage: /thinking [on|off]", surface.Output, StringComparison.Ordinal);
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
     }
 
     /// <summary>Answer-only model turns show transient thinking status while the request is pending.</summary>
@@ -2936,6 +3059,39 @@ public static class Milestone1Tests
                 + " \u2502 Attempt: 2/2"
                 + Environment.NewLine
                 + " \u2514 Reason: ReplaceText expectedText was not found in 'src/File.cs'."
+                + Environment.NewLine,
+            transcript.Text,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>Generic model correction attempts are visible through a sanitized lifecycle block.</summary>
+    [Fact]
+    public static void ConversationTranscript_ModelCorrectionAttempt_RendersRetryStatus()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var runId = RunId.New();
+        var transcript = new ConversationTranscript(string.Empty);
+        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
+
+        Assert.True(transcript.Apply(new ModelCorrectionAttempted(
+            sessionId,
+            occurredAt,
+            runId,
+            ModelCorrectionCategory.PostApplyValidation,
+            AttemptNumber: 1,
+            MaximumAttempts: 3,
+            "Validation gate requires correction.")));
+
+        Assert.StartsWith(
+            Environment.NewLine
+                + " CORRECTION: Retrying model request"
+                + Environment.NewLine
+                + " │ Attempt: 1/3"
+                + Environment.NewLine
+                + " ├ Category: PostApplyValidation"
+                + Environment.NewLine
+                + " └ Reason: Validation gate requires correction."
                 + Environment.NewLine,
             transcript.Text,
             StringComparison.Ordinal);
@@ -3463,6 +3619,26 @@ public static class Milestone1Tests
         }
 
         return builder.ToString();
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var count = 0;
+        for (var index = 0; index < text.Length;)
+        {
+            var match = text.IndexOf(value, index, StringComparison.Ordinal);
+            if (match < 0)
+            {
+                break;
+            }
+
+            count++;
+            index = match + value.Length;
+        }
+
+        return count;
     }
 
     private static ModelProfile CreateReasoningProfile(
@@ -4032,6 +4208,14 @@ public static class Milestone1Tests
                 Detail: "1 files, 0 diagnostics, 0 blocking"),
             new MutationProposalStarted(sessionId, occurredAt, RunId.New(), 1, 2),
             new MutationProposalRepairAttempted(sessionId, occurredAt, RunId.New(), 2, 2, "reason"),
+            new ModelCorrectionAttempted(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                ModelCorrectionCategory.MutationProposal,
+                1,
+                3,
+                "safe reason"),
             new PreMutationAnalysisCompleted(
                 sessionId,
                 occurredAt,

@@ -311,15 +311,21 @@ public static class Plan32OpenAiCompatibleProviderTests
                     var reasoning = parityCase.ResponseMode switch
                     {
                         OpenAiReasoningResponseMode.ReasoningContent
-                            => "\"reasoning_content\":\"hi\",\"reasoning\":\"wrong\"",
+                            => "\"reasoning_content\":\"hi\",\"reasoning\":\"wrong\",\"reasoning_text\":\"wrong\"",
                         OpenAiReasoningResponseMode.Reasoning
-                            => "\"reasoning_content\":\"wrong\",\"reasoning\":\"hi\"",
-                        _ => "\"reasoning_content\":\"wrong\",\"reasoning\":\"wrong\"",
+                            => "\"reasoning_content\":\"wrong\",\"reasoning\":\"hi\",\"reasoning_text\":\"wrong\"",
+                        OpenAiReasoningResponseMode.ReasoningText
+                            => "\"reasoning_content\":\"wrong\",\"reasoning\":\"wrong\",\"reasoning_text\":\"hi\"",
+                        OpenAiReasoningResponseMode.KnownFields
+                            => "\"reasoning_text\":\"hi\"",
+                        _ => "\"reasoning_content\":\"wrong\",\"reasoning\":\"wrong\",\"reasoning_text\":\"wrong\"",
                     };
                     var reasoningEnd = parityCase.ResponseMode switch
                     {
                         OpenAiReasoningResponseMode.ReasoningContent => "\"reasoning_content\":\"dden\"",
                         OpenAiReasoningResponseMode.Reasoning => "\"reasoning\":\"dden\"",
+                        OpenAiReasoningResponseMode.ReasoningText => "\"reasoning_text\":\"dden\"",
+                        OpenAiReasoningResponseMode.KnownFields => "\"reasoning\":\"dden\"",
                         _ => "\"reasoning_content\":\"wrong\"",
                     };
                     var stream = $"data: {{\"choices\":[{{\"delta\":{{{reasoning},\"content\":\"vis\"}}}}]}}\n\n"
@@ -713,6 +719,8 @@ public static class Plan32OpenAiCompatibleProviderTests
             OpenAiReasoningResponseMode.None => "none",
             OpenAiReasoningResponseMode.ReasoningContent => "reasoningContent",
             OpenAiReasoningResponseMode.Reasoning => "reasoning",
+            OpenAiReasoningResponseMode.ReasoningText => "reasoningText",
+            OpenAiReasoningResponseMode.KnownFields => "knownFields",
             _ => throw new ArgumentOutOfRangeException(nameof(mode)),
         };
     }
@@ -778,7 +786,10 @@ public static class Plan32OpenAiCompatibleProviderTests
             CreateMappedParityCase("cloud-glm-5-2", "glm-5.2:cloud"),
             CreateMappedParityCase("cloud-kimi-k2-5", "kimi-k2.5:cloud"),
             CreateMappedParityCase("cloud-deepseek-v4-pro", "deepseek-v4-pro:cloud"),
-            CreateStandardParityCase("cloud-kimi-k2-7-code", "kimi-k2.7-code:cloud"),
+            CreateStandardParityCase(
+                "cloud-kimi-k2-7-code",
+                "kimi-k2.7-code:cloud",
+                OpenAiReasoningResponseMode.KnownFields),
             CreateStandardParityCase("cloud-kimi-k2-6", "kimi-k2.6:cloud"),
             CreateStandardParityCase("cloud-minimax-m3", "minimax-m3:cloud"),
         ];
@@ -799,14 +810,17 @@ public static class Plan32OpenAiCompatibleProviderTests
             });
     }
 
-    private static ReasoningParityCase CreateStandardParityCase(string fixtureId, string modelId)
+    private static ReasoningParityCase CreateStandardParityCase(
+        string fixtureId,
+        string modelId,
+        OpenAiReasoningResponseMode responseMode = OpenAiReasoningResponseMode.ReasoningContent)
     {
         return CreateParityCase(
             fixtureId,
             modelId,
             Enum.GetValues<ReasoningLevel>(),
             OpenAiReasoningControlMode.StandardEffort,
-            OpenAiReasoningResponseMode.ReasoningContent);
+            responseMode);
     }
 
     private static ReasoningParityCase CreateParityCase(

@@ -73,6 +73,14 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 {
                     Activity = [.. activity, output.Text],
                 },
+                ModelCorrectionAttempted correction when existing is not null => existing with
+                {
+                    Activity =
+                    [
+                        .. activity,
+                        $"Model correction ({correction.Category}) {correction.AttemptNumber}/{correction.MaximumAttempts}: {correction.SafeReason}",
+                    ],
+                },
                 ContextAssembled assembled when existing is not null => existing with
                 {
                     ContextInspection = CopyInspection(assembled.Inspection),

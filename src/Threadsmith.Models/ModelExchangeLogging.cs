@@ -158,8 +158,22 @@ public sealed class JsonlModelExchangeLog
                 ToolContinuationRound = toolContinuationRound,
                 ErrorType = exception.GetType().Name,
                 ErrorMessage = exception.Message,
+                Payload = CreateFailurePayload(exception),
             },
             cancellationToken);
+    }
+
+    private static JsonElement? CreateFailurePayload(Exception exception)
+    {
+        return exception is MalformedInvocationException malformed
+            ? JsonSerializer.SerializeToElement(
+                new ModelExchangeFailurePayload
+                {
+                    MalformedInvocation = ModelExchangeMalformedInvocationSummary.FromDiagnostic(
+                        malformed.Diagnostic),
+                },
+                SerializerOptions)
+            : null;
     }
 
     private async Task AppendAsync(ModelExchangeLogEntry entry, CancellationToken cancellationToken)
@@ -370,6 +384,73 @@ public sealed record ModelExchangeLogEntry
 
     /// <summary>Gets the exception message for failure events.</summary>
     public string? ErrorMessage { get; init; }
+}
+
+/// <summary>Compact failure summary for model exchange diagnostics.</summary>
+public sealed record ModelExchangeFailurePayload
+{
+    /// <summary>Gets safe malformed-invocation metadata, when the provider failure has it.</summary>
+    public ModelExchangeMalformedInvocationSummary? MalformedInvocation { get; init; }
+}
+
+/// <summary>Safe malformed-invocation metadata for raw model exchange diagnostics.</summary>
+public sealed record ModelExchangeMalformedInvocationSummary
+{
+    /// <summary>Gets the safe machine-readable failure kind.</summary>
+    public string Kind { get; init; } = string.Empty;
+
+    /// <summary>Gets the sanitized bounded diagnostic message.</summary>
+    public string SafeMessage { get; init; } = string.Empty;
+
+    /// <summary>Gets the safe tool name when known.</summary>
+    public string? ToolName { get; init; }
+
+    /// <summary>Gets the zero-based tool-call ordinal when known.</summary>
+    public int? ToolOrdinal { get; init; }
+
+    /// <summary>Gets the total sibling tool-call count when known.</summary>
+    public int? ToolCallCount { get; init; }
+
+    /// <summary>Gets the provider family when known.</summary>
+    public string? ProviderFamily { get; init; }
+
+    /// <summary>Gets the raw argument character count without retaining argument content.</summary>
+    public int? ArgumentCharacterCount { get; init; }
+
+    /// <summary>Gets the SHA-256 digest of raw arguments without retaining argument content.</summary>
+    public string? ArgumentSha256 { get; init; }
+
+    /// <summary>Gets the JSON parser path when available.</summary>
+    public string? JsonPath { get; init; }
+
+    /// <summary>Gets the JSON parser line number when available.</summary>
+    public long? JsonLineNumber { get; init; }
+
+    /// <summary>Gets the JSON parser byte position in line when available.</summary>
+    public long? JsonBytePositionInLine { get; init; }
+
+    /// <summary>Creates a safe summary from provider-neutral malformed-invocation diagnostics.</summary>
+    /// <param name="diagnostic">Malformed invocation diagnostic.</param>
+    /// <returns>Safe log summary.</returns>
+    public static ModelExchangeMalformedInvocationSummary FromDiagnostic(
+        MalformedInvocationDiagnostic diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+        return new ModelExchangeMalformedInvocationSummary
+        {
+            Kind = diagnostic.Kind.ToString(),
+            SafeMessage = diagnostic.SafeMessage,
+            ToolName = diagnostic.ToolName,
+            ToolOrdinal = diagnostic.ToolOrdinal,
+            ToolCallCount = diagnostic.ToolCallCount,
+            ProviderFamily = diagnostic.ProviderFamily,
+            ArgumentCharacterCount = diagnostic.ArgumentCharacterCount,
+            ArgumentSha256 = diagnostic.ArgumentSha256,
+            JsonPath = diagnostic.JsonPath,
+            JsonLineNumber = diagnostic.JsonLineNumber,
+            JsonBytePositionInLine = diagnostic.JsonBytePositionInLine,
+        };
+    }
 }
 
 /// <summary>Compact per-request summary for model exchange diagnostics.</summary>

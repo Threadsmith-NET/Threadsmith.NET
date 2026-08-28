@@ -201,7 +201,6 @@ public static class RepoConfigTests
         Assert.Equal(1000, config.GetValue("tools:findSymbol:maxResults", 0));
         Assert.Equal(1000, config.GetValue("tools:findReferences:maxResults", 0));
         Assert.Equal(1000, config.GetValue("tools:findImplementations:maxResults", 0));
-        Assert.Equal("structured", config["tools:codeExplore:outputFormat"]);
         Assert.False(config.GetValue("tools:codeExplore:inspectCodeExploreOutput", true));
         Assert.Equal(30, config.GetValue("tools:runProcess:defaultTimeoutSeconds", 0));
         Assert.Equal(60, config.GetValue("tools:runProcess:maxTimeoutSeconds", 0));

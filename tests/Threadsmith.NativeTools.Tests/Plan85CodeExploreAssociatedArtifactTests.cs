@@ -513,20 +513,20 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         Assert.Equal(execution.Value.WorkspaceGeneration, continuation.WorkspaceGeneration);
     }
 
-    /// <summary>The public schema exposes associated artifact switches, anchors, and independent limits to providers.</summary>
+    /// <summary>Associated-artifact controls remain host-owned and absent from the model-facing schema.</summary>
     [Fact]
-    public void CodeExploreTool_InputSchema_IncludesAssociatedArtifactFields()
+    public void CodeExploreTool_InputSchema_ExcludesInternalAssociatedArtifactControls()
     {
         var schema = new CodeExploreTool(new EmptyCodeExploreService()).Definition.InputSchema.JsonSchema;
 
-        Assert.Contains("associatedArtifacts", schema, StringComparison.Ordinal);
-        Assert.Contains("associatedArtifactPathAnchors", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumAssociatedArtifacts", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumAssociatedArtifactCandidates", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumAssociatedArtifactCharacters", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumPerAssociatedArtifactCharacters", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumAssociatedArtifactBytes", schema, StringComparison.Ordinal);
-        Assert.Contains("maximumAssociatedArtifactNameMatches", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("associatedArtifacts", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("associatedArtifactPathAnchors", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumAssociatedArtifacts", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumAssociatedArtifactCandidates", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumAssociatedArtifactCharacters", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumPerAssociatedArtifactCharacters", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumAssociatedArtifactBytes", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximumAssociatedArtifactNameMatches", schema, StringComparison.Ordinal);
         _ = JsonDocument.Parse(schema);
     }
 

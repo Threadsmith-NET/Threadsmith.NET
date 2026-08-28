@@ -1207,11 +1207,9 @@ public sealed partial class SessionApplication :
         var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
             ? "code_explore"
             : "find_symbol";
-        var suggestedCall = suggestedTool == "code_explore" && isExactPathQuery
-            ? $"Call code_explore with query '{suggestedQuery}' and a pathAnchors entry for that repository-relative .cs path before text search."
-            : suggestedTool == "code_explore"
-                ? $"Call code_explore with query '{suggestedQuery}' as an exact symbol anchor before text search."
-                : $"Call find_symbol with query '{suggestedQuery}' before text search.";
+        var suggestedCall = suggestedTool == "code_explore"
+            ? $"Call code_explore with query '{suggestedQuery}' before text search."
+            : $"Call find_symbol with query '{suggestedQuery}' before text search.";
         content = $"A semantic workspace is loaded and {suggestedTool} is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
             + $"{suggestedCall} The rejected search query was '{boundedQuery}'. "
             + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";

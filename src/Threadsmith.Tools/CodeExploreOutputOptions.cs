@@ -48,7 +48,7 @@ public sealed class CodeExploreOutputOptions :
 
     /// <summary>Initializes a new instance of the <see cref="CodeExploreOutputOptions" /> class.</summary>
     public CodeExploreOutputOptions(
-        CodeExploreOutputFormat configuredOutputFormat = CodeExploreOutputFormat.Structured,
+        CodeExploreOutputFormat configuredOutputFormat = CodeExploreOutputFormat.Markdown,
         bool configuredInspectCodeExploreOutput = false)
     {
         if (!Enum.IsDefined(configuredOutputFormat))
@@ -123,15 +123,8 @@ public sealed class CodeExploreOutputOptions :
     /// <summary>Creates code_explore output options from layered normal configuration.</summary>
     public static CodeExploreOutputOptions FromConfiguration(IConfiguration? configuration)
     {
-        var format = CodeExploreOutputFormat.Structured;
-        if (configuration is not null
-            && TryParseOutputFormat(configuration["tools:codeExplore:outputFormat"], out var configuredFormat))
-        {
-            format = configuredFormat;
-        }
-
         var inspect = configuration?.GetValue("tools:codeExplore:inspectCodeExploreOutput", false) ?? false;
-        return new CodeExploreOutputOptions(format, inspect);
+        return new CodeExploreOutputOptions(configuredInspectCodeExploreOutput: inspect);
     }
 
     /// <summary>Parses a bounded user/configuration output-format value.</summary>

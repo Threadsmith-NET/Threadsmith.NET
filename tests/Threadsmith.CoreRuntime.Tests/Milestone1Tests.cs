@@ -1467,7 +1467,7 @@ public static class Milestone1Tests
         var snapshot = options.GetSnapshot(sessionCreated.SessionId);
         Assert.Equal(CodeExploreOutputFormat.Markdown, snapshot.OutputFormat);
         Assert.True(snapshot.InspectCodeExploreOutput);
-        Assert.Equal(CodeExploreOutputFormat.Structured, options.GetOutputFormat(SessionId.New()));
+        Assert.Equal(CodeExploreOutputFormat.Markdown, options.GetOutputFormat(SessionId.New()));
         Assert.Contains(
             "code_explore output format is markdown for this session.",
             surface.Output,

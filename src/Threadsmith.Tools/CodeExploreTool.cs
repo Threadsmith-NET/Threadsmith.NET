@@ -6,12 +6,22 @@ using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 
-/// <summary>Resolves exact C# anchors and returns bounded current source from one semantic generation.</summary>
-public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult>
+/// <summary>Minimal model-facing arguments for C# code exploration.</summary>
+public sealed record CodeExploreInput
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreRequest, CodeExploreResult>(
+    /// <summary>Natural-language question, symbol, file, or code term to explore.</summary>
+    public required string Query { get; init; }
+
+    /// <summary>Optional result-file hint; omission uses the host's adaptive default.</summary>
+    public int MaxFiles { get; init; } = 8;
+}
+
+/// <summary>Resolves C# queries and returns bounded current source from one semantic generation.</summary>
+public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
+{
+    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
         "code_explore",
-        "Primary source-bearing C# exploration tool for natural-language C# architecture or behavior questions, exact symbols, stable symbol ids, and repository-relative C# path anchors. Use before find_symbol, search, or read_file when the question needs current declaration source, structural survey, flow, or compact impact evidence. Natural-language query terms drive bounded deterministic Roslyn declaration discovery/ranking when exact anchors are not known; they are inert only in that they are never executed and never provider-reranked. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. The mode argument must be a JSON string enum value: \"Auto\", \"Survey\", \"Flow\", or \"Impact\". There is no \"source\" mode; do not send mode as an object such as {\"kind\":\"source\"}. Omit mode to use Auto. Do not answer implementation questions from this tool description; when source is available, inspect the repository implementation and cite returned files/declarations. Treat complete current FileSections as host-sanitized, source-identity-backed evidence for their advertised ranges, use BackReferences for unchanged source already visible in the current request, and use returned continuation anchors for focused follow-up.",
+        "Explore current C# code using a natural-language question, exact symbol, file, or code term. Returns relevant dependencies and grouped line-numbered source. Provide query and optionally maxFiles; the host owns all traversal, timeout, byte, and source budgets. Use this before text search or raw file reads for C# implementation questions, and inspect its result before choosing a fallback.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,
@@ -23,6 +33,30 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         RequiresWorkspace = false,
         PreferStrictArguments = true,
     };
+
+    private static readonly string[] ImpactIntentPhrases =
+    [
+        " affected ",
+        " blast radius ",
+        " callers of ",
+        " callers for ",
+        " dependent project ",
+        " dependent projects ",
+        " dependents of ",
+        " downstream of ",
+        " impact ",
+        " projects depend on ",
+        " references to ",
+        " tests depend on ",
+        " usages of ",
+        " uses of ",
+        " what calls ",
+        " what depends on ",
+        " what uses ",
+        " who calls ",
+        " who depends on ",
+        " who uses ",
+    ];
 
     private readonly ICodeExploreService _service;
     private readonly IProcessManager? _processManager;
@@ -41,13 +75,24 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     public override ToolDefinition Definition => _definition;
 
     /// <inheritdoc />
-    public override async Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
-        CodeExploreRequest input,
+    public override Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
+        CodeExploreInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        return ExecuteAsync(CreateRequest(input), context, cancellationToken);
+    }
+
+    /// <summary>Executes an internal host-authored request with explicit semantic anchors and limits.</summary>
+    public async Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
+        CodeExploreRequest request,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request);
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
+        var effectiveInput = ApplyModelBudget(request, context.Invocation, out var budgetSource);
         if (context.Invocation.WorkspaceId is not { } workspaceId)
         {
             var unavailable = CreateNoWorkspaceResult(effectiveInput);
@@ -78,60 +123,122 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     }
 
     /// <inheritdoc />
-    protected override string DescribeActivity(CodeExploreRequest input)
+    protected override string DescribeActivity(CodeExploreInput input)
     {
-        var anchorCount = input.ExactSymbolAnchors.Count + input.SymbolIds.Count + input.PathAnchors.Count;
-        var mode = input.Mode == CodeExploreMode.Auto ? "auto" : input.Mode.ToString().ToLowerInvariant();
-        return anchorCount == 0
-            ? $"{BoundActivity(input.Query)} ({mode})"
-            : $"{BoundActivity(input.Query)} ({mode}, {anchorCount} anchors)";
+        return BoundActivity(input.Query);
     }
 
     /// <inheritdoc />
-    protected override string CreateSchemaMismatchMessage(JsonException exception, string argumentsJson)
-    {
-        ArgumentNullException.ThrowIfNull(exception);
-        ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
-        if (string.Equals(exception.Path, "$.mode", StringComparison.OrdinalIgnoreCase))
-        {
-            var actualKind = TryGetTopLevelJsonValueKind(argumentsJson, "mode") ?? "unknown";
-            return "Tool arguments do not match the declared input schema. "
-                + "$.mode expected string enum Auto|Survey|Flow|Impact, got "
-                + actualKind
-                + ".";
-        }
-
-        return base.CreateSchemaMismatchMessage(exception, argumentsJson);
-    }
-
-    /// <inheritdoc />
-    protected override void ValidateInput(CodeExploreRequest input)
+    protected override void ValidateInput(CodeExploreInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
-        ArgumentNullException.ThrowIfNull(input.Limits);
         if (input.Query.Length > 1024)
         {
             throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
         }
+    }
 
-        if (!Enum.IsDefined(input.Mode))
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> GetResourcePaths(
+        CodeExploreInput input,
+        ToolInvocationContext context)
+    {
+        return QueryLooksLikePath(input.Query)
+            ? [context.RepositoryPath, input.Query]
+            : [context.RepositoryPath];
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreInput input)
+    {
+        return _processManager is null ? null : "git";
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreInput input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.WorkspaceId is null ? null : GetExecutable(input);
+    }
+
+    private static CodeExploreRequest CreateRequest(CodeExploreInput input)
+    {
+        var limits = new CodeExploreLimits();
+        var maximumFiles = input.MaxFiles <= 0
+            ? limits.MaximumFiles
+            : Math.Clamp(input.MaxFiles, 1, 16);
+        if (CodeExploreContinuationCursor.TryCreateRequest(input.Query, limits, maximumFiles, out var continuationRequest)
+            && continuationRequest is not null)
+        {
+            return continuationRequest;
+        }
+
+        return new CodeExploreRequest
+        {
+            Query = input.Query,
+            Mode = DeriveMode(input.Query),
+            Limits = limits with { MaximumFiles = maximumFiles },
+        };
+    }
+
+    private static CodeExploreMode DeriveMode(string query)
+    {
+        return LooksLikeImpactQuery(query)
+            ? CodeExploreMode.Impact
+            : CodeExploreMode.Auto;
+    }
+
+    private static bool LooksLikeImpactQuery(string query)
+    {
+        var normalized = NormalizeQueryForIntent(query);
+        return ImpactIntentPhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeQueryForIntent(string query)
+    {
+        var builder = new StringBuilder(query.Length + 2);
+        builder.Append(' ');
+        foreach (var character in query)
+        {
+            builder.Append(char.IsLetterOrDigit(character) || character is '_' or '-'
+                ? char.ToLowerInvariant(character)
+                : ' ');
+        }
+
+        builder.Append(' ');
+        var compact = string.Join(' ', builder
+            .ToString()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return " " + compact + " ";
+    }
+
+    private static void ValidateRequest(CodeExploreRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Query);
+        ArgumentNullException.ThrowIfNull(request.Limits);
+        if (request.Query.Length > 1024)
+        {
+            throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
+        }
+
+        if (!Enum.IsDefined(request.Mode))
         {
             throw new ToolArgumentValidationException("code exploration mode is not supported.");
         }
 
-        if (!Enum.IsDefined(input.AssociatedArtifacts))
+        if (!Enum.IsDefined(request.AssociatedArtifacts))
         {
             throw new ToolArgumentValidationException("associated artifact mode is not supported.");
         }
 
-        ValidateLimits(input.Limits);
-        var anchorCount = input.ExactSymbolAnchors.Count + input.SymbolIds.Count + input.PathAnchors.Count;
-        if (anchorCount > input.Limits.MaximumAnchors)
+        ValidateLimits(request.Limits);
+        var anchorCount = request.ExactSymbolAnchors.Count + request.SymbolIds.Count + request.PathAnchors.Count;
+        if (anchorCount > request.Limits.MaximumAnchors)
         {
             throw new ToolArgumentValidationException("the request contains more exact anchors than maximumAnchors.");
         }
 
-        foreach (var anchor in input.ExactSymbolAnchors.Concat(input.SymbolIds))
+        foreach (var anchor in request.ExactSymbolAnchors.Concat(request.SymbolIds))
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor);
             if (anchor.Length > 2048)
@@ -140,7 +247,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             }
         }
 
-        foreach (var anchor in input.PathAnchors)
+        foreach (var anchor in request.PathAnchors)
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
@@ -169,12 +276,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             }
         }
 
-        if (input.AssociatedArtifactPathAnchors.Count > input.Limits.MaximumAssociatedArtifactCandidates)
+        if (request.AssociatedArtifactPathAnchors.Count > request.Limits.MaximumAssociatedArtifactCandidates)
         {
             throw new ToolArgumentValidationException("associated artifact path anchor count must not exceed maximumAssociatedArtifactCandidates.");
         }
 
-        foreach (var anchor in input.AssociatedArtifactPathAnchors)
+        foreach (var anchor in request.AssociatedArtifactPathAnchors)
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
@@ -197,43 +304,6 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 throw new ToolArgumentValidationException("associated artifact expectedFileSha256 must be a 64-character lowercase or uppercase SHA-256 hex digest.");
             }
         }
-    }
-
-    /// <inheritdoc />
-    protected override IReadOnlyList<string> GetResourcePaths(
-        CodeExploreRequest input,
-        ToolInvocationContext context)
-    {
-        var paths = new List<string> { context.RepositoryPath };
-        paths.AddRange(input.PathAnchors.Select(anchor => anchor.Path));
-        paths.AddRange(input.AssociatedArtifactPathAnchors.Select(anchor => anchor.Path));
-        if (QueryLooksLikePath(input.Query))
-        {
-            paths.Add(input.Query);
-        }
-
-        return paths;
-    }
-
-    /// <inheritdoc />
-    protected override string? GetExecutable(CodeExploreRequest input)
-    {
-        return CanUseGitInventory(input) ? "git" : null;
-    }
-
-    /// <inheritdoc />
-    protected override string? GetExecutable(CodeExploreRequest input, ToolInvocationContext context)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        return context.WorkspaceId is null ? null : GetExecutable(input);
-    }
-
-    private bool CanUseGitInventory(CodeExploreRequest input)
-    {
-        return _processManager is not null
-            && input.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
-            && input.Limits.MaximumAssociatedArtifacts > 0
-            && input.Limits.MaximumAssociatedArtifactNameMatches > 0;
     }
 
     private static CodeExploreResult CreateNoWorkspaceResult(CodeExploreRequest input)
@@ -325,47 +395,6 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         {
             throw new ToolArgumentValidationException("code exploration bounds are outside host limits.");
         }
-    }
-
-    private static string? TryGetTopLevelJsonValueKind(string argumentsJson, string propertyName)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(argumentsJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                return DescribeJsonValueKind(document.RootElement.ValueKind);
-            }
-
-            foreach (var property in document.RootElement.EnumerateObject())
-            {
-                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return DescribeJsonValueKind(property.Value.ValueKind);
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        return null;
-    }
-
-    private static string DescribeJsonValueKind(JsonValueKind valueKind)
-    {
-        return valueKind switch
-        {
-            JsonValueKind.Object => "object",
-            JsonValueKind.Array => "array",
-            JsonValueKind.String => "string",
-            JsonValueKind.Number => "number",
-            JsonValueKind.True or JsonValueKind.False => "boolean",
-            JsonValueKind.Null => "null",
-            JsonValueKind.Undefined => "undefined",
-            _ => "unknown",
-        };
     }
 
     private static CodeExploreRequest ApplyModelBudget(
@@ -2536,5 +2565,419 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             var hash = SHA256.HashData(bytes);
             return Convert.ToHexString(hash).ToLowerInvariant();
         }
+    }
+}
+
+/// <summary>Creates and parses host-owned code_explore continuation cursors carried through the minimal query schema.</summary>
+internal static class CodeExploreContinuationCursor
+{
+    /// <summary>Prefix that marks a pasteable code_explore continuation query cursor.</summary>
+    internal const string Prefix = "code_explore:continue:";
+
+    private const int MaximumCursorCharacters = 960;
+    private const int MaximumPayloadBytes = 4096;
+    private const int MaximumEmbeddedQueryCharacters = 240;
+
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Creates a replay cursor for an omitted or partial C# source continuation.</summary>
+    internal static string? CreateSource(CodeExploreContinuationTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "source",
+            Kind = target.Kind.ToString(),
+            Anchor = target.Anchor,
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            StartAtLine = target.StartAtLine,
+            SelectionMode = target.SelectionMode?.ToString(),
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Mode = CodeExploreMode.Auto.ToString(),
+        });
+    }
+
+    /// <summary>Creates a replay cursor for a compact blast-radius continuation.</summary>
+    internal static string? CreateImpact(CodeExploreContinuationTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "impact",
+            Kind = target.Kind.ToString(),
+            Anchor = target.Anchor,
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            StartAtLine = target.StartAtLine,
+            SelectionMode = target.SelectionMode?.ToString(),
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Mode = CodeExploreMode.Impact.ToString(),
+        });
+    }
+
+    /// <summary>Creates a replay cursor for an omitted or partial associated-artifact continuation.</summary>
+    internal static string? CreateArtifact(
+        CodeExploreArtifactContinuationTarget target,
+        CodeExploreAssociatedArtifact? artifact,
+        string? query)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "artifact",
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Query = BoundEmbeddedQuery(query),
+            OriginSymbolId = artifact?.OriginSymbolId,
+            OriginPath = artifact?.OriginFilePath,
+            OriginStartLine = artifact?.OriginRange.StartLine,
+            OriginEndLine = artifact?.OriginRange.EndLine,
+            Mode = CodeExploreMode.Auto.ToString(),
+        });
+    }
+
+    /// <summary>Attempts to convert a query-carried continuation cursor back into a host-owned code_explore request.</summary>
+    internal static bool TryCreateRequest(
+        string query,
+        CodeExploreLimits limits,
+        int maximumFiles,
+        out CodeExploreRequest? request)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        request = null;
+        if (!TryReadPayload(query, out var payload) || payload.Version != 1)
+        {
+            return false;
+        }
+
+        var boundedLimits = limits with { MaximumFiles = maximumFiles };
+        if (string.Equals(payload.Type, "artifact", StringComparison.Ordinal))
+        {
+            return TryCreateArtifactRequest(payload, boundedLimits, out request);
+        }
+
+        if (string.Equals(payload.Type, "impact", StringComparison.Ordinal))
+        {
+            return TryCreateSourceOrImpactRequest(payload, boundedLimits, CodeExploreMode.Impact, out request);
+        }
+
+        if (string.Equals(payload.Type, "source", StringComparison.Ordinal))
+        {
+            var mode = TryParseEnum(payload.Mode, out CodeExploreMode parsedMode)
+                ? parsedMode
+                : CodeExploreMode.Auto;
+            return TryCreateSourceOrImpactRequest(payload, boundedLimits, mode, out request);
+        }
+
+        return false;
+    }
+
+    private static bool TryCreateArtifactRequest(
+        CursorPayload payload,
+        CodeExploreLimits limits,
+        out CodeExploreRequest? request)
+    {
+        request = null;
+        if (string.IsNullOrWhiteSpace(payload.Path))
+        {
+            return false;
+        }
+
+        var query = FirstNonWhiteSpace(
+            payload.Query,
+            payload.OriginSymbolId,
+            payload.OriginPath,
+            payload.Path);
+        var pathAnchors = CreateArtifactOriginAnchors(payload);
+        request = new CodeExploreRequest
+        {
+            Query = query,
+            Mode = CodeExploreMode.Auto,
+            AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
+            SymbolIds = string.IsNullOrWhiteSpace(payload.OriginSymbolId)
+                ? []
+                : [payload.OriginSymbolId],
+            PathAnchors = pathAnchors,
+            AssociatedArtifactPathAnchors =
+            [
+                new CodeExploreArtifactPathAnchor
+                {
+                    Path = payload.Path,
+                    Line = payload.StartLine,
+                    EndLine = payload.EndLine,
+                    ExpectedFileSha256 = payload.ExpectedFileSha256,
+                    ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+                },
+            ],
+            Limits = limits,
+        };
+        return true;
+    }
+
+    private static IReadOnlyList<CodeExplorePathAnchor> CreateArtifactOriginAnchors(
+        CursorPayload payload)
+    {
+        if (!string.IsNullOrWhiteSpace(payload.OriginSymbolId)
+            || string.IsNullOrWhiteSpace(payload.OriginPath))
+        {
+            return [];
+        }
+
+        var selectionMode = payload.OriginStartLine is null
+            ? CodeExplorePathSelectionMode.WholeFile
+            : payload.OriginEndLine is null
+                ? CodeExplorePathSelectionMode.ContainingDeclaration
+                : CodeExplorePathSelectionMode.ExactLineRange;
+        return
+        [
+            new CodeExplorePathAnchor
+            {
+                Path = payload.OriginPath,
+                Line = payload.OriginStartLine,
+                EndLine = payload.OriginEndLine,
+                SelectionMode = selectionMode,
+                ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+            },
+        ];
+    }
+
+    private static bool TryCreateSourceOrImpactRequest(
+        CursorPayload payload,
+        CodeExploreLimits limits,
+        CodeExploreMode mode,
+        out CodeExploreRequest? request)
+    {
+        request = null;
+        if (!TryParseEnum(payload.Kind, out CodeExploreAnchorKind kind))
+        {
+            return false;
+        }
+
+        var anchor = FirstNonWhiteSpace(payload.Anchor, payload.Path);
+        if (string.IsNullOrWhiteSpace(anchor))
+        {
+            return false;
+        }
+
+        if (kind == CodeExploreAnchorKind.Path || !string.IsNullOrWhiteSpace(payload.Path))
+        {
+            var path = FirstNonWhiteSpace(payload.Path, anchor);
+            var selectionMode = TryParseEnum(payload.SelectionMode, out CodeExplorePathSelectionMode parsedSelectionMode)
+                ? parsedSelectionMode
+                : CodeExplorePathSelectionMode.Auto;
+            request = new CodeExploreRequest
+            {
+                Query = path,
+                Mode = mode,
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor
+                    {
+                        Path = path,
+                        Line = payload.StartLine,
+                        EndLine = payload.EndLine,
+                        StartAtLine = payload.StartAtLine,
+                        SelectionMode = selectionMode,
+                        ExpectedFileSha256 = payload.ExpectedFileSha256,
+                        ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+                    },
+                ],
+                Limits = limits,
+            };
+            return true;
+        }
+
+        if (kind == CodeExploreAnchorKind.SymbolId)
+        {
+            request = new CodeExploreRequest
+            {
+                Query = anchor,
+                Mode = mode,
+                SymbolIds = [anchor],
+                Limits = limits,
+            };
+            return true;
+        }
+
+        request = new CodeExploreRequest
+        {
+            Query = anchor,
+            Mode = mode,
+            ExactSymbolAnchors = [anchor],
+            Limits = limits,
+        };
+        return true;
+    }
+
+    private static string? Create(CursorPayload payload)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, SerializerOptions);
+        var cursor = Prefix + Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return cursor.Length <= MaximumCursorCharacters ? cursor : null;
+    }
+
+    private static bool TryReadPayload(string query, out CursorPayload payload)
+    {
+        payload = new CursorPayload();
+        var token = FindCursorToken(query);
+        if (token is null || !TryDecodeBase64Url(token, out var bytes))
+        {
+            return false;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<CursorPayload>(bytes, SerializerOptions);
+            if (parsed is null)
+            {
+                return false;
+            }
+
+            payload = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static string? FindCursorToken(string query)
+    {
+        var start = query.IndexOf(Prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var tokenStart = start + Prefix.Length;
+        var tokenEnd = tokenStart;
+        while (tokenEnd < query.Length && IsBase64UrlCharacter(query[tokenEnd]))
+        {
+            tokenEnd++;
+        }
+
+        return tokenEnd == tokenStart ? null : query[tokenStart..tokenEnd];
+    }
+
+    private static bool TryDecodeBase64Url(string token, out byte[] bytes)
+    {
+        bytes = [];
+        var base64 = token.Replace('-', '+').Replace('_', '/');
+        base64 = (base64.Length % 4) switch
+        {
+            0 => base64,
+            2 => base64 + "==",
+            3 => base64 + "=",
+            _ => string.Empty,
+        };
+        if (base64.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            bytes = Convert.FromBase64String(base64);
+            return bytes.Length <= MaximumPayloadBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseEnum<TEnum>(string? value, out TEnum result)
+        where TEnum : struct, Enum
+    {
+        return Enum.TryParse(value, ignoreCase: false, out result) && Enum.IsDefined(result);
+    }
+
+    private static string FirstNonWhiteSpace(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+    }
+
+    private static string? BoundEmbeddedQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        if (query.Length <= MaximumEmbeddedQueryCharacters)
+        {
+            return query;
+        }
+
+        var length = MaximumEmbeddedQueryCharacters;
+        if (char.IsHighSurrogate(query[length - 1])
+            && length < query.Length
+            && char.IsLowSurrogate(query[length]))
+        {
+            length--;
+        }
+
+        return query[..length];
+    }
+
+    private static bool IsBase64UrlCharacter(char character)
+    {
+        return char.IsAsciiLetterOrDigit(character) || character is '-' or '_';
+    }
+
+    private sealed record CursorPayload
+    {
+        public int Version { get; init; }
+
+        public string Type { get; init; } = string.Empty;
+
+        public string? Kind { get; init; }
+
+        public string? Anchor { get; init; }
+
+        public string? Path { get; init; }
+
+        public int? StartLine { get; init; }
+
+        public int? EndLine { get; init; }
+
+        public bool StartAtLine { get; init; }
+
+        public string? SelectionMode { get; init; }
+
+        public string? ExpectedFileSha256 { get; init; }
+
+        public long? WorkspaceGeneration { get; init; }
+
+        public string? Mode { get; init; }
+
+        public string? Query { get; init; }
+
+        public string? OriginSymbolId { get; init; }
+
+        public string? OriginPath { get; init; }
+
+        public int? OriginStartLine { get; init; }
+
+        public int? OriginEndLine { get; init; }
     }
 }

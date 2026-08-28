@@ -361,8 +361,6 @@
     "findReferences": { "maxResults": 1000 },
     "findImplementations": { "maxResults": 1000 },
     "codeExplore": {
-      // Model-visible output shape for code_explore results: structured JSON or bounded Markdown.
-      "outputFormat": "structured",
       // TUI-only diagnostic switch that includes future code_explore output in tool completion blocks.
       "inspectCodeExploreOutput": false
     },

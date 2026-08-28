@@ -2752,11 +2752,11 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>Malformed code_explore mode shape returns a precise model-visible schema-path correction.</summary>
+    /// <summary>Removed internal code-explore controls return a precise model-visible schema-path correction.</summary>
     [Fact]
-    public static async Task SessionApplication_CodeExploreInvalidModeObject_ReturnsSpecificCorrection()
+    public static async Task SessionApplication_CodeExploreInternalControl_ReturnsSpecificCorrection()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-code-explore-mode-correction-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-code-explore-internal-correction-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
@@ -2780,7 +2780,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new CodeExploreInvalidModeThenTextModelProvider();
+            var model = new CodeExploreInternalControlThenTextModelProvider();
             var application = new SessionApplication(
                 events,
                 model,
@@ -2798,9 +2798,9 @@ public static class Milestone4Tests
                 evidence,
                 registry);
             var dispatcher = new CommandDispatcher([application]);
-            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore mode correction"));
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore internal control correction"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "inspect repository with malformed code_explore mode"));
+                new SubmitRequestCommand(sessionId, "inspect repository with an internal code_explore control"));
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
@@ -2808,17 +2808,12 @@ public static class Milestone4Tests
             Assert.Equal(2, model.Requests.Count);
             var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
             Assert.Equal(ModelCorrectionCategory.ToolBatch, correction.Category);
-            Assert.Contains(
-                "$.mode expected string enum Auto|Survey|Flow|Impact, got object",
-                correction.SafeReason,
-                StringComparison.Ordinal);
+            Assert.Contains("$.limits", correction.SafeReason, StringComparison.Ordinal);
             Assert.Contains(
                 model.Requests[1].Messages,
                 message => message.Role == ModelMessageRole.Tool
                     && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
-                    && message.Content.Any(part => part.Content.Contains(
-                        "$.mode expected string enum Auto|Survey|Flow|Impact, got object",
-                        StringComparison.Ordinal)));
+                    && message.Content.Any(part => part.Content.Contains("$.limits", StringComparison.Ordinal)));
         }
         finally
         {
@@ -4440,7 +4435,7 @@ public static class Milestone4Tests
         }
     }
 
-    private sealed class CodeExploreInvalidModeThenTextModelProvider : IModelProvider
+    private sealed class CodeExploreInternalControlThenTextModelProvider : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -4459,7 +4454,7 @@ public static class Milestone4Tests
                 {
                     Output = new ToolRequestModelOutput(
                         "code_explore",
-                        "{\"query\":\"OpenAI Codex provider authentication credentials API key token\",\"mode\":{\"kind\":\"source\"}}"),
+                        "{\"query\":\"OpenAI Codex provider authentication credentials API key token\",\"limits\":{\"maximumFiles\":20}}"),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;
@@ -4469,10 +4464,8 @@ public static class Milestone4Tests
                 request.Messages,
                 message => message.Role == ModelMessageRole.Tool
                     && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
-                    && message.Content.Any(part => part.Content.Contains(
-                        "$.mode expected string enum Auto|Survey|Flow|Impact, got object",
-                        StringComparison.Ordinal)));
-            yield return new ModelChunk { Text = "Mode-shape correction was visible." };
+                    && message.Content.Any(part => part.Content.Contains("$.limits", StringComparison.Ordinal)));
+            yield return new ModelChunk { Text = "Internal-control correction was visible." };
         }
     }
 

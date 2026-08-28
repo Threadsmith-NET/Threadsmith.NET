@@ -223,7 +223,7 @@ public static class ToolRuntimeTests
             {
                 TrustLevel = RepositoryTrustLevel.TrustedBuild,
             };
-            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"inspect source\"}");
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
 
             var claims = tool.GetSchedulingClaims(input, context);
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -256,63 +256,68 @@ public static class ToolRuntimeTests
         }
     }
 
-    /// <summary>Code exploration advertises strict model arguments and explicit mode-shape guidance.</summary>
+    /// <summary>Code exploration exposes only the CodeGraph-style query and optional file hint.</summary>
     [Fact]
-    public static void CodeExplore_Definition_PrefersStrictArgumentsAndDocumentsModeShape()
+    public static void CodeExplore_Definition_UsesMinimalModelFacingSchema()
     {
         var tool = new CodeExploreTool(new NoopCodeExploreService());
 
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var properties = schema.RootElement.GetProperty("properties")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(properties.SetEquals(["query", "maxFiles"]));
+        Assert.Equal(
+            "query",
+            Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
         Assert.True(tool.Definition.PreferStrictArguments);
-        Assert.Contains(
-            "mode argument must be a JSON string enum value",
-            tool.Definition.Description,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "There is no \"source\" mode",
-            tool.Definition.Description,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "{\"kind\":\"source\"}",
-            tool.Definition.Description,
-            StringComparison.Ordinal);
-        Assert.NotNull(ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+        Assert.Contains("host owns all traversal", tool.Definition.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("limits", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        var strictSchemaJson = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
             tool.Definition.Id,
-            tool.Definition.InputSchema.JsonSchema));
+            tool.Definition.InputSchema.JsonSchema);
+        using var strictSchema = JsonDocument.Parse(Assert.IsType<string>(strictSchemaJson));
+        var strictProperties = strictSchema.RootElement.GetProperty("properties")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(strictProperties.SetEquals(["query", "maxFiles"]));
     }
 
-    /// <summary>Strict-provider nulls for optional non-nullable code_explore defaults are treated as omitted.</summary>
+    /// <summary>The optional file-count hint is clamped by the host without a corrective turn.</summary>
     [Fact]
-    public static async Task CodeExplore_NullOptionalAssociatedArtifacts_PreflightTreatsAsOmitted()
+    public static async Task CodeExplore_MaxFilesHint_IsHostClampedWithoutPreflightFailure()
     {
         var repository = CreateTemporaryDirectory();
         try
         {
             await using var events = new DomainEventStream();
-            var tool = new CodeExploreTool(new NoopCodeExploreService());
-            var input = Assert.IsType<CodeExploreRequest>(tool.DeserializeInput(
-                "{\"query\":\"inspect source\",\"associatedArtifacts\":null}"));
-            Assert.Equal(CodeExploreAssociatedArtifactsMode.Auto, input.AssociatedArtifacts);
+            var service = new CapturingCodeExploreService();
+            var tool = new CodeExploreTool(service);
+            var defaultInput = Assert.IsType<CodeExploreInput>(tool.DeserializeInput(
+                "{\"query\":\"inspect source\",\"maxFiles\":null}"));
+            Assert.Equal(8, defaultInput.MaxFiles);
             var pipeline = CreatePipeline(events, [tool]);
 
-            var preflight = pipeline.PreflightBatch(
-            [
-                new ToolBatchRequest(
-                    0,
-                    "call-1",
-                    new ToolInvocationRequest
-                    {
-                        SessionId = SessionId.New(),
-                        RunId = RunId.New(),
-                        ToolId = "code_explore",
-                        ArgumentsJson = "{\"query\":\"inspect source\",\"associatedArtifacts\":null}",
-                        Context = CreateContext(repository) with
-                        {
-                            TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                        },
-                    }),
-            ]);
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "code_explore",
+                ArgumentsJson = "{\"query\":\"inspect source\",\"maxFiles\":100000}",
+                Context = CreateContext(repository) with
+                {
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    WorkspaceId = WorkspaceId.New(),
+                },
+            });
 
-            Assert.True(preflight.Succeeded, preflight.SafeReason);
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal(16, service.Request?.Limits.MaximumFiles);
+            Assert.Equal(CodeExploreMode.Auto, service.Request?.Mode);
         }
         finally
         {
@@ -320,9 +325,34 @@ public static class ToolRuntimeTests
         }
     }
 
-    /// <summary>Object-shaped mode arguments return a precise schema path correction before execution.</summary>
+    /// <summary>The minimal adapter derives single-anchor impact intent from the model-visible query.</summary>
     [Fact]
-    public static async Task CodeExplore_InvalidModeObject_PreflightReturnsSpecificSchemaPathFailure()
+    public static async Task CodeExplore_ImpactIntent_DerivesInternalImpactMode()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var service = new CapturingCodeExploreService();
+            var tool = new CodeExploreTool(service);
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
+
+            var execution = await tool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+
+            Assert.IsType<CodeExploreResult>(execution.Value);
+            Assert.Equal("what depends on Worker?", service.Request?.Query);
+            Assert.Equal(CodeExploreMode.Impact, service.Request?.Mode);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Internal traversal and budget controls are not accepted as model tool arguments.</summary>
+    [Fact]
+    public static async Task CodeExplore_InternalControls_AreRejectedByMinimalSchema()
     {
         var repository = CreateTemporaryDirectory();
         try
@@ -340,7 +370,7 @@ public static class ToolRuntimeTests
                         SessionId = SessionId.New(),
                         RunId = RunId.New(),
                         ToolId = "code_explore",
-                        ArgumentsJson = "{\"query\":\"inspect source\",\"mode\":{\"kind\":\"source\"}}",
+                        ArgumentsJson = "{\"query\":\"inspect source\",\"limits\":{\"maximumFiles\":20}}",
                         Context = CreateContext(repository) with
                         {
                             TrustLevel = RepositoryTrustLevel.TrustedBuild,
@@ -351,10 +381,6 @@ public static class ToolRuntimeTests
             Assert.False(preflight.Succeeded);
             Assert.Equal(0, preflight.FailedOrdinal);
             Assert.Equal("code_explore", preflight.FailedToolId);
-            Assert.Contains(
-                "$.mode expected string enum Auto|Survey|Flow|Impact, got object",
-                preflight.SafeReason,
-                StringComparison.Ordinal);
         }
         finally
         {
@@ -419,9 +445,9 @@ public static class ToolRuntimeTests
         Assert.Contains("not pasted source/tool output", error.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Code exploration declares optional Git inventory use to executable policy and scheduling.</summary>
+    /// <summary>Host-owned artifact discovery declares optional Git inventory use to policy and scheduling.</summary>
     [Fact]
-    public static async Task CodeExplore_AssociatedExactNameLookup_RequiresGitExecutablePolicy()
+    public static async Task CodeExplore_HostOwnedArtifactDiscovery_RequiresGitExecutablePolicy()
     {
         var repository = CreateTemporaryDirectory();
         try
@@ -437,7 +463,7 @@ public static class ToolRuntimeTests
                 false,
                 TimeSpan.Zero));
             var tool = new CodeExploreTool(new NoopCodeExploreService(), processManager);
-            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}");
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"artifact prompt\"}");
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedBuild,
@@ -447,12 +473,6 @@ public static class ToolRuntimeTests
             var claims = tool.GetSchedulingClaims(input, context);
             Assert.Contains(claims, claim => claim.ResourceKind == ToolResourceKind.ProcessPool
                 && claim.AccessMode == ToolAccessMode.Execute);
-            var disabledInput = input with
-            {
-                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Disabled,
-            };
-            var disabledClaims = tool.GetSchedulingClaims(disabledInput, context);
-            Assert.DoesNotContain(disabledClaims, claim => claim.ResourceKind == ToolResourceKind.ProcessPool);
 
             var pipeline = CreatePipeline(events, [tool]);
             var denied = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -460,7 +480,7 @@ public static class ToolRuntimeTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "code_explore",
-                ArgumentsJson = "{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}",
+                ArgumentsJson = "{\"query\":\"artifact prompt\"}",
                 Context = context,
             });
             var allowed = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -468,7 +488,7 @@ public static class ToolRuntimeTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "code_explore",
-                ArgumentsJson = "{\"query\":\"artifact prompt\",\"associatedArtifacts\":\"Enabled\"}",
+                ArgumentsJson = "{\"query\":\"artifact prompt\"}",
                 Context = context with { AllowedExecutables = ["git"] },
             });
 
@@ -483,6 +503,25 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Legacy persistent output-shape configuration cannot restore metadata-heavy model output.</summary>
+    [Fact]
+    public static void CodeExploreOutputOptions_LegacyPersistentFormat_DoesNotOverrideCompactDefault()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["tools:codeExplore:outputFormat"] = "structured",
+                ["tools:codeExplore:inspectCodeExploreOutput"] = "true",
+            })
+            .Build();
+
+        var options = CodeExploreOutputOptions.FromConfiguration(configuration);
+        var snapshot = options.GetSnapshot(SessionId.New());
+
+        Assert.Equal(CodeExploreOutputFormat.Markdown, snapshot.OutputFormat);
+        Assert.True(snapshot.InspectCodeExploreOutput);
+    }
+
     /// <summary>The code_explore output decorator is a pass-through in structured mode.</summary>
     [Fact]
     public static async Task CodeExploreOutputFormattingTool_StructuredMode_DoesNotSetModelResultContent()
@@ -493,7 +532,7 @@ public static class ToolRuntimeTests
             var tool = new CodeExploreOutputFormattingTool(
                 new CodeExploreTool(new NoopCodeExploreService()),
                 new CodeExploreOutputOptions(CodeExploreOutputFormat.Structured));
-            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"inspect source\"}");
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
             var execution = await tool.ExecuteAsync(
                 input,
                 CreateCodeExploreExecutionContext(repository));
@@ -517,19 +556,81 @@ public static class ToolRuntimeTests
             var tool = new CodeExploreOutputFormattingTool(
                 new CodeExploreTool(new NoopCodeExploreService()),
                 new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
-            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"inspect source\"}");
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
             var execution = await tool.ExecuteAsync(
                 input,
                 CreateCodeExploreExecutionContext(repository));
 
             Assert.IsType<CodeExploreResult>(execution.Value);
             Assert.NotNull(execution.ModelResultContent);
-            Assert.Contains("# code_explore result", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("## Resolved anchors", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("## Candidate summaries", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("## Impact / blast-radius evidence", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Exploration:** `inspect source`", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("Found 1 symbol across 1 file.", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Blast radius — what depends on these**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Caller reaches Worker.Run", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("## Source Code", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Project:** `Example.Dependent`", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Test:** `Example.Dependent.Tests`", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Source Code**", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("Artifact note: omitted range: L5-L10 omitted by artifact character bounds.", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("Artifact note: Artifact could not be read safely because it exceeded host bounds.", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("Candidate summaries", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("Adaptive envelope", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("sha256", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Markdown follow-up cursors replay exact source, impact, and artifact continuations through the minimal query schema.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_MarkdownContinuations_AreReplayableQueries()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var formattingTool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new NoopCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var input = (CodeExploreInput)formattingTool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
+            var execution = await formattingTool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+            var sourceCursor = ExtractContinuationCursor(markdown, "Source");
+            var impactCursor = ExtractContinuationCursor(markdown, "Impact");
+            var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
+
+            var sourceService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(sourceService).ExecuteAsync(
+                new CodeExploreInput { Query = sourceCursor },
+                CreateCodeExploreExecutionContext(repository));
+            var sourceAnchor = Assert.Single(sourceService.Request?.PathAnchors ?? []);
+            Assert.Equal("src/Worker.cs", sourceAnchor.Path);
+            Assert.Equal(5, sourceAnchor.Line);
+            Assert.Equal(8, sourceAnchor.EndLine);
+            Assert.Equal(CodeExplorePathSelectionMode.ExactLineRange, sourceAnchor.SelectionMode);
+            Assert.Equal(CodeExploreMode.Auto, sourceService.Request?.Mode);
+
+            var impactService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(impactService).ExecuteAsync(
+                new CodeExploreInput { Query = impactCursor },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.Equal(CodeExploreMode.Impact, impactService.Request?.Mode);
+            Assert.Equal("symbol:example.worker", Assert.Single(impactService.Request?.SymbolIds ?? []));
+
+            var artifactService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+                new CodeExploreInput { Query = artifactCursor },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
+            Assert.Equal("symbol:example.worker", Assert.Single(artifactService.Request?.SymbolIds ?? []));
+            var artifactAnchor = Assert.Single(artifactService.Request?.AssociatedArtifactPathAnchors ?? []);
+            Assert.Equal("prompts/worker.md", artifactAnchor.Path);
+            Assert.Equal(5, artifactAnchor.Line);
+            Assert.Equal(10, artifactAnchor.EndLine);
+            Assert.Equal(new string('a', 64), artifactAnchor.ExpectedFileSha256);
         }
         finally
         {
@@ -547,11 +648,11 @@ public static class ToolRuntimeTests
             var markdownSession = SessionId.New();
             var structuredSession = SessionId.New();
             var options = new CodeExploreOutputOptions();
-            _ = options.SetSessionOutputFormat(markdownSession, CodeExploreOutputFormat.Markdown);
+            _ = options.SetSessionOutputFormat(structuredSession, CodeExploreOutputFormat.Structured);
             var tool = new CodeExploreOutputFormattingTool(
                 new CodeExploreTool(new NoopCodeExploreService()),
                 options);
-            var input = (CodeExploreRequest)tool.DeserializeInput("{\"query\":\"inspect source\"}");
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
 
             var markdown = await tool.ExecuteAsync(
                 input,
@@ -562,6 +663,7 @@ public static class ToolRuntimeTests
 
             Assert.NotNull(markdown.ModelResultContent);
             Assert.Null(structured.ModelResultContent);
+            Assert.Equal(CodeExploreOutputFormat.Markdown, options.GetOutputFormat(markdownSession));
             Assert.Equal(CodeExploreOutputFormat.Structured, options.GetOutputFormat(structuredSession));
         }
         finally
@@ -604,7 +706,7 @@ public static class ToolRuntimeTests
             Assert.True(result.Succeeded, result.Error);
             Assert.NotNull(result.ResultJson);
             Assert.NotNull(result.ModelResultContent);
-            Assert.Contains("# code_explore result", result.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Exploration:** `inspect source`", result.ModelResultContent, StringComparison.Ordinal);
             var structured = JsonSerializer.Deserialize<CodeExploreResult>(result.ResultJson);
             Assert.NotNull(structured);
             var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
@@ -2716,6 +2818,27 @@ public static class ToolRuntimeTests
         };
     }
 
+    private static string ExtractContinuationCursor(string markdown, string label)
+    {
+        const string prefix = "code_explore:continue:";
+        var labelStart = markdown.IndexOf($"- **{label}:**", StringComparison.Ordinal);
+        Assert.True(labelStart >= 0, $"Expected {label} follow-up target in Markdown.{Environment.NewLine}{markdown}");
+        var tokenStart = markdown.IndexOf(prefix, labelStart, StringComparison.Ordinal);
+        Assert.True(tokenStart >= 0, $"Expected {label} retry query cursor in Markdown.{Environment.NewLine}{markdown}");
+        var tokenEnd = tokenStart;
+        while (tokenEnd < markdown.Length && IsBase64UrlCursorCharacter(markdown[tokenEnd]))
+        {
+            tokenEnd++;
+        }
+
+        return markdown[tokenStart..tokenEnd];
+    }
+
+    private static bool IsBase64UrlCursorCharacter(char character)
+    {
+        return char.IsAsciiLetterOrDigit(character) || character is ':' or '-' or '_';
+    }
+
     private static string CreateTemporaryDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), $"threadsmith-m3-{Guid.NewGuid():N}");
@@ -2839,6 +2962,23 @@ public static class ToolRuntimeTests
         }
     }
 
+    private sealed class CapturingCodeExploreService : ICodeExploreService
+    {
+        public CodeExploreRequest? Request { get; private set; }
+
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Request = request;
+            return Task.FromResult(CreateRichCodeExploreResult());
+        }
+    }
+
     private sealed class ThrowingCodeExploreService : ICodeExploreService
     {
         public bool WasCalled { get; private set; }
@@ -2859,6 +2999,7 @@ public static class ToolRuntimeTests
     {
         var worker = new SemanticSymbolIdentity("symbol:example.worker", "Worker", "class");
         var caller = new SemanticSymbolIdentity("symbol:example.caller", "Caller.Run", "method");
+        var continuationDigest = new string('a', 64);
         var location = new CodeExploreLocation(
             "Example.Project",
             "net10.0",
@@ -2866,6 +3007,15 @@ public static class ToolRuntimeTests
             new SourceRange(1, 1, 8, 2),
             IsGenerated: false,
             IsLinked: false);
+        var artifactContent = new CodeExploreArtifactContent(
+            new SourceRange(1, 1, 4, 1),
+            ["1: # Worker prompt", "2: Use the worker safely."],
+            continuationDigest,
+            "artifact-range-sha256",
+            CodeExploreSourceCompleteness.Partial,
+            ["L5-L10 omitted by artifact character bounds."],
+            "prompts/worker.md",
+            48);
         return new CodeExploreResult(
             1,
             SemanticConfidenceLevel.FullSemantic,
@@ -2895,25 +3045,62 @@ public static class ToolRuntimeTests
                 "Selected exact Worker declaration.")],
             new CodeExploreCoverage(true, true, true, true, []),
             [],
-            [],
+            [new CodeExploreContinuationTarget(
+                CodeExploreAnchorKind.Path,
+                "src/Worker.cs",
+                "src/Worker.cs",
+                5,
+                8,
+                false,
+                CodeExplorePathSelectionMode.ExactLineRange,
+                continuationDigest,
+                1,
+                "Retry with this exact Worker source range.")],
             BlastRadius: new CodeExploreBlastRadius(
-                [new CodeExploreBlastRadiusItem(
-                    worker.Id,
-                    ImpactKind.Caller,
-                    caller,
-                    location,
-                    location.ProjectName,
-                    "Caller reaches Worker.Run through compiler-known call evidence.")],
+                [
+                    new CodeExploreBlastRadiusItem(
+                        worker.Id,
+                        ImpactKind.Caller,
+                        caller,
+                        location,
+                        location.ProjectName,
+                        "Caller reaches Worker.Run through compiler-known call evidence."),
+                    new CodeExploreBlastRadiusItem(
+                        worker.Id,
+                        ImpactKind.Project,
+                        null,
+                        null,
+                        "Example.Dependent",
+                        "Project directly or transitively depends on a project containing primary anchor evidence."),
+                    new CodeExploreBlastRadiusItem(
+                        worker.Id,
+                        ImpactKind.Test,
+                        null,
+                        null,
+                        "Example.Dependent.Tests",
+                        "Test project directly or transitively depends on a project containing primary anchor evidence."),
+                ],
                 ReturnedCallers: 1,
                 TotalCallers: 1,
                 ReturnedImplementations: 0,
                 TotalImplementations: 0,
                 ReturnedProjects: 1,
                 TotalProjects: 1,
-                ReturnedTests: 0,
-                TotalTests: 0,
+                ReturnedTests: 1,
+                TotalTests: 1,
                 Omissions: [],
-                ContinuationTargets: []),
+                ContinuationTargets:
+                [new CodeExploreContinuationTarget(
+                    CodeExploreAnchorKind.SymbolId,
+                    worker.Id,
+                    null,
+                    null,
+                    null,
+                    false,
+                    null,
+                    null,
+                    1,
+                    "Retry symbol_impact for additional compact impact evidence.")]),
             CandidateSummaries:
             [
                 new CodeExploreCandidateSummary(
@@ -2926,7 +3113,56 @@ public static class ToolRuntimeTests
                     true,
                     "Matched the distinctive Worker identifier.",
                     null),
-            ]);
+            ],
+            AssociatedArtifacts:
+            [
+                new CodeExploreAssociatedArtifact(
+                    "prompts/worker.md",
+                    CodeExploreArtifactMediaKind.Markdown,
+                    "Example.Project",
+                    worker.Id,
+                    "src/Worker.cs",
+                    location.Range,
+                    CodeExploreArtifactRelationshipKind.PromptReference,
+                    CodeExploreArtifactEvidenceLevel.CompilerProven,
+                    ["Selected from Worker source evidence."],
+                    artifactContent,
+                    []),
+                new CodeExploreAssociatedArtifact(
+                    "prompts/worker.unreadable.md",
+                    CodeExploreArtifactMediaKind.Markdown,
+                    "Example.Project",
+                    worker.Id,
+                    "src/Worker.cs",
+                    location.Range,
+                    CodeExploreArtifactRelationshipKind.PromptReference,
+                    CodeExploreArtifactEvidenceLevel.CompilerProven,
+                    ["Selected from Worker source evidence but content was omitted."],
+                    null,
+                    ["Artifact could not be read safely because it exceeded host bounds."]),
+            ],
+            ArtifactCoverage: new CodeExploreArtifactCoverage(
+                InspectedSourceAnchors: 1,
+                InspectedProjects: 1,
+                InspectedDirectories: 1,
+                CandidateCount: 1,
+                ReturnedCount: 1,
+                OmittedCount: 1,
+                SpentCharacters: artifactContent.ReturnedCharacters,
+                Complete: false,
+                CandidateLimitReached: false,
+                FileLimitReached: false,
+                CharacterLimitReached: true,
+                TimeLimitReached: false,
+                Omissions: ["Associated artifact character-output bounds were reached; use artifact continuation targets for focused follow-up."],
+                ContinuationTargets:
+                [new CodeExploreArtifactContinuationTarget(
+                    "prompts/worker.md",
+                    5,
+                    10,
+                    continuationDigest,
+                    1,
+                    "Retry with this explicit associated artifact path anchor and digest to continue omitted artifact content.")]));
     }
 
     private sealed class StubCSharpScriptEngine : ICSharpScriptEngine

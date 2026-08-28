@@ -87,285 +87,139 @@ public sealed class CodeExploreOutputFormattingTool : ITool
             return execution;
         }
 
+        var query = input is CodeExploreInput codeExploreInput
+            ? codeExploreInput.Query
+            : null;
         return execution.Value is CodeExploreResult result
-            ? execution with { ModelResultContent = CodeExploreMarkdownRenderer.Render(result) }
+            ? execution with { ModelResultContent = CodeExploreMarkdownRenderer.Render(result, query) }
             : execution;
     }
 }
 
-/// <summary>Renders a model-facing Markdown projection from authoritative code_explore DTOs.</summary>
+/// <summary>Renders a compact CodeGraph-style model-facing projection from authoritative code-explore DTOs.</summary>
 internal static class CodeExploreMarkdownRenderer
 {
-    private const int MaximumNotShownTargets = 16;
-    private const int MaximumNextActions = 12;
-    private const int MaximumContinuations = 24;
-    private const int MaximumBackReferences = 24;
-    private const int MaximumFileRelevanceRows = 24;
-    private const int MaximumOmissions = 16;
-    private const int MaximumSemanticIdentities = 8;
-    private const int MaximumResolvedAnchors = 24;
-    private const int MaximumAnchorAlternatives = 8;
-    private const int MaximumCandidateSummaries = 24;
-    private const int MaximumBlastRadiusItems = 32;
-    private const int MaximumBlastRadiusContinuations = 12;
+    private const int MaximumImpactItems = 32;
     private const int MaximumFlowEdges = 24;
-    private const int MaximumFlowBoundaries = 16;
-    private const int MaximumAssociatedArtifacts = 16;
+    private const int MaximumFlowBoundaries = 12;
+    private const int MaximumAssociatedArtifacts = 12;
+    private const int MaximumArtifactOmissions = 4;
+    private const int MaximumBackReferences = 16;
+    private const int MaximumContinuations = 16;
+    private const int MaximumNextActions = 8;
+    private const int MaximumOmissions = 12;
+    private const int MaximumSemanticIdentities = 8;
 
-    /// <summary>Renders a bounded Markdown projection for one code_explore result.</summary>
-    internal static string Render(CodeExploreResult result)
+    /// <summary>Renders one concise source-first exploration result.</summary>
+    internal static string Render(CodeExploreResult result, string? query = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         var builder = new StringBuilder();
-        builder.AppendLine("# code_explore result");
-        builder.AppendLine();
-        AppendSummary(builder, result);
-        AppendHowToUse(builder, result);
-        AppendResolvedAnchors(builder, result.ResolvedAnchors);
-        AppendCandidateSummaries(builder, result.CandidateSummaries);
+        AppendHeader(builder, result, query);
+        AppendAvailability(builder, result);
         AppendBlastRadius(builder, result.BlastRadius);
-        AppendSourceCode(builder, result);
-        AppendBackReferences(builder, result.BackReferences);
+        AppendSourceCode(builder, result.FileSections);
         AppendFlow(builder, result.Flow);
-        AppendAssociatedArtifacts(builder, result.AssociatedArtifacts, result.ArtifactCoverage);
-        AppendFileRelevance(builder, result.FileRelevance);
-        AppendNotShown(builder, result.Presentation?.NotShownTargets);
-        AppendContinuations(builder, result.ContinuationTargets);
+        AppendAssociatedArtifacts(builder, result.AssociatedArtifacts);
+        AppendBackReferences(builder, result.BackReferences);
+        AppendContinuations(builder, result, query);
         AppendNextActions(builder, result.Presentation?.NextActions ?? result.Availability?.RecommendedActions);
-        AppendOmissions(builder, result.Omissions, result.Coverage, result.ArtifactCoverage);
+        AppendOmissions(builder, result);
         return builder.ToString().TrimEnd() + Environment.NewLine;
     }
 
-    private static void AppendSummary(StringBuilder builder, CodeExploreResult result)
+    private static void AppendHeader(StringBuilder builder, CodeExploreResult result, string? query)
     {
-        var availability = result.Availability;
-        if (!string.IsNullOrWhiteSpace(result.Presentation?.ModelSummary))
+        builder.Append("**Exploration:** ");
+        builder.AppendLine(FormatCodeSpan(string.IsNullOrWhiteSpace(query) ? "C# code" : BoundInline(query, 240)));
+        builder.AppendLine();
+
+        var symbols = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var resolution in result.ResolvedAnchors)
         {
-            builder.AppendLine(result.Presentation.ModelSummary.Trim());
+            if (resolution.SelectedSymbol is { } symbol)
+            {
+                _ = symbols.Add(symbol.Id);
+            }
         }
 
-        if (availability is not null)
+        foreach (var section in result.FileSections)
         {
-            builder.AppendLine(
-                $"Availability: **{availability.Status}** — {CleanInline(availability.Reason)}");
+            foreach (var symbol in section.SemanticIdentities)
+            {
+                _ = symbols.Add(symbol.Id);
+            }
         }
 
+        var fileCount = result.FileSections
+            .Select(section => section.FilePath)
+            .Distinct(PathComparer)
+            .Count();
         builder.AppendLine(
-            $"Confidence: **{result.Confidence}**; workspace generation: `{result.WorkspaceGeneration.ToString(CultureInfo.InvariantCulture)}`.");
-        builder.AppendLine(
-            $"Returned source sections: {result.FileSections.Count.ToString(CultureInfo.InvariantCulture)}; "
-            + $"back-references: {(result.BackReferences?.Count ?? 0).ToString(CultureInfo.InvariantCulture)}; "
-            + $"continuations: {result.ContinuationTargets.Count.ToString(CultureInfo.InvariantCulture)}.");
-        if (result.AdaptiveBudget is { } budget)
-        {
-            builder.AppendLine(
-                $"Adaptive envelope: {budget.RepositoryScale.Tier}; max files {budget.EffectiveMaximumFiles.ToString(CultureInfo.InvariantCulture)}, "
-                + $"source {budget.EffectiveMaximumSourceCharacters.ToString(CultureInfo.InvariantCulture)} chars, "
-                + $"per-file {budget.EffectiveMaximumPerFileSourceCharacters.ToString(CultureInfo.InvariantCulture)} chars.");
-        }
-
+            $"Found {FormatCount(symbols.Count, "symbol")} across {FormatCount(fileCount, "file")}.");
         builder.AppendLine();
     }
 
-    private static void AppendHowToUse(StringBuilder builder, CodeExploreResult result)
+    private static void AppendAvailability(StringBuilder builder, CodeExploreResult result)
     {
-        builder.AppendLine("## How to use this result");
-        if (result.Presentation?.SourceGuarantees is { Count: > 0 } guarantees)
-        {
-            var readEquivalent = guarantees.Count(guarantee => guarantee.IsReadEquivalent);
-            builder.AppendLine(
-                $"- {readEquivalent.ToString(CultureInfo.InvariantCulture)} returned or referenced range(s) are source-identity backed for their advertised line spans. Returned source text is the host-sanitized model-visible projection; digests identify the current source bytes before sanitization.");
-        }
-        else
-        {
-            builder.AppendLine("- Treat complete `Source Code` sections as current, line-numbered, host-sanitized source projections for their advertised ranges; digests identify source bytes before sanitization.");
-        }
-
-        builder.AppendLine("- Use `Back-references already visible` instead of re-reading unchanged source already present in this model request.");
-        builder.AppendLine("- Use `Continuation targets` for focused follow-up rather than broad search or adjacent pagination.");
-        builder.AppendLine("- The structured JSON result remains the host authority; this Markdown is derived from that DTO.");
-        builder.AppendLine();
-    }
-
-    private static void AppendResolvedAnchors(
-        StringBuilder builder,
-        IReadOnlyList<CodeExploreAnchorResolution> resolutions)
-    {
-        if (resolutions.Count == 0)
+        if (result.Availability is not { } availability
+            || availability.Status == CodeExploreAvailabilityStatus.Available)
         {
             return;
         }
 
-        builder.AppendLine("## Resolved anchors");
-        foreach (var resolution in resolutions.Take(MaximumResolvedAnchors))
-        {
-            builder.AppendLine(
-                $"- {resolution.Kind} {FormatCodeSpan(resolution.Input)}: **{resolution.Outcome}** — {BoundInline(resolution.Reason, 240)}");
-            if (resolution.SelectedSymbol is { } selectedSymbol)
-            {
-                builder.AppendLine($"  - Selected symbol: {FormatSymbol(selectedSymbol)}");
-            }
-
-            if (resolution.SelectedLocation is { } selectedLocation)
-            {
-                builder.AppendLine($"  - Selected location: {FormatLocation(selectedLocation)}");
-            }
-
-            if (resolution.Alternatives.Count > 0)
-            {
-                builder.AppendLine("  - Alternatives:");
-                foreach (var alternative in resolution.Alternatives.Take(MaximumAnchorAlternatives))
-                {
-                    builder.AppendLine(
-                        $"    - {FormatSymbol(alternative.Symbol)}"
-                        + (alternative.Location is null ? string.Empty : $" at {FormatLocation(alternative.Location)}"));
-                }
-
-                AppendAdditionalCountLine(
-                    builder,
-                    resolution.Alternatives.Count,
-                    MaximumAnchorAlternatives,
-                    "anchor alternative");
-            }
-        }
-
-        AppendAdditionalCountLine(builder, resolutions.Count, MaximumResolvedAnchors, "resolved anchor");
+        builder.AppendLine("**Availability**");
         builder.AppendLine();
-    }
-
-    private static void AppendCandidateSummaries(
-        StringBuilder builder,
-        IReadOnlyList<CodeExploreCandidateSummary>? candidates)
-    {
-        if (candidates is not { Count: > 0 })
-        {
-            return;
-        }
-
-        builder.AppendLine("## Candidate summaries");
-        builder.AppendLine("| Rank | Candidate | Tier | Selected | Location | Reasons | Explanation |");
-        builder.AppendLine("|---:|---|---|---|---|---|---|");
-        foreach (var candidate in candidates.Take(MaximumCandidateSummaries))
-        {
-            var identity = candidate.Symbol is null
-                ? candidate.FilePath ?? "candidate"
-                : FormatSymbol(candidate.Symbol);
-            var location = candidate.Location is null
-                ? candidate.FilePath ?? "no exact location"
-                : FormatLocation(candidate.Location);
-            builder.AppendLine(
-                $"| {candidate.Rank.ToString(CultureInfo.InvariantCulture)} "
-                + $"| {EscapeTableCell(identity)} "
-                + $"| {candidate.Tier} "
-                + $"| {FormatBool(candidate.Selected)} "
-                + $"| {EscapeTableCell(location)} "
-                + $"| {EscapeTableCell(BoundInline(candidate.Reasons.ToString(), 160))} "
-                + $"| {EscapeTableCell(BoundInline(candidate.Reason, 240))} |");
-        }
-
-        AppendAdditionalCountLine(builder, candidates.Count, MaximumCandidateSummaries, "candidate summary");
+        builder.AppendLine($"- **{availability.Status}:** {BoundInline(availability.Reason, 320)}");
         builder.AppendLine();
     }
 
     private static void AppendBlastRadius(StringBuilder builder, CodeExploreBlastRadius? blastRadius)
     {
-        if (blastRadius is null)
+        if (blastRadius is not { Items.Count: > 0 })
         {
             return;
         }
 
-        builder.AppendLine("## Impact / blast-radius evidence");
-        builder.AppendLine(
-            $"Callers: {blastRadius.ReturnedCallers.ToString(CultureInfo.InvariantCulture)}/{blastRadius.TotalCallers.ToString(CultureInfo.InvariantCulture)}; "
-            + $"implementations: {blastRadius.ReturnedImplementations.ToString(CultureInfo.InvariantCulture)}/{blastRadius.TotalImplementations.ToString(CultureInfo.InvariantCulture)}; "
-            + $"projects: {blastRadius.ReturnedProjects.ToString(CultureInfo.InvariantCulture)}/{blastRadius.TotalProjects.ToString(CultureInfo.InvariantCulture)}; "
-            + $"tests: {blastRadius.ReturnedTests.ToString(CultureInfo.InvariantCulture)}/{blastRadius.TotalTests.ToString(CultureInfo.InvariantCulture)}.");
-        if (blastRadius.Items.Count > 0)
+        builder.AppendLine("**Blast radius — what depends on these**");
+        builder.AppendLine();
+        foreach (var item in blastRadius.Items.Take(MaximumImpactItems))
         {
-            builder.AppendLine("| Anchor | Kind | Symbol | Location | Project | Reason |");
-            builder.AppendLine("|---|---|---|---|---|---|");
-            foreach (var item in blastRadius.Items.Take(MaximumBlastRadiusItems))
-            {
-                builder.AppendLine(
-                    $"| {EscapeTableCell(FormatCodeSpan(item.AnchorSymbolId))} "
-                    + $"| {item.Kind} "
-                    + $"| {EscapeTableCell(item.Symbol is null ? "n/a" : FormatSymbol(item.Symbol))} "
-                    + $"| {EscapeTableCell(item.Location is null ? "no exact location" : FormatLocation(item.Location))} "
-                    + $"| {EscapeTableCell(item.ProjectName ?? "n/a")} "
-                    + $"| {EscapeTableCell(BoundInline(item.Reason, 240))} |");
-            }
-
-            AppendAdditionalCountLine(builder, blastRadius.Items.Count, MaximumBlastRadiusItems, "impact item");
+            var identity = item.Symbol?.DisplayName
+                ?? item.ProjectName
+                ?? item.AnchorSymbolId;
+            var location = item.Location is null
+                ? string.Empty
+                : $" — {FormatCodeSpan(item.Location.FilePath)}:{FormatRange(item.Location.Range)}";
+            builder.AppendLine(
+                $"- **{item.Kind}:** {FormatCodeSpan(identity)}{location} — {BoundInline(item.Reason, 280)}");
         }
 
-        if (blastRadius.ContinuationTargets.Count > 0)
-        {
-            builder.AppendLine("Impact continuations:");
-            foreach (var target in blastRadius.ContinuationTargets.Take(MaximumBlastRadiusContinuations))
-            {
-                builder.AppendLine(
-                    $"- {FormatCodeSpan(target.Anchor)} ({target.Kind}) {FormatTargetPath(target.FilePath, CreateRange(target))} — {BoundInline(target.Reason, 240)}");
-            }
-
-            AppendAdditionalCountLine(
-                builder,
-                blastRadius.ContinuationTargets.Count,
-                MaximumBlastRadiusContinuations,
-                "impact continuation");
-        }
-
-        if (blastRadius.Omissions.Count > 0)
-        {
-            builder.AppendLine("Impact omissions:");
-            foreach (var omission in blastRadius.Omissions.Take(MaximumOmissions))
-            {
-                builder.AppendLine("- " + BoundInline(omission, 240));
-            }
-
-            AppendAdditionalCountLine(builder, blastRadius.Omissions.Count, MaximumOmissions, "impact omission");
-        }
-
+        AppendHiddenCount(builder, blastRadius.Items.Count, MaximumImpactItems, "impact item");
         builder.AppendLine();
     }
 
-    private static void AppendSourceCode(StringBuilder builder, CodeExploreResult result)
+    private static void AppendSourceCode(
+        StringBuilder builder,
+        IReadOnlyList<CodeExploreFileSection> sections)
     {
-        builder.AppendLine("## Source Code");
-        if (result.FileSections.Count == 0)
+        if (sections.Count == 0)
         {
-            builder.AppendLine("_No new C# source was returned._");
-            builder.AppendLine();
             return;
         }
 
-        foreach (var section in result.FileSections)
+        builder.AppendLine("**Source Code**");
+        builder.AppendLine();
+        foreach (var section in sections)
         {
-            var range = FormatRange(section.Source.Range);
-            builder.AppendLine($"### {FormatCodeSpan(section.FilePath)} {range}");
-            builder.AppendLine(
-                $"Project: {FormatCodeSpan(section.ProjectName)}; target framework: {FormatCodeSpan(section.TargetFramework)}; "
-                + $"completeness: **{section.Source.Completeness}**; generated: {FormatBool(section.IsGenerated)}; linked: {FormatBool(section.IsLinked)}.");
-            builder.AppendLine($"Reason: {CleanInline(section.SelectionReason)}");
-            if (!string.IsNullOrWhiteSpace(section.Source.FileSha256))
-            {
-                builder.AppendLine(
-                    $"Identity: file sha256 {FormatCodeSpan(section.Source.FileSha256)}"
-                    + (string.IsNullOrWhiteSpace(section.Source.RangeSha256)
-                        ? "."
-                        : $"; range sha256 {FormatCodeSpan(section.Source.RangeSha256)}."));
-            }
-
-            if (section.SemanticIdentities.Count > 0)
-            {
-                builder.AppendLine(
-                    "Symbols: "
-                    + string.Join(
-                        ", ",
-                        section.SemanticIdentities
-                            .Take(MaximumSemanticIdentities)
-                            .Select(identity => $"{FormatCodeSpan(identity.DisplayName)} ({CleanInline(identity.Kind)})"))
-                    + FormatAdditionalCount(section.SemanticIdentities.Count, MaximumSemanticIdentities));
-            }
+            var symbols = section.SemanticIdentities
+                .Take(MaximumSemanticIdentities)
+                .Select(symbol => FormatCodeSpan(symbol.DisplayName))
+                .ToArray();
+            var symbolSummary = symbols.Length == 0
+                ? string.Empty
+                : " — " + string.Join(", ", symbols);
+            builder.AppendLine($"**{FormatCodeSpan(section.FilePath)}**{symbolSummary}");
 
             if (section.Source.NumberedLines.Count > 0)
             {
@@ -380,23 +234,164 @@ internal static class CodeExploreMarkdownRenderer
             }
             else
             {
-                builder.AppendLine("_Source text was not emitted for this section._");
+                builder.AppendLine("_No source text was emitted for this section._");
             }
 
-            if (section.Source.OmittedRanges.Count > 0)
+            if (section.Source.Completeness != CodeExploreSourceCompleteness.Complete)
             {
                 builder.AppendLine(
-                    "Omitted ranges: "
-                    + string.Join(", ", section.Source.OmittedRanges.Select(CleanInline)));
+                    $"_Partial source: {section.Source.Completeness}; shown range {FormatRange(section.Source.Range)}._");
             }
 
-            if (!string.IsNullOrWhiteSpace(section.Source.ContinuationAnchor))
+            if (section.IsGenerated || section.IsLinked)
             {
-                builder.AppendLine($"Continuation anchor: {FormatCodeSpan(section.Source.ContinuationAnchor)}");
+                var classifications = new List<string>();
+                if (section.IsGenerated)
+                {
+                    classifications.Add("generated");
+                }
+
+                if (section.IsLinked)
+                {
+                    classifications.Add("linked");
+                }
+
+                builder.AppendLine("_Classification: " + string.Join(", ", classifications) + "._");
             }
 
             builder.AppendLine();
         }
+    }
+
+    private static void AppendFlow(StringBuilder builder, CodeExploreFlow? flow)
+    {
+        if (flow is null or { Edges.Count: 0, Boundaries.Count: 0 })
+        {
+            return;
+        }
+
+        builder.AppendLine("**Call flow**");
+        builder.AppendLine();
+        foreach (var edge in flow.Edges.Take(MaximumFlowEdges))
+        {
+            var callSite = edge.CallSite is null
+                ? string.Empty
+                : $" at {FormatCodeSpan(edge.CallSite.FilePath)}:{FormatRange(edge.CallSite.Range)}";
+            builder.AppendLine(
+                $"- {FormatCodeSpan(edge.CallerSymbolId)} → {FormatCodeSpan(edge.CalleeSymbolId)}"
+                + $" ({edge.DispatchKind}){callSite} — {BoundInline(edge.Proof, 280)}");
+        }
+
+        AppendHiddenCount(builder, flow.Edges.Count, MaximumFlowEdges, "flow edge");
+        foreach (var boundary in flow.Boundaries.Take(MaximumFlowBoundaries))
+        {
+            builder.AppendLine(
+                $"- **Boundary {boundary.Kind}:** {FormatCodeSpan(boundary.SymbolId)} — {BoundInline(boundary.Reason, 280)}");
+        }
+
+        AppendHiddenCount(builder, flow.Boundaries.Count, MaximumFlowBoundaries, "flow boundary");
+        builder.AppendLine();
+    }
+
+    private static void AppendAssociatedArtifacts(
+        StringBuilder builder,
+        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts)
+    {
+        if (artifacts is not { Count: > 0 })
+        {
+            return;
+        }
+
+        builder.AppendLine("**Associated artifacts**");
+        builder.AppendLine();
+        foreach (var artifact in artifacts.Take(MaximumAssociatedArtifacts))
+        {
+            var identity = artifact.FilePath ?? artifact.LogicalName ?? "artifact";
+            builder.AppendLine(
+                $"**{FormatCodeSpan(identity)}** — {artifact.Relationship}; from {FormatCodeSpan(artifact.OriginFilePath)}");
+            if (artifact.Content is { } content && content.NumberedLines.Count > 0)
+            {
+                var fence = CreateFence(content.NumberedLines);
+                builder.AppendLine(fence + "text");
+                foreach (var line in content.NumberedLines)
+                {
+                    builder.AppendLine(line);
+                }
+
+                builder.AppendLine(fence);
+            }
+
+            AppendArtifactCompleteness(builder, artifact);
+            builder.AppendLine();
+        }
+
+        AppendHiddenCount(builder, artifacts.Count, MaximumAssociatedArtifacts, "associated artifact");
+    }
+
+    private static void AppendArtifactCompleteness(
+        StringBuilder builder,
+        CodeExploreAssociatedArtifact artifact)
+    {
+        var details = CreateArtifactCompletenessDetails(artifact);
+        if (details.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var detail in details.Take(MaximumArtifactOmissions))
+        {
+            builder.AppendLine($"_Artifact note: {BoundInline(detail, 280)}_");
+        }
+
+        AppendHiddenCount(builder, details.Count, MaximumArtifactOmissions, "artifact note");
+    }
+
+    private static IReadOnlyList<string> CreateArtifactCompletenessDetails(
+        CodeExploreAssociatedArtifact artifact)
+    {
+        var details = new List<string>();
+        var content = artifact.Content;
+        if (content is null)
+        {
+            if (artifact.Omissions.Count == 0)
+            {
+                details.Add("content was omitted by host safety or budget policy.");
+            }
+        }
+        else
+        {
+            if (content.NumberedLines.Count == 0)
+            {
+                details.Add(content.Completeness switch
+                {
+                    CodeExploreSourceCompleteness.Complete => "content was empty or contained no displayable lines.",
+                    CodeExploreSourceCompleteness.Omitted => "content was omitted by host safety or budget policy.",
+                    CodeExploreSourceCompleteness.Drifted => "content was omitted because the artifact changed before it could be read safely.",
+                    _ => "content was partially omitted by host output bounds.",
+                });
+            }
+            else if (content.Completeness != CodeExploreSourceCompleteness.Complete)
+            {
+                details.Add(content.Completeness switch
+                {
+                    CodeExploreSourceCompleteness.Omitted => "additional content was omitted by host safety or budget policy.",
+                    CodeExploreSourceCompleteness.Drifted => "additional content was omitted because the artifact changed before it could be read safely.",
+                    _ => "additional content was omitted by host output bounds.",
+                });
+            }
+
+            details.AddRange(content.OmittedRanges.Select(omission => "omitted range: " + omission));
+            if (!string.IsNullOrWhiteSpace(content.ContinuationAnchor))
+            {
+                details.Add("continuation anchor available: use the matching Artifact follow-up target to replay exact omitted content.");
+            }
+        }
+
+        details.AddRange(artifact.Omissions);
+        return details
+            .Where(static detail => !string.IsNullOrWhiteSpace(detail))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static void AppendBackReferences(
@@ -408,190 +403,106 @@ internal static class CodeExploreMarkdownRenderer
             return;
         }
 
-        builder.AppendLine("## Back-references already visible");
+        builder.AppendLine("**Source already visible in this request**");
+        builder.AppendLine();
         foreach (var reference in backReferences.Take(MaximumBackReferences))
         {
             builder.AppendLine(
-                $"- {FormatCodeSpan(reference.FilePath)} {FormatRange(reference.Range)} — already visible from tool call {FormatCodeSpan(reference.ToolCallId)}; "
-                + $"file sha256 {FormatCodeSpan(reference.FileSha256)}. {CleanInline(reference.Reason)}");
+                $"- {FormatCodeSpan(reference.FilePath)}:{FormatRange(reference.Range)}"
+                + $" from tool call {FormatCodeSpan(reference.ToolCallId)} — {BoundInline(reference.Reason, 280)}");
         }
 
-        AppendAdditionalCountLine(builder, backReferences.Count, MaximumBackReferences, "back-reference");
-        builder.AppendLine();
-    }
-
-    private static void AppendFlow(StringBuilder builder, CodeExploreFlow? flow)
-    {
-        if (flow is null)
-        {
-            return;
-        }
-
-        builder.AppendLine("## Compiler-proven flow evidence");
-        builder.AppendLine(
-            $"Nodes: {flow.Nodes.Count.ToString(CultureInfo.InvariantCulture)}; "
-            + $"edges: {flow.Edges.Count.ToString(CultureInfo.InvariantCulture)}; "
-            + $"paths: {flow.Paths.Count.ToString(CultureInfo.InvariantCulture)}; "
-            + $"dispatch branches: {flow.DispatchBranches.Count.ToString(CultureInfo.InvariantCulture)}.");
-        foreach (var edge in flow.Edges.Take(MaximumFlowEdges))
-        {
-            var callSite = edge.CallSite is null
-                ? string.Empty
-                : $" at {FormatCodeSpan(edge.CallSite.FilePath)} {FormatRange(edge.CallSite.Range)}";
-            builder.AppendLine(
-                $"- {FormatCodeSpan(edge.CallerSymbolId)} -> {FormatCodeSpan(edge.CalleeSymbolId)} "
-                + $"({edge.DispatchKind}, {edge.ProofKind}){callSite}. {CleanInline(edge.Proof)}");
-        }
-
-        AppendAdditionalCountLine(builder, flow.Edges.Count, MaximumFlowEdges, "flow edge");
-        if (flow.Boundaries.Count > 0)
-        {
-            builder.AppendLine("Boundaries:");
-            foreach (var boundary in flow.Boundaries.Take(MaximumFlowBoundaries))
-            {
-                builder.AppendLine(
-                    $"- {boundary.Kind}: {FormatCodeSpan(boundary.SymbolId)} — {CleanInline(boundary.Reason)}");
-            }
-
-            AppendAdditionalCountLine(builder, flow.Boundaries.Count, MaximumFlowBoundaries, "flow boundary");
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void AppendAssociatedArtifacts(
-        StringBuilder builder,
-        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts,
-        CodeExploreArtifactCoverage? coverage)
-    {
-        if (artifacts is not { Count: > 0 } && coverage is null)
-        {
-            return;
-        }
-
-        builder.AppendLine("## Associated artifacts");
-        if (coverage is not null)
-        {
-            builder.AppendLine(
-                $"Returned {coverage.ReturnedCount.ToString(CultureInfo.InvariantCulture)} of {coverage.CandidateCount.ToString(CultureInfo.InvariantCulture)} candidate artifact(s); "
-                + $"spent {coverage.SpentCharacters.ToString(CultureInfo.InvariantCulture)} chars; complete: {FormatBool(coverage.Complete)}.");
-        }
-
-        if (artifacts is { Count: > 0 })
-        {
-            foreach (var artifact in artifacts.Take(MaximumAssociatedArtifacts))
-            {
-                var identity = artifact.FilePath ?? artifact.LogicalName ?? "artifact";
-                builder.AppendLine($"### {FormatCodeSpan(identity)}");
-                builder.AppendLine(
-                    $"Relationship: {artifact.Relationship}; evidence: {artifact.Evidence}; media: {artifact.MediaKind}; origin {FormatCodeSpan(artifact.OriginFilePath)} {FormatRange(artifact.OriginRange)}.");
-                if (artifact.SelectionReasons.Count > 0)
-                {
-                    builder.AppendLine("Reasons: " + string.Join("; ", artifact.SelectionReasons.Select(CleanInline)));
-                }
-
-                if (artifact.Content is { } content)
-                {
-                    builder.AppendLine(
-                        $"Completeness: **{content.Completeness}**; file sha256 {FormatCodeSpan(content.FileSha256)}"
-                        + (string.IsNullOrWhiteSpace(content.RangeSha256)
-                            ? "."
-                            : $"; range sha256 {FormatCodeSpan(content.RangeSha256)}."));
-                    var fence = CreateFence(content.NumberedLines);
-                    builder.AppendLine(fence + "text");
-                    foreach (var line in content.NumberedLines)
-                    {
-                        builder.AppendLine(line);
-                    }
-
-                    builder.AppendLine(fence);
-                }
-
-                if (artifact.Omissions.Count > 0)
-                {
-                    builder.AppendLine("Omissions: " + string.Join("; ", artifact.Omissions.Select(CleanInline)));
-                }
-
-                builder.AppendLine();
-            }
-
-            AppendAdditionalCountLine(builder, artifacts.Count, MaximumAssociatedArtifacts, "associated artifact");
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void AppendFileRelevance(
-        StringBuilder builder,
-        IReadOnlyList<CodeExploreFileRelevanceSummary>? fileRelevance)
-    {
-        if (fileRelevance is not { Count: > 0 })
-        {
-            return;
-        }
-
-        builder.AppendLine("## File relevance and output status");
-        builder.AppendLine("| Rank | File | Band | Output | Source | Reason |");
-        builder.AppendLine("|---:|---|---|---|---:|---|");
-        foreach (var summary in fileRelevance.Take(MaximumFileRelevanceRows))
-        {
-            builder.AppendLine(
-                $"| {summary.Rank.ToString(CultureInfo.InvariantCulture)} "
-                + $"| `{EscapeTableCell(summary.FilePath)}` "
-                + $"| {summary.Band} "
-                + $"| {summary.OutputStatus} "
-                + $"| {summary.SpentCharacters.ToString(CultureInfo.InvariantCulture)}/{summary.AllocatedCharacters.ToString(CultureInfo.InvariantCulture)} "
-                + $"| {EscapeTableCell(summary.Reason)} |");
-        }
-
-        AppendAdditionalCountLine(builder, fileRelevance.Count, MaximumFileRelevanceRows, "file-relevance row");
-        builder.AppendLine();
-    }
-
-    private static void AppendNotShown(
-        StringBuilder builder,
-        IReadOnlyList<CodeExploreNotShownTarget>? targets)
-    {
-        if (targets is not { Count: > 0 })
-        {
-            return;
-        }
-
-        builder.AppendLine("## Not shown targets");
-        foreach (var target in targets.Take(MaximumNotShownTargets))
-        {
-            builder.AppendLine(
-                $"- {target.Kind}: {FormatTargetPath(target.FilePath, target.Range)} — {CleanInline(target.Reason)}"
-                + FormatContinuationAnchorSuffix(target.ContinuationAnchor));
-        }
-
-        AppendAdditionalCountLine(builder, targets.Count, MaximumNotShownTargets, "not-shown target");
+        AppendHiddenCount(builder, backReferences.Count, MaximumBackReferences, "back-reference");
         builder.AppendLine();
     }
 
     private static void AppendContinuations(
         StringBuilder builder,
-        IReadOnlyList<CodeExploreContinuationTarget> targets)
+        CodeExploreResult result,
+        string? query)
     {
-        if (targets.Count == 0)
+        var continuations = CreateMarkdownContinuations(result, query);
+        if (continuations.Count == 0)
         {
             return;
         }
 
-        builder.AppendLine("## Continuation targets");
-        foreach (var target in targets.Take(MaximumContinuations))
+        builder.AppendLine("**Follow-up targets**");
+        builder.AppendLine();
+        foreach (var continuation in continuations.Take(MaximumContinuations))
         {
+            var location = string.IsNullOrWhiteSpace(continuation.FilePath)
+                ? string.Empty
+                : $" — {FormatCodeSpan(continuation.FilePath)}{FormatOptionalRange(continuation.StartLine, continuation.EndLine)}";
             builder.AppendLine(
-                $"- {FormatCodeSpan(target.Anchor)} ({target.Kind}) {FormatTargetPath(target.FilePath, CreateRange(target))} — "
-                + $"{CleanInline(target.Reason)}"
-                + (target.StartAtLine ? " Start at the supplied line." : string.Empty)
-                + (target.SelectionMode is null ? string.Empty : $" Selection mode: {FormatCodeSpan(target.SelectionMode.ToString() ?? string.Empty)}.")
-                + (string.IsNullOrWhiteSpace(target.ExpectedFileSha256) ? string.Empty : $" Expected file sha256 {FormatCodeSpan(target.ExpectedFileSha256)}.")
-                + (target.WorkspaceGeneration is null ? string.Empty : $" Workspace generation {FormatCodeSpan(target.WorkspaceGeneration.Value.ToString(CultureInfo.InvariantCulture))}."));
+                $"- **{continuation.Kind}:** {FormatCodeSpan(continuation.Anchor)}{location} — {BoundInline(continuation.Reason, 280)}");
+            if (continuation.Cursor is { } cursor)
+            {
+                builder.AppendLine($"  - Retry query: {FormatCodeSpan(cursor)}");
+            }
+            else
+            {
+                builder.AppendLine("  - Retry query cursor omitted because it exceeded the query length limit; use the shown path/range only if no exact cursor is available.");
+            }
         }
 
-        AppendAdditionalCountLine(builder, targets.Count, MaximumContinuations, "continuation target");
+        AppendHiddenCount(builder, continuations.Count, MaximumContinuations, "follow-up target");
         builder.AppendLine();
+    }
+
+    private static IReadOnlyList<MarkdownContinuationTarget> CreateMarkdownContinuations(
+        CodeExploreResult result,
+        string? query)
+    {
+        var continuations = new List<MarkdownContinuationTarget>();
+        foreach (var continuation in result.ContinuationTargets)
+        {
+            continuations.Add(new MarkdownContinuationTarget(
+                "Source",
+                continuation.Anchor,
+                continuation.FilePath,
+                continuation.StartLine,
+                continuation.EndLine,
+                continuation.Reason,
+                CodeExploreContinuationCursor.CreateSource(continuation)));
+        }
+
+        foreach (var continuation in result.BlastRadius?.ContinuationTargets ?? [])
+        {
+            continuations.Add(new MarkdownContinuationTarget(
+                "Impact",
+                continuation.Anchor,
+                continuation.FilePath,
+                continuation.StartLine,
+                continuation.EndLine,
+                continuation.Reason,
+                CodeExploreContinuationCursor.CreateImpact(continuation)));
+        }
+
+        foreach (var continuation in result.ArtifactCoverage?.ContinuationTargets ?? [])
+        {
+            var artifact = FindArtifactForContinuation(result.AssociatedArtifacts, continuation);
+            continuations.Add(new MarkdownContinuationTarget(
+                "Artifact",
+                continuation.FilePath,
+                continuation.FilePath,
+                continuation.StartLine,
+                continuation.EndLine,
+                continuation.Reason,
+                CodeExploreContinuationCursor.CreateArtifact(continuation, artifact, query)));
+        }
+
+        return continuations
+            .DistinctBy(static continuation => $"{continuation.Kind}:{continuation.Anchor}:{continuation.FilePath}:{continuation.StartLine}:{continuation.EndLine}:{continuation.Cursor}")
+            .ToArray();
+    }
+
+    private static CodeExploreAssociatedArtifact? FindArtifactForContinuation(
+        IReadOnlyList<CodeExploreAssociatedArtifact>? artifacts,
+        CodeExploreArtifactContinuationTarget continuation)
+    {
+        return artifacts?.FirstOrDefault(artifact => artifact.FilePath is not null
+            && PathComparer.Equals(artifact.FilePath, continuation.FilePath));
     }
 
     private static void AppendNextActions(
@@ -603,65 +514,51 @@ internal static class CodeExploreMarkdownRenderer
             return;
         }
 
-        builder.AppendLine("## Recommended next actions");
+        builder.AppendLine("**Next actions**");
+        builder.AppendLine();
         foreach (var action in actions.Take(MaximumNextActions))
         {
-            builder.AppendLine(
-                $"- {action.Kind}: {CleanInline(action.Message)}"
-                + (action.FilePath is null ? string.Empty : $" {FormatCodeSpan(action.FilePath)}")
-                + (action.Range is null ? string.Empty : $" {FormatRange(action.Range)}")
-                + FormatContinuationAnchorSuffix(action.ContinuationAnchor));
+            builder.AppendLine($"- {BoundInline(action.Message, 280)}");
         }
 
-        AppendAdditionalCountLine(builder, actions.Count, MaximumNextActions, "next action");
+        AppendHiddenCount(builder, actions.Count, MaximumNextActions, "next action");
         builder.AppendLine();
     }
 
-    private static void AppendOmissions(
-        StringBuilder builder,
-        IReadOnlyList<string> omissions,
-        CodeExploreCoverage coverage,
-        CodeExploreArtifactCoverage? artifactCoverage)
+    private static void AppendOmissions(StringBuilder builder, CodeExploreResult result)
     {
-        var combined = omissions
-            .Concat(coverage.Omissions)
-            .Concat(artifactCoverage?.Omissions ?? [])
+        var omissions = result.Omissions
+            .Concat(result.Coverage.Omissions)
+            .Concat(result.ArtifactCoverage?.Omissions ?? [])
             .Where(omission => !string.IsNullOrWhiteSpace(omission))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        if (combined.Length == 0)
+        if (omissions.Length == 0)
         {
             return;
         }
 
-        builder.AppendLine("## Omissions");
-        foreach (var omission in combined.Take(MaximumOmissions))
+        builder.AppendLine("**Not shown**");
+        builder.AppendLine();
+        foreach (var omission in omissions.Take(MaximumOmissions))
         {
-            builder.AppendLine("- " + CleanInline(omission));
+            builder.AppendLine("- " + BoundInline(omission, 280));
         }
 
-        AppendAdditionalCountLine(builder, combined.Length, MaximumOmissions, "omission");
+        AppendHiddenCount(builder, omissions.Length, MaximumOmissions, "omission");
         builder.AppendLine();
     }
 
-    private static SourceRange? CreateRange(CodeExploreContinuationTarget target)
+    private static string FormatOptionalRange(int? startLine, int? endLine)
     {
-        return target.StartLine is { } startLine && target.EndLine is { } endLine
-            ? new SourceRange(startLine, 1, endLine, 1)
-            : null;
-    }
+        if (startLine is null)
+        {
+            return string.Empty;
+        }
 
-    private static string FormatSymbol(SemanticSymbolIdentity symbol)
-    {
-        ArgumentNullException.ThrowIfNull(symbol);
-        return $"{FormatCodeSpan(symbol.DisplayName)} ({CleanInline(symbol.Kind)}, id {FormatCodeSpan(symbol.Id)})";
-    }
-
-    private static string FormatLocation(CodeExploreLocation location)
-    {
-        ArgumentNullException.ThrowIfNull(location);
-        return $"{FormatCodeSpan(location.FilePath)} {FormatRange(location.Range)}; "
-            + $"project {FormatCodeSpan(location.ProjectName)}; target {FormatCodeSpan(location.TargetFramework)}";
+        return endLine is null || endLine == startLine
+            ? $":L{startLine.Value.ToString(CultureInfo.InvariantCulture)}"
+            : $":L{startLine.Value.ToString(CultureInfo.InvariantCulture)}-L{endLine.Value.ToString(CultureInfo.InvariantCulture)}";
     }
 
     private static string FormatRange(SourceRange range)
@@ -671,28 +568,9 @@ internal static class CodeExploreMarkdownRenderer
             : $"L{range.StartLine.ToString(CultureInfo.InvariantCulture)}-L{range.EndLine.ToString(CultureInfo.InvariantCulture)}";
     }
 
-    private static string FormatTargetPath(string? filePath, SourceRange? range)
+    private static string FormatCount(int count, string noun)
     {
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            return "no exact file path";
-        }
-
-        return range is null
-            ? FormatCodeSpan(filePath)
-            : $"{FormatCodeSpan(filePath)} {FormatRange(range)}";
-    }
-
-    private static string FormatContinuationAnchorSuffix(string? anchor)
-    {
-        return string.IsNullOrWhiteSpace(anchor)
-            ? string.Empty
-            : $" Continuation anchor: {FormatCodeSpan(anchor)}.";
-    }
-
-    private static string FormatBool(bool value)
-    {
-        return value ? "yes" : "no";
+        return $"{count.ToString(CultureInfo.InvariantCulture)} {noun}{(count == 1 ? string.Empty : "s")}";
     }
 
     private static string FormatCodeSpan(string value)
@@ -719,27 +597,17 @@ internal static class CodeExploreMarkdownRenderer
             : $"{delimiter}{clean}{delimiter}";
     }
 
-    private static string FormatAdditionalCount(int count, int maximum)
-    {
-        var hidden = count - maximum;
-        return hidden <= 0
-            ? string.Empty
-            : $", plus {hidden.ToString(CultureInfo.InvariantCulture)} more";
-    }
-
-    private static void AppendAdditionalCountLine(
+    private static void AppendHiddenCount(
         StringBuilder builder,
         int count,
         int maximum,
         string noun)
     {
         var hidden = count - maximum;
-        if (hidden <= 0)
+        if (hidden > 0)
         {
-            return;
+            builder.AppendLine($"- _{FormatCount(hidden, noun)} not shown._");
         }
-
-        builder.AppendLine($"_Plus {hidden.ToString(CultureInfo.InvariantCulture)} more {noun}(s) not shown in this Markdown projection._");
     }
 
     private static string CreateFence(IReadOnlyList<string> lines)
@@ -747,17 +615,17 @@ internal static class CodeExploreMarkdownRenderer
         var maximumRun = 0;
         foreach (var line in lines)
         {
-            var current = 0;
+            var currentRun = 0;
             foreach (var character in line)
             {
                 if (character == '`')
                 {
-                    current++;
-                    maximumRun = Math.Max(maximumRun, current);
+                    currentRun++;
+                    maximumRun = Math.Max(maximumRun, currentRun);
                 }
                 else
                 {
-                    current = 0;
+                    currentRun = 0;
                 }
             }
         }
@@ -768,26 +636,29 @@ internal static class CodeExploreMarkdownRenderer
     private static string BoundInline(string? value, int maximumCharacters)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
         var clean = CleanInline(value);
         return clean.Length <= maximumCharacters
             ? clean
             : clean[..Math.Max(0, maximumCharacters - 1)] + "…";
     }
 
-    private static string CleanInline(string value)
+    private static string CleanInline(string? value)
     {
-        return value.Replace('\r', ' ')
-            .Replace('\n', ' ')
-            .Trim();
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
-    private static string EscapeTableCell(string value)
-    {
-        return CleanInline(value).Replace("|", "\\|", StringComparison.Ordinal);
-    }
+    private sealed record MarkdownContinuationTarget(
+        string Kind,
+        string Anchor,
+        string? FilePath,
+        int? StartLine,
+        int? EndLine,
+        string Reason,
+        string? Cursor);
+
+    private static StringComparer PathComparer => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
 }

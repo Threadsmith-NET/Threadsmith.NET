@@ -189,7 +189,6 @@ internal static class ConfigurationBootstrap
             ["tools:findSymbol:maxResults"] = "1000",
             ["tools:findReferences:maxResults"] = "1000",
             ["tools:findImplementations:maxResults"] = "1000",
-            ["tools:codeExplore:outputFormat"] = "structured",
             ["tools:codeExplore:inspectCodeExploreOutput"] = "false",
             ["tools:runProcess:defaultTimeoutSeconds"] = "30",
             ["tools:runProcess:maxTimeoutSeconds"] = "60",

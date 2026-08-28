@@ -188,6 +188,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 Name = definition.Id,
                 Description = definition.Description,
                 ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
+                PreferStrictArguments = definition.PreferStrictArguments,
             };
         }).ToArray();
     }

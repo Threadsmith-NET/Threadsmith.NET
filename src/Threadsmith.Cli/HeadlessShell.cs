@@ -145,6 +145,28 @@ public sealed class HeadlessShell
         return _dispatcher.DispatchAsync(new SetActiveReasoningCommand(reasoningLevel), cancellationToken);
     }
 
+    /// <summary>Sets code_explore model-visible output format through the shared host command boundary.</summary>
+    public Task<CodeExploreOutputSnapshot> SetCodeExploreOutputFormatAsync(
+        SessionId sessionId,
+        CodeExploreOutputFormat outputFormat,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SetCodeExploreOutputFormatCommand(sessionId, outputFormat),
+            cancellationToken);
+    }
+
+    /// <summary>Sets code_explore output inspection through the shared host command boundary.</summary>
+    public Task<CodeExploreOutputSnapshot> SetCodeExploreOutputInspectionAsync(
+        SessionId sessionId,
+        bool inspectCodeExploreOutput,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SetCodeExploreOutputInspectionCommand(sessionId, inspectCodeExploreOutput),
+            cancellationToken);
+    }
+
     /// <summary>Executes one exact noninteractive MCP lifecycle request through the shared manager.</summary>
     public Task<McpManagementResult> ManageMcpAsync(
         McpManagementRequest request,

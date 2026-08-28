@@ -291,6 +291,170 @@ public enum CodeExploreSelectionReason
     Peripheral = 1 << 14,
 }
 
+/// <summary>Recoverable availability state for source-bearing code exploration.</summary>
+public enum CodeExploreAvailabilityStatus
+{
+    /// <summary>The semantic workspace was available and the result contains ordinary code-exploration evidence.</summary>
+    Available,
+
+    /// <summary>No workspace identity was attached to the invocation.</summary>
+    NoWorkspaceOpen,
+
+    /// <summary>The semantic workspace identity exists but compiler-aware state is not available yet.</summary>
+    SemanticWorkspaceUnavailable,
+
+    /// <summary>The semantic workspace confidence is below the minimum required for source-bearing exploration.</summary>
+    SemanticReadinessBelowMinimum,
+
+    /// <summary>No loaded C# project currently has a usable compilation.</summary>
+    NoCompiledProjects,
+
+    /// <summary>The request did not match compiler-known declarations or confined C# paths.</summary>
+    NoMatchingDeclarations,
+
+    /// <summary>Policy removed all otherwise relevant source from the result.</summary>
+    NoSourceAfterPolicy,
+
+    /// <summary>The invocation timed out after returning partial safe evidence.</summary>
+    TimedOutPartial,
+}
+
+/// <summary>Closed advisory action kinds emitted for model-facing code-exploration recovery.</summary>
+public enum CodeExploreNextActionKind
+{
+    /// <summary>Use the returned current source for the advertised line ranges.</summary>
+    UseReturnedSource,
+
+    /// <summary>Use unchanged source already visible in the current model request.</summary>
+    UseBackReference,
+
+    /// <summary>Retry with an exact continuation target returned by this result.</summary>
+    FollowContinuation,
+
+    /// <summary>Refine the request with a more exact symbol, stable id, or path anchor.</summary>
+    RefineAnchor,
+
+    /// <summary>Open or select a workspace before retrying semantic exploration.</summary>
+    OpenWorkspace,
+
+    /// <summary>Wait for semantic loading or compilation readiness before retrying.</summary>
+    WaitForWorkspace,
+
+    /// <summary>Use a narrower non-semantic tool for a specific remaining gap.</summary>
+    UseGranularFallback,
+
+    /// <summary>Ask the user for the missing workspace, anchor, or scope decision.</summary>
+    AskUser,
+}
+
+/// <summary>Source guarantee category derived from authoritative source and frontier fields.</summary>
+public enum CodeExploreSourceGuaranteeKind
+{
+    /// <summary>The range is current line-numbered source projected through host output sanitization and backed by source digests for that range.</summary>
+    ReadEquivalent,
+
+    /// <summary>The range is current line-numbered source projected through host output sanitization but only partially covers the selected span.</summary>
+    Partial,
+
+    /// <summary>The source range was omitted before text was emitted.</summary>
+    Omitted,
+
+    /// <summary>The semantic span or continuation cursor drifted from current file identity.</summary>
+    Drifted,
+
+    /// <summary>The range is unchanged source already present in the current model request.</summary>
+    BackReference,
+}
+
+/// <summary>Closed target kind for model-facing not-shown code-exploration evidence.</summary>
+public enum CodeExploreNotShownTargetKind
+{
+    /// <summary>C# source was not emitted or was emitted only partially.</summary>
+    Source,
+
+    /// <summary>A compiler-known declaration was selected or discovered but not source-emitted.</summary>
+    Symbol,
+
+    /// <summary>An associated artifact was not emitted or was emitted only partially.</summary>
+    Artifact,
+
+    /// <summary>The result has a broader omission not tied to one exact file range.</summary>
+    General,
+}
+
+/// <summary>Repository scale tier used to adapt code-exploration presentation and default source envelopes.</summary>
+public enum CodeExploreRepositoryScaleTier
+{
+    /// <summary>No compiler-aware C# project inventory was available.</summary>
+    Unknown,
+
+    /// <summary>A very small repository or workspace slice.</summary>
+    Tiny,
+
+    /// <summary>A small repository or workspace slice.</summary>
+    Small,
+
+    /// <summary>A medium repository or workspace slice.</summary>
+    Medium,
+
+    /// <summary>A large repository or workspace slice.</summary>
+    Large,
+
+    /// <summary>A very large repository or workspace slice.</summary>
+    VeryLarge,
+}
+
+/// <summary>Bounded prose verbosity selected for model-facing code-exploration presentation.</summary>
+public enum CodeExplorePresentationVerbosity
+{
+    /// <summary>Emit only the highest-value presentation hints.</summary>
+    Compact,
+
+    /// <summary>Emit the normal bounded presentation shape.</summary>
+    Standard,
+
+    /// <summary>Emit additional not-shown guidance to prevent scattershot follow-ups.</summary>
+    Guided,
+}
+
+/// <summary>Coarse relevance band for one source file considered by code exploration.</summary>
+public enum CodeExploreFileRelevanceBand
+{
+    /// <summary>The file was explicitly pinned or contains primary flow-spine source.</summary>
+    Primary,
+
+    /// <summary>The file has strong structural relevance and should usually receive source.</summary>
+    Strong,
+
+    /// <summary>The file is useful supporting evidence.</summary>
+    Supporting,
+
+    /// <summary>The file is weak tail evidence and should usually be named by continuation only.</summary>
+    Peripheral,
+}
+
+/// <summary>Final model-visible source outcome for one relevance-ranked file.</summary>
+public enum CodeExploreFileOutputStatus
+{
+    /// <summary>The final output state was not classified.</summary>
+    Unknown,
+
+    /// <summary>The final result contains source lines for this file.</summary>
+    SourceReturned,
+
+    /// <summary>The final result references source already visible in the current model request.</summary>
+    BackReferenceOnly,
+
+    /// <summary>The file is named by an exact continuation target without returned source lines.</summary>
+    ContinuationOnly,
+
+    /// <summary>The file was omitted by policy, drift, or source-read safety checks.</summary>
+    OmittedByPolicyOrSafety,
+
+    /// <summary>The file source was removed during final model-budget trimming.</summary>
+    RemovedByModelBudget,
+}
+
 /// <summary>Explicit limits for one source-bearing code exploration.</summary>
 public sealed record CodeExploreLimits
 {
@@ -522,6 +686,93 @@ public sealed record CodeExploreCandidateSummary(
     string Reason,
     string? AmbiguityGroup);
 
+/// <summary>One advisory next action derived from authoritative code-exploration result state.</summary>
+public sealed record CodeExploreNextActionHint(
+    CodeExploreNextActionKind Kind,
+    string Message,
+    string? FilePath = null,
+    SourceRange? Range = null,
+    string? ContinuationAnchor = null);
+
+/// <summary>Availability and safe recovery guidance for one code-exploration invocation.</summary>
+public sealed record CodeExploreAvailability(
+    CodeExploreAvailabilityStatus Status,
+    string Reason,
+    bool IsRetryable,
+    SemanticConfidenceLevel? CurrentReadiness,
+    SemanticConfidenceLevel? MinimumReadinessRequired,
+    bool GranularFallbackMayHelp,
+    IReadOnlyList<CodeExploreNextActionHint> RecommendedActions);
+
+/// <summary>Per-range source guarantee derived from returned source or current-request back-references.</summary>
+public sealed record CodeExploreSourceGuarantee(
+    CodeExploreSourceGuaranteeKind Kind,
+    string FilePath,
+    SourceRange Range,
+    bool IsCurrent,
+    bool IsVerbatim,
+    bool IsLineNumbered,
+    bool IsReadEquivalent,
+    string? FileSha256,
+    string? RangeSha256,
+    IReadOnlyList<string> SymbolIds,
+    string Message);
+
+/// <summary>Bounded target intentionally not emitted as new source in a code-exploration result.</summary>
+public sealed record CodeExploreNotShownTarget(
+    CodeExploreNotShownTargetKind Kind,
+    string? FilePath,
+    SourceRange? Range,
+    string Reason,
+    string? ContinuationAnchor = null,
+    string? ExpectedFileSha256 = null,
+    long? WorkspaceGeneration = null);
+
+/// <summary>Bounded model-facing presentation synthesized from authoritative code-exploration fields.</summary>
+public sealed record CodeExplorePresentation(
+    string ModelSummary,
+    IReadOnlyList<CodeExploreSourceGuarantee> SourceGuarantees,
+    IReadOnlyList<CodeExploreNotShownTarget> NotShownTargets,
+    IReadOnlyList<CodeExploreNextActionHint> NextActions);
+
+/// <summary>Repository scale inputs used to adapt code-exploration defaults and presentation.</summary>
+public sealed record CodeExploreRepositoryScale(
+    CodeExploreRepositoryScaleTier Tier,
+    int ProjectCount,
+    int CompiledProjectCount,
+    int TotalCSharpDocumentCount,
+    int CompiledCSharpDocumentCount,
+    int GeneratedCSharpDocumentCount,
+    int? TargetFrameworkCount,
+    int? DeclarationCatalogEntryCount,
+    bool? DeclarationCatalogComplete,
+    int AssociatedArtifactCandidateCount);
+
+/// <summary>Effective code-exploration output envelope after repository-scale and model-budget clamps.</summary>
+public sealed record CodeExploreAdaptiveBudget(
+    CodeExploreRepositoryScale RepositoryScale,
+    int EffectiveMaximumFiles,
+    int EffectiveMaximumSourceCharacters,
+    int EffectiveMaximumPerFileSourceCharacters,
+    int EffectiveMaximumCandidateSummaries,
+    int RecommendedFollowUpCount,
+    CodeExplorePresentationVerbosity PresentationVerbosity,
+    string BudgetSource);
+
+/// <summary>Inspectable file-level relevance and source-allocation outcome without source text.</summary>
+public sealed record CodeExploreFileRelevanceSummary(
+    string FilePath,
+    int Rank,
+    CodeExploreFileRelevanceBand Band,
+    CodeExploreSelectionReason Reasons,
+    int SelectedSymbolCount,
+    int QueryTermCoverage,
+    bool SourceCliffed,
+    int AllocatedCharacters,
+    int SpentCharacters,
+    string Reason,
+    CodeExploreFileOutputStatus OutputStatus = CodeExploreFileOutputStatus.Unknown);
+
 /// <summary>Per-section source allocation outcome for code exploration.</summary>
 public sealed record CodeExploreAllocationFileSummary(
     string FilePath,
@@ -690,7 +941,7 @@ public sealed record ModelVisibleSourceEntry(
     string? RangeSha256,
     int EmittedCharacters);
 
-/// <summary>Request-local host-owned frontier of verbatim source visible to the model.</summary>
+/// <summary>Request-local host-owned frontier of source ranges already visible to the model after host output sanitization.</summary>
 public sealed record ModelVisibleSourceFrontier(
     string RepositoryPath,
     WorkspaceId? WorkspaceId,
@@ -748,7 +999,11 @@ public sealed record CodeExploreResult(
     CodeExploreDedupSummary? Deduplication = null,
     IReadOnlyList<CodeExploreEmissionRecord>? Emissions = null,
     IReadOnlyList<CodeExploreAssociatedArtifact>? AssociatedArtifacts = null,
-    CodeExploreArtifactCoverage? ArtifactCoverage = null);
+    CodeExploreArtifactCoverage? ArtifactCoverage = null,
+    CodeExploreAvailability? Availability = null,
+    CodeExplorePresentation? Presentation = null,
+    CodeExploreAdaptiveBudget? AdaptiveBudget = null,
+    IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null);
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(

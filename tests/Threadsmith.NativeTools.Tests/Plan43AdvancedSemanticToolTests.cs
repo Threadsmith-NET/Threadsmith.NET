@@ -198,10 +198,27 @@ public sealed class Plan43AdvancedSemanticToolTests
         var pattern = root.GetProperty("properties").GetProperty("pattern");
         Assert.False(pattern.GetProperty("additionalProperties").GetBoolean());
         Assert.False(pattern.GetProperty("properties").TryGetProperty("version", out _));
+        var patternRequired = pattern.GetProperty("required")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("kind", patternRequired);
+        Assert.True(tool.Definition.PreferStrictArguments);
         Assert.Contains(
             "{pattern:{kind,name?",
             tool.Definition.Description,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "MethodDeclaration",
+            tool.Definition.Description,
+            StringComparison.Ordinal);
+        var methodAlias = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
+            "{\"pattern\":{\"kind\":\"Method\",\"name\":\"Run\"}}"));
+        Assert.Contains("$.pattern.kind expected string enum", methodAlias.Message, StringComparison.Ordinal);
+        Assert.Contains("use MethodDeclaration for methods, not Method", methodAlias.Message, StringComparison.Ordinal);
+        var nullKind = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
+            "{\"pattern\":{\"kind\":null,\"name\":\"Run\"}}"));
+        Assert.Contains("$.pattern.kind expected string enum", nullKind.Message, StringComparison.Ordinal);
         Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
             "{\"kind\":\"Invocation\",\"name\":\"Run\"}"));
         var valid = Assert.IsType<CSharpPatternSearchRequest>(tool.DeserializeInput(

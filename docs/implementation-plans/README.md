@@ -125,6 +125,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 88 | `plan-88-unified-model-correction-loop-substrate.md` | Conversation-native corrective messages |
 | 88.1 | `plan-88.1-complete-conversation-native-correction-migration.md` | Conversation-native correction migration follow-up |
 | 89 | `plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md` | Code explore agent-sufficient presentation, ranking, adaptive output, and availability |
+| 90 | `plan-90-deployable-prompt-assets.md` | Deployable Markdown prompt assets and cached injectable prompt loading |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

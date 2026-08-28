@@ -44,6 +44,9 @@ public sealed record ModelContentPart
 
     /// <summary>Sanitized content.</summary>
     public required string Content { get; init; }
+
+    /// <summary>Whether the part is sent to the model provider.</summary>
+    public bool IsModelVisible { get; init; } = true;
 }
 
 /// <summary>One immutable chronological provider-neutral model message.</summary>
@@ -63,6 +66,18 @@ public sealed record ModelMessage
 
     /// <summary>Optional stable tool name for assistant calls and tool results.</summary>
     public string? ToolName { get; init; }
+
+    /// <summary>Returns the provider-visible content text in part order.</summary>
+    public string GetModelVisibleContent()
+    {
+        return string.Concat(Content.Where(static part => part.IsModelVisible).Select(static part => part.Content));
+    }
+
+    /// <summary>Returns the provider-visible content character count.</summary>
+    public int GetModelVisibleContentLength()
+    {
+        return Content.Where(static part => part.IsModelVisible).Sum(static part => part.Content.Length);
+    }
 }
 
 /// <summary>How tool schemas are transported to an adapter.</summary>
@@ -483,7 +498,7 @@ public static class ModelWireEstimator
         for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
-            var tokens = EstimateCharacters(message.Content.Sum(part => part.Content.Length));
+            var tokens = EstimateCharacters(message.GetModelVisibleContentLength());
             sections[message.SectionId] = sections.TryGetValue(message.SectionId, out var current)
                 ? checked(current + tokens)
                 : tokens;

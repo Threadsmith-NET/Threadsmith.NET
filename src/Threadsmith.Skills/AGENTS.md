@@ -32,7 +32,7 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - Checkpoint persistence is compare-and-swap on expected generation/status. Resume and continuation advance the generation, stale writers fail without publishing a boundary, and age retention removes terminal checkpoints only so nonterminal workflows keep their durable package reference.
 - Schemas use the closed supported keyword/type subset. No `$ref`, remote resolution, regex/custom format execution, dynamic type activation, or unknown action/step kinds.
 - Required content that cannot fit fails explicitly. Optional references are omitted deterministically. Strict UTF-8, hashes, sanitizer, confinement, and provenance apply to every loaded segment.
-- Procedure turns advertise only declared available tools, request at most one model tool call per response, and call it through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
+- Procedure turns advertise only declared available tools while preserving provider-neutral tool metadata such as strict-argument preference, request at most one model tool call per response, and call it through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
 - Workflow host actions remain proposals. The execution subsystem owns planning/mutation/validation; the delegation subsystem owns scheduling/worktrees/review/integration. Nested skills, arbitrary loops, and package-owned concurrency are prohibited.
 - Maintained packages use exactly the same manifest/hash/schema/content/model/tool/workflow/persistence path as third-party packages.
 

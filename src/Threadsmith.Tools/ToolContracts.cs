@@ -1,6 +1,8 @@
 namespace Threadsmith.Tools;
 
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Threadsmith.Core;
 
@@ -252,6 +254,10 @@ public sealed record ToolDefinition
     /// <summary>Whether invocation requires a currently loaded semantic workspace identity.</summary>
     public bool RequiresWorkspace { get; init; }
 
+    /// <summary>Whether providers should use strict argument generation when their wire protocol supports it.</summary>
+    /// <remarks>Canonical host validation remains authoritative regardless of this preference.</remarks>
+    public bool PreferStrictArguments { get; init; }
+
     /// <summary>Host-only concurrency and claim-resolution classification.</summary>
     public ToolSchedulingDescriptor Scheduling { get; init; } = new();
 }
@@ -385,8 +391,11 @@ public sealed record ToolInvocationResult
     /// <summary>Whether execution succeeded.</summary>
     public bool Succeeded { get; init; }
 
-    /// <summary>Bounded JSON output when successful.</summary>
+    /// <summary>Bounded structured JSON output when successful.</summary>
     public string? ResultJson { get; init; }
+
+    /// <summary>Optional bounded content supplied to the model instead of <see cref="ResultJson" />.</summary>
+    public string? ModelResultContent { get; init; }
 
     /// <summary>Sources supporting the result.</summary>
     public IReadOnlyList<ToolProvenanceSource> Sources { get; init; } = [];
@@ -429,6 +438,14 @@ public interface ITool
     /// <summary>Returns the requested executable basename when applicable.</summary>
     string? GetExecutable(object input);
 
+    /// <summary>Returns the requested executable basename for this invocation context when applicable.</summary>
+    string? GetExecutable(object input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(context);
+        return GetExecutable(input);
+    }
+
     /// <summary>Returns network hosts evaluated by host policy.</summary>
     IReadOnlyList<string> GetNetworkHosts(object input);
 
@@ -469,7 +486,8 @@ public sealed record ToolExecutionEnvelope(
     object Value,
     IReadOnlyList<ToolProvenanceSource> Sources,
     bool IsTruncated,
-    long? AuthoritativeElapsedMilliseconds = null);
+    long? AuthoritativeElapsedMilliseconds = null,
+    string? ModelResultContent = null);
 
 /// <summary>Host-owned network authorization that can admit exact transient claims independently of repository configuration.</summary>
 internal interface IHostAuthorizedNetworkClaims
@@ -482,6 +500,14 @@ internal interface IHostAuthorizedNetworkClaims
 public abstract class Tool<TInput, TOutput> : ITool
     where TInput : class
 {
+    private const int MaximumSchemaPathCharacters = 128;
+    private const string TruncationSuffix = "...";
+
+    private static readonly JsonNodeOptions _jsonNodeOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -498,7 +524,8 @@ public abstract class Tool<TInput, TOutput> : ITool
         ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
         try
         {
-            var input = JsonSerializer.Deserialize<TInput>(argumentsJson, _jsonOptions)
+            var normalizedArgumentsJson = NormalizeOptionalNullArguments(argumentsJson);
+            var input = JsonSerializer.Deserialize<TInput>(normalizedArgumentsJson, _jsonOptions)
                 ?? throw new ToolArgumentValidationException("Tool arguments were empty.");
             ValidateInput(input);
             return input;
@@ -510,7 +537,7 @@ public abstract class Tool<TInput, TOutput> : ITool
         catch (JsonException exception)
         {
             throw new ToolArgumentValidationException(
-                "Tool arguments do not match the declared input schema.",
+                CreateSchemaMismatchMessage(exception, argumentsJson),
                 exception);
         }
         catch (ArgumentException exception)
@@ -547,6 +574,13 @@ public abstract class Tool<TInput, TOutput> : ITool
     }
 
     /// <inheritdoc />
+    public string? GetExecutable(object input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return GetExecutable((TInput)input, context);
+    }
+
+    /// <inheritdoc />
     public IReadOnlyList<string> GetNetworkHosts(object input)
     {
         return GetNetworkHosts((TInput)input);
@@ -578,7 +612,7 @@ public abstract class Tool<TInput, TOutput> : ITool
                 accessMode));
         }
 
-        if (GetExecutable((TInput)input) is not null)
+        if (GetExecutable((TInput)input, context) is not null)
         {
             claims.Add(new ToolResourceClaim(ToolResourceKind.ProcessPool, "host", ToolAccessMode.Execute));
         }
@@ -610,6 +644,17 @@ public abstract class Tool<TInput, TOutput> : ITool
     /// <summary>Validates type-specific invariants after JSON schema binding.</summary>
     protected abstract void ValidateInput(TInput input);
 
+    /// <summary>Creates a sanitized schema-mismatch message suitable for model-visible correction.</summary>
+    protected virtual string CreateSchemaMismatchMessage(JsonException exception, string argumentsJson)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
+        var path = BoundJsonPath(exception.Path);
+        return path is null
+            ? "Tool arguments do not match the declared input schema."
+            : $"Tool arguments do not match the declared input schema at {path}.";
+    }
+
     /// <summary>Returns optional concise context for interactive activity display.</summary>
     protected virtual string? DescribeActivity(TInput input)
     {
@@ -636,10 +681,234 @@ public abstract class Tool<TInput, TOutput> : ITool
         return null;
     }
 
+    /// <summary>Returns an executable evaluated by host policy for this invocation context.</summary>
+    protected virtual string? GetExecutable(TInput input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return GetExecutable(input);
+    }
+
     /// <summary>Returns network hosts evaluated by host policy.</summary>
     protected virtual IReadOnlyList<string> GetNetworkHosts(TInput input)
     {
         return [];
+    }
+
+    private string NormalizeOptionalNullArguments(string argumentsJson)
+    {
+        if (!argumentsJson.Contains("null", StringComparison.Ordinal))
+        {
+            return argumentsJson;
+        }
+
+        var argumentsNode = JsonNode.Parse(argumentsJson, nodeOptions: _jsonNodeOptions);
+        if (argumentsNode is not JsonObject argumentsObject)
+        {
+            return argumentsJson;
+        }
+
+        var schemaNode = JsonNode.Parse(Definition.InputSchema.JsonSchema, nodeOptions: _jsonNodeOptions);
+        if (schemaNode is not JsonObject schemaObject)
+        {
+            return argumentsJson;
+        }
+
+        var definitions = schemaObject["$defs"] as JsonObject;
+        return RemoveOptionalNulls(argumentsObject, schemaObject, definitions)
+            ? argumentsObject.ToJsonString()
+            : argumentsJson;
+    }
+
+    private static bool RemoveOptionalNulls(
+        JsonObject valueObject,
+        JsonObject schemaObject,
+        JsonObject? definitions)
+    {
+        var effectiveSchema = ResolveSchema(schemaObject, definitions) ?? schemaObject;
+        if (effectiveSchema["properties"] is not JsonObject properties)
+        {
+            return false;
+        }
+
+        var required = ReadRequiredProperties(effectiveSchema);
+        var changed = false;
+        foreach (var property in valueObject.ToArray())
+        {
+            var propertySchema = FindPropertySchema(properties, property.Key, definitions);
+            if (propertySchema is null)
+            {
+                continue;
+            }
+
+            if (property.Value is null)
+            {
+                if (!required.Contains(property.Key) && !SchemaAllowsNull(propertySchema))
+                {
+                    _ = valueObject.Remove(property.Key);
+                    changed = true;
+                }
+
+                continue;
+            }
+
+            var nestedSchema = ResolveSchema(propertySchema, definitions) ?? propertySchema;
+            if (property.Value is JsonObject nestedObject)
+            {
+                changed |= RemoveOptionalNulls(nestedObject, nestedSchema, definitions);
+            }
+            else if (property.Value is JsonArray nestedArray
+                && TryGetArrayItemSchema(nestedSchema, definitions) is { } itemSchema)
+            {
+                changed |= RemoveOptionalNullsFromArray(nestedArray, itemSchema, definitions);
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool RemoveOptionalNullsFromArray(
+        JsonArray array,
+        JsonObject itemSchema,
+        JsonObject? definitions)
+    {
+        var changed = false;
+        foreach (var item in array)
+        {
+            if (item is JsonObject itemObject)
+            {
+                changed |= RemoveOptionalNulls(itemObject, itemSchema, definitions);
+            }
+            else if (item is JsonArray nestedArray
+                && TryGetArrayItemSchema(itemSchema, definitions) is { } nestedItemSchema)
+            {
+                changed |= RemoveOptionalNullsFromArray(nestedArray, nestedItemSchema, definitions);
+            }
+        }
+
+        return changed;
+    }
+
+    private static JsonObject? FindPropertySchema(
+        JsonObject properties,
+        string propertyName,
+        JsonObject? definitions)
+    {
+        foreach (var property in properties)
+        {
+            if (string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase)
+                && property.Value is JsonObject schema)
+            {
+                return ResolveSchema(schema, definitions) ?? schema;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? TryGetArrayItemSchema(JsonObject schema, JsonObject? definitions)
+    {
+        var effectiveSchema = ResolveSchema(schema, definitions) ?? schema;
+        return effectiveSchema["items"] is JsonObject itemSchema
+            ? ResolveSchema(itemSchema, definitions) ?? itemSchema
+            : null;
+    }
+
+    private static JsonObject? ResolveSchema(JsonObject schema, JsonObject? definitions)
+    {
+        if (definitions is null
+            || schema["$ref"] is not JsonValue refValue
+            || !refValue.TryGetValue<string>(out var reference)
+            || string.IsNullOrWhiteSpace(reference)
+            || !reference.StartsWith("#/$defs/", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var name = reference["#/$defs/".Length..];
+        return definitions.TryGetPropertyValue(name, out var definition)
+            && definition is JsonObject definitionObject
+                ? definitionObject
+                : null;
+    }
+
+    private static HashSet<string> ReadRequiredProperties(JsonObject schema)
+    {
+        var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (schema["required"] is not JsonArray requiredArray)
+        {
+            return required;
+        }
+
+        foreach (var item in requiredArray)
+        {
+            if (item is JsonValue value && value.TryGetValue<string>(out var name) && !string.IsNullOrWhiteSpace(name))
+            {
+                required.Add(name);
+            }
+        }
+
+        return required;
+    }
+
+    private static bool SchemaAllowsNull(JsonObject schema)
+    {
+        if (schema["type"] is JsonValue typeValue
+            && typeValue.TryGetValue<string>(out var typeName)
+            && string.Equals(typeName, "null", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (schema["type"] is JsonArray typeArray
+            && typeArray.Any(item => item is JsonValue value
+                && value.TryGetValue<string>(out var arrayType)
+                && string.Equals(arrayType, "null", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        if (schema["enum"] is JsonArray enumArray && enumArray.Any(static item => item is null))
+        {
+            return true;
+        }
+
+        return schema["anyOf"] is JsonArray anyOf
+            && anyOf.Any(static item => item is JsonObject anyOfObject
+                && anyOfObject["type"] is JsonValue value
+                && value.TryGetValue<string>(out var anyOfType)
+                && string.Equals(anyOfType, "null", StringComparison.Ordinal));
+    }
+
+    private static string? BoundJsonPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var maximumContentCharacters = MaximumSchemaPathCharacters - TruncationSuffix.Length;
+        var builder = new StringBuilder(Math.Min(path.Length, maximumContentCharacters));
+        var truncated = false;
+        foreach (var character in path)
+        {
+            if (builder.Length == maximumContentCharacters)
+            {
+                truncated = true;
+                break;
+            }
+
+            builder.Append(char.IsWhiteSpace(character) || char.IsControl(character) ? ' ' : character);
+        }
+
+        var result = builder.ToString().Trim();
+        if (result.Length == 0)
+        {
+            return null;
+        }
+
+        return truncated
+            ? result.TrimEnd() + TruncationSuffix
+            : result;
     }
 }
 

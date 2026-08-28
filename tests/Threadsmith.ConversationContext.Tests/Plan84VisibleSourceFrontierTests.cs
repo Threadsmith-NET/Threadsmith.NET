@@ -9,7 +9,7 @@ using Xunit;
 /// <summary>Context-visible source frontier tests for Plan 84.</summary>
 public static class Plan84VisibleSourceFrontierTests
 {
-    /// <summary>Only complete verbatim code-explore tool results with digests become visible-source entries.</summary>
+    /// <summary>Only complete sanitized code-explore tool results with digests become visible-source entries.</summary>
     [Fact]
     public static void Build_IncludesOnlyCompleteCodeExploreSourceWithDigest()
     {
@@ -48,6 +48,90 @@ public static class Plan84VisibleSourceFrontierTests
         Assert.Equal(new SourceRange(10, 1, 18, 1), entry.Range);
         Assert.Equal(1, frontier.RangeCount);
         Assert.True(frontier.SourceCharacters > 0);
+    }
+
+    /// <summary>Host-only structured sidecars preserve code-explore source frontier in Markdown output mode.</summary>
+    [Fact]
+    public static void Build_ReadsHostOnlyCodeExploreSidecarButIgnoresVisibleMarkdown()
+    {
+        var workspaceId = WorkspaceId.New();
+        var result = CreateCodeExploreResult(
+            "src/Markdown.cs",
+            new SourceRange(4, 1, 9, 1),
+            CodeExploreSourceCompleteness.Complete,
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        var messages = new[]
+        {
+            new ModelMessage
+            {
+                Role = ModelMessageRole.Tool,
+                SectionId = "tool-result",
+                ToolCallId = "holder-markdown",
+                ToolName = "code_explore",
+                Content =
+                [
+                    new ModelContentPart
+                    {
+                        Kind = ModelContentPartKind.Text,
+                        Content = "# code_explore result\nvisible markdown only",
+                    },
+                    new ModelContentPart
+                    {
+                        Kind = ModelContentPartKind.Json,
+                        Content = JsonSerializer.Serialize(result),
+                        IsModelVisible = false,
+                    },
+                ],
+            },
+        };
+
+        var frontier = ModelVisibleSourceFrontierBuilder.Build(
+            messages,
+            "C:\\repo",
+            workspaceId,
+            11);
+
+        var entry = Assert.Single(frontier.Entries);
+        Assert.Equal("holder-markdown", entry.ToolCallId);
+        Assert.Equal("src/Markdown.cs", entry.FilePath);
+        Assert.Equal(new SourceRange(4, 1, 9, 1), entry.Range);
+        Assert.Equal(1, frontier.RangeCount);
+    }
+
+    /// <summary>Reduced host-only sidecars remain structurally incomplete and do not create stale frontier entries.</summary>
+    [Fact]
+    public static void Build_SkipsStructurallyIncompleteHostOnlyCodeExploreSidecar()
+    {
+        var frontier = ModelVisibleSourceFrontierBuilder.Build(
+            [new ModelMessage
+            {
+                Role = ModelMessageRole.Tool,
+                SectionId = "tool-result",
+                ToolCallId = "holder-reduced",
+                ToolName = "code_explore",
+                Content =
+                [
+                    new ModelContentPart
+                    {
+                        Kind = ModelContentPartKind.Text,
+                        Content = "# reduced markdown",
+                    },
+                    new ModelContentPart
+                    {
+                        Kind = ModelContentPartKind.Json,
+                        Content = "{\"isTruncated\":true}",
+                        IsModelVisible = false,
+                    },
+                ],
+            },
+            ],
+            "C:\\repo",
+            WorkspaceId.New(),
+            12);
+
+        Assert.Empty(frontier.Entries);
+        Assert.Equal(0, frontier.RangeCount);
+        Assert.Equal(0, frontier.SourceCharacters);
     }
 
     /// <summary>Valid but structurally incomplete reduced JSON is ignored instead of aborting context assembly.</summary>

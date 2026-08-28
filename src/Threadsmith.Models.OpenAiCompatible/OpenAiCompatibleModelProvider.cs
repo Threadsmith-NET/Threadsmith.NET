@@ -445,7 +445,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         var messages = new List<OpenAiMessage>(request.Messages.Count);
         foreach (var message in request.Messages)
         {
-            var content = string.Concat(message.Content.Select(part => part.Content));
+            var content = message.GetModelVisibleContent();
             switch (message.Role)
             {
                 case ModelMessageRole.System:

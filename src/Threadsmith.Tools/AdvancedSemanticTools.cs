@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Threadsmith.Core;
 
@@ -115,6 +116,16 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
     }
 
     /// <inheritdoc />
+    protected override string CreateSchemaMismatchMessage(JsonException exception, string argumentsJson)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
+        return string.Equals(exception.Path, "$.pattern.kind", StringComparison.OrdinalIgnoreCase)
+            ? "Tool arguments do not match the declared input schema. $.pattern.kind expected string enum Declaration|TypeDeclaration|MethodDeclaration|PropertyDeclaration|FieldDeclaration|Attribute|Invocation|ObjectCreation|MemberAccess; use MethodDeclaration for methods, not Method."
+            : base.CreateSchemaMismatchMessage(exception, argumentsJson);
+    }
+
+    /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
         CSharpPatternSearchRequest input,
         ToolInvocationContext context)
@@ -126,16 +137,34 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
     {
         var definition = CreateDefinition<CSharpPatternSearchRequest, CSharpPatternSearchResult>(
             "csharp_pattern_search",
-            "Primary semantic tool for C# declaration and expression shapes when an exact symbol query is insufficient. Arguments must use the nested shape {pattern:{kind,name?,containingType?,requiredModifiers?,requiredAttributes?,capture?},path?,maximumMatches?,timeoutMilliseconds?}. MUST use before search and fall back only if this tool fails or reports incomplete evidence.");
+            "Primary semantic tool for C# declaration and expression shapes when an exact symbol query is insufficient. Arguments must use the nested shape {pattern:{kind,name?,containingType?,requiredModifiers?,requiredAttributes?,capture?},path?,maximumMatches?,timeoutMilliseconds?}. pattern.kind must be a JSON string enum value: Declaration, TypeDeclaration, MethodDeclaration, PropertyDeclaration, FieldDeclaration, Attribute, Invocation, ObjectCreation, or MemberAccess; there is no Method kind, use MethodDeclaration for methods. MUST use before search and fall back only if this tool fails or reports incomplete evidence.");
         var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)
             ?? throw new InvalidOperationException("The generated pattern-search schema was empty.");
-        if (schema["properties"]?["pattern"]?["properties"] is JsonObject patternProperties)
+        if (schema["properties"]?["pattern"] is JsonObject patternSchema)
         {
-            patternProperties.Remove("version");
+            if (patternSchema["properties"] is JsonObject patternProperties)
+            {
+                patternProperties.Remove("version");
+            }
+
+            var required = patternSchema["required"] as JsonArray;
+            if (required is null)
+            {
+                required = [];
+                patternSchema["required"] = required;
+            }
+
+            if (!required.Any(item => item is JsonValue value
+                && value.TryGetValue<string>(out var name)
+                && string.Equals(name, "kind", StringComparison.OrdinalIgnoreCase)))
+            {
+                required.Add("kind");
+            }
         }
 
         return definition with
         {
+            PreferStrictArguments = true,
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = schema.ToJsonString(),

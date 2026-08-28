@@ -12,6 +12,12 @@ public sealed class OpenAiCodexCatalogClient
 {
     private const int DefaultContextWindow = 128_000;
     private const int DefaultOutputReserve = 32_768;
+
+    // The Codex backend filters `/models` rows by Codex client compatibility, not by
+    // Threadsmith's product version. Upstream Codex model metadata reviewed for this
+    // implementation currently requires up to 0.144.0.
+    private const string CodexModelsClientCompatibilityVersion = "0.144.0";
+
     private readonly HttpClient _httpClient;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCodexCatalogClient"/> class.</summary>
@@ -59,6 +65,7 @@ public sealed class OpenAiCodexCatalogClient
             throw new InvalidDataException("The Codex model response does not contain a models array.");
         }
 
+        var returnedCount = models.GetArrayLength();
         OpenAiCodexModelConfiguration[] discovered =
         [
             .. models.EnumerateArray()
@@ -67,9 +74,14 @@ public sealed class OpenAiCodexCatalogClient
                 .Select(model => model!)
                 .DistinctBy(model => model.ModelId, StringComparer.Ordinal),
         ];
-        if (discovered.Length is 0 or > 256)
+        if (returnedCount is 0 or > 256)
         {
             throw new InvalidDataException("The authenticated Codex account returned an invalid model count.");
+        }
+
+        if (discovered.Length == 0)
+        {
+            throw new InvalidDataException("The Codex model response did not contain any usable model identifiers.");
         }
 
         return new OpenAiCodexProviderConfiguration
@@ -84,19 +96,24 @@ public sealed class OpenAiCodexCatalogClient
 
     private static Uri BuildModelsUri()
     {
-        var version = typeof(OpenAiCodexCatalogClient).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-        return new Uri($"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(version)}");
+        return new Uri(
+            $"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(CodexModelsClientCompatibilityVersion)}");
     }
 
     private static OpenAiCodexModelConfiguration? ProjectModel(JsonElement element)
     {
         var slug = GetString(element, "slug");
-        if (string.IsNullOrWhiteSpace(slug))
+        if (string.IsNullOrWhiteSpace(slug) || slug.Length > 256)
         {
             return null;
         }
 
-        var name = GetString(element, "display_name") ?? slug;
+        var name = GetString(element, "display_name");
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 256)
+        {
+            name = slug;
+        }
+
         var contextWindow = GetPositiveInt(element, "context_window")
             ?? GetPositiveInt(element, "max_context_window")
             ?? DefaultContextWindow;

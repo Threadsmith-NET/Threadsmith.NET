@@ -73,7 +73,8 @@ internal static class ShellRunner
                     webFetchAuthorization: context.WebFetchAuthorization,
                     directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
                     userConfigurationPath: context.Paths.UserConfiguration,
-                    validationStages: context.Applications.ValidationStages).RunAsync(
+                    validationStages: context.Applications.ValidationStages,
+                    codeExploreOutputOptions: context.CodeExploreOutputOptions).RunAsync(
                         context.Paths.RepositoryRoot,
                         context.CommandLine.RequestedTrust,
                         context.CommandLine.RequestedSolution,
@@ -253,6 +254,9 @@ internal sealed record ShellRunContext
 
     /// <summary>Gets mutable tool availability state used by slash commands.</summary>
     internal required ToolStateManager ToolStateManager { get; init; }
+
+    /// <summary>Gets host-owned per-session code_explore output presentation state.</summary>
+    internal required CodeExploreOutputOptions CodeExploreOutputOptions { get; init; }
 
     /// <summary>Gets transient direct web-fetch authorization owned by user command surfaces.</summary>
     internal required WebFetchAuthorizationAuthority WebFetchAuthorization { get; init; }

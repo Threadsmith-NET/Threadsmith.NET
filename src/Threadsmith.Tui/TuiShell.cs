@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Tools;
 
 /// <summary>Terminal-independent presenter state used by the TUI test harness.</summary>
 public sealed record ShellSnapshot(
@@ -155,6 +156,28 @@ public sealed class TuiPresenter
     {
         return _dispatcher.DispatchAsync(
             new ManageModelProviderAuthenticationCommand(providerId, action),
+            cancellationToken);
+    }
+
+    /// <summary>Sets the code_explore output format through the shared host boundary.</summary>
+    public Task<CodeExploreOutputSnapshot> SetCodeExploreOutputFormatAsync(
+        SessionId sessionId,
+        CodeExploreOutputFormat outputFormat,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SetCodeExploreOutputFormatCommand(sessionId, outputFormat),
+            cancellationToken);
+    }
+
+    /// <summary>Sets code_explore output inspection through the shared host boundary.</summary>
+    public Task<CodeExploreOutputSnapshot> SetCodeExploreOutputInspectionAsync(
+        SessionId sessionId,
+        bool inspectCodeExploreOutput,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SetCodeExploreOutputInspectionCommand(sessionId, inspectCodeExploreOutput),
             cancellationToken);
     }
 
@@ -1915,6 +1938,7 @@ internal sealed class ConversationTranscript
 {
     private readonly StringBuilder _reasoning = new();
     private readonly bool _showOperationDurations;
+    private readonly Func<bool> _inspectCodeExploreOutput;
     private readonly StringBuilder _text;
     private readonly Dictionary<(RunId RunId, int Revision), PlanSanityCheckCompleted> _planSanityChecks = [];
     private readonly Dictionary<(RunId RunId, int Revision), string> _planRiskBases = [];
@@ -1933,11 +1957,16 @@ internal sealed class ConversationTranscript
     /// <summary>Initializes a new instance of the <see cref="ConversationTranscript"/> class.</summary>
     /// <param name="initialText">Previously projected conversation text.</param>
     /// <param name="showOperationDurations">Whether valid authoritative durations are appended.</param>
-    internal ConversationTranscript(string initialText, bool showOperationDurations = true)
+    /// <param name="inspectCodeExploreOutput">Returns whether code_explore output should be included in future tool blocks.</param>
+    internal ConversationTranscript(
+        string initialText,
+        bool showOperationDurations = true,
+        Func<bool>? inspectCodeExploreOutput = null)
     {
         ArgumentNullException.ThrowIfNull(initialText);
         _text = new StringBuilder(initialText);
         _showOperationDurations = showOperationDurations;
+        _inspectCodeExploreOutput = inspectCodeExploreOutput ?? (() => false);
     }
 
     /// <summary>Gets the latest completed or active reasoning text.</summary>
@@ -2261,7 +2290,11 @@ internal sealed class ConversationTranscript
         ToolInvocationStarted started,
         ToolInvocationCompleted completed)
     {
-        AppendLifecycleBlock(TuiPresentationFormatter.FormatToolCompletion(started, completed, _showOperationDurations));
+        AppendLifecycleBlock(TuiPresentationFormatter.FormatToolCompletion(
+            started,
+            completed,
+            _showOperationDurations,
+            _inspectCodeExploreOutput()));
     }
 
     private void AppendSemanticCheckCompletion(

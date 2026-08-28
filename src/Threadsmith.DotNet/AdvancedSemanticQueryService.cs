@@ -26,6 +26,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumArtifactLiteralLength = 512;
     private const int MaximumExactNameArtifactLiterals = 16;
     private const int MaximumExactNameArtifactLookups = 32;
+    private const int MaximumPresentationSummaryCharacters = 900;
+    private const int MaximumPresentationGuarantees = 12;
+    private const int MaximumPresentationNotShownTargets = 12;
+    private const int MaximumPresentationNextActions = 8;
+    private const int MaximumFileRelevanceSummaries = 24;
+    private const int MaximumCodeExploreScaleProjects = 121;
+    private const int MaximumCodeExploreScaleDocuments = 2_501;
 
     private static readonly TimeSpan NonCooperativeCompilationBackstop = TimeSpan.FromSeconds(2);
 
@@ -588,10 +595,62 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(sourceReader);
         ValidateCodeExploreRequest(request);
-        var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
         using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
+        timeout.Token.ThrowIfCancellationRequested();
+        var engine = _registry.GetEngine(workspaceId);
+        var readiness = engine.CaptureCodeExploreReadinessSnapshot();
         var queryInterpretation = InterpretCodeExploreQuery(request.Query);
+        if (CreateInitialCodeExploreAvailability(readiness) is { } initialAvailability)
+        {
+            var unavailableScale = CreateUnknownCodeExploreRepositoryScale(
+                request.AssociatedArtifactPathAnchors.Count);
+            request = ApplyCodeExploreAdaptiveDefaults(request, unavailableScale, out var unavailableBudget);
+            EnsureCurrent(engine, readiness.Generation);
+            return CreateUnavailableCodeExploreResult(
+                readiness,
+                request,
+                queryInterpretation,
+                initialAvailability,
+                unavailableBudget);
+        }
+
+        var solution = readiness.Solution
+            ?? throw new InvalidOperationException("Code exploration requires a captured semantic solution.");
+        var repositoryPath = readiness.RepositoryPath
+            ?? throw new InvalidOperationException("Code exploration requires an opened repository path.");
+        var snapshot = new AdvancedSemanticSnapshot(
+            solution,
+            readiness.CompiledProjects,
+            readiness.Confidence,
+            repositoryPath,
+            readiness.Generation);
+        CodeExploreRepositoryScale repositoryScale;
+        try
+        {
+            repositoryScale = CreateCodeExploreRepositoryScale(
+                snapshot,
+                sourceReader,
+                declarationCatalogEntryCount: null,
+                declarationCatalogComplete: null,
+                associatedArtifactCandidateCount: request.AssociatedArtifactPathAnchors.Count,
+                timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            var timedOutScale = CreateUnknownCodeExploreRepositoryScale(
+                request.AssociatedArtifactPathAnchors.Count);
+            request = ApplyCodeExploreAdaptiveDefaults(request, timedOutScale, out var timedOutBudget);
+            var timedOutAvailability = CreateInitialTimeoutCodeExploreAvailability(readiness);
+            EnsureCurrent(engine, readiness.Generation);
+            return CreateUnavailableCodeExploreResult(
+                readiness,
+                request,
+                queryInterpretation,
+                timedOutAvailability,
+                timedOutBudget);
+        }
+
+        request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
         var anchors = BuildCodeExploreAnchors(request).ToList();
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
@@ -630,10 +689,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 EnsureCurrent(engine, snapshot.Generation);
                 return CreateUnanchoredCodeExploreResult(
                     snapshot,
-                    request.Query,
+                    request,
                     queryInterpretation,
                     discovery,
-                    candidateSummaries);
+                    candidateSummaries,
+                    adaptiveBudget);
             }
 
             foreach (var anchor in anchors)
@@ -854,11 +914,30 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         break;
                     }
 
-                    var sourceAllowance = remainingSourceCharacters <= 0
-                        ? 0
-                        : Math.Min(
-                            remainingSourceCharacters,
-                            request.Limits.MaximumPerFileSourceCharacters);
+                    var sourceAllowance = CalculateCodeExploreSourceAllowance(
+                        candidate,
+                        candidates,
+                        selectedSections.Count,
+                        remainingSourceCharacters,
+                        request.Limits);
+                    if (sourceAllowance <= 0 && selectedSections.Count > 0)
+                    {
+                        outputBoundReached = true;
+                        var continuation = CreateSkippedCandidateContinuation(
+                            snapshot,
+                            candidate,
+                            "The source allocation pass reserved remaining budget for stronger code_explore candidates.");
+                        AddContinuationIfWithinLimit(continuations, continuation, request.Limits.MaximumFiles);
+                        allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                            ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
+                            0,
+                            0,
+                            CodeExploreSourceCompleteness.Omitted,
+                            false,
+                            "Source was cliffed by relevance-aware allocation; use the continuation target if this tail evidence is needed."));
+                        continue;
+                    }
+
                     var projected = await ProjectCodeExploreSectionAsync(
                         snapshot,
                         activeProjection,
@@ -1009,7 +1088,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             request.Limits.MaximumSourceCharacters,
             reservedCharacters,
             spentSourceCharacters,
-            "request.maximumSourceCharacters after reserved metadata, plus request.maximumPerFileSourceCharacters",
+            CreateAllocationBudgetSource(adaptiveBudget),
             allocationFiles);
         var deduplication = visibleSourceFrontier is null || dedupCandidateRanges == 0
             ? null
@@ -1021,6 +1100,36 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 reclaimedCharacters,
                 usedForNewSourceCharacters,
                 dedupReasons.Order(StringComparer.Ordinal).ToArray());
+        var continuationTargets = continuations
+            .DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}")
+            .ToArray();
+        adaptiveBudget = UpdateAdaptiveBudgetScale(
+            adaptiveBudget,
+            discovery,
+            artifactProjection?.Coverage);
+        var availability = CreateCodeExploreAvailability(
+            snapshot,
+            coverage,
+            resolutions,
+            selectedSections,
+            backReferences,
+            continuationTargets,
+            timeReached);
+        var presentation = CreateCodeExplorePresentation(
+            availability,
+            selectedSections,
+            backReferences,
+            continuationTargets,
+            coverageOmissions,
+            artifactProjection?.Coverage,
+            adaptiveBudget.PresentationVerbosity);
+        var fileRelevance = CreateCodeExploreFileRelevanceSummaries(
+            candidateSummaries,
+            allocationFiles,
+            selectedSections,
+            backReferences,
+            continuationTargets,
+            queryInterpretation);
         return new CodeExploreResult(
             snapshot.Generation,
             snapshot.Confidence,
@@ -1028,7 +1137,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selectedSections,
             coverage,
             coverageOmissions,
-            continuations.DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}").ToArray(),
+            continuationTargets,
             flow,
             blastRadius,
             queryInterpretation,
@@ -1039,7 +1148,1071 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             deduplication,
             emissionRecords,
             artifactProjection?.Artifacts,
-            artifactProjection?.Coverage);
+            artifactProjection?.Coverage,
+            availability,
+            presentation,
+            adaptiveBudget,
+            fileRelevance);
+    }
+
+    private static CodeExploreAvailability? CreateInitialCodeExploreAvailability(
+        CodeExploreReadinessSnapshot snapshot)
+    {
+        if (snapshot.Solution is null || string.IsNullOrWhiteSpace(snapshot.RepositoryPath))
+        {
+            var status = snapshot.Confidence == SemanticConfidenceLevel.None
+                ? CodeExploreAvailabilityStatus.SemanticWorkspaceUnavailable
+                : CodeExploreAvailabilityStatus.SemanticReadinessBelowMinimum;
+            var reason = snapshot.Confidence == SemanticConfidenceLevel.None
+                ? "The opened workspace has not loaded compiler-aware project state yet."
+                : "The semantic workspace does not currently expose compiler-aware project state.";
+            return new CodeExploreAvailability(
+                status,
+                reason,
+                true,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.WaitForWorkspace,
+                    "Wait for semantic workspace loading, then retry code_explore for C# source-bearing evidence.")]);
+        }
+
+        if (snapshot.Confidence < SemanticConfidenceLevel.PartialCompilation)
+        {
+            return new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.SemanticReadinessBelowMinimum,
+                "The semantic workspace is below the minimum readiness required for compiler-known C# source exploration.",
+                true,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.WaitForWorkspace,
+                    "Wait until at least partial compilation is available, then retry code_explore.")]);
+        }
+
+        if (snapshot.CompiledProjects.Count == 0)
+        {
+            return new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.NoCompiledProjects,
+                "The opened workspace has no compiled C# projects available for source-bearing semantic exploration.",
+                true,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.OpenWorkspace,
+                    "Open or load a C# solution/project workspace before retrying code_explore.")]);
+        }
+
+        return null;
+    }
+
+    private static CodeExploreAvailability CreateInitialTimeoutCodeExploreAvailability(
+        CodeExploreReadinessSnapshot snapshot)
+    {
+        return new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.TimedOutPartial,
+            "The code exploration time limit was reached while inspecting workspace scale before source could be projected.",
+            true,
+            snapshot.Confidence,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            [new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.RefineAnchor,
+                "Retry code_explore with more exact symbol or path anchors, or use a narrower granular fallback for the immediate gap.")]);
+    }
+
+    private static CodeExploreResult CreateUnavailableCodeExploreResult(
+        CodeExploreReadinessSnapshot snapshot,
+        CodeExploreRequest request,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreAvailability availability,
+        CodeExploreAdaptiveBudget adaptiveBudget)
+    {
+        var coverage = new CodeExploreCoverage(
+            false,
+            false,
+            false,
+            true,
+            [availability.Reason]);
+        var allocation = new CodeExploreAllocationSummary(
+            request.Limits.MaximumSourceCharacters,
+            0,
+            0,
+            CreateAllocationBudgetSource(adaptiveBudget),
+            []);
+        var presentation = CreateCodeExplorePresentation(
+            availability,
+            [],
+            [],
+            [],
+            coverage.Omissions,
+            null,
+            adaptiveBudget.PresentationVerbosity);
+        return new CodeExploreResult(
+            snapshot.Generation,
+            snapshot.Confidence,
+            [],
+            [],
+            coverage,
+            coverage.Omissions,
+            [],
+            QueryInterpretation: interpretation,
+            Allocation: allocation,
+            Availability: availability,
+            Presentation: presentation,
+            AdaptiveBudget: adaptiveBudget,
+            FileRelevance: []);
+    }
+
+    private static CodeExploreRepositoryScale CreateUnknownCodeExploreRepositoryScale(
+        int associatedArtifactCandidateCount)
+    {
+        return new CodeExploreRepositoryScale(
+            CodeExploreRepositoryScaleTier.Unknown,
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            null,
+            null,
+            associatedArtifactCandidateCount);
+    }
+
+    private static CodeExploreRepositoryScale CreateCodeExploreRepositoryScale(
+        AdvancedSemanticSnapshot snapshot,
+        ICodeExploreSourceReader sourceReader,
+        int? declarationCatalogEntryCount,
+        bool? declarationCatalogComplete,
+        int associatedArtifactCandidateCount,
+        CancellationToken cancellationToken)
+    {
+        var projectRecords = new List<CodeExploreScaleProject>();
+        var inspectedProjects = 0;
+        var inspectedDocuments = 0;
+        foreach (var project in snapshot.Solution.Projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (inspectedProjects >= MaximumCodeExploreScaleProjects)
+            {
+                break;
+            }
+
+            inspectedProjects++;
+            var record = CreatePolicyAdmittedScaleProject(
+                project,
+                sourceReader,
+                ref inspectedDocuments,
+                cancellationToken);
+            if (record.ProjectFileAllowed || record.DocumentCount > 0)
+            {
+                projectRecords.Add(record);
+            }
+
+            if (inspectedDocuments >= MaximumCodeExploreScaleDocuments)
+            {
+                break;
+            }
+        }
+
+        var records = projectRecords.ToArray();
+        var totalDocuments = records.Sum(record => record.DocumentCount);
+        var compiledDocuments = records
+            .Where(record => snapshot.CompiledProjects.Contains(record.Project.Id))
+            .Sum(record => record.DocumentCount);
+        var compiledProjectCount = records.Count(record => snapshot.CompiledProjects.Contains(record.Project.Id));
+        var generatedDocuments = records.Sum(record => record.GeneratedDocumentCount);
+        int? targetFrameworkCount = null;
+        var tier = SelectCodeExploreRepositoryScaleTier(
+            records.Length,
+            totalDocuments,
+            compiledDocuments,
+            declarationCatalogEntryCount);
+        return new CodeExploreRepositoryScale(
+            tier,
+            records.Length,
+            compiledProjectCount,
+            totalDocuments,
+            compiledDocuments,
+            generatedDocuments,
+            targetFrameworkCount,
+            declarationCatalogEntryCount,
+            declarationCatalogComplete,
+            associatedArtifactCandidateCount);
+    }
+
+    private static CodeExploreScaleProject CreatePolicyAdmittedScaleProject(
+        Project project,
+        ICodeExploreSourceReader sourceReader,
+        ref int inspectedDocuments,
+        CancellationToken cancellationToken)
+    {
+        var documentCount = 0;
+        var generatedDocumentCount = 0;
+        foreach (var document in project.Documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (inspectedDocuments >= MaximumCodeExploreScaleDocuments)
+            {
+                break;
+            }
+
+            inspectedDocuments++;
+            if (document.FilePath is not { } path || !sourceReader.IsPathAllowed(path))
+            {
+                continue;
+            }
+
+            documentCount++;
+            if (IsGeneratedPath(document.FilePath ?? document.Name))
+            {
+                generatedDocumentCount++;
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var projectFileAllowed = project.FilePath is { } projectPath && sourceReader.IsPathAllowed(projectPath);
+        return new CodeExploreScaleProject(
+            project,
+            projectFileAllowed,
+            documentCount,
+            generatedDocumentCount);
+    }
+
+    private static CodeExploreRepositoryScaleTier SelectCodeExploreRepositoryScaleTier(
+        int projectCount,
+        int totalDocuments,
+        int compiledDocuments,
+        int? declarationCatalogEntryCount)
+    {
+        var effectiveDocuments = Math.Max(totalDocuments, compiledDocuments);
+        var declarations = declarationCatalogEntryCount ?? 0;
+        if (projectCount == 0 && effectiveDocuments == 0 && declarations == 0)
+        {
+            return CodeExploreRepositoryScaleTier.Unknown;
+        }
+
+        if (projectCount <= 2 && effectiveDocuments <= 25 && declarations <= 800)
+        {
+            return CodeExploreRepositoryScaleTier.Tiny;
+        }
+
+        if (projectCount <= 8 && effectiveDocuments <= 120 && declarations <= 4_000)
+        {
+            return CodeExploreRepositoryScaleTier.Small;
+        }
+
+        if (projectCount <= 30 && effectiveDocuments <= 600 && declarations <= 18_000)
+        {
+            return CodeExploreRepositoryScaleTier.Medium;
+        }
+
+        if (projectCount <= 120 && effectiveDocuments <= 2_500 && declarations <= 60_000)
+        {
+            return CodeExploreRepositoryScaleTier.Large;
+        }
+
+        return CodeExploreRepositoryScaleTier.VeryLarge;
+    }
+
+    private static CodeExploreRequest ApplyCodeExploreAdaptiveDefaults(
+        CodeExploreRequest request,
+        CodeExploreRepositoryScale repositoryScale,
+        out CodeExploreAdaptiveBudget adaptiveBudget)
+    {
+        var envelope = SelectAdaptiveEnvelope(repositoryScale.Tier);
+        var appliesToSourceDefaults = UsesDefaultCodeExploreSourceEnvelope(request.Limits);
+        var limits = appliesToSourceDefaults
+            ? request.Limits with
+            {
+                MaximumFiles = Math.Min(request.Limits.MaximumFiles, envelope.MaximumFiles),
+                MaximumSourceCharacters = Math.Min(request.Limits.MaximumSourceCharacters, envelope.MaximumSourceCharacters),
+                MaximumPerFileSourceCharacters = Math.Min(request.Limits.MaximumPerFileSourceCharacters, envelope.MaximumPerFileSourceCharacters),
+            }
+            : request.Limits;
+        var budgetSource = appliesToSourceDefaults
+            ? $"repository scale {repositoryScale.Tier} adaptive defaults applied within request/model source limits"
+            : $"repository scale {repositoryScale.Tier} recorded; explicit request source limits retained";
+        adaptiveBudget = new CodeExploreAdaptiveBudget(
+            repositoryScale,
+            limits.MaximumFiles,
+            limits.MaximumSourceCharacters,
+            limits.MaximumPerFileSourceCharacters,
+            ResolveNaturalLanguageCandidateSummaryLimit(limits.MaximumSourceCharacters, 0),
+            envelope.RecommendedFollowUpCount,
+            envelope.PresentationVerbosity,
+            budgetSource);
+        return request with { Limits = limits };
+    }
+
+    private static bool UsesDefaultCodeExploreSourceEnvelope(CodeExploreLimits limits)
+    {
+        var defaults = new CodeExploreLimits();
+        return limits.MaximumFiles == defaults.MaximumFiles
+            && limits.MaximumSourceCharacters == defaults.MaximumSourceCharacters
+            && limits.MaximumPerFileSourceCharacters == defaults.MaximumPerFileSourceCharacters;
+    }
+
+    private static (
+        int MaximumFiles,
+        int MaximumSourceCharacters,
+        int MaximumPerFileSourceCharacters,
+        int RecommendedFollowUpCount,
+        CodeExplorePresentationVerbosity PresentationVerbosity) SelectAdaptiveEnvelope(CodeExploreRepositoryScaleTier tier)
+    {
+        return tier switch
+        {
+            CodeExploreRepositoryScaleTier.Tiny => (4, 24_000, 10_000, 1, CodeExplorePresentationVerbosity.Compact),
+            CodeExploreRepositoryScaleTier.Small => (6, 36_000, 12_000, 1, CodeExplorePresentationVerbosity.Compact),
+            CodeExploreRepositoryScaleTier.Large => (8, 48_000, 14_000, 3, CodeExplorePresentationVerbosity.Guided),
+            CodeExploreRepositoryScaleTier.VeryLarge => (8, 44_000, 12_000, 4, CodeExplorePresentationVerbosity.Guided),
+            _ => (8, 50_000, 16_384, 2, CodeExplorePresentationVerbosity.Standard),
+        };
+    }
+
+    private static CodeExploreAdaptiveBudget UpdateAdaptiveBudgetScale(
+        CodeExploreAdaptiveBudget adaptiveBudget,
+        CodeExploreDiscoverySummary? discovery,
+        CodeExploreArtifactCoverage? artifactCoverage)
+    {
+        var current = adaptiveBudget.RepositoryScale;
+        var updated = current with
+        {
+            DeclarationCatalogEntryCount = discovery?.CatalogEntryCount ?? current.DeclarationCatalogEntryCount,
+            DeclarationCatalogComplete = discovery?.CatalogComplete ?? current.DeclarationCatalogComplete,
+            AssociatedArtifactCandidateCount = artifactCoverage?.CandidateCount ?? current.AssociatedArtifactCandidateCount,
+        };
+        var budgetSource = discovery is null
+            ? adaptiveBudget.BudgetSource
+            : adaptiveBudget.BudgetSource + "; declaration-catalog observations attached after envelope selection";
+        return adaptiveBudget with
+        {
+            RepositoryScale = updated,
+            BudgetSource = budgetSource,
+        };
+    }
+
+    private static string CreateAllocationBudgetSource(CodeExploreAdaptiveBudget adaptiveBudget)
+    {
+        return adaptiveBudget.BudgetSource
+            + "; request.maximumSourceCharacters after reserved metadata, plus relevance-aware per-file allocation";
+    }
+
+    private static int CalculateCodeExploreSourceAllowance(
+        CodeExploreSectionCandidate candidate,
+        IReadOnlyList<CodeExploreSectionCandidate> candidates,
+        int selectedSectionCount,
+        int remainingSourceCharacters,
+        CodeExploreLimits limits)
+    {
+        if (remainingSourceCharacters <= 0)
+        {
+            return 0;
+        }
+
+        var maximumPerFile = Math.Min(remainingSourceCharacters, limits.MaximumPerFileSourceCharacters);
+        if (selectedSectionCount == 0 || IsPrimaryCodeExploreSourceCandidate(candidate))
+        {
+            return maximumPerFile;
+        }
+
+        if (remainingSourceCharacters < MinimumUsefulSourceCharacters)
+        {
+            return 0;
+        }
+
+        var remainingSlots = Math.Max(1, limits.MaximumFiles - selectedSectionCount);
+        if (IsWeakTailCodeExploreSourceCandidate(candidate, limits)
+            && remainingSourceCharacters < MinimumUsefulSourceCharacters * Math.Max(2, remainingSlots))
+        {
+            return 0;
+        }
+
+        var futureUsefulReserve = MinimumUsefulSourceCharacters * Math.Max(0, remainingSlots - 1);
+        var spendableForThisFile = Math.Max(
+            MinimumUsefulSourceCharacters,
+            remainingSourceCharacters - Math.Min(futureUsefulReserve, remainingSourceCharacters - MinimumUsefulSourceCharacters));
+        var relevanceCap = CalculateCandidateSourceCap(candidate, candidates, limits.MaximumPerFileSourceCharacters);
+        return Math.Min(maximumPerFile, Math.Min(relevanceCap, spendableForThisFile));
+    }
+
+    private static bool IsPrimaryCodeExploreSourceCandidate(CodeExploreSectionCandidate candidate)
+    {
+        return candidate.Priority <= 1
+            || candidate.AllocationRank is > 0 and <= 2
+            || candidate.SelectionReason.Contains("Pinned", StringComparison.OrdinalIgnoreCase)
+            || candidate.SelectionReason.Contains("flow", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWeakTailCodeExploreSourceCandidate(
+        CodeExploreSectionCandidate candidate,
+        CodeExploreLimits limits)
+    {
+        if (IsPrimaryCodeExploreSourceCandidate(candidate))
+        {
+            return false;
+        }
+
+        var allocationRank = candidate.AllocationRank ?? int.MaxValue;
+        return candidate.Priority >= 4 || allocationRank > Math.Max(2, limits.MaximumFiles / 2);
+    }
+
+    private static int CalculateCandidateSourceCap(
+        CodeExploreSectionCandidate candidate,
+        IReadOnlyList<CodeExploreSectionCandidate> candidates,
+        int maximumPerFileSourceCharacters)
+    {
+        var relatedCandidatesInFile = candidates.Count(other => string.Equals(other.FilePath, candidate.FilePath, PathComparison));
+        var cap = candidate.Priority switch
+        {
+            <= 1 => maximumPerFileSourceCharacters,
+            2 => maximumPerFileSourceCharacters * 3 / 4,
+            3 or 4 => maximumPerFileSourceCharacters / 2,
+            _ => maximumPerFileSourceCharacters / 3,
+        };
+        if (relatedCandidatesInFile > 1)
+        {
+            cap += maximumPerFileSourceCharacters / 8;
+        }
+
+        if ((candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath))
+            && !candidate.SelectionReason.Contains("generated", StringComparison.OrdinalIgnoreCase))
+        {
+            cap -= maximumPerFileSourceCharacters / 8;
+        }
+
+        var candidatePathForTestClassification = (candidate.Location?.FilePath ?? candidate.FilePath).Replace('\\', '/');
+        if (IsTestProjectNameOrPath(candidate.Location?.ProjectName ?? string.Empty, candidatePathForTestClassification)
+            && !candidate.SelectionReason.Contains("test", StringComparison.OrdinalIgnoreCase))
+        {
+            cap -= maximumPerFileSourceCharacters / 8;
+        }
+
+        return Math.Clamp(cap, MinimumUsefulSourceCharacters, maximumPerFileSourceCharacters);
+    }
+
+    private static CodeExploreAvailability CreateCodeExploreAvailability(
+        AdvancedSemanticSnapshot snapshot,
+        CodeExploreCoverage coverage,
+        IReadOnlyList<CodeExploreAnchorResolution> resolutions,
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference> backReferences,
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        bool timeReached)
+    {
+        var hasVisibleSource = sections.Any(section => section.Source.NumberedLines.Count > 0)
+            || backReferences.Count > 0;
+        if (timeReached)
+        {
+            var reason = hasVisibleSource || resolutions.Count > 0 || continuationTargets.Count > 0
+                ? "The code exploration time limit was reached after returning bounded safe evidence."
+                : "The code exploration time limit was reached before source evidence could be assembled.";
+            return new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.TimedOutPartial,
+                reason,
+                true,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                continuationTargets.Count == 0,
+                CreateTimeoutAvailabilityActions(continuationTargets));
+        }
+
+        if (!hasVisibleSource
+            && resolutions.Count > 0
+            && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
+        {
+            return new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.NoMatchingDeclarations,
+                "No compiler-known C# declaration or confined C# path matched the request.",
+                false,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.RefineAnchor,
+                    "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+        }
+
+        if (!hasVisibleSource && HasPolicySourceOmission(resolutions, sections, coverage.Omissions))
+        {
+            return new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.NoSourceAfterPolicy,
+                "Relevant C# source was found but all source text was removed by path, policy, drift, or source-read safety checks.",
+                false,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.AskUser,
+                    "Ask the user whether the workspace scope or repository path policy should be adjusted before retrying.")]);
+        }
+
+        return new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.Available,
+            "Compiler-aware code exploration completed with the returned bounded evidence.",
+            false,
+            snapshot.Confidence,
+            SemanticConfidenceLevel.PartialCompilation,
+            !coverage.SourceComplete,
+            []);
+    }
+
+    private static IReadOnlyList<CodeExploreNextActionHint> CreateTimeoutAvailabilityActions(
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets)
+    {
+        if (continuationTargets.Count > 0)
+        {
+            var first = continuationTargets[0];
+            return [new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.FollowContinuation,
+                "Use the returned continuation target for a narrower retry instead of repeating the broad request.",
+                first.FilePath,
+                CreateContinuationRange(first),
+                first.Anchor)];
+        }
+
+        return [new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.RefineAnchor,
+            "Retry with a narrower exact symbol, stable id, or C# path anchor.")];
+    }
+
+    private static bool HasPolicySourceOmission(
+        IReadOnlyList<CodeExploreAnchorResolution> resolutions,
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<string> omissions)
+    {
+        return resolutions.Any(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Omitted)
+            || sections.Any(section => section.Source.Completeness is CodeExploreSourceCompleteness.Omitted or CodeExploreSourceCompleteness.Drifted)
+            || omissions.Any(omission => omission.Contains("policy", StringComparison.OrdinalIgnoreCase)
+                || omission.Contains("outside", StringComparison.OrdinalIgnoreCase)
+                || omission.Contains("drift", StringComparison.OrdinalIgnoreCase)
+                || omission.Contains("could not be read", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static CodeExplorePresentation CreateCodeExplorePresentation(
+        CodeExploreAvailability availability,
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference> backReferences,
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        IReadOnlyList<string> omissions,
+        CodeExploreArtifactCoverage? artifactCoverage,
+        CodeExplorePresentationVerbosity verbosity)
+    {
+        var guarantees = CreateSourceGuarantees(sections, backReferences, verbosity);
+        var notShownTargets = CreateNotShownTargets(continuationTargets, omissions, artifactCoverage, verbosity);
+        var nextActions = CreatePresentationNextActions(availability, guarantees, continuationTargets, verbosity);
+        var summary = CreatePresentationSummary(
+            availability,
+            guarantees,
+            notShownTargets,
+            continuationTargets,
+            verbosity);
+        return new CodeExplorePresentation(summary, guarantees, notShownTargets, nextActions);
+    }
+
+    private static IReadOnlyList<CodeExploreSourceGuarantee> CreateSourceGuarantees(
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference> backReferences,
+        CodeExplorePresentationVerbosity verbosity)
+    {
+        var maximumGuarantees = verbosity == CodeExplorePresentationVerbosity.Compact
+            ? Math.Min(6, MaximumPresentationGuarantees)
+            : MaximumPresentationGuarantees;
+        var guarantees = new List<CodeExploreSourceGuarantee>();
+        foreach (var section in sections.OrderBy(section => section.FilePath, PathComparer).ThenBy(section => section.Source.Range.StartLine))
+        {
+            if (guarantees.Count >= maximumGuarantees)
+            {
+                break;
+            }
+
+            var source = section.Source;
+            var hasCurrentSource = source.NumberedLines.Count > 0 && source.FileSha256 is not null;
+            var kind = source.Completeness switch
+            {
+                CodeExploreSourceCompleteness.Complete when hasCurrentSource && source.RangeSha256 is not null => CodeExploreSourceGuaranteeKind.ReadEquivalent,
+                CodeExploreSourceCompleteness.Partial when hasCurrentSource => CodeExploreSourceGuaranteeKind.Partial,
+                CodeExploreSourceCompleteness.Drifted => CodeExploreSourceGuaranteeKind.Drifted,
+                _ => CodeExploreSourceGuaranteeKind.Omitted,
+            };
+            var readEquivalent = kind == CodeExploreSourceGuaranteeKind.ReadEquivalent;
+            var message = kind switch
+            {
+                CodeExploreSourceGuaranteeKind.ReadEquivalent => $"{section.FilePath} {FormatSourceRange(source.Range)} is current line-numbered source projected through host output sanitization; digests identify the original current source bytes before sanitization, so treat it as read-equivalent for code structure but not proof of redacted literal bytes.",
+                CodeExploreSourceGuaranteeKind.Partial => $"{section.FilePath} {FormatSourceRange(source.Range)} is current line-numbered partial source projected through host output sanitization; use continuation anchors for omitted lines before claiming complete-file or exact-byte coverage.",
+                CodeExploreSourceGuaranteeKind.Drifted => $"{section.FilePath} {FormatSourceRange(source.Range)} was not emitted because semantic or continuation identity drifted from current source.",
+                _ => $"{section.FilePath} {FormatSourceRange(source.Range)} was not emitted; use the omission reason or continuation target before falling back.",
+            };
+            guarantees.Add(new CodeExploreSourceGuarantee(
+                kind,
+                section.FilePath,
+                source.Range,
+                hasCurrentSource,
+                false,
+                hasCurrentSource,
+                readEquivalent,
+                source.FileSha256,
+                source.RangeSha256,
+                section.SemanticIdentities.Select(identity => identity.Id).Take(8).ToArray(),
+                BoundPresentationText(message, 420)));
+        }
+
+        foreach (var reference in backReferences.OrderBy(reference => reference.FilePath, PathComparer).ThenBy(reference => reference.Range.StartLine))
+        {
+            if (guarantees.Count >= maximumGuarantees)
+            {
+                break;
+            }
+
+            var message = $"{reference.FilePath} {FormatSourceRange(reference.Range)} is unchanged source already visible in the current model request via holder {reference.HolderId}, tool call {reference.ToolCallId}; that visible text may already be host-sanitized, so use it for code structure instead of reading the same range again but do not infer redacted literal bytes.";
+            guarantees.Add(new CodeExploreSourceGuarantee(
+                CodeExploreSourceGuaranteeKind.BackReference,
+                reference.FilePath,
+                reference.Range,
+                true,
+                false,
+                true,
+                true,
+                reference.FileSha256,
+                reference.RangeSha256,
+                reference.SymbolIds.Take(8).ToArray(),
+                BoundPresentationText(message, 420)));
+        }
+
+        return guarantees;
+    }
+
+    private static IReadOnlyList<CodeExploreNotShownTarget> CreateNotShownTargets(
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        IReadOnlyList<string> omissions,
+        CodeExploreArtifactCoverage? artifactCoverage,
+        CodeExplorePresentationVerbosity verbosity)
+    {
+        var maximumTargets = verbosity == CodeExplorePresentationVerbosity.Compact
+            ? Math.Min(6, MaximumPresentationNotShownTargets)
+            : MaximumPresentationNotShownTargets;
+        var targets = new List<CodeExploreNotShownTarget>();
+        foreach (var continuation in continuationTargets)
+        {
+            if (targets.Count >= maximumTargets)
+            {
+                break;
+            }
+
+            AddNotShownTarget(targets, new CodeExploreNotShownTarget(
+                CodeExploreNotShownTargetKind.Source,
+                continuation.FilePath,
+                CreateContinuationRange(continuation),
+                BoundPresentationText(continuation.Reason, 320),
+                continuation.Anchor,
+                continuation.ExpectedFileSha256,
+                continuation.WorkspaceGeneration));
+        }
+
+        foreach (var continuation in artifactCoverage?.ContinuationTargets ?? [])
+        {
+            if (targets.Count >= maximumTargets)
+            {
+                break;
+            }
+
+            AddNotShownTarget(targets, new CodeExploreNotShownTarget(
+                CodeExploreNotShownTargetKind.Artifact,
+                continuation.FilePath,
+                CreateArtifactContinuationRange(continuation),
+                BoundPresentationText(continuation.Reason, 320),
+                continuation.FilePath,
+                continuation.ExpectedFileSha256,
+                continuation.WorkspaceGeneration));
+        }
+
+        var remainingSlots = Math.Max(0, maximumTargets - targets.Count);
+        foreach (var omission in omissions.Distinct(StringComparer.Ordinal).Take(remainingSlots))
+        {
+            AddNotShownTarget(targets, new CodeExploreNotShownTarget(
+                CodeExploreNotShownTargetKind.General,
+                null,
+                null,
+                BoundPresentationText(omission, 280)));
+        }
+
+        return targets;
+    }
+
+    private static void AddNotShownTarget(
+        List<CodeExploreNotShownTarget> targets,
+        CodeExploreNotShownTarget target)
+    {
+        var key = $"{target.Kind}:{target.FilePath}:{target.Range?.StartLine}:{target.Range?.EndLine}:{target.ContinuationAnchor}:{target.Reason}";
+        if (!targets.Any(existing => string.Equals(
+            $"{existing.Kind}:{existing.FilePath}:{existing.Range?.StartLine}:{existing.Range?.EndLine}:{existing.ContinuationAnchor}:{existing.Reason}",
+            key,
+            StringComparison.Ordinal)))
+        {
+            targets.Add(target);
+        }
+    }
+
+    private static SourceRange? CreateContinuationRange(CodeExploreContinuationTarget continuation)
+    {
+        if (continuation.StartLine is not { } startLine)
+        {
+            return null;
+        }
+
+        return new SourceRange(startLine, 1, continuation.EndLine ?? startLine, 1);
+    }
+
+    private static SourceRange? CreateArtifactContinuationRange(CodeExploreArtifactContinuationTarget continuation)
+    {
+        if (continuation.StartLine is not { } startLine)
+        {
+            return null;
+        }
+
+        return new SourceRange(startLine, 1, continuation.EndLine ?? startLine, 1);
+    }
+
+    private static IReadOnlyList<CodeExploreNextActionHint> CreatePresentationNextActions(
+        CodeExploreAvailability availability,
+        IReadOnlyList<CodeExploreSourceGuarantee> guarantees,
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        CodeExplorePresentationVerbosity verbosity)
+    {
+        var maximumActions = verbosity == CodeExplorePresentationVerbosity.Compact
+            ? Math.Min(5, MaximumPresentationNextActions)
+            : MaximumPresentationNextActions;
+        var actions = new List<CodeExploreNextActionHint>();
+        foreach (var action in availability.RecommendedActions)
+        {
+            AddPresentationAction(actions, action, maximumActions);
+        }
+
+        var returnedSource = guarantees.FirstOrDefault(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.ReadEquivalent);
+        if (returnedSource is not null)
+        {
+            AddPresentationAction(
+                actions,
+                new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.UseReturnedSource,
+                    "Use complete current FileSections as host-sanitized, source-identity-backed evidence for their advertised ranges; do not infer redacted literal bytes.",
+                    returnedSource.FilePath,
+                    returnedSource.Range),
+                maximumActions);
+        }
+
+        var backReference = guarantees.FirstOrDefault(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.BackReference);
+        if (backReference is not null)
+        {
+            AddPresentationAction(
+                actions,
+                new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.UseBackReference,
+                    "Use the named current-request back-reference instead of re-reading unchanged source already visible to the model.",
+                    backReference.FilePath,
+                    backReference.Range),
+                maximumActions);
+        }
+
+        if (continuationTargets.Count > 0)
+        {
+            var continuation = continuationTargets[0];
+            AddPresentationAction(
+                actions,
+                new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.FollowContinuation,
+                    "For omitted or partial source, retry with the exact returned continuation target rather than broad search.",
+                    continuation.FilePath,
+                    CreateContinuationRange(continuation),
+                    continuation.Anchor),
+                maximumActions);
+        }
+
+        if (actions.Count == 0 && availability.GranularFallbackMayHelp)
+        {
+            AddPresentationAction(
+                actions,
+                new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.UseGranularFallback,
+                    "Use find_symbol, search, or read_file only for the specific gap described by availability or omissions."),
+                maximumActions);
+        }
+
+        return actions;
+    }
+
+    private static void AddPresentationAction(
+        List<CodeExploreNextActionHint> actions,
+        CodeExploreNextActionHint action,
+        int maximumActions)
+    {
+        if (actions.Count >= maximumActions)
+        {
+            return;
+        }
+
+        var key = $"{action.Kind}:{action.FilePath}:{action.Range?.StartLine}:{action.Range?.EndLine}:{action.ContinuationAnchor}";
+        if (!actions.Any(existing => string.Equals(
+            $"{existing.Kind}:{existing.FilePath}:{existing.Range?.StartLine}:{existing.Range?.EndLine}:{existing.ContinuationAnchor}",
+            key,
+            StringComparison.Ordinal)))
+        {
+            actions.Add(action);
+        }
+    }
+
+    private static string CreatePresentationSummary(
+        CodeExploreAvailability availability,
+        IReadOnlyList<CodeExploreSourceGuarantee> guarantees,
+        IReadOnlyList<CodeExploreNotShownTarget> notShownTargets,
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        CodeExplorePresentationVerbosity verbosity)
+    {
+        var parts = new List<string> { $"Availability: {availability.Status}. {availability.Reason}" };
+        var readEquivalentCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.ReadEquivalent);
+        if (readEquivalentCount > 0)
+        {
+            parts.Add($"{readEquivalentCount} returned current line-numbered source range(s) are host-sanitized and source-identity backed for their advertised ranges.");
+        }
+
+        var partialCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.Partial);
+        if (partialCount > 0)
+        {
+            parts.Add($"{partialCount} returned source range(s) are partial; use exact continuations before claiming complete coverage.");
+        }
+
+        var backReferenceCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.BackReference);
+        if (backReferenceCount > 0)
+        {
+            parts.Add($"{backReferenceCount} unchanged range(s) are already visible by current-request back-reference.");
+        }
+
+        if (continuationTargets.Count > 0)
+        {
+            parts.Add($"{continuationTargets.Count} exact continuation target(s) identify the next focused code_explore calls.");
+        }
+
+        if (notShownTargets.Count > 0 && verbosity != CodeExplorePresentationVerbosity.Compact)
+        {
+            parts.Add($"{notShownTargets.Count} not-shown target(s) summarize omitted source, artifacts, or safety notes.");
+        }
+
+        var maximumCharacters = verbosity == CodeExplorePresentationVerbosity.Compact
+            ? 520
+            : MaximumPresentationSummaryCharacters;
+        return BoundPresentationText(string.Join(' ', parts), maximumCharacters);
+    }
+
+    private static IReadOnlyList<CodeExploreFileRelevanceSummary> CreateCodeExploreFileRelevanceSummaries(
+        IReadOnlyList<CodeExploreCandidateSummary>? candidateSummaries,
+        IReadOnlyList<CodeExploreAllocationFileSummary> allocationFiles,
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference> backReferences,
+        IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var candidatesByPath = new Dictionary<string, List<CodeExploreCandidateSummary>>(PathComparer);
+        foreach (var summary in candidateSummaries ?? [])
+        {
+            var path = GetCandidateSummaryPath(summary);
+            if (path is null)
+            {
+                continue;
+            }
+
+            if (!candidatesByPath.TryGetValue(path, out var summaries))
+            {
+                summaries = [];
+                candidatesByPath.Add(path, summaries);
+            }
+
+            summaries.Add(summary);
+        }
+
+        var allocationByPath = allocationFiles
+            .GroupBy(file => file.FilePath, PathComparer)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last(),
+                PathComparer);
+        var sectionSourceCharacters = sections
+            .GroupBy(section => section.FilePath, PathComparer)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Sum(section => section.Source.NumberedLines.Sum(line => line.Length)),
+                PathComparer);
+        var returnedSourcePaths = sections
+            .Where(section => section.Source.NumberedLines.Count > 0)
+            .Select(section => section.FilePath)
+            .ToHashSet(PathComparer);
+        var backReferencePaths = backReferences
+            .Select(reference => reference.FilePath)
+            .ToHashSet(PathComparer);
+        var continuationPaths = continuationTargets
+            .Select(target => target.FilePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path ?? string.Empty)
+            .ToHashSet(PathComparer);
+        var paths = candidatesByPath.Keys
+            .Concat(allocationByPath.Keys)
+            .Concat(sectionSourceCharacters.Keys)
+            .Concat(backReferencePaths)
+            .Concat(continuationPaths)
+            .Distinct(PathComparer)
+            .ToArray();
+        var results = new List<CodeExploreFileRelevanceSummary>();
+        foreach (var path in paths)
+        {
+            candidatesByPath.TryGetValue(path, out var summaries);
+            summaries ??= [];
+            allocationByPath.TryGetValue(path, out var allocation);
+            sectionSourceCharacters.TryGetValue(path, out var spentFromSections);
+            var reasons = summaries.Aggregate(
+                CodeExploreSelectionReason.None,
+                (current, summary) => current | summary.Reasons);
+            var band = ResolveFileRelevanceBand(summaries, reasons);
+            var allocated = allocation?.AllowedCharacters ?? 0;
+            var spent = allocation?.SpentCharacters ?? spentFromSections;
+            var sourceCliffed = allocation is { AllowedCharacters: 0, SpentCharacters: 0, OmissionReason: { } omissionReason }
+                && omissionReason.Contains("cliffed by relevance-aware allocation", StringComparison.OrdinalIgnoreCase);
+            var outputStatus = ResolveFileOutputStatus(
+                path,
+                allocation,
+                spent,
+                returnedSourcePaths,
+                backReferencePaths,
+                continuationPaths);
+            results.Add(new CodeExploreFileRelevanceSummary(
+                path,
+                0,
+                band,
+                reasons,
+                summaries.Count(summary => summary.Selected),
+                CountFileQueryTermCoverage(path, interpretation),
+                sourceCliffed,
+                allocated,
+                spent,
+                CreateFileRelevanceReason(band, sourceCliffed),
+                outputStatus));
+        }
+
+        return results
+            .OrderBy(summary => summary.Band)
+            .ThenByDescending(summary => summary.SelectedSymbolCount)
+            .ThenByDescending(summary => summary.AllocatedCharacters)
+            .ThenByDescending(summary => summary.SpentCharacters)
+            .ThenByDescending(summary => summary.QueryTermCoverage)
+            .ThenBy(summary => summary.FilePath, PathComparer)
+            .Take(MaximumFileRelevanceSummaries)
+            .Select((summary, index) => summary with { Rank = index + 1 })
+            .ToArray();
+    }
+
+    private static string? GetCandidateSummaryPath(CodeExploreCandidateSummary summary)
+    {
+        if (!string.IsNullOrWhiteSpace(summary.FilePath))
+        {
+            return summary.FilePath;
+        }
+
+        return string.IsNullOrWhiteSpace(summary.Location?.FilePath)
+            ? null
+            : summary.Location.FilePath;
+    }
+
+    private static CodeExploreFileRelevanceBand ResolveFileRelevanceBand(
+        IReadOnlyList<CodeExploreCandidateSummary> summaries,
+        CodeExploreSelectionReason reasons)
+    {
+        if ((reasons & (CodeExploreSelectionReason.Pinned | CodeExploreSelectionReason.FlowSpine)) != 0)
+        {
+            return CodeExploreFileRelevanceBand.Primary;
+        }
+
+        if (summaries.Any(summary => summary.Tier <= CodeExploreCandidateTier.DistinctiveIdentifier)
+            || (reasons & CodeExploreSelectionReason.QualifiedName) != 0)
+        {
+            return CodeExploreFileRelevanceBand.Strong;
+        }
+
+        if (summaries.Any(summary => summary.Tier <= CodeExploreCandidateTier.GraphConnected)
+            || (reasons & (CodeExploreSelectionReason.MultiTerm | CodeExploreSelectionReason.CoLocated | CodeExploreSelectionReason.GraphConnected)) != 0)
+        {
+            return CodeExploreFileRelevanceBand.Supporting;
+        }
+
+        return CodeExploreFileRelevanceBand.Peripheral;
+    }
+
+    private static int CountFileQueryTermCoverage(string filePath, CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms
+            .Concat(interpretation.ExactIdentifiers)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count(term => filePath.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static CodeExploreFileOutputStatus ResolveFileOutputStatus(
+        string filePath,
+        CodeExploreAllocationFileSummary? allocation,
+        int spentCharacters,
+        IReadOnlySet<string> returnedSourcePaths,
+        IReadOnlySet<string> backReferencePaths,
+        IReadOnlySet<string> continuationPaths)
+    {
+        if (spentCharacters > 0 || returnedSourcePaths.Contains(filePath))
+        {
+            return CodeExploreFileOutputStatus.SourceReturned;
+        }
+
+        if (backReferencePaths.Contains(filePath))
+        {
+            return CodeExploreFileOutputStatus.BackReferenceOnly;
+        }
+
+        if (continuationPaths.Contains(filePath))
+        {
+            return CodeExploreFileOutputStatus.ContinuationOnly;
+        }
+
+        if (allocation is null)
+        {
+            return CodeExploreFileOutputStatus.Unknown;
+        }
+
+        return allocation.Completeness is CodeExploreSourceCompleteness.Omitted or CodeExploreSourceCompleteness.Drifted
+            ? CodeExploreFileOutputStatus.OmittedByPolicyOrSafety
+            : CodeExploreFileOutputStatus.Unknown;
+    }
+
+    private static string CreateFileRelevanceReason(
+        CodeExploreFileRelevanceBand band,
+        bool sourceCliffed)
+    {
+        var baseReason = band switch
+        {
+            CodeExploreFileRelevanceBand.Primary => "Primary source allocation from pinned or flow-spine evidence.",
+            CodeExploreFileRelevanceBand.Strong => "Strong source allocation from exact, qualified, or distinctive declaration evidence.",
+            CodeExploreFileRelevanceBand.Supporting => "Supporting source allocation from multi-term, co-located, or graph-connected evidence.",
+            _ => "Peripheral evidence retained primarily as a focused follow-up target.",
+        };
+        return sourceCliffed
+            ? baseReason + " Source was not emitted because relevance-aware allocation preserved budget for stronger files."
+            : baseReason;
+    }
+
+    private static string FormatSourceRange(SourceRange range)
+    {
+        return $"L{range.StartLine}-L{range.EndLine}";
+    }
+
+    private static string BoundPresentationText(string value, int maximumCharacters)
+    {
+        return BoundText(value.ReplaceLineEndings(" ").Trim(), maximumCharacters);
     }
 
     private static int ConsumeSourceCharacters(ref int remainingSourceCharacters, int sourceCharacters)
@@ -2721,6 +3894,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int Score,
         int CoveredTermCount,
         string AmbiguityGroup);
+
+    private sealed record CodeExploreScaleProject(
+        Project Project,
+        bool ProjectFileAllowed,
+        int DocumentCount,
+        int GeneratedDocumentCount);
 
     private sealed record NaturalLanguageCodeExploreDiscovery(
         IReadOnlyList<CodeExploreAnchor> Anchors,
@@ -4793,6 +5972,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             snapshot,
             ranked,
             cancellationToken);
+        ranked = ApplyNaturalLanguageRelativeFloor(ranked);
         var rankedByIdentity = ranked
             .GroupBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal)
             .Select(group => group.First())
@@ -5257,6 +6437,29 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ];
     }
 
+    private static CodeExploreRankedCandidate[] ApplyNaturalLanguageRelativeFloor(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked)
+    {
+        if (ranked.Count <= 12)
+        {
+            return [.. ranked];
+        }
+
+        var strongest = ranked.Max(candidate => candidate.Score);
+        var relativeFloor = Math.Max(90, Math.Min(400, strongest / 3));
+        var minimumBackfillCount = Math.Min(12, ranked.Count);
+        return
+        [
+            .. ranked
+                .Select((candidate, index) => new { Candidate = candidate, Index = index })
+                .Where(item => item.Index < minimumBackfillCount
+                    || item.Candidate.Score >= relativeFloor
+                    || item.Candidate.Tier <= CodeExploreCandidateTier.DistinctiveIdentifier
+                    || (item.Candidate.Reasons & (CodeExploreSelectionReason.Path | CodeExploreSelectionReason.QualifiedName)) != 0)
+                .Select(item => item.Candidate),
+        ];
+    }
+
     private static async Task<CodeExploreRankedCandidate[]> ApplyGraphConnectivityAsync(
         AdvancedSemanticSnapshot snapshot,
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
@@ -5491,6 +6694,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             score += 80;
         }
 
+        score += CalculateKindRelevanceAdjustment(entry, interpretation, coveredTerms.Length, reasons);
+        if (IsWeakLowSignalCandidate(entry, coveredTerms.Length, reasons))
+        {
+            score -= 100;
+        }
+
         if (reasons == CodeExploreSelectionReason.None || score <= 0)
         {
             return null;
@@ -5536,32 +6745,67 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static CodeExploreResult CreateUnanchoredCodeExploreResult(
         AdvancedSemanticSnapshot snapshot,
-        string query,
+        CodeExploreRequest request,
         CodeExploreQueryInterpretation interpretation,
         CodeExploreDiscoverySummary? discovery,
-        IReadOnlyList<CodeExploreCandidateSummary> candidateSummaries)
+        IReadOnlyList<CodeExploreCandidateSummary> candidateSummaries,
+        CodeExploreAdaptiveBudget adaptiveBudget)
     {
         var reason = "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
         var resolution = new CodeExploreAnchorResolution(
-            query,
+            request.Query,
             CodeExploreAnchorKind.Query,
             CodeExploreResolutionOutcome.NotFound,
             null,
             null,
             [],
             reason);
+        var coverage = new CodeExploreCoverage(
+            false,
+            snapshot.Confidence == SemanticConfidenceLevel.FullSemantic,
+            false,
+            true,
+            [reason]);
+        var availability = new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.NoMatchingDeclarations,
+            "No compiler-known C# declaration or confined C# path matched the request.",
+            false,
+            snapshot.Confidence,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            [new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.RefineAnchor,
+                "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+        var allocation = new CodeExploreAllocationSummary(
+            request.Limits.MaximumSourceCharacters,
+            0,
+            0,
+            CreateAllocationBudgetSource(adaptiveBudget),
+            []);
+        var presentation = CreateCodeExplorePresentation(
+            availability,
+            [],
+            [],
+            [],
+            coverage.Omissions,
+            null,
+            adaptiveBudget.PresentationVerbosity);
         return new CodeExploreResult(
             snapshot.Generation,
             snapshot.Confidence,
             [resolution],
             [],
-            new CodeExploreCoverage(false, snapshot.Confidence == SemanticConfidenceLevel.FullSemantic, false, true, [reason]),
+            coverage,
             [reason],
             [],
             QueryInterpretation: interpretation,
             Discovery: discovery,
             CandidateSummaries: candidateSummaries,
-            Allocation: new CodeExploreAllocationSummary(0, 0, 0, "no source allocated", []));
+            Allocation: allocation,
+            Availability: availability,
+            Presentation: presentation,
+            AdaptiveBudget: adaptiveBudget,
+            FileRelevance: []);
     }
 
     private static CodeExploreQueryInterpretation InterpretCodeExploreQuery(string query)
@@ -5580,9 +6824,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 continue;
             }
 
-            if (IsCSharpPathSpan(token))
+            if (NormalizeCodeExplorePathSpanToken(token) is { } normalizedPath)
             {
-                paths.Add(token);
+                paths.Add(normalizedPath);
                 continue;
             }
 
@@ -5837,6 +7081,44 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 || value.Contains('\\'));
     }
 
+    private static string? NormalizeCodeExplorePathSpanToken(string value)
+    {
+        var token = TrimCodeExploreToken(value);
+        var labelSeparator = token.IndexOf(':');
+        if (labelSeparator > 0)
+        {
+            var label = token[..labelSeparator];
+            if (label.Equals("path", StringComparison.OrdinalIgnoreCase)
+                || label.Equals("file", StringComparison.OrdinalIgnoreCase)
+                || label.Equals("source", StringComparison.OrdinalIgnoreCase))
+            {
+                token = token[(labelSeparator + 1)..];
+            }
+        }
+
+        var extensionIndex = token.LastIndexOf(".cs", StringComparison.OrdinalIgnoreCase);
+        if (extensionIndex >= 0)
+        {
+            var suffixStart = extensionIndex + ".cs".Length;
+            if (suffixStart < token.Length)
+            {
+                var suffix = token[suffixStart..];
+                if (suffix.StartsWith(":", StringComparison.Ordinal)
+                    && suffix[1..].All(char.IsDigit))
+                {
+                    token = token[..suffixStart];
+                }
+                else if (suffix.StartsWith("#L", StringComparison.OrdinalIgnoreCase)
+                    && suffix[2..].All(char.IsDigit))
+                {
+                    token = token[..suffixStart];
+                }
+            }
+        }
+
+        return IsCSharpPathSpan(token) ? token : null;
+    }
+
     private static bool CandidateCoversTerm(CodeExploreDeclarationCatalogEntry entry, string term)
     {
         var variants = CreateCodeExploreTermVariants(term);
@@ -5924,6 +7206,53 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             "delegate" => kind == "delegate",
             _ => false,
         });
+    }
+
+    private static int CalculateKindRelevanceAdjustment(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        int coveredTermCount,
+        CodeExploreSelectionReason reasons)
+    {
+        var kind = entry.Kind.ToLowerInvariant();
+        var behaviorFocused = HasBehaviorFocus(interpretation);
+        var explicitKindFocus = HasKindFocus(entry, interpretation);
+        var baseAdjustment = kind switch
+        {
+            "method" or "constructor" or "localfunction" => behaviorFocused ? 150 : 110,
+            "class" or "record" or "struct" or "interface" or "namedtype" or "delegate" => 90,
+            "property" or "event" => explicitKindFocus || coveredTermCount > 1 ? 35 : 5,
+            "enum" => explicitKindFocus ? 60 : 20,
+            "field" => explicitKindFocus || (reasons & CodeExploreSelectionReason.QualifiedName) != 0 ? 20 : -45,
+            "enummember" => explicitKindFocus ? 10 : -70,
+            _ => 0,
+        };
+        if ((reasons & (CodeExploreSelectionReason.QualifiedName | CodeExploreSelectionReason.Pinned)) != 0)
+        {
+            baseAdjustment += 60;
+        }
+
+        return baseAdjustment;
+    }
+
+    private static bool IsWeakLowSignalCandidate(
+        CodeExploreDeclarationCatalogEntry entry,
+        int coveredTermCount,
+        CodeExploreSelectionReason reasons)
+    {
+        if ((reasons & (CodeExploreSelectionReason.Pinned | CodeExploreSelectionReason.QualifiedName | CodeExploreSelectionReason.MultiTerm | CodeExploreSelectionReason.CoLocated | CodeExploreSelectionReason.GraphConnected)) != 0)
+        {
+            return false;
+        }
+
+        var kind = entry.Kind.ToLowerInvariant();
+        return coveredTermCount <= 1
+            && (kind is "field" or "property" or "event" or "enummember");
+    }
+
+    private static bool HasBehaviorFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(term => term is "flow" or "call" or "caller" or "callee" or "dispatch" or "execute" or "execution" or "behavior" or "behaviour" or "implementation" or "handle" or "process");
     }
 
     private static CodeExploreCandidateTier MinTier(
@@ -8432,6 +9761,14 @@ internal sealed class SemanticSourceProjection
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 }
+
+/// <summary>Compiler-readiness state captured before deciding whether code_explore can return source.</summary>
+internal sealed record CodeExploreReadinessSnapshot(
+    Solution? Solution,
+    IReadOnlySet<ProjectId> CompiledProjects,
+    SemanticConfidenceLevel Confidence,
+    string? RepositoryPath,
+    long Generation);
 
 /// <summary>Immutable compiler-aware state captured for one advanced query.</summary>
 internal sealed record AdvancedSemanticSnapshot(

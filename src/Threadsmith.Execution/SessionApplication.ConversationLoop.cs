@@ -222,7 +222,7 @@ public sealed partial class SessionApplication
                     frontier.RangeCount,
                     frontier.SourceCharacters,
                     frontier.FrontierGeneration,
-                    "Derived only from verbatim code_explore tool results in the current canonical request."),
+                    "Derived only from host-sanitized code_explore source ranges in the current canonical request."),
                 cancellationToken);
         }
 
@@ -345,11 +345,29 @@ public sealed partial class SessionApplication
                 streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
             }
 
+            if (!streamState.CorrectiveTurnRequested
+                && !streamState.HasAcceptedOutput)
+            {
+                await AppendEmptyResponseCorrectionOrThrowAsync(
+                    round,
+                    loopState,
+                    streamState,
+                    correctiveTurns,
+                    maximumModelRounds,
+                    cancellationToken);
+            }
+
             loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
             loopState.CommitCurrentGroup(round.ModelRound, streamState.CurrentGroupPurgeAfterCorrection);
             if (!streamState.CurrentGroupPurgeAfterCorrection)
             {
                 loopState.PurgeCorrectionGroups();
+            }
+
+            if (!streamState.CorrectiveTurnRequested
+                && streamState.PendingToolCalls.Count > 0)
+            {
+                correctiveTurns.Reset();
             }
 
             streamState.ModelSucceeded = true;
@@ -761,7 +779,8 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = batchResult.Result;
-            var content = result.ResultJson ?? result.Error ?? "Tool completed.";
+            var structuredContent = result.ResultJson;
+            var content = result.ModelResultContent ?? structuredContent ?? result.Error ?? "Tool completed.";
             loopState.AddCurrentSource(
                 batchResult.CorrelationId,
                 ActiveTurnSourceKind.ToolInvocation,
@@ -796,7 +815,7 @@ public sealed partial class SessionApplication
                         {
                             SourcePath = source?.Identifier,
                             ToolInvocationId = result.ToolInvocationId,
-                            SemanticConfidence = ReadSemanticConfidence(result.ToolId, content),
+                            SemanticConfidence = ReadSemanticConfidence(result.ToolId, structuredContent ?? content),
                             Source = $"tool:{result.ToolId}",
                         },
                         CollectedAt = DateTimeOffset.UtcNow,
@@ -823,7 +842,9 @@ public sealed partial class SessionApplication
             loopState.AddCurrentToolResult(CreateToolResultMessage(
                 batchResult.CorrelationId,
                 result.ToolId,
-                content));
+                content,
+                result.ModelResultContent is null,
+                structuredContent));
         }
 
         return true;
@@ -930,6 +951,39 @@ public sealed partial class SessionApplication
             failureSummary,
             cancellationToken);
         return true;
+    }
+
+    private async Task AppendEmptyResponseCorrectionOrThrowAsync(
+        ConversationRound round,
+        ConversationLoopState loopState,
+        ModelRoundStreamState streamState,
+        CorrectiveTurnState correctiveTurns,
+        int maximumModelRounds,
+        CancellationToken cancellationToken)
+    {
+        const string safeReason = "The model response did not include assistant text, a plan, or a tool request.";
+        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
+        {
+            throw new MalformedModelOutputException(
+                "The model response remained empty after the corrective-turn budget was exhausted.");
+        }
+
+        loopState.AbortCurrentGroup();
+        streamState.MarkCorrectiveTurnRequested();
+        loopState.CommitStandaloneMessage(
+            round.ModelRound,
+            CorrectiveMessageFactory.CreateEmptyResponseDeveloperMessage(
+                safeReason,
+                attemptNumber,
+                correctiveTurns.MaximumTurns),
+            purgeAfterCorrection: true);
+        await PublishModelCorrectionAttemptedAsync(
+            round,
+            ModelCorrectionCategory.EmptyResponse,
+            attemptNumber,
+            correctiveTurns.MaximumTurns,
+            safeReason,
+            cancellationToken);
     }
 
     private async Task PublishModelCorrectionAttemptedAsync(
@@ -1215,6 +1269,7 @@ public sealed partial class SessionApplication
             Name = definition.Id,
             Description = definition.Description,
             ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
+            PreferStrictArguments = definition.PreferStrictArguments,
         })];
         if (phase == RunPhase.EvidenceCollection)
         {
@@ -2579,6 +2634,8 @@ public sealed partial class SessionApplication
 
         public bool ModelSucceeded { get; set; }
 
+        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || Plan is not null || PendingToolCalls.Count > 0;
+
         public List<PendingModelToolCall> PendingToolCalls { get; } = [];
 
         public ImplementationPlan? Plan { get; set; }
@@ -2622,6 +2679,19 @@ public sealed partial class SessionApplication
             }
 
             ToolProducingOutputObserved = true;
+        }
+
+        private static bool HasNonWhiteSpaceText(StringBuilder text)
+        {
+            for (var index = 0; index < text.Length; index++)
+            {
+                if (!char.IsWhiteSpace(text[index]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static MalformedInvocationException CreateMultipleToolProducingOutputsException()

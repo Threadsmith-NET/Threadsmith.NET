@@ -56,6 +56,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ProcessManager processManager,
         ToolStateManager toolStateManager,
         ToolRegistry toolRegistry,
+        CodeExploreOutputOptions codeExploreOutputOptions,
         WebFetchAuthorizationAuthority webFetchAuthorization,
         DirectFetchApprovalPromptRouter directFetchApprovalPrompt,
         InvocationLeaseAuthority extensionLeaseAuthority,
@@ -97,6 +98,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ProcessManager = processManager;
         ToolStateManager = toolStateManager;
         ToolRegistry = toolRegistry;
+        CodeExploreOutputOptions = codeExploreOutputOptions;
         WebFetchAuthorization = webFetchAuthorization;
         DirectFetchApprovalPrompt = directFetchApprovalPrompt;
         ExtensionLeaseAuthority = extensionLeaseAuthority;
@@ -208,6 +210,9 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Gets the effective built-in and dynamic tool registry.</summary>
     internal ToolRegistry ToolRegistry { get; }
 
+    /// <summary>Gets host-owned per-session code_explore output presentation state.</summary>
+    internal CodeExploreOutputOptions CodeExploreOutputOptions { get; }
+
     /// <summary>Gets transient host-owned web-fetch activation and direct authorization.</summary>
     internal WebFetchAuthorizationAuthority WebFetchAuthorization { get; }
 
@@ -253,6 +258,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 4096),
         };
         var toolLimits = CreateToolLimits(configuration);
+        var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
         var events = new DomainEventStream();
         var projections = new InMemoryProjectionStore(executionLimits);
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
@@ -395,7 +401,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 advancedSemanticQueries,
                 advancedSemanticQueries,
                 secretResolver,
-                toolLimits);
+                toolLimits,
+                codeExploreOutputOptions);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -454,6 +461,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 processManager,
                 toolStateManager,
                 toolRegistry,
+                codeExploreOutputOptions,
                 webFetchAuthorization,
                 approvalPrompt,
                 leaseAuthority,
@@ -810,7 +818,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         IAdvancedSemanticQueryService advancedSemanticQueries,
         ICodeExploreService codeExplore,
         ISecretResolver secretResolver,
-        ToolLimits limits)
+        ToolLimits limits,
+        CodeExploreOutputOptions codeExploreOutputOptions)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -872,7 +881,9 @@ internal sealed class HostFoundation : IAsyncDisposable
             new DiagnosticQueryTool(nativeValidation),
             new TestDiscoveryTool(nativeValidation),
             new TargetedTestTool(nativeValidation),
-            new CodeExploreTool(codeExplore, processManager),
+            new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(codeExplore, processManager),
+                codeExploreOutputOptions),
             new CallHierarchyTool(advancedSemanticQueries),
             new SymbolImpactTool(advancedSemanticQueries),
             new CSharpPatternSearchTool(advancedSemanticQueries),

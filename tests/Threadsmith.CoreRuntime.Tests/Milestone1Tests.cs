@@ -1442,6 +1442,43 @@ public static class Milestone1Tests
         Assert.Contains("No model is configured.", surface.Output, StringComparison.Ordinal);
     }
 
+    /// <summary>The code_explore output commands route through host-owned per-session state.</summary>
+    [Fact]
+    public static async Task ConversationalShell_CodeExploreOutputCommands_UpdateHostSessionOptions()
+    {
+        var options = new CodeExploreOutputOptions();
+        await using var harness = await SessionHarness.CreateAsync(
+            new ScriptedSession(),
+            additionalHandlers: [options]);
+        var surface = new FakeConsoleSurface([
+            "/code_explore_output markdown",
+            "/code_explore_inspect on",
+            "/quit",
+        ]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            codeExploreOutputOptions: options);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        var sessionCreated = Assert.Single(harness.Events.OfType<SessionCreated>());
+        var snapshot = options.GetSnapshot(sessionCreated.SessionId);
+        Assert.Equal(CodeExploreOutputFormat.Markdown, snapshot.OutputFormat);
+        Assert.True(snapshot.InspectCodeExploreOutput);
+        Assert.Equal(CodeExploreOutputFormat.Structured, options.GetOutputFormat(SessionId.New()));
+        Assert.Contains(
+            "code_explore output format is markdown for this session.",
+            surface.Output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "code_explore output inspection is on for this session.",
+            surface.Output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
+    }
+
     /// <summary>The /help text aligns descriptions and wraps only commands that exceed the command column.</summary>
     [Fact]
     public static async Task ConversationalShell_HelpAlignsCommandDescriptions()
@@ -1462,6 +1499,17 @@ public static class Milestone1Tests
             StringComparison.Ordinal);
         Assert.Contains(
             "/reasoning [level]                        Set reasoning effort for the active model",
+            surface.Output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "/code_explore_output {structured|markdown}"
+                + Environment.NewLine
+                + descriptionIndent
+                + "Set code_explore output format for this session",
+            surface.Output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "/code_explore_inspect {on|off}            Show future code_explore outputs in the tool block for this session",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -2968,6 +3016,95 @@ public static class Milestone1Tests
         Assert.DoesNotContain("Threadsmith:", transcript.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("tool:find_references requested", transcript.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("sources:", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>code_explore tool output inspection is off by default.</summary>
+    [Fact]
+    public static void ConversationTranscript_CodeExploreInspection_DefaultOff_OmitsOutput()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(string.Empty);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "code_explore",
+            RunId.New())));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: "{\"structured\":true}",
+            ModelResultContent: "# code_explore result\nvisible markdown")));
+
+        Assert.Contains("TOOLS: code_explore - completed", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("# code_explore result", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>code_explore tool output inspection renders the final model-visible content safely when enabled.</summary>
+    [Fact]
+    public static void ConversationTranscript_CodeExploreInspection_On_RendersModelContentSafely()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(
+            string.Empty,
+            inspectCodeExploreOutput: () => true);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "code_explore",
+            RunId.New())));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: "{\"structured\":true}",
+            ModelResultContent: "# code_explore result\n\u001b[31mred")));
+
+        Assert.Contains("Output:", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("# code_explore result", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("\\u001B[31mred", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', transcript.Text);
+        Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Structured code_explore inspection is pretty-printed inside the tool block.</summary>
+    [Fact]
+    public static void ConversationTranscript_CodeExploreInspection_StructuredModePrettyPrintsJson()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(
+            string.Empty,
+            inspectCodeExploreOutput: () => true);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "code_explore",
+            RunId.New())));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: "{\"structured\":true}")));
+
+        Assert.Contains("Output:", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains($"\u2502 {{", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("\"structured\": true", transcript.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Built-in search completion identifies its scope and bounded result count.</summary>

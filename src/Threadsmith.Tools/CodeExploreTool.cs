@@ -11,13 +11,18 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreRequest, CodeExploreResult>(
         "code_explore",
-        "Primary source-bearing C# exploration tool for natural-language C# architecture or behavior questions, exact symbols, stable symbol ids, and repository-relative C# path anchors. Use before find_symbol, search, or read_file when the question needs current declaration source, structural survey, flow, or compact impact evidence. Natural-language query terms drive bounded deterministic Roslyn declaration discovery/ranking when exact anchors are not known; they are inert only in that they are never executed and never provider-reranked. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. Do not answer implementation questions from this tool description; when source is available, inspect the repository implementation and cite returned files/declarations. Use returned continuation anchors for focused follow-up.",
+        "Primary source-bearing C# exploration tool for natural-language C# architecture or behavior questions, exact symbols, stable symbol ids, and repository-relative C# path anchors. Use before find_symbol, search, or read_file when the question needs current declaration source, structural survey, flow, or compact impact evidence. Natural-language query terms drive bounded deterministic Roslyn declaration discovery/ranking when exact anchors are not known; they are inert only in that they are never executed and never provider-reranked. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. The mode argument must be a JSON string enum value: \"Auto\", \"Survey\", \"Flow\", or \"Impact\". There is no \"source\" mode; do not send mode as an object such as {\"kind\":\"source\"}. Omit mode to use Auto. Do not answer implementation questions from this tool description; when source is available, inspect the repository implementation and cite returned files/declarations. Treat complete current FileSections as host-sanitized, source-identity-backed evidence for their advertised ranges, use BackReferences for unchanged source already visible in the current request, and use returned continuation anchors for focused follow-up.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,
         ToolSideEffect.ReadOnly,
         TimeSpan.FromSeconds(60),
-        1024 * 1024);
+        1024 * 1024)
+    with
+    {
+        RequiresWorkspace = false,
+        PreferStrictArguments = true,
+    };
 
     private readonly ICodeExploreService _service;
     private readonly IProcessManager? _processManager;
@@ -42,10 +47,16 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        var workspaceId = context.Invocation.WorkspaceId
-            ?? throw new InvalidOperationException("Code exploration requires an opened workspace.");
-        var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager);
         var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
+        if (context.Invocation.WorkspaceId is not { } workspaceId)
+        {
+            var unavailable = CreateNoWorkspaceResult(effectiveInput);
+            unavailable = ApplyBudgetSource(unavailable, budgetSource);
+            unavailable = BoundResultForModelBudget(unavailable, context.Invocation);
+            return new(unavailable, [new ToolProvenanceSource("repository", context.Invocation.RepositoryPath)], IsTruncated(unavailable));
+        }
+
+        var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager);
         var result = await _service.QueryCodeExploreAsync(
             workspaceId,
             effectiveInput,
@@ -74,6 +85,23 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         return anchorCount == 0
             ? $"{BoundActivity(input.Query)} ({mode})"
             : $"{BoundActivity(input.Query)} ({mode}, {anchorCount} anchors)";
+    }
+
+    /// <inheritdoc />
+    protected override string CreateSchemaMismatchMessage(JsonException exception, string argumentsJson)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
+        if (string.Equals(exception.Path, "$.mode", StringComparison.OrdinalIgnoreCase))
+        {
+            var actualKind = TryGetTopLevelJsonValueKind(argumentsJson, "mode") ?? "unknown";
+            return "Tool arguments do not match the declared input schema. "
+                + "$.mode expected string enum Auto|Survey|Flow|Impact, got "
+                + actualKind
+                + ".";
+        }
+
+        return base.CreateSchemaMismatchMessage(exception, argumentsJson);
     }
 
     /// <inheritdoc />
@@ -190,12 +218,87 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     /// <inheritdoc />
     protected override string? GetExecutable(CodeExploreRequest input)
     {
+        return CanUseGitInventory(input) ? "git" : null;
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreRequest input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.WorkspaceId is null ? null : GetExecutable(input);
+    }
+
+    private bool CanUseGitInventory(CodeExploreRequest input)
+    {
         return _processManager is not null
             && input.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
             && input.Limits.MaximumAssociatedArtifacts > 0
-            && input.Limits.MaximumAssociatedArtifactNameMatches > 0
-            ? "git"
-            : null;
+            && input.Limits.MaximumAssociatedArtifactNameMatches > 0;
+    }
+
+    private static CodeExploreResult CreateNoWorkspaceResult(CodeExploreRequest input)
+    {
+        var reason = "No workspace is open for code_explore. Open or select a C# workspace, then retry semantic source exploration.";
+        var action = new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.OpenWorkspace,
+            "Open or select a C# workspace before retrying code_explore.");
+        var availability = new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.NoWorkspaceOpen,
+            reason,
+            true,
+            null,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            [action]);
+        var coverage = new CodeExploreCoverage(
+            false,
+            false,
+            false,
+            true,
+            [reason]);
+        var scale = new CodeExploreRepositoryScale(
+            CodeExploreRepositoryScaleTier.Unknown,
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            null,
+            null,
+            input.AssociatedArtifactPathAnchors.Count);
+        var adaptiveBudget = new CodeExploreAdaptiveBudget(
+            scale,
+            input.Limits.MaximumFiles,
+            input.Limits.MaximumSourceCharacters,
+            input.Limits.MaximumPerFileSourceCharacters,
+            Math.Clamp(input.Limits.MaximumSourceCharacters / 512, 1, 64),
+            1,
+            CodeExplorePresentationVerbosity.Compact,
+            "no workspace; request source limits retained");
+        var presentation = new CodeExplorePresentation(
+            $"Availability: {availability.Status}. {reason}",
+            [],
+            [new CodeExploreNotShownTarget(CodeExploreNotShownTargetKind.General, null, null, reason)],
+            [action]);
+        return new CodeExploreResult(
+            0,
+            SemanticConfidenceLevel.None,
+            [],
+            [],
+            coverage,
+            coverage.Omissions,
+            [],
+            Allocation: new CodeExploreAllocationSummary(
+                input.Limits.MaximumSourceCharacters,
+                0,
+                0,
+                adaptiveBudget.BudgetSource,
+                []),
+            Availability: availability,
+            Presentation: presentation,
+            AdaptiveBudget: adaptiveBudget,
+            FileRelevance: []);
     }
 
     private static void ValidateLimits(CodeExploreLimits limits)
@@ -222,6 +325,47 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         {
             throw new ToolArgumentValidationException("code exploration bounds are outside host limits.");
         }
+    }
+
+    private static string? TryGetTopLevelJsonValueKind(string argumentsJson, string propertyName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return DescribeJsonValueKind(document.RootElement.ValueKind);
+            }
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return DescribeJsonValueKind(property.Value.ValueKind);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string DescribeJsonValueKind(JsonValueKind valueKind)
+    {
+        return valueKind switch
+        {
+            JsonValueKind.Object => "object",
+            JsonValueKind.Array => "array",
+            JsonValueKind.String => "string",
+            JsonValueKind.Number => "number",
+            JsonValueKind.True or JsonValueKind.False => "boolean",
+            JsonValueKind.Null => "null",
+            JsonValueKind.Undefined => "undefined",
+            _ => "unknown",
+        };
     }
 
     private static CodeExploreRequest ApplyModelBudget(
@@ -268,9 +412,20 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CodeExploreResult result,
         string? budgetSource)
     {
-        return budgetSource is null || result.Allocation is null
-            ? result
-            : result with { Allocation = result.Allocation with { BudgetSource = budgetSource } };
+        if (budgetSource is null)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            Allocation = result.Allocation is null
+                ? null
+                : result.Allocation with { BudgetSource = result.Allocation.BudgetSource + "; " + budgetSource },
+            AdaptiveBudget = result.AdaptiveBudget is null
+                ? null
+                : result.AdaptiveBudget with { BudgetSource = result.AdaptiveBudget.BudgetSource + "; " + budgetSource },
+        };
     }
 
     private static CodeExploreResult BoundResultForModelBudget(
@@ -289,14 +444,16 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         }
 
         var bounded = result;
+        bounded = TrimPresentation(bounded, maximumSerializedBytes);
+        bounded = TrimFileRelevance(bounded, maximumSerializedBytes);
         bounded = TrimCandidateSummaries(bounded, maximumSerializedBytes);
         bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
         bounded = TrimFlow(bounded, maximumSerializedBytes);
-        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
         bounded = TrimAssociatedArtifacts(bounded, maximumSerializedBytes);
         bounded = TrimBackReferences(bounded, maximumSerializedBytes);
         bounded = TrimEmissions(bounded, maximumSerializedBytes);
         bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
+        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
         bounded = TrimFileSections(bounded, maximumSerializedBytes);
         if (GetSerializedByteCount(bounded) <= maximumSerializedBytes)
         {
@@ -313,6 +470,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             BackReferences = [],
             Emissions = [],
             AssociatedArtifacts = [],
+            Presentation = null,
+            FileRelevance = [],
             ArtifactCoverage = bounded.ArtifactCoverage is null
                 ? null
                 : bounded.ArtifactCoverage with
@@ -348,6 +507,72 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             },
         };
         return minimal;
+    }
+
+    private static CodeExploreResult TrimPresentation(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var presentation = result.Presentation;
+        while (presentation is not null && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            if (!string.IsNullOrWhiteSpace(presentation.ModelSummary))
+            {
+                presentation = presentation with { ModelSummary = string.Empty };
+            }
+            else if (presentation.NotShownTargets.Count > 0)
+            {
+                presentation = presentation with { NotShownTargets = TakeHalf(presentation.NotShownTargets) };
+            }
+            else if (presentation.SourceGuarantees.Count > 0)
+            {
+                presentation = presentation with { SourceGuarantees = TakeHalf(presentation.SourceGuarantees) };
+            }
+            else if (presentation.NextActions.Count > 0)
+            {
+                presentation = presentation with { NextActions = TakeHalf(presentation.NextActions) };
+            }
+            else
+            {
+                presentation = null;
+            }
+
+            result = result with
+            {
+                Presentation = presentation,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimFileRelevance(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var fileRelevance = result.FileRelevance;
+        while (fileRelevance is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            fileRelevance = TakeHalf(fileRelevance);
+            result = result with
+            {
+                FileRelevance = fileRelevance,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
     }
 
     private static CodeExploreResult TrimCandidateSummaries(
@@ -443,7 +668,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CodeExploreResult result,
         int maximumSerializedBytes)
     {
-        while (result.ContinuationTargets.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (result.ContinuationTargets.Count > 1 && GetSerializedByteCount(result) > maximumSerializedBytes)
         {
             result = result with
             {
@@ -716,12 +941,25 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     {
         while (result.FileSections.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
         {
-            var fileSections = result.FileSections.Take(result.FileSections.Count / 2).ToArray();
+            var retainedCount = result.FileSections.Count / 2;
+            var fileSections = result.FileSections.Take(retainedCount).ToArray();
+            var removedSections = result.FileSections.Skip(retainedCount).ToArray();
+            var continuationTargets = AddTrimmedSectionContinuations(
+                result.ContinuationTargets,
+                removedSections,
+                result.WorkspaceGeneration);
             result = result with
             {
                 FileSections = fileSections,
+                ContinuationTargets = continuationTargets,
                 Flow = NullRemovedSourceSectionIndexes(result.Flow, fileSections.Length),
                 Allocation = TrimAllocationToFileSections(result.Allocation, fileSections),
+                Presentation = TrimPresentationToFileSections(
+                    result.Presentation,
+                    fileSections,
+                    removedSections,
+                    result.WorkspaceGeneration),
+                FileRelevance = MarkFileRelevanceAfterFileSectionTrim(result.FileRelevance, removedSections),
                 Omissions = AddResultBoundOmission(result.Omissions),
                 Coverage = result.Coverage with
                 {
@@ -767,6 +1005,61 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             : null;
     }
 
+    private static IReadOnlyList<CodeExploreContinuationTarget> AddTrimmedSectionContinuations(
+        IReadOnlyList<CodeExploreContinuationTarget> existingTargets,
+        IReadOnlyList<CodeExploreFileSection> removedSections,
+        long workspaceGeneration)
+    {
+        if (removedSections.Count == 0)
+        {
+            return existingTargets;
+        }
+
+        var targets = existingTargets.ToList();
+        foreach (var section in removedSections)
+        {
+            var target = CreateTrimmedSectionContinuation(section, workspaceGeneration);
+            if (!targets.Any(existing => IsSameContinuationTarget(existing, target)))
+            {
+                targets.Add(target);
+            }
+        }
+
+        return targets;
+    }
+
+    private static CodeExploreContinuationTarget CreateTrimmedSectionContinuation(
+        CodeExploreFileSection section,
+        long workspaceGeneration)
+    {
+        return new CodeExploreContinuationTarget(
+            CodeExploreAnchorKind.Path,
+            section.FilePath,
+            section.FilePath,
+            section.Source.Range.StartLine,
+            section.Source.Range.EndLine,
+            false,
+            CodeExplorePathSelectionMode.ExactLineRange,
+            section.Source.FileSha256,
+            workspaceGeneration,
+            "Retry with this exact path range; source was removed only to fit the selected model request budget.");
+    }
+
+    private static bool IsSameContinuationTarget(
+        CodeExploreContinuationTarget left,
+        CodeExploreContinuationTarget right)
+    {
+        return left.Kind == right.Kind
+            && string.Equals(left.Anchor, right.Anchor, StringComparison.Ordinal)
+            && string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && left.StartLine == right.StartLine
+            && left.EndLine == right.EndLine
+            && left.StartAtLine == right.StartAtLine
+            && left.SelectionMode == right.SelectionMode
+            && string.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256, StringComparison.OrdinalIgnoreCase)
+            && left.WorkspaceGeneration == right.WorkspaceGeneration;
+    }
+
     private static CodeExploreAllocationSummary? TrimAllocationToFileSections(
         CodeExploreAllocationSummary? allocation,
         IReadOnlyList<CodeExploreFileSection> fileSections)
@@ -787,6 +1080,88 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             SpentSourceCharacters = files.Sum(file => file.SpentCharacters),
             Files = files,
         };
+    }
+
+    private static CodeExplorePresentation? TrimPresentationToFileSections(
+        CodeExplorePresentation? presentation,
+        IReadOnlyList<CodeExploreFileSection> fileSections,
+        IReadOnlyList<CodeExploreFileSection> removedSections,
+        long workspaceGeneration)
+    {
+        if (presentation is null)
+        {
+            return null;
+        }
+
+        var retainedPaths = fileSections
+            .Select(section => section.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var notShownTargets = presentation.NotShownTargets.ToList();
+        foreach (var section in removedSections)
+        {
+            var target = new CodeExploreNotShownTarget(
+                CodeExploreNotShownTargetKind.Source,
+                section.FilePath,
+                section.Source.Range,
+                "Source was removed only to fit the selected model request budget; use the exact path continuation target if needed.",
+                section.FilePath,
+                section.Source.FileSha256,
+                workspaceGeneration);
+            if (!notShownTargets.Any(existing => IsSameNotShownTarget(existing, target)))
+            {
+                notShownTargets.Add(target);
+            }
+        }
+
+        return presentation with
+        {
+            SourceGuarantees = presentation.SourceGuarantees
+                .Where(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.BackReference
+                    || retainedPaths.Contains(guarantee.FilePath))
+                .ToArray(),
+            NotShownTargets = notShownTargets.ToArray(),
+            NextActions = presentation.NextActions
+                .Where(action => action.FilePath is null
+                    || retainedPaths.Contains(action.FilePath)
+                    || action.Kind == CodeExploreNextActionKind.FollowContinuation)
+                .ToArray(),
+        };
+    }
+
+    private static bool IsSameNotShownTarget(
+        CodeExploreNotShownTarget left,
+        CodeExploreNotShownTarget right)
+    {
+        return left.Kind == right.Kind
+            && string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && Equals(left.Range, right.Range)
+            && string.Equals(left.ContinuationAnchor, right.ContinuationAnchor, StringComparison.Ordinal)
+            && string.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256, StringComparison.OrdinalIgnoreCase)
+            && left.WorkspaceGeneration == right.WorkspaceGeneration;
+    }
+
+    private static IReadOnlyList<CodeExploreFileRelevanceSummary>? MarkFileRelevanceAfterFileSectionTrim(
+        IReadOnlyList<CodeExploreFileRelevanceSummary>? fileRelevance,
+        IReadOnlyList<CodeExploreFileSection> removedSections)
+    {
+        if (fileRelevance is null || removedSections.Count == 0)
+        {
+            return fileRelevance;
+        }
+
+        var removedPaths = removedSections
+            .Select(section => section.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return fileRelevance
+            .Select(summary => removedPaths.Contains(summary.FilePath)
+                ? summary with
+                {
+                    SpentCharacters = 0,
+                    OutputStatus = CodeExploreFileOutputStatus.RemovedByModelBudget,
+                    Reason = summary.Reason + " Final source was removed during model-budget trimming; use the exact continuation target if needed.",
+                }
+                : summary)
+            .ToArray();
     }
 
     private static T[] TakeHalf<T>(IReadOnlyList<T> items)
@@ -843,6 +1218,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         var artifactCoverage = ConfineArtifactCoverage(result.ArtifactCoverage, associatedArtifacts, context, associatedArtifactOmitted);
         var backReferences = ConfineBackReferences(result.BackReferences, context, out var backReferenceOmitted);
         var emissions = ConfineEmissions(result.Emissions, context, out var emissionOmitted);
+        var availability = ConfineAvailability(result.Availability, context, out var availabilityOmitted);
+        var presentation = ConfinePresentation(result.Presentation, context, out var presentationOmitted);
+        var fileRelevance = ConfineFileRelevance(result.FileRelevance, context, out var fileRelevanceOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
@@ -855,8 +1233,23 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || candidateSummaryOmitted
             || allocationOmitted
             || backReferenceOmitted
-            || emissionOmitted;
+            || emissionOmitted
+            || availabilityOmitted
+            || presentationOmitted
+            || fileRelevanceOmitted;
         var omitted = csharpOmitted || associatedArtifactOmitted;
+        var hadVisibleSourceBeforeConfinement = HasVisibleCodeExploreSource(
+            result.FileSections,
+            result.BackReferences);
+        var hasVisibleSourceAfterConfinement = HasVisibleCodeExploreSource(
+            sections,
+            backReferences);
+        availability = ReclassifyAvailabilityAfterConfinement(
+            availability,
+            hadVisibleSourceBeforeConfinement,
+            hasVisibleSourceAfterConfinement,
+            omitted);
+        presentation = UpdatePresentationAfterAvailabilityConfinement(presentation, availability);
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
@@ -871,6 +1264,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             ArtifactCoverage = artifactCoverage,
             BackReferences = backReferences,
             Emissions = emissions,
+            Availability = availability,
+            Presentation = presentation,
+            FileRelevance = fileRelevance,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
@@ -879,6 +1275,130 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 Omissions = AddPolicyOmission(result.Coverage.Omissions, csharpOmitted),
             },
         };
+    }
+
+    private static bool HasVisibleCodeExploreSource(
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference>? backReferences)
+    {
+        return sections.Any(section => section.Source.NumberedLines.Count > 0)
+            || backReferences is { Count: > 0 };
+    }
+
+    private static CodeExploreAvailability? ReclassifyAvailabilityAfterConfinement(
+        CodeExploreAvailability? availability,
+        bool hadVisibleSourceBeforeConfinement,
+        bool hasVisibleSourceAfterConfinement,
+        bool omitted)
+    {
+        if (availability is null
+            || availability.Status != CodeExploreAvailabilityStatus.Available
+            || !omitted
+            || !hadVisibleSourceBeforeConfinement
+            || hasVisibleSourceAfterConfinement)
+        {
+            return availability;
+        }
+
+        return availability with
+        {
+            Status = CodeExploreAvailabilityStatus.NoSourceAfterPolicy,
+            Reason = "Post-query path-policy confinement removed all visible code_explore source from this result.",
+            IsRetryable = false,
+            GranularFallbackMayHelp = true,
+            RecommendedActions = [new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.AskUser,
+                "Ask the user whether the workspace scope or approved roots should be adjusted before retrying.")],
+        };
+    }
+
+    private static CodeExplorePresentation? UpdatePresentationAfterAvailabilityConfinement(
+        CodeExplorePresentation? presentation,
+        CodeExploreAvailability? availability)
+    {
+        if (presentation is null || availability is null || availability.Status == CodeExploreAvailabilityStatus.Available)
+        {
+            return presentation;
+        }
+
+        return presentation with
+        {
+            ModelSummary = $"Availability: {availability.Status}. {availability.Reason}",
+            NextActions = availability.RecommendedActions.Count > 0
+                ? availability.RecommendedActions
+                : presentation.NextActions,
+        };
+    }
+
+    private static CodeExploreAvailability? ConfineAvailability(
+        CodeExploreAvailability? availability,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (availability is null)
+        {
+            return null;
+        }
+
+        var actions = availability.RecommendedActions
+            .Where(action => action.FilePath is null || IsAllowed(action.FilePath, context))
+            .ToArray();
+        omitted = actions.Length != availability.RecommendedActions.Count;
+        return availability with { RecommendedActions = actions };
+    }
+
+    private static CodeExplorePresentation? ConfinePresentation(
+        CodeExplorePresentation? presentation,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (presentation is null)
+        {
+            return null;
+        }
+
+        var guarantees = presentation.SourceGuarantees
+            .Where(guarantee => IsAllowed(guarantee.FilePath, context))
+            .ToArray();
+        var notShownTargets = presentation.NotShownTargets
+            .Where(target => target.FilePath is null || IsAllowed(target.FilePath, context))
+            .ToArray();
+        var nextActions = presentation.NextActions
+            .Where(action => action.FilePath is null || IsAllowed(action.FilePath, context))
+            .ToArray();
+        omitted = guarantees.Length != presentation.SourceGuarantees.Count
+            || notShownTargets.Length != presentation.NotShownTargets.Count
+            || nextActions.Length != presentation.NextActions.Count;
+        var summary = omitted
+            ? "Presentation was confined by invocation path policy; rely on returned structured fields and safe continuations."
+            : presentation.ModelSummary;
+        return presentation with
+        {
+            ModelSummary = summary,
+            SourceGuarantees = guarantees,
+            NotShownTargets = notShownTargets,
+            NextActions = nextActions,
+        };
+    }
+
+    private static IReadOnlyList<CodeExploreFileRelevanceSummary>? ConfineFileRelevance(
+        IReadOnlyList<CodeExploreFileRelevanceSummary>? fileRelevance,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (fileRelevance is null)
+        {
+            return null;
+        }
+
+        var confined = fileRelevance
+            .Where(summary => IsAllowed(summary.FilePath, context))
+            .ToArray();
+        omitted = confined.Length != fileRelevance.Count;
+        return confined;
     }
 
     private static IReadOnlyList<CodeExploreBackReference>? ConfineBackReferences(

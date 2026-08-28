@@ -66,6 +66,23 @@ internal static class CorrectiveMessageFactory
             + " Expected propose_plan arguments: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
     }
 
+    /// <summary>Creates a standalone developer correction for an empty assistant response.</summary>
+    public static ModelMessage CreateEmptyResponseDeveloperMessage(
+        string safeReason,
+        int attemptNumber,
+        int maximumAttempts)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(safeReason);
+        var reason = BoundSingleLine(safeReason, MaximumReasonCharacters);
+        var content = $"Corrective turn {FormatAttempt(attemptNumber, maximumAttempts)}: "
+            + "The previous model response ended without assistant text, a plan, or a tool call. "
+            + "Nothing was delivered to the user from that response. "
+            + reason
+            + " Answer the user's request using the available conversation and tool evidence, "
+            + "or request a valid tool call if more evidence is required.";
+        return CreateDeveloperCorrectionMessage("active-turn-empty-response-correction", attemptNumber, content);
+    }
+
     /// <summary>Creates a standalone developer correction for plan sanity failures.</summary>
     public static ModelMessage CreatePlanSanityDeveloperMessage(
         string safeReason,

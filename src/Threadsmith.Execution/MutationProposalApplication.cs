@@ -727,10 +727,14 @@ public sealed class MutationProposalApplication :
         IReadOnlyList<ImplementationPlanStep> approvedSteps,
         StringComparer pathComparer)
     {
-        return approvedSteps
-            .Where(step => mutations.Any(mutation => step.FileIntents.Any(
-                intent => IntentCoversMutation(intent, mutation, pathComparer))))
-            .Select(step => step.StepId)
+        return mutations
+            .Select(mutation => approvedSteps
+                .Where(step => step.FileIntents.Any(intent => IntentCoversMutation(intent, mutation, pathComparer)))
+                .Select(step => step.StepId)
+                .ToArray())
+            .Where(matches => matches.Length == 1)
+            .Select(matches => matches[0])
+            .Distinct()
             .ToArray();
     }
 

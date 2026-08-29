@@ -90,7 +90,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                     using StreamReader reader = new(stream);
-                    await foreach (var chunk in ReadEventsAsync(reader, toolNameMap, timeout.Token).ConfigureAwait(false))
+                    await foreach (var chunk in ReadEventsAsync(
+                        reader,
+                        toolNameMap,
+                        request.MaximumOutputTokens ?? profileOutputLimit,
+                        timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
                     }
@@ -135,7 +139,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     continue;
                 }
 
-                throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
+                try
+                {
+                    throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new ModelProviderTimeoutException("The Codex error response timed out.", exception);
+                }
             }
         }
     }
@@ -284,9 +295,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
         StreamReader reader,
         ModelToolWireNameMap toolNameMap,
+        int maximumOutputTokens,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var pendingToolCalls = new List<PendingCodexToolCall>();
+        long streamedOutputBytes = 0;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -308,6 +321,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.output_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } text)
                     {
+                        AddStreamedOutput(text);
                         yield return new ModelChunk { Text = text };
                     }
 
@@ -316,6 +330,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.reasoning_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } reasoning)
                     {
+                        AddStreamedOutput(reasoning);
                         yield return new ModelChunk { Reasoning = reasoning };
                     }
 
@@ -324,9 +339,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     if (root.TryGetProperty("item", out var item)
                         && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal))
                     {
-                        pendingToolCalls.Add(new PendingCodexToolCall(
-                            GetString(item, "name"),
-                            GetString(item, "arguments")));
+                        var name = GetString(item, "name");
+                        var arguments = GetString(item, "arguments");
+                        AddStreamedOutput(name);
+                        AddStreamedOutput(arguments);
+                        pendingToolCalls.Add(new PendingCodexToolCall(name, arguments));
                     }
 
                     break;
@@ -352,6 +369,24 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.failed":
                 case "error":
                     throw new ModelProviderException("The Codex Responses stream reported a provider error.");
+            }
+        }
+
+        void AddStreamedOutput(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            // Codex's byte-level tokenizer cannot produce more tokens than the UTF-8 bytes
+            // representing streamed model-visible output. Treating every byte as one token
+            // therefore enforces the ceiling conservatively without an endpoint parameter.
+            streamedOutputBytes = checked(streamedOutputBytes + Encoding.UTF8.GetByteCount(value));
+            if (streamedOutputBytes > maximumOutputTokens)
+            {
+                throw new ModelProviderException(
+                    $"The Codex response exceeded the host-owned output ceiling of {maximumOutputTokens} tokens.");
             }
         }
     }
@@ -478,12 +513,10 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 : root;
             var code = GetString(error, "code");
             var parameter = GetString(error, "param");
-            var message = GetString(error, "message") ?? GetString(root, "detail");
             var parts = new[]
             {
-                code is null ? null : $"Code: {code}.",
-                parameter is null ? null : $"Parameter: {parameter}.",
-                message,
+                IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
+                IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
             }.Where(part => !string.IsNullOrWhiteSpace(part));
             var details = string.Join(' ', parts);
             return details.Length == 0 ? null : details;
@@ -492,6 +525,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         {
             return null;
         }
+    }
+
+    private static bool IsSafeErrorIdentifier(string? value, int maximumLength)
+    {
+        return value is { Length: > 0 } && value.Length <= maximumLength
+            && value.All(character => char.IsAsciiLetterOrDigit(character)
+                || character is '_' or '-' or '.');
     }
 
     private static bool IsTransient(HttpStatusCode statusCode)

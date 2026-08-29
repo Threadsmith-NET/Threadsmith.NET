@@ -450,6 +450,7 @@ public static class Milestone5Tests
         });
         var runId = RunId.New();
         var stepId = StepId.New();
+        var ambiguousStepId = StepId.New();
         var baselineFile = Assert.Single(repository.Baseline.Files);
         var envelope = new MutationProposalEnvelope
         {
@@ -516,6 +517,14 @@ public static class Milestone5Tests
                     FileIntents = ModifyIntents("src/SectorEntityStandardizer.cs"),
                     ExpectedOutcome = "Name returns test.",
                 },
+                new ImplementationPlanStep
+                {
+                    StepId = ambiguousStepId,
+                    Title = "Document Name behavior",
+                    Description = "Document the changed behavior in the same file.",
+                    FileIntents = ModifyIntents("src/SectorEntityStandardizer.cs"),
+                    ExpectedOutcome = "The behavior is documented.",
+                },
             ],
         };
 
@@ -531,6 +540,7 @@ public static class Milestone5Tests
         Assert.Equal(runId, staged.MutationSet.RunId);
         Assert.Equal(repository.WorkspaceId, staged.MutationSet.WorkspaceId);
         Assert.NotEqual(default, staged.MutationSet.MutationSetId);
+        Assert.Empty(staged.PlanStepIds);
         var stagedMutation = Assert.Single(staged.MutationSet.Mutations);
         Assert.NotEqual(default, stagedMutation.MutationId);
         Assert.Equal(source.IndexOf("StandardizerName", StringComparison.Ordinal), stagedMutation.StartOffset);

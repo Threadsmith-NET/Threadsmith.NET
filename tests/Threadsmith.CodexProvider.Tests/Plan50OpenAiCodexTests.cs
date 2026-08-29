@@ -119,6 +119,28 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
+    /// <summary>Schema-one snapshots are invalidated so their former prohibited sensitivity policy cannot survive upgrade.</summary>
+    [Fact]
+    public async Task CatalogCache_LegacySchema_ReturnsNull()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-legacy-cache-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "models.json");
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(
+            path,
+            "{\"SchemaVersion\":1,\"Models\":[{\"Id\":\"legacy\",\"Name\":\"Legacy\",\"ModelId\":\"legacy\",\"Enabled\":true,\"ContextWindow\":128000,\"MaximumOutputTokens\":128000,\"SensitiveDataPolicy\":0}]}",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            Assert.Null(await new OpenAiCodexCatalogCache(path).LoadAsync(TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>Browser OAuth uses protected OpenAI authorities, PKCE, state, and loopback only.</summary>
     [Fact]
     public void BrowserChallenge_IsProtectedAndRejectsNonLoopbackRedirect()
@@ -367,14 +389,14 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(2, document.RootElement.GetProperty("tools").GetArrayLength());
     }
 
-    /// <summary>Codex JSON rejection details remain bounded but actionable at the provider boundary.</summary>
+    /// <summary>Codex JSON rejection details expose only safe structured identifiers.</summary>
     [Fact]
     public async Task Provider_BadRequest_PreservesStructuredErrorDetail()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
             Content = new StringContent(
-                "{\"detail\":\"Unsupported parameter: max_output_tokens\"}",
+                "{\"error\":{\"code\":\"invalid_request\",\"param\":\"max_output_tokens\",\"message\":\"secret repository text\"}}",
                 Encoding.UTF8,
                 "application/json"),
         });
@@ -386,7 +408,28 @@ public sealed class Plan50OpenAiCodexTests
                 TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
 
         Assert.Contains("HTTP 400", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Unsupported parameter: max_output_tokens", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Code: invalid_request.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Parameter: max_output_tokens.", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>The unsupported wire parameter is replaced by conservative streamed-output enforcement.</summary>
+    [Fact]
+    public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
+    {
+        const string stream = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"12345\"}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(
+                CreateStreamRequest() with { MaximumOutputTokens = 4 },
+                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("output ceiling of 4 tokens", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>

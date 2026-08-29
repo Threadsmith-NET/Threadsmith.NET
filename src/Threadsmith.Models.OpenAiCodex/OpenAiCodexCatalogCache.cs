@@ -6,6 +6,8 @@ using Threadsmith.Models;
 /// <summary>Maintains the bounded user-owned snapshot of models returned after Codex authentication.</summary>
 public sealed class OpenAiCodexCatalogCache
 {
+    private const int CurrentSchemaVersion = 2;
+
     private readonly string _path;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCodexCatalogCache"/> class.</summary>
@@ -31,7 +33,7 @@ public sealed class OpenAiCodexCatalogCache
             var payload = await JsonSerializer.DeserializeAsync<CachePayload>(
                 stream,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (payload is not { SchemaVersion: 1, Models: { Count: > 0 and <= 256 } models })
+            if (payload is not { SchemaVersion: CurrentSchemaVersion, Models: { Count: > 0 and <= 256 } models })
             {
                 return null;
             }
@@ -74,7 +76,7 @@ public sealed class OpenAiCodexCatalogCache
         ];
         await File.WriteAllBytesAsync(
             temporary,
-            JsonSerializer.SerializeToUtf8Bytes(new CachePayload(1, models)),
+            JsonSerializer.SerializeToUtf8Bytes(new CachePayload(CurrentSchemaVersion, models)),
             cancellationToken).ConfigureAwait(false);
         File.Move(temporary, _path, overwrite: true);
     }

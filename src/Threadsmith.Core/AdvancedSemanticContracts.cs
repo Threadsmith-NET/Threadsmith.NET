@@ -1,5 +1,9 @@
 namespace Threadsmith.Core;
 
+using System.Collections.Frozen;
+using System.Globalization;
+using System.Text;
+
 /// <summary>Direction used while traversing a semantic call hierarchy.</summary>
 public enum CallHierarchyDirection
 {
@@ -200,6 +204,114 @@ public enum CSharpPatternKind
 
     /// <summary>A member-access expression.</summary>
     MemberAccess,
+}
+
+/// <summary>Shared closed constraints for inert C# structural pattern predicates.</summary>
+public static class CSharpPatternConstraints
+{
+    /// <summary>Maximum length for one pattern name, containing type, capture, or attribute predicate.</summary>
+    public const int MaximumNameCharacters = 256;
+
+    /// <summary>Maximum number of modifier or attribute predicates in one request.</summary>
+    public const int MaximumPredicateValues = 16;
+
+    /// <summary>Supported exact C# modifier predicates.</summary>
+    public static IReadOnlySet<string> AllowedModifiers { get; } = new[]
+    {
+        "public", "private", "protected", "internal", "static", "abstract", "virtual", "override", "sealed",
+        "partial", "async", "readonly", "required", "unsafe", "extern", "new",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// <summary>Determines whether a value is a dot-separated sequence of legal C# identifier tokens.</summary>
+    /// <param name="value">Candidate identifier or dotted identifier name.</param>
+    /// <returns><see langword="true" /> when every segment is a legal C# identifier token.</returns>
+    public static bool IsValidDottedIdentifierName(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Split('.').All(IsValidIdentifierName);
+    }
+
+    /// <summary>Determines whether a value is a legal C# identifier token.</summary>
+    /// <param name="value">Candidate identifier token.</param>
+    /// <returns><see langword="true" /> when the token follows C# identifier character rules.</returns>
+    public static bool IsValidIdentifierName(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        var identifier = value;
+        var escaped = false;
+        if (identifier[0] == '@')
+        {
+            if (identifier.Length == 1)
+            {
+                return false;
+            }
+
+            identifier = identifier[1..];
+            escaped = true;
+        }
+
+        if (!escaped && ReservedKeywords.Contains(identifier))
+        {
+            return false;
+        }
+
+        var isFirst = true;
+        foreach (var rune in identifier.EnumerateRunes())
+        {
+            if (isFirst)
+            {
+                if (rune.Value != '_' && !IsIdentifierStart(Rune.GetUnicodeCategory(rune)))
+                {
+                    return false;
+                }
+
+                isFirst = false;
+                continue;
+            }
+
+            if (!IsIdentifierPart(Rune.GetUnicodeCategory(rune)))
+            {
+                return false;
+            }
+        }
+
+        return !isFirst;
+    }
+
+    private static FrozenSet<string> ReservedKeywords { get; } = new[]
+    {
+        "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "const",
+        "continue", "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern",
+        "false", "finally", "fixed", "float", "for", "foreach", "goto", "if", "implicit", "in", "int", "interface",
+        "internal", "is", "lock", "long", "namespace", "new", "null", "object", "operator", "out", "override",
+        "params", "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
+        "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint",
+        "ulong", "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static bool IsIdentifierStart(UnicodeCategory category)
+    {
+        return category is UnicodeCategory.UppercaseLetter
+            or UnicodeCategory.LowercaseLetter
+            or UnicodeCategory.TitlecaseLetter
+            or UnicodeCategory.ModifierLetter
+            or UnicodeCategory.OtherLetter
+            or UnicodeCategory.LetterNumber;
+    }
+
+    private static bool IsIdentifierPart(UnicodeCategory category)
+    {
+        return IsIdentifierStart(category)
+            || category is UnicodeCategory.NonSpacingMark
+                or UnicodeCategory.SpacingCombiningMark
+                or UnicodeCategory.DecimalDigitNumber
+                or UnicodeCategory.ConnectorPunctuation
+                or UnicodeCategory.Format;
+    }
 }
 
 /// <summary>Versioned inert C# syntax predicate. Values are names and closed modifiers, never executable text.</summary>

@@ -352,7 +352,8 @@ public sealed record ToolProvenanceSource(
 public sealed record ToolExecution<TOutput>(
     TOutput Value,
     IReadOnlyList<ToolProvenanceSource> Sources,
-    bool IsTruncated = false);
+    bool IsTruncated = false,
+    string? ModelResultContent = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -632,7 +633,7 @@ public abstract class Tool<TInput, TOutput> : ITool
             throw new InvalidOperationException("A tool returned a null output value.");
         }
 
-        return new ToolExecutionEnvelope(result.Value, result.Sources, result.IsTruncated);
+        return new ToolExecutionEnvelope(result.Value, result.Sources, result.IsTruncated, ModelResultContent: result.ModelResultContent);
     }
 
     /// <summary>Executes validated typed input.</summary>

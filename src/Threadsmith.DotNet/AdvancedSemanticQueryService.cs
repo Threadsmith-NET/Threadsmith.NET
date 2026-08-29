@@ -56,10 +56,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ["EmbeddedResource", "Resource"],
         StringComparer.OrdinalIgnoreCase);
 
-    private static readonly HashSet<string> AllowedModifiers = new(
-        ["public", "private", "protected", "internal", "static", "abstract", "virtual", "override", "sealed", "partial", "async", "readonly", "required", "unsafe", "extern", "new"],
-        StringComparer.Ordinal);
-
     private static readonly HashSet<string> NaturalLanguageStopWords = new(
         ["a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could", "did", "do", "does", "for", "from", "has", "have", "how", "i", "in", "into", "is", "it", "its", "me", "of", "on", "or", "please", "show", "that", "the", "their", "this", "through", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with", "without"],
         StringComparer.OrdinalIgnoreCase);
@@ -8987,7 +8983,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsExactSymbolAnchor(string query)
     {
-        return LooksLikeDocumentationId(query) || IsSafeName(StripParameters(query));
+        return LooksLikeDocumentationId(query)
+            || CSharpPatternConstraints.IsValidDottedIdentifierName(StripParameters(query));
     }
 
     private static bool QueryLooksLikePath(string query)
@@ -9204,7 +9201,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var requiredAttributes = request.Pattern.RequiredAttributes ?? [];
         foreach (var value in requiredModifiers)
         {
-            if (!AllowedModifiers.Contains(value))
+            if (!CSharpPatternConstraints.AllowedModifiers.Contains(value))
             {
                 throw new ArgumentException($"Unsupported C# modifier '{value}'.", nameof(request));
             }
@@ -9213,13 +9210,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         foreach (var value in new[] { request.Pattern.Name, request.Pattern.ContainingType, request.Pattern.Capture }
             .Concat(requiredAttributes))
         {
-            if (value is { Length: > 256 } || (value is not null && !IsSafeName(value)))
+            if (value is { Length: > CSharpPatternConstraints.MaximumNameCharacters }
+                || (value is not null && !CSharpPatternConstraints.IsValidDottedIdentifierName(value)))
             {
                 throw new ArgumentException("Pattern names must be bounded C# identifiers.", nameof(request));
             }
         }
 
-        if (requiredModifiers.Count > 16 || requiredAttributes.Count > 16)
+        if (requiredModifiers.Count > CSharpPatternConstraints.MaximumPredicateValues
+            || requiredAttributes.Count > CSharpPatternConstraints.MaximumPredicateValues)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern predicate counts exceed host limits.");
         }
@@ -9231,12 +9230,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Generated-code bounds are outside host limits.");
         }
-    }
-
-    private static bool IsSafeName(string value)
-    {
-        return value.Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .All(part => SyntaxFacts.IsValidIdentifier(part));
     }
 
     private static async Task<ISymbol> ResolveSymbolAsync(Solution solution, string symbolId, CancellationToken cancellationToken)

@@ -126,6 +126,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 88.1 | `plan-88.1-complete-conversation-native-correction-migration.md` | Conversation-native correction migration follow-up |
 | 89 | `plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md` | Code explore agent-sufficient presentation, ranking, adaptive output, and availability |
 | 90 | `plan-90-deployable-prompt-assets.md` | Deployable Markdown prompt assets and cached injectable prompt loading |
+| 91 | `plan-91-create-sub-agent-delegation-tool.md` | Model-callable sub-agent delegation tool, steering, and double-Esc cancellation |
+| 92 | `plan-92-advanced-semantic-tool-schema-maintenance.md` | Advanced semantic model-facing schema simplification and projection hardening |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

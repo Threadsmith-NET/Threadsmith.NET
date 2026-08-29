@@ -150,9 +150,9 @@ Threadsmith registers built-in runtime tools. Repository configuration, trust, i
 | `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, current line-numbered source or safe current-context back-references, flow/impact evidence, associated prompt/config/project artifacts, digests, confidence, omissions, and continuations. |
 | `find_references` | Find references to a compiler symbol. |
 | `find_implementations` | Find implementations of a compiler symbol. |
-| `call_hierarchy` | Traverse bounded incoming/outgoing compiler-known calls with dispatch, cycles, confidence, and omissions. |
-| `symbol_impact` | Explain bounded reference, caller, implementation, dependent-project/test, and classified-source impact. |
-| `csharp_pattern_search` | Search declarations and expression shapes with a closed, inert, versioned C# pattern schema. |
+| `call_hierarchy` | Traverse incoming/outgoing compiler-known calls from a symbol with one optional depth hint and compact call-list output. |
+| `symbol_impact` | Explain ranked reference, caller, implementation, dependent-project/test, and classified-source impact for a symbol. |
+| `csharp_pattern_search` | Search declarations and expression shapes with a flat, closed, inert C# pattern schema. |
 | `generated_code_query` | Inventory and optionally inspect bounded generated content already loaded by the semantic workspace. |
 | `run_process` | Run an allow-listed, approved, non-interactive process with bounded output and process-tree cancellation. |
 | `datetime` | Return current UTC and local date/time with timezone information. |

@@ -308,7 +308,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult CreateNoWorkspaceResult(CodeExploreRequest input)
     {
-        var reason = "No workspace is open for code_explore. Open or select a C# workspace, then retry semantic source exploration.";
+        const string reason = "No workspace is open for code_explore. Open or select a C# workspace, then retry semantic source exploration.";
         var action = new CodeExploreNextActionHint(
             CodeExploreNextActionKind.OpenWorkspace,
             "Open or select a C# workspace before retrying code_explore.");
@@ -2097,11 +2097,6 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             return mediaKind;
         }
 
-        private static bool IsExistingRegularFile(string normalized)
-        {
-            return IsExistingRegularFile(new FileInfo(normalized));
-        }
-
         private static bool IsExistingRegularFile(FileSystemInfo info)
         {
             return info.Exists
@@ -2597,7 +2592,7 @@ internal static class CodeExploreContinuationCursor
             SelectionMode = target.SelectionMode?.ToString(),
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
-            Mode = CodeExploreMode.Auto.ToString(),
+            Mode = nameof(CodeExploreMode.Auto),
         });
     }
 
@@ -2618,7 +2613,7 @@ internal static class CodeExploreContinuationCursor
             SelectionMode = target.SelectionMode?.ToString(),
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
-            Mode = CodeExploreMode.Impact.ToString(),
+            Mode = nameof(CodeExploreMode.Impact),
         });
     }
 
@@ -2643,7 +2638,7 @@ internal static class CodeExploreContinuationCursor
             OriginPath = artifact?.OriginFilePath,
             OriginStartLine = artifact?.OriginRange.StartLine,
             OriginEndLine = artifact?.OriginRange.EndLine,
-            Mode = CodeExploreMode.Auto.ToString(),
+            Mode = nameof(CodeExploreMode.Auto),
         });
     }
 

@@ -13,7 +13,7 @@ The current directory is the default repository. Use `--repository`, `--trust`, 
 ## Expected to work
 
 - Native transcript: submitted inputs, streamed responses, repository results, plans, and diffs remain ordinary terminal scrollback. Mouse selection or terminal keyboard mark mode plus `Ctrl+C` copies prior text.
-- Startup: an ASCII Threadsmith.NET wordmark and `Forge better code, not slop.` followed by a blank line precede a status block containing the effective model, repository, trust, solution, target frameworks when known, semantic confidence, and interactive mode. Pending initial semantic discovery displays `Loading...` and later appends its resolved confidence.
+- Startup: an ASCII Threadsmith.NET wordmark and `Forge better code, not slop.` followed by a blank line precede a status block containing the effective model, repository, trust, solution, session-status mode, target frameworks when known, semantic confidence, and interactive mode. Pending initial semantic discovery displays `Loading...` and later appends its resolved confidence.
 - Composer: the prompt is `<current-repository-name> >` and changes after `/open`. `Enter` submits, `Shift+Enter` inserts a newline, `Ctrl+V` performs bulk paste, and `Ctrl+C` cancels input or active work when the terminal has no native selection.
 - Repository startup: the current directory opens automatically. A single solution selects automatically; multiple solutions require explicit selection.
 - Startup cancellation: Cancel in a trust, upgrade, or solution selector exits before the composer; cancelling an in-session `/open` remains non-terminal.

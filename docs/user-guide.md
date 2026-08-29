@@ -192,7 +192,7 @@ Grant `TrustedBuild` or above only to repositories whose build scripts, analyzer
 
 ## Using the interactive terminal
 
-Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The composer is labeled with the current repository directory name.
+Startup displays the Threadsmith identity, repository and solution state, effective model, trust, session-status mode, target frameworks, semantic confidence, and terminal mode. The composer is labeled with the current repository directory name.
 
 Ordinary prompts are conversational. A greeting or question can complete as a normal assistant response. A repository-change request remains in the same model turn, but the model must call the host-owned `propose_plan` tool before governed planning begins.
 

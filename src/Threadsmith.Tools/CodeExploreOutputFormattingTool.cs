@@ -106,8 +106,10 @@ internal static class CodeExploreMarkdownRenderer
     private const int MaximumArtifactOmissions = 4;
     private const int MaximumBackReferences = 16;
     private const int MaximumContinuations = 16;
+    private const int MaximumContinuationCursors = 3;
     private const int MaximumNextActions = 8;
     private const int MaximumOmissions = 12;
+    private const int MaximumSelectedEvidenceItems = 12;
     private const int MaximumSemanticIdentities = 8;
 
     /// <summary>Renders one concise source-first exploration result.</summary>
@@ -117,8 +119,9 @@ internal static class CodeExploreMarkdownRenderer
         var builder = new StringBuilder();
         AppendHeader(builder, result, query);
         AppendAvailability(builder, result);
-        AppendBlastRadius(builder, result.BlastRadius);
+        AppendSelectedEvidence(builder, result);
         AppendSourceCode(builder, result.FileSections);
+        AppendBlastRadius(builder, result.BlastRadius);
         AppendFlow(builder, result.Flow);
         AppendAssociatedArtifacts(builder, result.AssociatedArtifacts);
         AppendBackReferences(builder, result.BackReferences);
@@ -261,6 +264,71 @@ internal static class CodeExploreMarkdownRenderer
 
             builder.AppendLine();
         }
+    }
+
+    private static void AppendSelectedEvidence(StringBuilder builder, CodeExploreResult result)
+    {
+        var items = CreateSelectedEvidenceItems(result);
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("**Selected evidence**");
+        builder.AppendLine();
+        foreach (var item in items.Take(MaximumSelectedEvidenceItems))
+        {
+            var location = string.IsNullOrWhiteSpace(item.FilePath)
+                ? string.Empty
+                : $" — {FormatCodeSpan(item.FilePath)}{FormatNullableRange(item.Range)}";
+            builder.AppendLine(
+                $"- {FormatCodeSpan(item.Label)}{location} — {BoundInline(item.Reason, 280)}");
+        }
+
+        AppendHiddenCount(builder, items.Count, MaximumSelectedEvidenceItems, "selected evidence item");
+        builder.AppendLine();
+    }
+
+    private static IReadOnlyList<MarkdownEvidenceItem> CreateSelectedEvidenceItems(CodeExploreResult result)
+    {
+        var items = new List<MarkdownEvidenceItem>();
+        foreach (var candidate in result.CandidateSummaries?.Where(candidate => candidate.Selected) ?? [])
+        {
+            var label = candidate.Symbol?.DisplayName
+                ?? candidate.FilePath
+                ?? candidate.AmbiguityGroup
+                ?? "selected declaration";
+            items.Add(new MarkdownEvidenceItem(
+                label,
+                candidate.FilePath ?? candidate.Location?.FilePath,
+                candidate.Location?.Range,
+                candidate.Reason));
+        }
+
+        var seenFiles = new HashSet<string>(
+            items
+                .Where(item => !string.IsNullOrWhiteSpace(item.FilePath))
+                .Select(item => item.FilePath ?? string.Empty),
+            PathComparer);
+        foreach (var section in result.FileSections)
+        {
+            if (!seenFiles.Add(section.FilePath))
+            {
+                continue;
+            }
+
+            var label = section.SemanticIdentities.FirstOrDefault()?.DisplayName ?? section.FilePath;
+            items.Add(new MarkdownEvidenceItem(
+                label,
+                section.FilePath,
+                section.Source.Range,
+                section.SelectionReason));
+        }
+
+        return items
+            .Where(static item => !string.IsNullOrWhiteSpace(item.Reason))
+            .DistinctBy(static item => $"{item.Label}:{item.FilePath}:{item.Range}")
+            .ToArray();
     }
 
     private static void AppendFlow(StringBuilder builder, CodeExploreFlow? flow)
@@ -427,27 +495,74 @@ internal static class CodeExploreMarkdownRenderer
             return;
         }
 
+        var visibleContinuations = continuations
+            .Take(MaximumContinuations)
+            .ToArray();
+        var cursorSlots = SelectContinuationCursorSlots(visibleContinuations);
+        var omittedCursorCount = 0;
         builder.AppendLine("**Follow-up targets**");
         builder.AppendLine();
-        foreach (var continuation in continuations.Take(MaximumContinuations))
+        for (var index = 0; index < visibleContinuations.Length; index++)
         {
+            var continuation = visibleContinuations[index];
             var location = string.IsNullOrWhiteSpace(continuation.FilePath)
                 ? string.Empty
                 : $" — {FormatCodeSpan(continuation.FilePath)}{FormatOptionalRange(continuation.StartLine, continuation.EndLine)}";
             builder.AppendLine(
                 $"- **{continuation.Kind}:** {FormatCodeSpan(continuation.Anchor)}{location} — {BoundInline(continuation.Reason, 280)}");
-            if (continuation.Cursor is { } cursor)
+            if (continuation.Cursor is { } cursor && cursorSlots.Contains(index))
             {
                 builder.AppendLine($"  - Retry query: {FormatCodeSpan(cursor)}");
             }
-            else
+            else if (continuation.Cursor is null)
             {
                 builder.AppendLine("  - Retry query cursor omitted because it exceeded the query length limit; use the shown path/range only if no exact cursor is available.");
             }
+            else
+            {
+                omittedCursorCount++;
+            }
+        }
+
+        if (omittedCursorCount > 0)
+        {
+            builder.AppendLine(
+                $"- _{FormatCount(omittedCursorCount, "retry query cursor")} omitted to keep follow-up targets compact._");
         }
 
         AppendHiddenCount(builder, continuations.Count, MaximumContinuations, "follow-up target");
         builder.AppendLine();
+    }
+
+    private static HashSet<int> SelectContinuationCursorSlots(
+        IReadOnlyList<MarkdownContinuationTarget> continuations)
+    {
+        var slots = new HashSet<int>();
+        var cursorCandidates = continuations
+            .Select((continuation, index) => new { Continuation = continuation, Index = index })
+            .Where(item => item.Continuation.Cursor is not null)
+            .ToArray();
+        foreach (var group in cursorCandidates.GroupBy(item => item.Continuation.Kind, StringComparer.Ordinal))
+        {
+            if (slots.Count >= MaximumContinuationCursors)
+            {
+                return slots;
+            }
+
+            _ = slots.Add(group.First().Index);
+        }
+
+        foreach (var item in cursorCandidates)
+        {
+            if (slots.Count >= MaximumContinuationCursors)
+            {
+                break;
+            }
+
+            _ = slots.Add(item.Index);
+        }
+
+        return slots;
     }
 
     private static IReadOnlyList<MarkdownContinuationTarget> CreateMarkdownContinuations(
@@ -561,6 +676,13 @@ internal static class CodeExploreMarkdownRenderer
             : $":L{startLine.Value.ToString(CultureInfo.InvariantCulture)}-L{endLine.Value.ToString(CultureInfo.InvariantCulture)}";
     }
 
+    private static string FormatNullableRange(SourceRange? range)
+    {
+        return range is { } sourceRange
+            ? ":" + FormatRange(sourceRange)
+            : string.Empty;
+    }
+
     private static string FormatRange(SourceRange range)
     {
         return range.StartLine == range.EndLine
@@ -657,6 +779,12 @@ internal static class CodeExploreMarkdownRenderer
         int? EndLine,
         string Reason,
         string? Cursor);
+
+    private sealed record MarkdownEvidenceItem(
+        string Label,
+        string? FilePath,
+        SourceRange? Range,
+        string Reason);
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase

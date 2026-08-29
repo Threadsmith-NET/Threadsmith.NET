@@ -565,6 +565,8 @@ public static class ToolRuntimeTests
             Assert.NotNull(execution.ModelResultContent);
             Assert.Contains("**Exploration:** `inspect source`", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Found 1 symbol across 1 file.", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("**Selected evidence**", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("Matched the distinctive Worker identifier.", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Blast radius — what depends on these**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Caller reaches Worker.Run", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Project:** `Example.Dependent`", execution.ModelResultContent, StringComparison.Ordinal);
@@ -575,6 +577,8 @@ public static class ToolRuntimeTests
             Assert.DoesNotContain("Candidate summaries", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("Adaptive envelope", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("sha256", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+            AssertAppearsBefore(execution.ModelResultContent, "**Selected evidence**", "**Source Code**");
+            AssertAppearsBefore(execution.ModelResultContent, "**Source Code**", "**Blast radius");
         }
         finally
         {
@@ -631,6 +635,56 @@ public static class ToolRuntimeTests
             Assert.Equal(5, artifactAnchor.Line);
             Assert.Equal(10, artifactAnchor.EndLine);
             Assert.Equal(new string('a', 64), artifactAnchor.ExpectedFileSha256);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Markdown keeps many follow-up targets readable by bounding embedded retry cursors.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_ManyContinuations_BoundsRetryCursorNoise()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var formattingTool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new ManyContinuationCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var input = (CodeExploreInput)formattingTool.DeserializeInput("{\"query\":\"inspect more source\"}");
+            var execution = await formattingTool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+
+            Assert.Contains("**Follow-up targets**", markdown, StringComparison.Ordinal);
+            Assert.Contains("src/WorkerExtra5.cs", markdown, StringComparison.Ordinal);
+            Assert.Equal(3, CountOccurrences(markdown, "Retry query:"));
+            Assert.Contains("retry query cursors omitted", markdown, StringComparison.Ordinal);
+
+            var sourceCursor = ExtractContinuationCursor(markdown, "Source");
+            var impactCursor = ExtractContinuationCursor(markdown, "Impact");
+            var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
+
+            var sourceService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(sourceService).ExecuteAsync(
+                new CodeExploreInput { Query = sourceCursor },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.Equal("src/WorkerExtra0.cs", Assert.Single(sourceService.Request?.PathAnchors ?? []).Path);
+
+            var impactService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(impactService).ExecuteAsync(
+                new CodeExploreInput { Query = impactCursor },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.Equal(CodeExploreMode.Impact, impactService.Request?.Mode);
+
+            var artifactService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+                new CodeExploreInput { Query = artifactCursor },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
         }
         finally
         {
@@ -769,7 +823,7 @@ public static class ToolRuntimeTests
         {
             await File.WriteAllTextAsync(
                 Path.Combine(repository, "source.cs"),
-                "Call(cancellationToken: cancellationToken);\n");
+                "Call(cancellationToken: cancellationToken);\nvar apiKey = \"sk-abcdefghijklmnopqrstuvwxyz\";\n");
             await using var events = new DomainEventStream();
             var pipeline = CreatePipeline(
                 events,
@@ -790,8 +844,13 @@ public static class ToolRuntimeTests
 
             Assert.True(result.Succeeded, result.Error);
             using var document = JsonDocument.Parse(Assert.IsType<string>(result.ResultJson));
-            var line = Assert.Single(document.RootElement.GetProperty("Lines").EnumerateArray()).GetString();
-            Assert.Contains("[REDACTED]", line, StringComparison.Ordinal);
+            var lines = document.RootElement.GetProperty("Lines")
+                .EnumerateArray()
+                .Select(line => line.GetString() ?? string.Empty)
+                .ToArray();
+            Assert.Contains(lines, line => line.Contains("cancellationToken: cancellationToken", StringComparison.Ordinal));
+            Assert.Contains(lines, line => line.Contains("[REDACTED]", StringComparison.Ordinal));
+            Assert.DoesNotContain(lines, line => line.Contains("sk-abcdefghijklmnopqrstuvwxyz", StringComparison.Ordinal));
         }
         finally
         {
@@ -2839,6 +2898,34 @@ public static class ToolRuntimeTests
         return char.IsAsciiLetterOrDigit(character) || character is ':' or '-' or '_';
     }
 
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var startIndex = 0;
+        while (startIndex < text.Length)
+        {
+            var index = text.IndexOf(value, startIndex, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return count;
+            }
+
+            count++;
+            startIndex = index + value.Length;
+        }
+
+        return count;
+    }
+
+    private static void AssertAppearsBefore(string text, string first, string second)
+    {
+        var firstIndex = text.IndexOf(first, StringComparison.Ordinal);
+        var secondIndex = text.IndexOf(second, StringComparison.Ordinal);
+        Assert.True(firstIndex >= 0, $"Expected '{first}' in text.");
+        Assert.True(secondIndex >= 0, $"Expected '{second}' in text.");
+        Assert.True(firstIndex < secondIndex, $"Expected '{first}' before '{second}'.");
+    }
+
     private static string CreateTemporaryDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), $"threadsmith-m3-{Guid.NewGuid():N}");
@@ -2959,6 +3046,20 @@ public static class ToolRuntimeTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateRichCodeExploreResult());
+        }
+    }
+
+    private sealed class ManyContinuationCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(CreateManyContinuationCodeExploreResult());
         }
     }
 
@@ -3163,6 +3264,26 @@ public static class ToolRuntimeTests
                     continuationDigest,
                     1,
                     "Retry with this explicit associated artifact path anchor and digest to continue omitted artifact content.")]));
+    }
+
+    private static CodeExploreResult CreateManyContinuationCodeExploreResult()
+    {
+        var result = CreateRichCodeExploreResult();
+        var continuationDigest = new string('a', 64);
+        var continuations = Enumerable.Range(0, 6)
+            .Select(index => new CodeExploreContinuationTarget(
+                CodeExploreAnchorKind.Path,
+                $"src/WorkerExtra{index}.cs",
+                $"src/WorkerExtra{index}.cs",
+                index + 1,
+                index + 3,
+                false,
+                CodeExplorePathSelectionMode.ExactLineRange,
+                continuationDigest,
+                1,
+                $"Retry with Worker extra source range {index}."))
+            .ToArray();
+        return result with { ContinuationTargets = continuations };
     }
 
     private sealed class StubCSharpScriptEngine : ICSharpScriptEngine

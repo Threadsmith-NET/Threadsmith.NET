@@ -1133,7 +1133,10 @@ public sealed class ConversationalShell
             .AppendLine($"  Model: {modelStatus}")
             .AppendLine($"  Repository: {repositoryStatus}")
             .AppendLine($"  Trust: {trustStatus}")
-            .AppendLine($"  Solution: {solutionStatus}");
+            .AppendLine($"  Solution: {solutionStatus}")
+            .AppendLine(_showSessionStatus
+                ? "  Session status: Composer-adjacent"
+                : "  Session status: Disabled by tui:footer:enabled");
         if (snapshot.TargetFrameworks is { Count: > 0 } targetFrameworks)
         {
             startupStatus.AppendLine($"  Target frameworks: {string.Join(", ", targetFrameworks)}");

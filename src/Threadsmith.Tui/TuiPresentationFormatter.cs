@@ -468,13 +468,19 @@ internal static class TuiPresentationFormatter
 
     private static string PrepareInspectionOutput(string output, bool isJson)
     {
-        var displayOutput = isJson ? FormatJsonForInspection(output) : output;
+        var displayOutput = NormalizeInspectionLineEndings(isJson ? FormatJsonForInspection(output) : output);
         var bounded = displayOutput.Length <= MaximumToolInspectionCharacters
             ? displayOutput
             : displayOutput[..MaximumToolInspectionCharacters]
-                + Environment.NewLine
+                + "\n"
                 + "[code_explore inspection truncated by TUI display bound]";
         return TerminalControlEncoder.Encode(bounded);
+    }
+
+    private static string NormalizeInspectionLineEndings(string output)
+    {
+        return output.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
     }
 
     private static string FormatJsonForInspection(string output)

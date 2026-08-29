@@ -3103,6 +3103,66 @@ public static class Milestone1Tests
         Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>code_explore inspection normalizes CRLF before terminal-control escaping.</summary>
+    [Fact]
+    public static void ConversationTranscript_CodeExploreInspection_NormalizesCrlfModelContent()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(
+            string.Empty,
+            inspectCodeExploreOutput: () => true);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "code_explore",
+            RunId.New())));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: "{\"structured\":true}",
+            ModelResultContent: "# code_explore result\r\ncancellationToken: cancellationToken")));
+
+        Assert.Contains("# code_explore result", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("cancellationToken: cancellationToken", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u000D", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Truncated code_explore inspection does not reintroduce CR control escapes.</summary>
+    [Fact]
+    public static void ConversationTranscript_CodeExploreInspection_TruncatedOutputNormalizesMarkerNewline()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(
+            string.Empty,
+            inspectCodeExploreOutput: () => true);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "code_explore",
+            RunId.New())));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            ResultJson: "{\"structured\":true}",
+            ModelResultContent: new string('x', 100_000) + "\r\ntrailing")));
+
+        Assert.Contains("[code_explore inspection truncated by TUI display bound]", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u000D", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Structured code_explore inspection is pretty-printed inside the tool block.</summary>
     [Fact]
     public static void ConversationTranscript_CodeExploreInspection_StructuredModePrettyPrintsJson()
@@ -3714,6 +3774,8 @@ public static class Milestone1Tests
     [InlineData("Authorization: Bearer abc123", "abc123")]
     [InlineData("Authorization=Basic Zm9vOmJhcg==", "Zm9vOmJhcg==")]
     [InlineData("{\"apiKey\":\"secret-json\"}", "secret-json")]
+    [InlineData("{\"threadsmith_api_key\":\"secret-json\"}", "secret-json")]
+    [InlineData("{\"github_token\":\"secret-json\"}", "secret-json")]
     [InlineData("THREAD_TOKEN=secret-env", "secret-env")]
     [InlineData("/?api_key=secret-query&x=1", "secret-query")]
     [InlineData("token: first\napi-key: second", "first")]
@@ -3732,6 +3794,70 @@ public static class Milestone1Tests
         Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
         Assert.Contains("[REDACTED]", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain('\u001b', sanitized);
+    }
+
+    /// <summary>Source-code identifier echoes remain visible while credential-shaped literals redact.</summary>
+    [Fact]
+    public static void SecretOutputSanitizer_PreservesSourceIdentifiersAndRedactsCredentialLiterals()
+    {
+        var sanitizer = new SecretOutputSanitizer();
+        const string secret = "sk-abcdefghijklmnopqrstuvwxyz";
+        var input = """
+            public Task RunAsync(CancellationToken cancellationToken, string accessToken)
+            {
+                return UseAsync(accessToken: accessToken, cancellationToken: cancellationToken);
+            }
+
+            _ = UseAsync(accessToken: accessToken);
+            _ = UseAsync(cancellation_token: cancellation_token);
+            _ = UseAsync(accessToken: providedAccessToken);
+            _ = new { password = "password" };
+
+            var apiKey = "sk-abcdefghijklmnopqrstuvwxyz";
+            """;
+
+        var sanitized = sanitizer.Sanitize(input);
+
+        Assert.Contains("CancellationToken cancellationToken", sanitized, StringComparison.Ordinal);
+        Assert.Contains("accessToken: accessToken", sanitized, StringComparison.Ordinal);
+        Assert.Contains("accessToken: accessToken)", sanitized, StringComparison.Ordinal);
+        Assert.Contains("cancellationToken: cancellationToken", sanitized, StringComparison.Ordinal);
+        Assert.Contains("cancellation_token: cancellation_token", sanitized, StringComparison.Ordinal);
+        Assert.Contains("accessToken: providedAccessToken", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"password\"", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", sanitized, StringComparison.Ordinal);
+    }
+
+    /// <summary>Credential-looking config and header echoes still redact outside source named arguments.</summary>
+    [Fact]
+    public static void SecretOutputSanitizer_RedactsNonSourceCredentialEchoes()
+    {
+        var sanitizer = new SecretOutputSanitizer();
+        var input = """
+            THREAD_TOKEN=token
+            thread_token=secret
+            github_token=secret
+            threadsmith_api_key=secret
+            {"threadsmith_api_key":"secret-json"}
+            {"github_token":"secret-json"}
+            token=token
+            accessToken=accessToken
+            Authorization: authorization
+            """;
+
+        var sanitized = sanitizer.Sanitize(input);
+
+        Assert.DoesNotContain("THREAD_TOKEN=token", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("thread_token=secret", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("github_token=secret", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("threadsmith_api_key=secret", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"threadsmith_api_key\":\"secret-json\"}", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"github_token\":\"secret-json\"}", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("token=token", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("accessToken=accessToken", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("Authorization: authorization", sanitized, StringComparison.Ordinal);
+        Assert.Equal(9, sanitized.Split("[REDACTED]", StringSplitOptions.None).Length - 1);
     }
 
     private static IEnumerable<RunPhase[]> GetLegalTransitionPaths()

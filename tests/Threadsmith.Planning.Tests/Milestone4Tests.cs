@@ -3611,6 +3611,103 @@ public static class Milestone4Tests
         Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
+    /// <summary>A policy fallback becomes the shared active selection before provider dispatch.</summary>
+    [Fact]
+    public static async Task ModelResolution_FallbackSelectsActiveModelAndPublishesNotice()
+    {
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            return Task.CompletedTask;
+        });
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var selectedBase = CreateProfile("selected", structuredOutput: true, permitsSensitiveData: true);
+        var selected = selectedBase with
+        {
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+                StructuredOutput = true,
+            },
+            IntendedWorkloadClasses = [WorkloadClass.Review],
+        };
+        var fallbackBase = CreateProfile("fallback", structuredOutput: true, permitsSensitiveData: true);
+        var fallback = fallbackBase with
+        {
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+                StructuredOutput = true,
+            },
+            IntendedWorkloadClasses = [WorkloadClass.General, WorkloadClass.Planning],
+        };
+        var resolver = new ModelResolver(
+            new ConfiguredModelCatalog([selected, fallback]),
+            new InMemoryModelPreferenceSnapshotProvider());
+        var assembler = CreateAssembler(events, evidence, modelResolver: resolver);
+        var preferences = new SessionModelPreferences(selected.Id, ReasoningLevel.None);
+        var model = new QueueModelProvider([CreatePlan("fallback", 1)]);
+        var selectionCalls = 0;
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            contextAssembler: assembler,
+            evidenceStore: evidence,
+            defaultModelProfileId: selected.Id,
+            sessionPreferences: preferences,
+            selectActiveModel: (profileId, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                selectionCalls++;
+                Assert.Equal(fallback.Id, profileId);
+                preferences.SetReasoning(profileId, ReasoningLevel.None);
+                return Task.FromResult(new ActiveModelSelectionResult
+                {
+                    Selection = new ActiveModelSelectionSnapshot
+                    {
+                        ProviderId = "fallback-provider",
+                        Profile = fallback,
+                        ReasoningLevel = ReasoningLevel.None,
+                        Source = ActiveModelSelectionSource.Explicit,
+                        Generation = preferences.Generation,
+                    },
+                    Changed = true,
+                    ReasoningPreserved = true,
+                    Persisted = true,
+                });
+            });
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("fallback selection"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (model.Requests.Count == 0 && !observed.OfType<RunCompleted>().Any())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+
+        Assert.True(
+            model.Requests.Count > 0,
+            string.Join(Environment.NewLine, observed.Select(domainEvent => domainEvent.ToString())));
+        var dispatched = Assert.Single(model.Requests);
+        var fallbackEvent = Assert.Single(observed.OfType<ModelFallbackSelected>());
+        Assert.Equal(1, selectionCalls);
+        Assert.Equal(selected.Id, fallbackEvent.RequestedProfileId);
+        Assert.Equal(fallback.Id, fallbackEvent.SelectedProfileId);
+        Assert.Equal(fallback.Id, preferences.CurrentProfileId);
+        Assert.Equal(fallback.Id, dispatched.ResolvedProfileId);
+        Assert.Equal(fallback.Id, assembler.GetInspection(runId)?.ModelProfileId);
+        Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+    }
+
     /// <summary>Repository-scoped plan hooks receive the active repository identity.</summary>
     [Fact]
     public static async Task PlanHooks_ReceiveActiveRepositoryIdentity()

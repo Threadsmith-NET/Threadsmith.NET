@@ -129,6 +129,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 91 | `plan-91-create-sub-agent-delegation-tool.md` | Model-callable sub-agent delegation tool, steering, and double-Esc cancellation |
 | 92 | `plan-92-advanced-semantic-tool-schema-maintenance.md` | Advanced semantic model-facing schema simplification and projection hardening |
 | 93 | `plan-93-codex-headless-auth-json-numeric-compatibility.md` | Codex headless OAuth JSON numeric compatibility |
+| 94 | `plan-94-code-explore-agent-execution-quality.md` | Code explore agent-execution ranking and presentation quality |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

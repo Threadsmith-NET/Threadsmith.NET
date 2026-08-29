@@ -137,6 +137,16 @@ internal static class ApplicationComposition
             host.Events);
         var planSanityChecker = new PlanSanityChecker();
         var validationStages = GetValidationStages(host.Configuration);
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectResolvedFallback =
+            integration.Models.ActiveModels is null
+                ? null
+                : (profileId, cancellationToken) =>
+                    (resolvedFallbackSelector
+                        ?? throw new InvalidOperationException(
+                            "Active-model fallback selection is not initialized."))(
+                        profileId,
+                        cancellationToken);
         var sessionApplication = new SessionApplication(
             host.Events,
             integration.Models.Provider,
@@ -249,7 +259,8 @@ internal static class ApplicationComposition
             repositoryMemoryGovernor: repositoryMemoryGovernor,
             activeTurnCompactor: activeTurnCompactor,
             activeTurnCompactionPolicy: activeTurnCompactionPolicy,
-            activeTurnCompactionProfile: activeTurnCompactionProfile);
+            activeTurnCompactionProfile: activeTurnCompactionProfile,
+            selectActiveModel: selectResolvedFallback);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -535,11 +546,16 @@ internal static class ApplicationComposition
             };
             if (integration.Models.ActiveModels is { } activeModels)
             {
-                handlers.Add(new ActiveModelSelectionApplication(
+                var activeModelSelection = new ActiveModelSelectionApplication(
                     activeModels,
                     contextAssembler,
                     host.Projections,
-                    sessionLifecycle.CheckpointActiveSelectionAsync));
+                    sessionLifecycle.CheckpointActiveSelectionAsync);
+                resolvedFallbackSelector = (profileId, cancellationToken) =>
+                    activeModelSelection.HandleAsync(
+                        new SelectActiveModelCommand(profileId),
+                        cancellationToken);
+                handlers.Add(activeModelSelection);
             }
 
             var dispatcher = new CommandDispatcher(

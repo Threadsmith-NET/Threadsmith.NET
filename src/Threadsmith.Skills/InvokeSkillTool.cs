@@ -52,7 +52,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         InputSchema = new ToolSchema(
             nameof(InvokeSkillInput),
             1,
-            "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{}}}"),
+            "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}}}"),
         OutputSchema = new ToolSchema(
             nameof(InvokeSkillOutput),
             1,

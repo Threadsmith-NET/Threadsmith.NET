@@ -320,7 +320,10 @@ public sealed class SkillSubsystemTests
         Assert.NotNull(workflows.Request);
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
         Assert.Equal("{\"scope\":\"current\"}", workflows.Request.InputJson);
-        Assert.Contains("\"input\":{}", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}",
+            tool.Definition.InputSchema.JsonSchema,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("inputJson", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("invocationId", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("payloadJson", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);

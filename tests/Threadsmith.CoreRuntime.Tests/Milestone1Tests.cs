@@ -957,6 +957,31 @@ public static class Milestone1Tests
         Assert.Contains("Semantic confidence: Unavailable", transcript.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>A resolved fallback visibly replaces the misleading selected-model presentation.</summary>
+    [Fact]
+    public static void ConversationTranscript_ModelFallbackSelected_RendersActiveModelWarning()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var transcript = new ConversationTranscript(string.Empty);
+        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
+
+        Assert.True(transcript.Apply(new ModelFallbackSelected(
+            sessionId,
+            occurredAt,
+            RunId.New(),
+            ModelProfileId.New(),
+            ModelProfileId.New(),
+            "fallback-provider",
+            "Fallback Model",
+            Persisted: true)));
+
+        Assert.Contains(
+            "Switched to fallback model 'Fallback Model' (fallback-provider); it is now the active model.",
+            transcript.Text,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>The inline shell starts without a full-screen driver and exits through its command loop.</summary>
     [Fact]
     public static async Task ConversationalShell_Quit_UsesNativeTerminalSurface()
@@ -4305,6 +4330,15 @@ public static class Milestone1Tests
                     RunId = RunId.New(),
                     TokenBudget = 100,
                 }),
+            new ModelFallbackSelected(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                ModelProfileId.New(),
+                ModelProfileId.New(),
+                "provider",
+                "model",
+                Persisted: true),
             new ActiveTurnCompactionStarted(
                 sessionId,
                 occurredAt,

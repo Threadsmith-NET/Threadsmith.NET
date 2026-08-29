@@ -48,8 +48,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         var profileOutputLimit = _profile.EffectiveRequestOutputTokenReserve;
-        var maximumOutputTokens = request.MaximumOutputTokens ?? profileOutputLimit;
-        if (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit)
+        if (request.MaximumOutputTokens is { } maximumOutputTokens
+            && (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit))
         {
             throw new ModelProviderException(
                 $"The requested output ceiling must be between 1 and the resolved profile request reserve of "
@@ -69,7 +69,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             using var message = CreateRequest(
                 request,
                 accessToken,
-                maximumOutputTokens,
                 canonicalTools,
                 toolNameMap);
             HttpResponseMessage response;
@@ -136,7 +135,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     continue;
                 }
 
-                throw CreateFailure(response.StatusCode);
+                throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
             }
         }
     }
@@ -144,7 +143,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private HttpRequestMessage CreateRequest(
         ModelStreamRequest request,
         string accessToken,
-        int maximumOutputTokens,
         IReadOnlyList<ModelToolDefinition> canonicalTools,
         ModelToolWireNameMap toolNameMap)
     {
@@ -153,7 +151,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
-            ["max_output_tokens"] = maximumOutputTokens,
             ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
             ["input"] = CreateInput(request, toolNameMap),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
@@ -419,17 +416,82 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return new ModelUsage(input, output, Cache: cache);
     }
 
-    private static Exception CreateFailure(HttpStatusCode statusCode)
+    private static async Task<Exception> CreateFailureAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(response);
+        var statusCode = response.StatusCode;
+        var details = await ReadErrorDetailsAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var suffix = details is null ? string.Empty : $" {details}";
         return statusCode switch
         {
             HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
                 or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout =>
-                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}."),
+                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.{suffix}"),
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-                new ModelProviderException("Codex authentication is missing, expired, or unauthorized."),
-            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}."),
+                new ModelProviderException($"Codex authentication is missing, expired, or unauthorized.{suffix}"),
+            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}.{suffix}"),
         };
+    }
+
+    private static async Task<string?> ReadErrorDetailsAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        const int maximumCharacters = 4096;
+        try
+        {
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using StreamReader reader = new(stream, Encoding.UTF8);
+            var body = new StringBuilder(maximumCharacters);
+            var buffer = new char[1024];
+            while (body.Length <= maximumCharacters)
+            {
+                var remaining = maximumCharacters + 1 - body.Length;
+                var count = await reader.ReadAsync(
+                    buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                    cancellationToken).ConfigureAwait(false);
+                if (count is 0)
+                {
+                    break;
+                }
+
+                body.Append(buffer, 0, count);
+            }
+
+            if (body.Length is 0 or > maximumCharacters)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(body.ToString());
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var error = root.TryGetProperty("error", out var nestedError)
+                && nestedError.ValueKind == JsonValueKind.Object
+                ? nestedError
+                : root;
+            var code = GetString(error, "code");
+            var parameter = GetString(error, "param");
+            var message = GetString(error, "message") ?? GetString(root, "detail");
+            var parts = new[]
+            {
+                code is null ? null : $"Code: {code}.",
+                parameter is null ? null : $"Parameter: {parameter}.",
+                message,
+            }.Where(part => !string.IsNullOrWhiteSpace(part));
+            var details = string.Join(' ', parts);
+            return details.Length == 0 ? null : details;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
+        {
+            return null;
+        }
     }
 
     private static bool IsTransient(HttpStatusCode statusCode)

@@ -2054,6 +2054,15 @@ internal sealed class ConversationTranscript
                 _text.AppendLine();
                 _text.AppendLine();
                 return true;
+            case ModelFallbackSelected fallback:
+                AppendSystemResponse(
+                    $"The selected model could not satisfy this request. Switched to fallback model "
+                    + $"'{fallback.SelectedModelName}' ({fallback.SelectedProviderId}); it is now the active model"
+                    + (fallback.Persisted
+                        ? "."
+                        : ". Repository selection was not persisted: "
+                            + (fallback.PersistenceDiagnostic ?? "No persistence diagnostic was available.")));
+                return true;
             case RepositoryOpened repository:
                 AppendSystemResponse(
                     $"Repository opened.\nRepository: {repository.Path}\nTrust: {repository.TrustLevel}");

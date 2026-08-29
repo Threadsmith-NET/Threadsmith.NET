@@ -107,6 +107,8 @@ public sealed partial class SessionApplication :
     private readonly IToolRegistry? _toolRegistry;
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>?
+        _selectActiveModel;
 
     /// <summary>Gets whether any model or governed run is still active.</summary>
     public bool HasActiveWork => _runs.Values.Any(registration => !registration.Completion.Task.IsCompleted);
@@ -165,7 +167,8 @@ public sealed partial class SessionApplication :
         IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
         IActiveTurnCompactor? activeTurnCompactor = null,
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
-        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -212,6 +215,7 @@ public sealed partial class SessionApplication :
         _limits = limits ?? ExecutionLimits.Default;
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
+        _selectActiveModel = selectActiveModel;
         _conversationStore = conversationStore;
         _conversationGovernor = conversationGovernor;
         _conversationCompactor = conversationCompactor;

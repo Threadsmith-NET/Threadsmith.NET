@@ -72,17 +72,11 @@ public enum WebFetchTruncationStage
     ExtractedText,
 }
 
-/// <summary>Bounded fetch request accepting exactly one activation route.</summary>
+/// <summary>Bounded fetch request whose host-classified reference selects one authorized route.</summary>
 public sealed record WebFetchRequest
 {
-    /// <summary>Opaque host-issued search result reference.</summary>
-    public string? SearchResultId { get; init; }
-
-    /// <summary>Opaque reference for an exact URL in the current top-level user message.</summary>
-    public string? UserUrlId { get; init; }
-
-    /// <summary>Exact pre-authorized URL or model-proposed direct destination.</summary>
-    public string? Url { get; init; }
+    /// <summary>Opaque search/user URL reference or exact authorized public URL.</summary>
+    public required string Reference { get; init; }
 }
 
 /// <summary>One sanitized redirect hop containing no query data.</summary>

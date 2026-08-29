@@ -144,16 +144,24 @@ public sealed partial class SessionApplication
         if (_contextAssembler is not null && context is null)
         {
             var toolSchemas = CreateContextToolSchemas(modelTools);
+            var assemblyRequest = CreateContextAssemblyRequest(
+                registration,
+                runId,
+                phase,
+                invocationContext,
+                modelTools,
+                toolSchemas,
+                modelPreference,
+                _defaultModelProfileId);
             context = await _contextAssembler.AssembleAsync(
-                CreateContextAssemblyRequest(
-                    registration,
-                    runId,
-                    phase,
-                    invocationContext,
-                    modelTools,
-                    toolSchemas,
-                    modelPreference,
-                    _defaultModelProfileId),
+                assemblyRequest,
+                cancellationToken);
+            (modelPreference, context) = await ReconcileResolvedFallbackAsync(
+                registration.SessionId,
+                runId,
+                assemblyRequest,
+                modelPreference,
+                context,
                 cancellationToken);
             loopState.FrozenContext = context;
         }
@@ -250,6 +258,76 @@ public sealed partial class SessionApplication
             usageRequestId,
             modelRequest,
             loopState.LastGroupSequence);
+    }
+
+    private async Task<(SessionModelPreferenceSnapshot? Preference, ContextAssemblyResult Context)>
+        ReconcileResolvedFallbackAsync(
+            SessionId sessionId,
+            RunId runId,
+            ContextAssemblyRequest assemblyRequest,
+            SessionModelPreferenceSnapshot? modelPreference,
+            ContextAssemblyResult context,
+            CancellationToken cancellationToken)
+    {
+        var requestedProfileId = modelPreference?.ProfileId ?? _defaultModelProfileId;
+        if (requestedProfileId is not { } requestedProfile
+            || context.ModelResolution is not { } resolution
+            || resolution.ProfileId == requestedProfile)
+        {
+            return (modelPreference, context);
+        }
+
+        if (_selectActiveModel is null)
+        {
+            throw new InvalidOperationException(
+                "The selected model cannot satisfy this request, and no active-model fallback transition is available.");
+        }
+
+        var selection = await _selectActiveModel(resolution.ProfileId, cancellationToken);
+        if (selection.Selection.Profile.Id != resolution.ProfileId)
+        {
+            throw new InvalidOperationException(
+                "The active-model fallback transition selected a different profile than request resolution.");
+        }
+
+        var updatedPreference = _sessionPreferences?.Capture()
+            ?? throw new InvalidOperationException(
+                "The active-model fallback transition did not expose shared session state.");
+        if (updatedPreference.ProfileId != resolution.ProfileId)
+        {
+            throw new InvalidOperationException(
+                "The shared active-model state does not match the resolved request fallback.");
+        }
+
+        var persistenceDiagnostic = selection.Persisted
+            ? null
+            : _sanitizer.Sanitize(
+                selection.Diagnostic ?? "The repository model selection was not persisted.");
+        await _events.PublishAsync(
+            new ModelFallbackSelected(
+                sessionId,
+                DateTimeOffset.UtcNow,
+                runId,
+                requestedProfile,
+                resolution.ProfileId,
+                _sanitizer.Sanitize(selection.Selection.ProviderId),
+                _sanitizer.Sanitize(selection.Selection.Profile.Name),
+                selection.Persisted,
+                persistenceDiagnostic),
+            cancellationToken);
+
+        var refreshed = await (_contextAssembler
+            ?? throw new InvalidOperationException("Context assembly became unavailable during model fallback."))
+            .AssembleAsync(
+                assemblyRequest with { DefaultModelProfileId = updatedPreference.ProfileId },
+                cancellationToken);
+        if (refreshed.ModelResolution?.ProfileId != resolution.ProfileId)
+        {
+            throw new InvalidOperationException(
+                "The active fallback model did not remain effective after governed context reassembly.");
+        }
+
+        return (updatedPreference, refreshed);
     }
 
     private async Task<ConversationRoundOutcome> ExecuteConversationRoundAsync(

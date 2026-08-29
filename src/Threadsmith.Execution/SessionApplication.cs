@@ -29,54 +29,41 @@ public sealed partial class SessionApplication :
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schemaVersion", "plan"],
+          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
           "properties": {
-            "schemaVersion": { "type": "integer", "const": 1 },
-            "plan": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
-              "properties": {
-                "schemaVersion": { "type": "integer", "const": 2 },
-                "revision": { "type": "integer", "minimum": 1 },
-                "summary": { "type": "string" },
-                "steps": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
-                    "properties": {
-                      "stepId": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["value"],
-                        "properties": { "value": { "type": "string", "format": "uuid" } }
-                      },
-                      "title": { "type": "string" },
-                      "description": { "type": "string" },
-                      "fileIntents": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["kind", "path"],
-                          "properties": {
-                            "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
-                            "path": { "type": "string" },
-                            "destinationPath": { "type": "string" }
-                          }
-                        }
-                      },
-                      "expectedOutcome": { "type": "string" },
-                      "validation": { "type": "array", "items": { "type": "string" } }
+            "schemaVersion": { "type": "integer", "const": 2 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "summary": { "type": "string" },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+                "properties": {
+                  "stepId": { "type": "string", "format": "uuid" },
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "fileIntents": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "path"],
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
+                        "path": { "type": "string" },
+                        "destinationPath": { "type": "string" }
+                      }
                     }
-                  }
-                },
-                "risks": { "type": "array", "items": { "type": "string" } },
-                "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "expectedOutcome": { "type": "string" },
+                  "validation": { "type": "array", "items": { "type": "string" } }
+                }
               }
-            }
+            },
+            "risks": { "type": "array", "items": { "type": "string" } },
+            "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
           }
         }
         """;
@@ -120,6 +107,8 @@ public sealed partial class SessionApplication :
     private readonly IToolRegistry? _toolRegistry;
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>?
+        _selectActiveModel;
 
     /// <summary>Gets whether any model or governed run is still active.</summary>
     public bool HasActiveWork => _runs.Values.Any(registration => !registration.Completion.Task.IsCompleted);
@@ -178,7 +167,8 @@ public sealed partial class SessionApplication :
         IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
         IActiveTurnCompactor? activeTurnCompactor = null,
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
-        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -225,6 +215,7 @@ public sealed partial class SessionApplication :
         _limits = limits ?? ExecutionLimits.Default;
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
+        _selectActiveModel = selectActiveModel;
         _conversationStore = conversationStore;
         _conversationGovernor = conversationGovernor;
         _conversationCompactor = conversationCompactor;

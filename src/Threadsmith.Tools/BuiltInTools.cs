@@ -1068,7 +1068,6 @@ public sealed record GitStatusInput;
 public sealed record GitStatusOutput(
     string Branch,
     IReadOnlyList<string> Entries,
-    int ExitCode,
     bool IsTruncated);
 
 /// <summary>Gets machine-readable read-only Git status through the process manager.</summary>
@@ -1138,7 +1137,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
                 context.Invocation.ProhibitedPaths))];
         var truncated = result.StandardOutputTruncated || result.StandardErrorTruncated;
         return new ToolExecution<GitStatusOutput>(
-            new GitStatusOutput(branch, entries, result.ExitCode ?? -1, truncated),
+            new GitStatusOutput(branch, entries, truncated),
             [new ToolProvenanceSource("git", repositoryPath)],
             truncated);
     }
@@ -1175,9 +1174,6 @@ public sealed record FindReferencesInput
 {
     /// <summary>Stable symbol identity returned by find_symbol.</summary>
     public required string SymbolId { get; init; }
-
-    /// <summary>Whether explicit text fallback is allowed below partial compilation.</summary>
-    public bool AllowTextFallback { get; init; }
 }
 
 /// <summary>Input for implementation lookup.</summary>
@@ -1227,7 +1223,11 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
             workspaceId,
             input.Query,
             cancellationToken);
-        SymbolResult[] selected = [.. results.Take(_limits.FindSymbolMaxResults)];
+        SymbolResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        SymbolResult[] selected = [.. allowed.Take(_limits.FindSymbolMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<SymbolResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -1235,7 +1235,8 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1263,7 +1264,7 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
     }
 }
 
-/// <summary>Compiler-aware reference search tool with explicit degraded fallback.</summary>
+/// <summary>Compiler-aware reference search tool with host-selected degraded fallback.</summary>
 public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList<ReferenceResult>>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
@@ -1302,9 +1303,13 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
         var results = await _semanticEngine.FindReferencesAsync(
             workspaceId,
             input.SymbolId,
-            input.AllowTextFallback,
+            allowTextFallback: true,
             cancellationToken);
-        ReferenceResult[] selected = [.. results.Take(_limits.FindReferencesMaxResults)];
+        ReferenceResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        ReferenceResult[] selected = [.. allowed.Take(_limits.FindReferencesMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<ReferenceResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -1312,7 +1317,8 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1377,7 +1383,11 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
             workspaceId,
             input.SymbolId,
             cancellationToken);
-        ImplementationResult[] selected = [.. results.Take(_limits.FindImplementationsMaxResults)];
+        ImplementationResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        ImplementationResult[] selected = [.. allowed.Take(_limits.FindImplementationsMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<ImplementationResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -1385,7 +1395,8 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1407,6 +1418,87 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
     {
         return [context.RepositoryPath];
     }
+}
+
+/// <summary>Confines legacy semantic results and creates bounded, flat model-facing projections.</summary>
+internal static class LegacySemanticToolOutput
+{
+    private const int MaximumResults = 100;
+
+    /// <summary>Returns whether a semantic location is within the invocation path policy.</summary>
+    internal static bool IsAllowed(
+        SemanticSourceLocation location,
+        ToolInvocationContext context)
+    {
+        try
+        {
+            _ = ToolPathRules.NormalizeAndValidate(location.FilePath, context);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Projects symbol declarations.</summary>
+    internal static string Render(IReadOnlyList<SymbolResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    /// <summary>Projects symbol references.</summary>
+    internal static string Render(IReadOnlyList<ReferenceResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    /// <summary>Projects symbol implementations.</summary>
+    internal static string Render(IReadOnlyList<ImplementationResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    private static string Render(
+        IEnumerable<LegacySemanticProjectionItem> results,
+        int resultCount,
+        bool truncated)
+    {
+        var selected = results.Take(MaximumResults).ToArray();
+        return JsonSerializer.Serialize(new
+        {
+            results = selected,
+            truncated = truncated || resultCount > selected.Length,
+        });
+    }
+
+    private static LegacySemanticProjectionItem CreateItem(
+        SemanticSymbolIdentity symbol,
+        SemanticSourceLocation location)
+    {
+        return new(
+            symbol.Id,
+            symbol.DisplayName,
+            symbol.Kind,
+            location.FilePath,
+            location.Range.StartLine);
+    }
+
+    private sealed record LegacySemanticProjectionItem(
+        [property: JsonPropertyName("symbolId")] string SymbolId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("kind")] string Kind,
+        [property: JsonPropertyName("path")] string Path,
+        [property: JsonPropertyName("line")] int Line);
 }
 
 /// <summary>Input for bounded shell-command execution.</summary>

@@ -112,6 +112,20 @@ public static class Milestone3Tests
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
                     RequestedBy = "test",
                 }));
+        var confinedToolResult = await new FindSymbolTool(resolver).ExecuteAsync(
+            new FindSymbolInput { Query = "IService" },
+            new ToolExecutionContext(
+                ToolInvocationId.New(),
+                request.SessionId,
+                RunId.New(),
+                new ToolInvocationContext
+                {
+                    WorkspaceId = request.WorkspaceId,
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    ProhibitedPaths = ["Contracts/**"],
+                    RequestedBy = "test",
+                }));
         var generated = await engine.FindSymbolsAsync("GeneratedMarker");
         var linked = await engine.FindSymbolsAsync("LinkedMarker");
 
@@ -124,6 +138,12 @@ public static class Milestone3Tests
             item.SemanticConfidence));
         Assert.NotEmpty(referenceToolResult.Sources);
         Assert.NotEmpty(implementationToolResult.Sources);
+        AssertFlatSemanticProjection(toolResult.ModelResultContent, symbol.Symbol.Id);
+        AssertFlatSemanticProjection(referenceToolResult.ModelResultContent, symbol.Symbol.Id);
+        AssertFlatSemanticProjection(implementationToolResult.ModelResultContent);
+        Assert.Empty(confinedToolResult.Value);
+        Assert.True(confinedToolResult.IsTruncated);
+        Assert.DoesNotContain("IService", confinedToolResult.ModelResultContent, StringComparison.Ordinal);
         Assert.Contains(generated, item => item.Location.IsGenerated);
         Assert.NotEmpty(linked);
         Assert.All(linked, item => Assert.True(item.Location.IsLinked));
@@ -907,12 +927,8 @@ public static class Milestone3Tests
             "T:SmallSolution.Contracts.IService",
             allowTextFallback: true);
         var tool = new FindReferencesTool(new TestSemanticResolver(request.WorkspaceId, engine));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(
-            new FindReferencesInput
-            {
-                SymbolId = "T:SmallSolution.Contracts.IService",
-                AllowTextFallback = false,
-            },
+        var toolResult = await tool.ExecuteAsync(
+            new FindReferencesInput { SymbolId = "T:SmallSolution.Contracts.IService" },
             new ToolExecutionContext(
                 ToolInvocationId.New(),
                 SessionId.New(),
@@ -923,12 +939,20 @@ public static class Milestone3Tests
                     RepositoryPath = root,
                     TrustLevel = RepositoryTrustLevel.TrustedRead,
                     RequestedBy = "test",
-                })));
+                }));
 
         Assert.NotEmpty(fallback);
         Assert.All(fallback, item => Assert.Equal(
             SemanticConfidenceLevel.TextOnly,
             item.SemanticConfidence));
+        Assert.NotEmpty(toolResult.Value);
+        AssertFlatSemanticProjection(
+            toolResult.ModelResultContent,
+            "T:SmallSolution.Contracts.IService");
+        Assert.DoesNotContain(
+            "allowTextFallback",
+            tool.Definition.InputSchema.JsonSchema,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Text fallback honors prohibited paths, file bounds, and the total-match ceiling.</summary>
@@ -2692,6 +2716,26 @@ public static class Milestone3Tests
 
         Assert.Single(provider.Requests);
         Assert.Equal(ReasoningLevel.None, provider.Requests[0].ReasoningLevel);
+    }
+
+    private static void AssertFlatSemanticProjection(string? content, string? symbolId = null)
+    {
+        using var document = JsonDocument.Parse(Assert.IsType<string>(content));
+        var root = document.RootElement;
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("results").ValueKind);
+        Assert.Equal(JsonValueKind.False, root.GetProperty("truncated").ValueKind);
+        var item = root.GetProperty("results").EnumerateArray().First();
+        Assert.Equal(
+            ["symbolId", "name", "kind", "path", "line"],
+            [.. item.EnumerateObject().Select(static property => property.Name)]);
+        if (symbolId is not null)
+        {
+            Assert.Equal(symbolId, item.GetProperty("symbolId").GetString());
+        }
+
+        Assert.True(item.GetProperty("line").GetInt32() > 0);
+        Assert.DoesNotContain("semanticConfidence", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("targetFramework", content, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CreateMinimalProjectText()

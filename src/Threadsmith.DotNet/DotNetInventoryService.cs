@@ -44,7 +44,6 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.SelectedSolutionPath);
         cancellationToken.ThrowIfCancellationRequested();
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.RepositoryPath));
         var loaded = GetAuthoritativeLoadRequest(request.WorkspaceId, repositoryRoot);

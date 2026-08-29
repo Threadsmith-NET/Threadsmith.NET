@@ -63,7 +63,7 @@ internal static class CorrectiveMessageFactory
         ArgumentNullException.ThrowIfNull(diagnostic);
         var reason = BoundSingleLine(diagnostic.SafeMessage, MaximumReasonCharacters);
         return reason
-            + " Expected propose_plan arguments: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
+            + " Expected propose_plan arguments: {schemaVersion:2, revision:int, summary:string, steps:[{stepId:guid-string, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}. Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
     }
 
     /// <summary>Creates a standalone developer correction for an empty assistant response.</summary>

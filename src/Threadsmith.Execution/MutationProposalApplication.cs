@@ -16,25 +16,99 @@ public sealed class MutationProposalApplication :
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schemaVersion", "planRevision", "planStepIds", "mutationSet"],
-          "properties": {
-            "schemaVersion": { "type": "integer", "const": 1 },
-            "planRevision": { "type": "integer", "minimum": 1 },
-            "planStepIds": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "anyOf": [
-                  { "type": "string", "format": "uuid" },
-                  {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["value"],
-                    "properties": { "value": { "type": "string", "format": "uuid" } }
-                  }
-                ]
+          "required": ["mutationSet"],
+          "$defs": {
+            "content": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "encoding", "newline"],
+              "properties": {
+                "text": { "type": "string" },
+                "encoding": { "type": "string", "enum": ["Utf8", "Utf8Bom"] },
+                "newline": { "type": "string", "enum": ["Lf", "CrLf"] },
+                "sha256": { "type": "string" }
               }
             },
+            "expectedIdentity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sha256", "byteLength"],
+              "properties": {
+                "sha256": { "type": "string" },
+                "byteLength": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "createFile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "relativePath", "content"],
+              "properties": {
+                "type": { "type": "string", "const": "CreateFile" },
+                "relativePath": { "type": "string" },
+                "content": { "$ref": "#/$defs/content" },
+                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
+                "projectFilePath": { "type": "string" }
+              }
+            },
+            "deleteFile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "relativePath", "expectedIdentity"],
+              "properties": {
+                "type": { "type": "string", "const": "DeleteFile" },
+                "relativePath": { "type": "string" },
+                "baselineSha256": { "type": "string" },
+                "expectedIdentity": { "$ref": "#/$defs/expectedIdentity" },
+                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
+                "projectFilePath": { "type": "string" }
+              }
+            },
+            "replaceText": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "relativePath", "startOffset", "length", "expectedText", "replacementText"],
+              "properties": {
+                "type": { "type": "string", "const": "ReplaceText" },
+                "relativePath": { "type": "string" },
+                "baselineSha256": { "type": "string" },
+                "startOffset": { "type": "integer", "minimum": 0 },
+                "length": { "type": "integer", "minimum": 0 },
+                "expectedText": { "type": "string" },
+                "replacementText": { "type": "string" },
+                "relatedSymbolId": { "type": "string" },
+                "projectFilePath": { "type": "string" }
+              }
+            },
+            "renameSymbol": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "relativePath", "relatedSymbolId", "replacementText"],
+              "properties": {
+                "type": { "type": "string", "const": "RenameSymbol" },
+                "relativePath": { "type": "string" },
+                "baselineSha256": { "type": "string" },
+                "relatedSymbolId": { "type": "string" },
+                "replacementText": { "type": "string" },
+                "projectFilePath": { "type": "string" }
+              }
+            },
+            "moveFile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "relativePath", "destinationRelativePath", "expectedIdentity"],
+              "properties": {
+                "type": { "type": "string", "const": "MoveFile" },
+                "relativePath": { "type": "string" },
+                "baselineSha256": { "type": "string" },
+                "expectedIdentity": { "$ref": "#/$defs/expectedIdentity" },
+                "destinationRelativePath": { "type": "string" },
+                "content": { "$ref": "#/$defs/content" },
+                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
+                "projectFilePath": { "type": "string" }
+              }
+            }
+          },
+          "properties": {
             "mutationSet": {
               "type": "object",
               "additionalProperties": false,
@@ -45,43 +119,13 @@ public sealed class MutationProposalApplication :
                   "minItems": 1,
                   "maxItems": 100,
                   "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["type", "relativePath"],
-                    "properties": {
-                      "type": { "type": "string", "enum": ["CreateFile", "DeleteFile", "ReplaceText", "RenameSymbol", "MoveFile"] },
-                      "relativePath": { "type": "string" },
-                      "baselineSha256": { "type": "string" },
-                      "expectedIdentity": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["sha256", "byteLength"],
-                        "properties": {
-                          "sha256": { "type": "string" },
-                          "byteLength": { "type": "integer", "minimum": 0 }
-                        }
-                      },
-                      "destinationRelativePath": { "type": "string" },
-                      "destinationExpectation": { "type": "string", "enum": ["Absent"] },
-                      "content": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["text", "encoding", "newline"],
-                        "properties": {
-                          "text": { "type": "string" },
-                          "encoding": { "type": "string", "enum": ["Utf8", "Utf8Bom"] },
-                          "newline": { "type": "string", "enum": ["Lf", "CrLf"] },
-                          "sha256": { "type": "string" }
-                        }
-                      },
-                      "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
-                      "projectFilePath": { "type": "string" },
-                      "startOffset": { "type": "integer", "minimum": 0 },
-                      "length": { "type": "integer", "minimum": 0 },
-                      "expectedText": { "type": "string" },
-                      "replacementText": { "type": "string" },
-                      "relatedSymbolId": { "type": "string" }
-                    }
+                    "oneOf": [
+                      { "$ref": "#/$defs/createFile" },
+                      { "$ref": "#/$defs/deleteFile" },
+                      { "$ref": "#/$defs/replaceText" },
+                      { "$ref": "#/$defs/renameSymbol" },
+                      { "$ref": "#/$defs/moveFile" }
+                    ]
                   }
                 },
                 "rationale": { "type": "string" },
@@ -101,12 +145,12 @@ public sealed class MutationProposalApplication :
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
     static MutationProposalApplication()
     {
         JsonOptions.Converters.Add(new JsonStringEnumConverter());
-        JsonOptions.Converters.Add(new StepIdJsonConverter());
     }
 
     private static readonly ModelToolDefinition ProposeMutationsTool =
@@ -115,7 +159,7 @@ public sealed class MutationProposalApplication :
             new ModelToolDefinition
             {
                 Name = ProposeMutationsToolName,
-                Description = "Submit one plan-scoped mutation proposal using the exact schema fields. Required envelope fields are schemaVersion, planRevision, planStepIds, and mutationSet. mutationSet requires rationale and mutations. Each mutation item requires type and relativePath; use baselineSha256 for baseline hashes. Do not use plan file-intent or legacy names kind, path, baselineHash, or per-item rationale/risk/validation fields. For C# symbol renames, prefer RenameSymbol with relatedSymbolId and replacementText set to the new identifier; optional MoveFile may rename the declaration file. ReplaceText requires exact expectedText; the host may correct an inaccurate offset only when that text has one match. The host validates the proposal and this call never writes files.",
+                Description = "Submit one plan-scoped mutation proposal. The host already owns the approved plan revision and step identities; provide only mutationSet plus optional expected outcomes. mutationSet requires rationale and mutations. Each mutation uses one operation-specific shape selected by type, so include only fields advertised for that operation. Use canonical names such as relativePath and, when advertised, baselineSha256; never use plan file-intent or legacy names kind, path, baselineHash, or per-item prose fields. For C# symbol renames, prefer RenameSymbol with relatedSymbolId and replacementText set to the new identifier; optional MoveFile may rename the declaration file. ReplaceText requires exact expectedText; the host may correct an inaccurate offset only when that text has one match. The host validates the proposal and this call never writes files.",
                 ArgumentsJsonSchema = ProposeMutationsArgumentsSchema,
                 PreferStrictArguments = true,
             },
@@ -461,7 +505,7 @@ public sealed class MutationProposalApplication :
                         throw CreateRepairableMutationFailure(
                             ModelCorrectionCategory.MutationProposal,
                             MalformedInvocationFailureKind.InvalidJsonArguments,
-                            $"The propose_mutations arguments did not match schema 1 at '{path}'.",
+                            $"The propose_mutations arguments did not match the operation-specific schema at '{path}'.",
                             exception);
                     }
 
@@ -522,7 +566,7 @@ public sealed class MutationProposalApplication :
 
         if (envelope is not null)
         {
-            ValidateEnvelope(envelope, command.ApprovedPlan);
+            ValidateEnvelope(envelope);
             var hostOwned = CreateHostOwnedMutationSet(
                 envelope.MutationSet,
                 command,
@@ -618,15 +662,10 @@ public sealed class MutationProposalApplication :
             command.ApprovedPlan.Steps,
             approvedPlanPathComparer,
             "approved plan");
-
-        if (envelope is not null)
-        {
-            ValidateMutationsWithinPlan(
-                proposed.Mutations,
-                command.ApprovedPlan.Steps.Where(step => envelope.PlanStepIds.Contains(step.StepId)),
-                approvedPlanPathComparer,
-                "claimed plan steps");
-        }
+        var planStepIds = ResolvePlanStepIds(
+            proposed.Mutations,
+            command.ApprovedPlan.Steps,
+            approvedPlanPathComparer);
 
         await AnalyzePreMutationAsync(
             command,
@@ -636,7 +675,7 @@ public sealed class MutationProposalApplication :
             cancellationToken);
 
         var staged = await _workspaces.StageAsync(proposed, cancellationToken);
-        return staged with { PlanStepIds = envelope?.PlanStepIds.ToArray() ?? [] };
+        return staged with { PlanStepIds = planStepIds };
     }
 
     private static void ValidateMutationsWithinPlan(
@@ -681,6 +720,22 @@ public sealed class MutationProposalApplication :
                 && PathsEqual(intent.Path, mutation.RelativePath, pathComparer),
             _ => false,
         };
+    }
+
+    private static IReadOnlyList<StepId> ResolvePlanStepIds(
+        IReadOnlyList<Mutation> mutations,
+        IReadOnlyList<ImplementationPlanStep> approvedSteps,
+        StringComparer pathComparer)
+    {
+        return mutations
+            .Select(mutation => approvedSteps
+                .Where(step => step.FileIntents.Any(intent => IntentCoversMutation(intent, mutation, pathComparer)))
+                .Select(step => step.StepId)
+                .ToArray())
+            .Where(matches => matches.Length == 1)
+            .Select(matches => matches[0])
+            .Distinct()
+            .ToArray();
     }
 
     private static bool PathsEqual(string? left, string? right, StringComparer pathComparer)
@@ -1405,24 +1460,7 @@ public sealed class MutationProposalApplication :
             WorkspaceId = command.WorkspaceId,
             BaselineCapturedAt = baseline.CapturedAt,
             BaselineRevision = baseline.GitRevision,
-            Mutations = proposal.Mutations.Select(change => new Mutation
-            {
-                MutationId = MutationId.New(),
-                Type = change.Type,
-                RelativePath = change.RelativePath,
-                BaselineSha256 = change.BaselineSha256,
-                ExpectedIdentity = change.ExpectedIdentity,
-                DestinationRelativePath = change.DestinationRelativePath,
-                DestinationExpectation = change.DestinationExpectation ?? DestinationExpectation.Absent,
-                Content = change.Content,
-                LifecycleRisk = change.LifecycleRisk,
-                ProjectFilePath = change.ProjectFilePath,
-                StartOffset = change.StartOffset ?? 0,
-                Length = change.Length ?? 0,
-                ExpectedText = change.ExpectedText,
-                ReplacementText = GetReplacementText(change),
-                RelatedSymbolId = change.RelatedSymbolId,
-            }).ToArray(),
+            Mutations = proposal.Mutations.Select(CreateHostOwnedMutation).ToArray(),
             Rationale = proposal.Rationale,
             AffectedProjects = NullAsEmpty(proposal.AffectedProjects),
             ExpectedDiagnosticsResolved = NullAsEmpty(proposal.ExpectedDiagnosticsResolved),
@@ -1432,14 +1470,71 @@ public sealed class MutationProposalApplication :
         };
     }
 
-    private static string GetReplacementText(MutationProposalChange change)
+    private static Mutation CreateHostOwnedMutation(MutationProposalChange change)
     {
         ArgumentNullException.ThrowIfNull(change);
-        return change.Type == MutationType.CreateFile
-            && string.IsNullOrEmpty(change.ReplacementText)
-            && change.Content is { } content
-                ? content.Text
-                : change.ReplacementText ?? string.Empty;
+        return change switch
+        {
+            CreateFileMutationProposal create => new Mutation
+            {
+                MutationId = MutationId.New(),
+                Type = MutationType.CreateFile,
+                RelativePath = create.RelativePath,
+                Content = create.Content,
+                LifecycleRisk = create.LifecycleRisk,
+                ProjectFilePath = create.ProjectFilePath,
+                ReplacementText = create.Content?.Text ?? string.Empty,
+            },
+            DeleteFileMutationProposal delete => new Mutation
+            {
+                MutationId = MutationId.New(),
+                Type = MutationType.DeleteFile,
+                RelativePath = delete.RelativePath,
+                BaselineSha256 = delete.BaselineSha256,
+                ExpectedIdentity = delete.ExpectedIdentity,
+                LifecycleRisk = delete.LifecycleRisk,
+                ProjectFilePath = delete.ProjectFilePath,
+            },
+            ReplaceTextMutationProposal replace => new Mutation
+            {
+                MutationId = MutationId.New(),
+                Type = MutationType.ReplaceText,
+                RelativePath = replace.RelativePath,
+                BaselineSha256 = replace.BaselineSha256,
+                ProjectFilePath = replace.ProjectFilePath,
+                StartOffset = replace.StartOffset,
+                Length = replace.Length,
+                ExpectedText = replace.ExpectedText,
+                ReplacementText = replace.ReplacementText,
+                RelatedSymbolId = replace.RelatedSymbolId,
+            },
+            RenameSymbolMutationProposal rename => new Mutation
+            {
+                MutationId = MutationId.New(),
+                Type = MutationType.RenameSymbol,
+                RelativePath = rename.RelativePath,
+                BaselineSha256 = rename.BaselineSha256,
+                ProjectFilePath = rename.ProjectFilePath,
+                ReplacementText = rename.ReplacementText,
+                RelatedSymbolId = rename.RelatedSymbolId,
+            },
+            MoveFileMutationProposal move => new Mutation
+            {
+                MutationId = MutationId.New(),
+                Type = MutationType.MoveFile,
+                RelativePath = move.RelativePath,
+                BaselineSha256 = move.BaselineSha256,
+                ExpectedIdentity = move.ExpectedIdentity,
+                DestinationRelativePath = move.DestinationRelativePath,
+                Content = move.Content,
+                LifecycleRisk = move.LifecycleRisk,
+                ProjectFilePath = move.ProjectFilePath,
+            },
+            _ => throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                "The mutation proposal contains an unsupported operation."),
+        };
     }
 
     private static IReadOnlyList<string> NullAsEmpty(IReadOnlyList<string>? values)
@@ -1447,29 +1542,42 @@ public sealed class MutationProposalApplication :
         return values ?? [];
     }
 
-    private static void ValidateEnvelope(
-        MutationProposalEnvelope envelope,
-        ImplementationPlan approvedPlan)
+    private static void ValidateEnvelope(MutationProposalEnvelope envelope)
     {
-        if (envelope.SchemaVersion != 1
-            || envelope.PlanRevision != approvedPlan.Revision
-            || envelope.PlanStepIds.Count == 0)
+        if (envelope.MutationSet is null
+            || envelope.MutationSet.Mutations is null
+            || envelope.MutationSet.Mutations.Count is < 1 or > 100
+            || string.IsNullOrWhiteSpace(envelope.MutationSet.Rationale))
         {
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.MutationSchemaMismatch,
-                "The mutation proposal schema, plan revision, or plan-step correlation is invalid.");
+                "The mutation proposal requires a rationale and 1..100 operation-specific mutations.");
         }
 
-        HashSet<StepId> approvedStepIds = [.. approvedPlan.Steps.Select(step => step.StepId)];
-        var unknownStep = envelope.PlanStepIds
-            .FirstOrDefault(stepId => !approvedStepIds.Contains(stepId));
-        if (unknownStep != default)
+        var invalidChange = envelope.MutationSet.Mutations.FirstOrDefault(change => change switch
+        {
+            CreateFileMutationProposal create => string.IsNullOrWhiteSpace(create.RelativePath)
+                || create.Content is null,
+            DeleteFileMutationProposal delete => string.IsNullOrWhiteSpace(delete.RelativePath)
+                || delete.ExpectedIdentity is null,
+            ReplaceTextMutationProposal replace => string.IsNullOrWhiteSpace(replace.RelativePath)
+                || replace.ExpectedText is null
+                || replace.ReplacementText is null,
+            RenameSymbolMutationProposal rename => string.IsNullOrWhiteSpace(rename.RelativePath)
+                || string.IsNullOrWhiteSpace(rename.RelatedSymbolId)
+                || string.IsNullOrWhiteSpace(rename.ReplacementText),
+            MoveFileMutationProposal move => string.IsNullOrWhiteSpace(move.RelativePath)
+                || string.IsNullOrWhiteSpace(move.DestinationRelativePath)
+                || move.ExpectedIdentity is null,
+            _ => true,
+        });
+        if (invalidChange is not null)
         {
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                $"The mutation proposal references unknown plan step '{unknownStep.Value}'.");
+                "A mutation operation omitted a required operation-specific field.");
         }
 
         if (NullAsEmpty(envelope.ExpectedOutcomes).Any(string.IsNullOrWhiteSpace)

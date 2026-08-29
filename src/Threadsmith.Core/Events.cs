@@ -17,6 +17,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(PlanApprovalPolicyChanged), "planApprovalPolicyChanged")]
 [JsonDerivedType(typeof(PlanRevisionRequested), "planRevisionRequested")]
 [JsonDerivedType(typeof(ContextAssembled), "contextAssembled")]
+[JsonDerivedType(typeof(ModelFallbackSelected), "modelFallbackSelected")]
 [JsonDerivedType(typeof(ActiveTurnCompactionStarted), "activeTurnCompactionStarted")]
 [JsonDerivedType(typeof(ActiveTurnCompactionCompleted), "activeTurnCompactionCompleted")]
 [JsonDerivedType(typeof(ApprovalRequested), "approvalRequested")]
@@ -184,6 +185,18 @@ public sealed record ContextAssembled(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
     ContextInspectionProjection Inspection) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A per-request fallback became the active model selection before provider dispatch.</summary>
+public sealed record ModelFallbackSelected(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId RequestedProfileId,
+    ModelProfileId SelectedProfileId,
+    string SelectedProviderId,
+    string SelectedModelName,
+    bool Persisted,
+    string? PersistenceDiagnostic = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>An active-turn candidate operation began under host-owned pressure policy.</summary>
 public sealed record ActiveTurnCompactionStarted(
@@ -765,6 +778,7 @@ public static class DomainEventJson
             ["planApprovalPolicyChanged"] = typeof(PlanApprovalPolicyChanged),
             ["planRevisionRequested"] = typeof(PlanRevisionRequested),
             ["contextAssembled"] = typeof(ContextAssembled),
+            ["modelFallbackSelected"] = typeof(ModelFallbackSelected),
             ["activeTurnCompactionStarted"] = typeof(ActiveTurnCompactionStarted),
             ["activeTurnCompactionCompleted"] = typeof(ActiveTurnCompactionCompleted),
             ["approvalRequested"] = typeof(ApprovalRequested),

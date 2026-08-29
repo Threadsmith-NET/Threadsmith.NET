@@ -294,10 +294,6 @@ public sealed class GeneratedCodeTool : AdvancedSemanticTool<GeneratedCodeQuery,
     /// <inheritdoc />
     protected override void ValidateInput(GeneratedCodeQuery input)
     {
-        if (input.MaximumDocuments is < 1 or > 500 || input.MaximumContentCharacters is < 1 or > 65_536)
-        {
-            throw new ToolArgumentValidationException("generated document/content bounds are outside host limits.");
-        }
     }
 
     /// <inheritdoc />
@@ -518,6 +514,8 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
                 AdvancedSemanticMarkdownRenderer.Render(impactInput, impactResult),
             (CSharpPatternSearchInput patternInput, CSharpPatternSearchResult patternResult) =>
                 AdvancedSemanticMarkdownRenderer.Render(patternInput, patternResult),
+            (GeneratedCodeQuery generatedInput, GeneratedCodeResult generatedResult) =>
+                AdvancedSemanticMarkdownRenderer.Render(generatedInput, generatedResult),
             _ => null,
         };
     }
@@ -542,6 +540,8 @@ internal static class AdvancedSemanticMarkdownRenderer
     private const int MaximumCallSymbols = 32;
     private const int MaximumImpactItems = 32;
     private const int MaximumPatternMatches = 40;
+    private const int MaximumGeneratedDocuments = 12;
+    private const int MaximumGeneratedContentCharacters = 4_096;
     private const int MaximumOmissions = 8;
 
     /// <summary>Renders one compact call-hierarchy result.</summary>
@@ -636,6 +636,84 @@ internal static class AdvancedSemanticMarkdownRenderer
         AppendHiddenCount(builder, result.Matches.Count, MaximumPatternMatches, "match");
         AppendOmissions(builder, result.Omissions);
         return builder.ToString().TrimEnd();
+    }
+
+    /// <summary>Renders one compact generated-code result.</summary>
+    internal static string Render(GeneratedCodeQuery input, GeneratedCodeResult result)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(result);
+        var builder = new StringBuilder();
+        var scope = string.IsNullOrWhiteSpace(input.Path) ? "." : input.Path;
+        builder.AppendLine($"**Generated code:** {FormatCodeSpan(scope)}");
+        builder.AppendLine($"Found {result.Documents.Count} document{Pluralize(result.Documents.Count)}.");
+        if (result.Documents.Count > 0)
+        {
+            builder.AppendLine();
+            foreach (var document in result.Documents.Take(MaximumGeneratedDocuments))
+            {
+                builder.Append($"- {FormatCodeSpan(document.FilePath)} ({document.Origin}, {FormatCodeSpan(document.ProjectName)})");
+                if (!string.IsNullOrWhiteSpace(document.OriginName))
+                {
+                    builder.Append($" — {BoundInline(document.OriginName, 160)}");
+                }
+
+                builder.AppendLine();
+                if (input.IncludeContent && document.Content is not null)
+                {
+                    var projectedContent = document.Content.Length <= MaximumGeneratedContentCharacters
+                        ? document.Content
+                        : document.Content[..MaximumGeneratedContentCharacters];
+                    AppendCodeBlock(builder, projectedContent);
+                    if (document.ContentTruncated)
+                    {
+                        builder.AppendLine("  Content truncated by the host.");
+                    }
+
+                    if (projectedContent.Length < document.Content.Length)
+                    {
+                        builder.AppendLine("  Content shortened by the model projection.");
+                    }
+                }
+            }
+
+            AppendHiddenCount(builder, result.Documents.Count, MaximumGeneratedDocuments, "generated document");
+        }
+
+        AppendOmissions(builder, result.Omissions);
+        return builder.ToString().TrimEnd();
+    }
+
+    private static void AppendCodeBlock(StringBuilder builder, string content)
+    {
+        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var maximumRun = 0;
+        var currentRun = 0;
+        foreach (var character in normalized)
+        {
+            if (character == '`')
+            {
+                currentRun++;
+                maximumRun = Math.Max(maximumRun, currentRun);
+            }
+            else
+            {
+                currentRun = 0;
+            }
+        }
+
+        var delimiter = new string('`', Math.Max(3, maximumRun + 1));
+        builder.Append("  ");
+        builder.Append(delimiter);
+        builder.AppendLine("csharp");
+        foreach (var line in normalized.Split('\n'))
+        {
+            builder.Append("  ");
+            builder.AppendLine(line);
+        }
+
+        builder.Append("  ");
+        builder.AppendLine(delimiter);
     }
 
     private static string FormatCallEdge(

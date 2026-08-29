@@ -396,12 +396,6 @@ public sealed record GeneratedCodeQuery
 
     /// <summary>Whether bounded source content is included.</summary>
     public bool IncludeContent { get; init; }
-
-    /// <summary>Maximum returned documents.</summary>
-    public int MaximumDocuments { get; init; } = 100;
-
-    /// <summary>Maximum content characters per returned document.</summary>
-    public int MaximumContentCharacters { get; init; } = 16_384;
 }
 
 /// <summary>Host-owned metadata and optional bounded content for one generated document.</summary>

@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -264,9 +265,9 @@ public static class Milestone4Tests
         Assert.Contains("expected 2", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Null file-intent paths are malformed plan output, not unhandled runtime exceptions.</summary>
+    /// <summary>The former outer model-output wrapper is not accepted by the flat tool contract.</summary>
     [Fact]
-    public static void ModelOutputValidator_NullPlanIntentPath_IsRejectedAsMalformedOutput()
+    public static void ModelOutputValidator_LegacyWrappedPlan_IsRejected()
     {
         const string json = """
             {
@@ -274,22 +275,75 @@ public static class Milestone4Tests
               "plan": {
                 "schemaVersion": 2,
                 "revision": 1,
-                "summary": "Invalid path plan.",
-                "steps": [
-                  {
-                    "stepId": { "value": "11111111-1111-1111-1111-111111111111" },
-                    "title": "Invalid path",
-                    "description": "Declare a null path.",
-                    "fileIntents": [
-                      { "kind": "Modify", "path": null }
-                    ],
-                    "expectedOutcome": "Rejected safely.",
-                    "validation": []
-                  }
-                ],
+                "summary": "Legacy wrapper",
+                "steps": [],
                 "risks": [],
                 "outstandingQuestions": []
               }
+            }
+            """;
+
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
+            ModelOutputValidator.ParsePlan(json));
+
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+    }
+
+    /// <summary>Runtime parsing rejects enum and identifier shapes outside the advertised JSON schema.</summary>
+    [Theory]
+    [InlineData("0", "11111111-1111-1111-1111-111111111111")]
+    [InlineData("\"Modify\"", "{11111111-1111-1111-1111-111111111111}")]
+    public static void ModelOutputValidator_NonSchemaScalarShapes_AreRejected(
+        string kindJson,
+        string stepId)
+    {
+        var json = $$"""
+            {
+              "schemaVersion": 2,
+              "revision": 1,
+              "summary": "Invalid scalar shape",
+              "steps": [{
+                "stepId": "{{stepId}}",
+                "title": "Invalid scalar",
+                "description": "Use only schema-advertised scalars.",
+                "fileIntents": [{ "kind": {{kindJson}}, "path": "src/Foo.cs" }],
+                "expectedOutcome": "Rejected",
+                "validation": []
+              }],
+              "risks": [],
+              "outstandingQuestions": []
+            }
+            """;
+
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
+            ModelOutputValidator.ParsePlan(json));
+
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+    }
+
+    /// <summary>Null file-intent paths are malformed plan output, not unhandled runtime exceptions.</summary>
+    [Fact]
+    public static void ModelOutputValidator_NullPlanIntentPath_IsRejectedAsMalformedOutput()
+    {
+        const string json = """
+            {
+              "schemaVersion": 2,
+              "revision": 1,
+              "summary": "Invalid path plan.",
+              "steps": [
+                {
+                  "stepId": "11111111-1111-1111-1111-111111111111",
+                  "title": "Invalid path",
+                  "description": "Declare a null path.",
+                  "fileIntents": [
+                    { "kind": "Modify", "path": null }
+                  ],
+                  "expectedOutcome": "Rejected safely.",
+                  "validation": []
+                }
+              ],
+              "risks": [],
+              "outstandingQuestions": []
             }
             """;
 
@@ -318,7 +372,7 @@ public static class Milestone4Tests
             : $$"""
               [
                 {
-                  "stepId": { "value": "11111111-1111-1111-1111-111111111111" },
+                  "stepId": "11111111-1111-1111-1111-111111111111",
                   "title": "Valid step",
                   "description": "A valid step with one file intent.",
                   "fileIntents": {{fileIntents}},
@@ -331,15 +385,12 @@ public static class Milestone4Tests
         var outstandingQuestions = nullProperty == "outstandingQuestions" ? "null" : "[]";
         var json = $$"""
             {
-              "schemaVersion": 1,
-              "plan": {
-                "schemaVersion": 2,
-                "revision": 1,
-                "summary": "Null collection plan.",
-                "steps": {{steps}},
-                "risks": {{risks}},
-                "outstandingQuestions": {{outstandingQuestions}}
-              }
+              "schemaVersion": 2,
+              "revision": 1,
+              "summary": "Null collection plan.",
+              "steps": {{steps}},
+              "risks": {{risks}},
+              "outstandingQuestions": {{outstandingQuestions}}
             }
             """;
 
@@ -388,7 +439,7 @@ public static class Milestone4Tests
             ? new PlanModelOutput(implementationPlan)
             : new ToolRequestModelOutput(
                 "propose_plan",
-                JsonSerializer.Serialize(new PlanModelOutput(implementationPlan)));
+                SerializePlanProposal(implementationPlan));
         var plan = new ModelChunk { Output = planOutput };
         var ordinaryTool = new ModelChunk
         {
@@ -418,7 +469,7 @@ public static class Milestone4Tests
     public static async Task SessionApplication_DuplicatePlanProposals_FailClosed()
     {
         await using var events = new DomainEventStream();
-        var arguments = JsonSerializer.Serialize(new PlanModelOutput(CreatePlan("exclusive plan", 1)));
+        var arguments = SerializePlanProposal(CreatePlan("exclusive plan", 1));
         var application = new SessionApplication(
             events,
             new ChunkSequenceModelProvider(
@@ -574,6 +625,12 @@ public static class Milestone4Tests
         var modelRequest = Assert.Single(model.Requests);
         Assert.Equal("propose_plan", modelRequest.Tools.Last().Name);
         Assert.True(modelRequest.Tools.Last().PreferStrictArguments);
+        using var schema = JsonDocument.Parse(modelRequest.Tools.Last().ArgumentsJsonSchema);
+        var properties = schema.RootElement.GetProperty("properties");
+        Assert.False(properties.TryGetProperty("plan", out _));
+        Assert.Equal(2, properties.GetProperty("schemaVersion").GetProperty("const").GetInt32());
+        var stepSchema = properties.GetProperty("steps").GetProperty("items");
+        Assert.Equal("string", stepSchema.GetProperty("properties").GetProperty("stepId").GetProperty("type").GetString());
         Assert.Equal(true, modelRequest.AllowMultipleToolCalls);
         Assert.True(await dispatcher.DispatchAsync(
             new RejectPlanCommand(sessionId, runId, "test complete")));
@@ -3554,6 +3611,103 @@ public static class Milestone4Tests
         Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
+    /// <summary>A policy fallback becomes the shared active selection before provider dispatch.</summary>
+    [Fact]
+    public static async Task ModelResolution_FallbackSelectsActiveModelAndPublishesNotice()
+    {
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            return Task.CompletedTask;
+        });
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var selectedBase = CreateProfile("selected", structuredOutput: true, permitsSensitiveData: true);
+        var selected = selectedBase with
+        {
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+                StructuredOutput = true,
+            },
+            IntendedWorkloadClasses = [WorkloadClass.Review],
+        };
+        var fallbackBase = CreateProfile("fallback", structuredOutput: true, permitsSensitiveData: true);
+        var fallback = fallbackBase with
+        {
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+                StructuredOutput = true,
+            },
+            IntendedWorkloadClasses = [WorkloadClass.General, WorkloadClass.Planning],
+        };
+        var resolver = new ModelResolver(
+            new ConfiguredModelCatalog([selected, fallback]),
+            new InMemoryModelPreferenceSnapshotProvider());
+        var assembler = CreateAssembler(events, evidence, modelResolver: resolver);
+        var preferences = new SessionModelPreferences(selected.Id, ReasoningLevel.None);
+        var model = new QueueModelProvider([CreatePlan("fallback", 1)]);
+        var selectionCalls = 0;
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            contextAssembler: assembler,
+            evidenceStore: evidence,
+            defaultModelProfileId: selected.Id,
+            sessionPreferences: preferences,
+            selectActiveModel: (profileId, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                selectionCalls++;
+                Assert.Equal(fallback.Id, profileId);
+                preferences.SetReasoning(profileId, ReasoningLevel.None);
+                return Task.FromResult(new ActiveModelSelectionResult
+                {
+                    Selection = new ActiveModelSelectionSnapshot
+                    {
+                        ProviderId = "fallback-provider",
+                        Profile = fallback,
+                        ReasoningLevel = ReasoningLevel.None,
+                        Source = ActiveModelSelectionSource.Explicit,
+                        Generation = preferences.Generation,
+                    },
+                    Changed = true,
+                    ReasoningPreserved = true,
+                    Persisted = true,
+                });
+            });
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("fallback selection"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (model.Requests.Count == 0 && !observed.OfType<RunCompleted>().Any())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+
+        Assert.True(
+            model.Requests.Count > 0,
+            string.Join(Environment.NewLine, observed.Select(domainEvent => domainEvent.ToString())));
+        var dispatched = Assert.Single(model.Requests);
+        var fallbackEvent = Assert.Single(observed.OfType<ModelFallbackSelected>());
+        Assert.Equal(1, selectionCalls);
+        Assert.Equal(selected.Id, fallbackEvent.RequestedProfileId);
+        Assert.Equal(fallback.Id, fallbackEvent.SelectedProfileId);
+        Assert.Equal(fallback.Id, preferences.CurrentProfileId);
+        Assert.Equal(fallback.Id, dispatched.ResolvedProfileId);
+        Assert.Equal(fallback.Id, assembler.GetInspection(runId)?.ModelProfileId);
+        Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+    }
+
     /// <summary>Repository-scoped plan hooks receive the active repository identity.</summary>
     [Fact]
     public static async Task PlanHooks_ReceiveActiveRepositoryIdentity()
@@ -3991,6 +4145,38 @@ public static class Milestone4Tests
         };
     }
 
+    private static string SerializePlanProposal(ImplementationPlan plan)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = plan.SchemaVersion,
+                plan.Revision,
+                plan.Summary,
+                steps = plan.Steps.Select(step => new
+                {
+                    stepId = step.StepId.Value.ToString("D"),
+                    step.Title,
+                    step.Description,
+                    fileIntents = step.FileIntents.Select(intent => new
+                    {
+                        kind = intent.Kind.ToString(),
+                        intent.Path,
+                        intent.DestinationPath,
+                    }),
+                    step.ExpectedOutcome,
+                    step.Validation,
+                }),
+                plan.Risks,
+                plan.OutstandingQuestions,
+            },
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            });
+    }
+
     private static WorkspaceBaseline CreateBaseline(IReadOnlyList<string> files)
     {
         return CreateBaseline(files, Environment.CurrentDirectory);
@@ -4265,7 +4451,7 @@ public static class Milestone4Tests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new PlanModelOutput(_plan))),
+                    SerializePlanProposal(_plan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -4314,7 +4500,7 @@ public static class Milestone4Tests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new PlanModelOutput(_plan))),
+                    SerializePlanProposal(_plan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -4352,7 +4538,7 @@ public static class Milestone4Tests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new PlanModelOutput(_initialPlan))),
+                    SerializePlanProposal(_initialPlan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -4647,7 +4833,7 @@ public static class Milestone4Tests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new { schemaVersion = 1, plan = _plan })),
+                    SerializePlanProposal(_plan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -4688,7 +4874,7 @@ public static class Milestone4Tests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new { schemaVersion = 1, plan = _plan })),
+                    SerializePlanProposal(_plan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }

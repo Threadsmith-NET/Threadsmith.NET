@@ -1,10 +1,8 @@
 namespace Threadsmith.NativeTools.Tests;
 
-using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.DotNet;

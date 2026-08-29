@@ -15,6 +15,13 @@ public static class ModelOutputValidator
         Converters = { new JsonStringEnumConverter() },
     };
 
+    private static readonly JsonSerializerOptions _planJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false) },
+    };
+
     /// <summary>Validates the supported schema version and type-specific invariants.</summary>
     public static void Validate(ModelOutput output, int supportedSchemaVersion = 1)
     {
@@ -54,8 +61,9 @@ public static class ModelOutputValidator
         PlanModelOutput output;
         try
         {
-            output = JsonSerializer.Deserialize<PlanModelOutput>(json, _jsonOptions)
-                ?? throw new JsonException("The structured plan output was empty.");
+            var proposal = JsonSerializer.Deserialize<PlanProposalInput>(json, _planJsonOptions)
+                ?? throw new JsonException("The structured plan proposal was empty.");
+            output = CreatePlanOutput(proposal);
         }
         catch (JsonException exception)
         {
@@ -201,6 +209,50 @@ public static class ModelOutputValidator
                 exception,
                 exception);
         }
+    }
+
+    private static PlanModelOutput CreatePlanOutput(PlanProposalInput proposal)
+    {
+        if (proposal.Steps is null
+            || proposal.Risks is null
+            || proposal.OutstandingQuestions is null)
+        {
+            throw new JsonException("Plan collections cannot be null.");
+        }
+
+        var steps = new List<ImplementationPlanStep>(proposal.Steps.Count);
+        foreach (var step in proposal.Steps)
+        {
+            if (step is null || step.FileIntents is null || step.Validation is null)
+            {
+                throw new JsonException("Plan collections cannot be null.");
+            }
+
+            if (!Guid.TryParseExact(step.StepId, "D", out var stepId))
+            {
+                throw new JsonException("Plan step ids must be UUID strings.");
+            }
+
+            steps.Add(new ImplementationPlanStep
+            {
+                StepId = new StepId(stepId),
+                Title = step.Title,
+                Description = step.Description,
+                FileIntents = step.FileIntents,
+                ExpectedOutcome = step.ExpectedOutcome,
+                Validation = step.Validation,
+            });
+        }
+
+        return new PlanModelOutput(new ImplementationPlan
+        {
+            SchemaVersion = proposal.SchemaVersion,
+            Revision = proposal.Revision,
+            Summary = proposal.Summary,
+            Steps = steps,
+            Risks = proposal.Risks,
+            OutstandingQuestions = proposal.OutstandingQuestions,
+        });
     }
 
     private static MalformedInvocationException CreateInvocationException(
@@ -490,6 +542,22 @@ public static class ModelOutputValidator
                 "Mutation replacement content exceeds the 4 MiB proposal limit.");
         }
     }
+
+    private sealed record PlanProposalInput(
+        int SchemaVersion,
+        int Revision,
+        string Summary,
+        IReadOnlyList<PlanProposalStepInput?>? Steps,
+        IReadOnlyList<string>? Risks,
+        IReadOnlyList<string>? OutstandingQuestions);
+
+    private sealed record PlanProposalStepInput(
+        string StepId,
+        string Title,
+        string Description,
+        IReadOnlyList<PlanFileIntent>? FileIntents,
+        string ExpectedOutcome,
+        IReadOnlyList<string>? Validation);
 
     private static bool IsSha256(string value)
     {

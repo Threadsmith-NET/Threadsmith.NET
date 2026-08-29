@@ -119,6 +119,28 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
+    /// <summary>Schema-one snapshots are invalidated so their former prohibited sensitivity policy cannot survive upgrade.</summary>
+    [Fact]
+    public async Task CatalogCache_LegacySchema_ReturnsNull()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-legacy-cache-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "models.json");
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(
+            path,
+            "{\"SchemaVersion\":1,\"Models\":[{\"Id\":\"legacy\",\"Name\":\"Legacy\",\"ModelId\":\"legacy\",\"Enabled\":true,\"ContextWindow\":128000,\"MaximumOutputTokens\":128000,\"SensitiveDataPolicy\":0}]}",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            Assert.Null(await new OpenAiCodexCatalogCache(path).LoadAsync(TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>Browser OAuth uses protected OpenAI authorities, PKCE, state, and loopback only.</summary>
     [Fact]
     public void BrowserChallenge_IsProtectedAndRejectsNonLoopbackRedirect()
@@ -261,6 +283,7 @@ public sealed class Plan50OpenAiCodexTests
             RunId = RunId.New(),
             Input = "hello",
             ReasoningLevel = ReasoningLevel.High,
+            MaximumOutputTokens = 4096,
             AllowMultipleToolCalls = true,
             Tools =
             [
@@ -293,6 +316,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("\"strict\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"parallel_tool_calls\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"additionalProperties\":false", requestBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"max_output_tokens\"", requestBody, StringComparison.Ordinal);
 
         var ordinaryTool = Assert.Single(streamRequest.Tools) with { PreferStrictArguments = false };
         _ = await provider.StreamAsync(
@@ -319,6 +343,93 @@ public sealed class Plan50OpenAiCodexTests
             "\"parallel_tool_calls\"",
             handler.RequestBody ?? string.Empty,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>One Codex response can return multiple tool calls while the request keeps parallel execution enabled.</summary>
+    [Fact]
+    public async Task Provider_BatchedToolCalls_PreserveModelOrderAndParallelAllowance()
+    {
+        const string stream = """
+            data: {"type":"response.output_item.done","item":{"type":"function_call","name":"read_first","arguments":"{\"path\":\"a.cs\"}"}}
+
+            data: {"type":"response.output_item.done","item":{"type":"function_call","name":"read_second","arguments":"{\"path\":\"b.cs\"}"}}
+
+            data: {"type":"response.completed","response":{}}
+
+            data: [DONE]
+
+            """;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        var request = CreateStreamRequest() with
+        {
+            AllowMultipleToolCalls = true,
+            Tools =
+            [
+                CreateReadTool("read_first"),
+                CreateReadTool("read_second"),
+            ],
+        };
+
+        var chunks = await provider.StreamAsync(
+            request,
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        var calls = chunks
+            .Select(chunk => chunk.Output)
+            .OfType<ToolRequestModelOutput>()
+            .ToArray();
+        Assert.Equal(["read_first", "read_second"], calls.Select(call => call.ToolName));
+        Assert.Equal(["{\"path\":\"a.cs\"}", "{\"path\":\"b.cs\"}"], calls.Select(call => call.ArgumentsJson));
+        using var document = JsonDocument.Parse(handler.RequestBody ?? string.Empty);
+        Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
+        Assert.Equal(2, document.RootElement.GetProperty("tools").GetArrayLength());
+    }
+
+    /// <summary>Codex JSON rejection details expose only safe structured identifiers.</summary>
+    [Fact]
+    public async Task Provider_BadRequest_PreservesStructuredErrorDetail()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(
+                "{\"error\":{\"code\":\"invalid_request\",\"param\":\"max_output_tokens\",\"message\":\"secret repository text\"}}",
+                Encoding.UTF8,
+                "application/json"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(
+                CreateStreamRequest(),
+                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("HTTP 400", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Code: invalid_request.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Parameter: max_output_tokens.", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>The unsupported wire parameter is replaced by conservative streamed-output enforcement.</summary>
+    [Fact]
+    public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
+    {
+        const string stream = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"12345\"}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(
+                CreateStreamRequest() with { MaximumOutputTokens = 4 },
+                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("output ceiling of 4 tokens", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>
@@ -408,20 +519,20 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 
-    /// <summary>Sensitive content prohibited by the profile never reaches the Codex endpoint.</summary>
+    /// <summary>Sensitive repository content reaches Codex when the discovered profile explicitly allows it.</summary>
     [Fact]
-    public async Task Provider_ProhibitedSensitiveRequest_IsRejectedBeforeDispatch()
+    public async Task Provider_AllowedSensitiveRequest_ReachesCodexEndpoint()
     {
         var handler = new RecordingHandler(_ => StreamingResponse());
         var provider = await CreateProviderAsync(handler, "token");
         var request = CreateStreamRequest() with { ContainsSensitiveData = true };
 
-        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
-            await provider.StreamAsync(request, TestContext.Current.CancellationToken)
-                .ToListAsync(TestContext.Current.CancellationToken));
+        var chunks = await provider.StreamAsync(
+            request,
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains("prohibits sensitive request content", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(0, handler.RequestCount);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 
     private static HttpResponseMessage JsonResponse(string value)
@@ -475,6 +586,16 @@ public sealed class Plan50OpenAiCodexTests
             RunId = RunId.New(),
             Input = "hello",
             ReasoningLevel = ReasoningLevel.Medium,
+        };
+    }
+
+    private static ModelToolDefinition CreateReadTool(string name)
+    {
+        return new ModelToolDefinition
+        {
+            Name = name,
+            Description = "Read one file.",
+            ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
         };
     }
 

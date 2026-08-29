@@ -637,7 +637,7 @@ public sealed class Plan43AdvancedSemanticToolTests
 
         var result = await fixture.Service.QueryGeneratedCodeAsync(
             fixture.WorkspaceId,
-            new GeneratedCodeQuery { IncludeContent = true, MaximumContentCharacters = 20 },
+            new GeneratedCodeQuery { IncludeContent = true },
             TestContext.Current.CancellationToken);
 
         var generated = Assert.Single(
@@ -645,7 +645,8 @@ public sealed class Plan43AdvancedSemanticToolTests
             document => document.Name == "GeneratedThing.g.cs");
         Assert.Equal(GeneratedCodeOrigin.FileConvention, generated.Origin);
         Assert.True(generated.ContentTruncated);
-        Assert.Equal(20, generated.Content?.Length);
+        Assert.Equal(16_384, generated.Content?.Length);
+        Assert.Contains("generated content", generated.Content, StringComparison.Ordinal);
 
         var projectScoped = await fixture.Service.QueryGeneratedCodeAsync(
             fixture.WorkspaceId,
@@ -703,6 +704,11 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.False(execution.Value.IsComplete);
             Assert.True(execution.IsTruncated);
             Assert.Contains(execution.Value.Omissions, omission => omission.Contains("path policy", StringComparison.Ordinal));
+            Assert.Contains("Allowed.g.cs", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains("allowed", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("Token.g.cs", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("workspaceGeneration", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -733,6 +739,8 @@ public sealed class Plan43AdvancedSemanticToolTests
         Assert.Contains("depth", tools[0].Definition.InputSchema.JsonSchema);
         Assert.DoesNotContain("maximumDepth", tools[0].Definition.InputSchema.JsonSchema);
         Assert.Contains("kind", tools[2].Definition.InputSchema.JsonSchema);
+        Assert.DoesNotContain("maximumDocuments", tools[3].Definition.InputSchema.JsonSchema);
+        Assert.DoesNotContain("maximumContentCharacters", tools[3].Definition.InputSchema.JsonSchema);
 
         await using var fixture = await AdvancedSemanticFixture.CreateAsync();
         using var cancellation = new CancellationTokenSource();
@@ -880,7 +888,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             Write(repositoryPath, "src/Library/GeneratedThing.g.cs", """
                 namespace Example;
                 public sealed class GeneratedThing { public string Value => "generated content"; }
-                """);
+                """ + new string(' ', 17_000));
             Write(repositoryPath, "tests/Library.Tests/Library.Tests.csproj", """
                 <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="../../src/Library/Library.csproj" /></ItemGroup></Project>
                 """);

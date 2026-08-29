@@ -141,6 +141,9 @@ internal static class TuiEventSegments
             case MutationApplied:
                 AppendLifecycleBlock(segments, text, TuiTextRole.Success);
                 return;
+            case ModelFallbackSelected:
+                Add(segments, text, TuiTextRole.Warning);
+                return;
             case TaskIntentRecorded:
                 Add(segments, text, TuiTextRole.UserPrompt);
                 return;

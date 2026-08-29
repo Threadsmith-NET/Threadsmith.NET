@@ -2,6 +2,7 @@ namespace Threadsmith.ModelTooling.Tests;
 
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Tools;
@@ -160,7 +161,7 @@ public sealed class WebFetchTests
             .Any(definition => definition.Id == "web_fetch");
         var context = CreateContext(other);
         var exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
-            new WebFetchRequest { SearchResultId = reference },
+            new WebFetchRequest { Reference = reference },
             context));
 
         // Assert
@@ -191,7 +192,7 @@ public sealed class WebFetchTests
             "test",
             "query-id",
             1);
-        var request = new WebFetchRequest { SearchResultId = reference };
+        var request = new WebFetchRequest { Reference = reference };
 
         // Act
         var claims = ((ITool)tool).GetNetworkHosts(request);
@@ -243,7 +244,7 @@ public sealed class WebFetchTests
         var tool = new WebFetchTool(fetcher, authority, options);
         var context = CreateContext(fixture.Path);
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://example.com/docs?q=hidden");
-        var request = new WebFetchRequest { Url = "https://example.com/docs?q=hidden" };
+        var request = new WebFetchRequest { Reference = "https://example.com/docs?q=hidden" };
 
         // Act
         var result = await tool.ExecuteAsync(request, context);
@@ -251,6 +252,22 @@ public sealed class WebFetchTests
 
         // Assert
         Assert.Equal("https://example.com/docs", result.Value.Provenance.FinalUrl);
+        using var inputSchema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var inputProperties = inputSchema.RootElement.GetProperty("properties");
+        Assert.Equal(["reference"], inputProperties.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(["reference"], inputSchema.RootElement.GetProperty("required")
+            .EnumerateArray()
+            .Select(property => property.GetString()));
+        Assert.False(inputSchema.RootElement.GetProperty("additionalProperties").GetBoolean());
+        Assert.NotNull(result.ModelResultContent);
+        using var modelResult = JsonDocument.Parse(result.ModelResultContent);
+        Assert.Equal("https://example.com/docs", modelResult.RootElement.GetProperty("resolvedUrl").GetString());
+        Assert.Equal("text/plain", modelResult.RootElement.GetProperty("mediaType").GetString());
+        Assert.Equal("content", modelResult.RootElement.GetProperty("content").GetString());
+        Assert.Equal("None", modelResult.RootElement.GetProperty("truncation").GetProperty("stage").GetString());
+        Assert.Contains("UNTRUSTED EXTERNAL EVIDENCE", modelResult.RootElement.GetProperty("trustWarning").GetString(), StringComparison.Ordinal);
+        Assert.False(modelResult.RootElement.TryGetProperty("sourceDigest", out _));
+        Assert.False(modelResult.RootElement.TryGetProperty("provenance", out _));
         Assert.Equal(1, fetcher.CallCount);
         Assert.Equal(ToolErrorClassification.DirectAuthorizationRequired, replay.ErrorClassification);
     }
@@ -272,7 +289,7 @@ public sealed class WebFetchTests
             ["https://example.com/start", "https://redirect.example/final"]);
 
         // Act
-        var request = new WebFetchRequest { Url = "https://example.com/start" };
+        var request = new WebFetchRequest { Reference = "https://example.com/start" };
         var policyHosts = ((ITool)tool).GetNetworkHosts(request);
         var policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
         _ = await tool.ExecuteAsync(request, context);
@@ -300,9 +317,9 @@ public sealed class WebFetchTests
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://redirect.example/independent");
 
         // Act
-        _ = await tool.ExecuteAsync(new WebFetchRequest { Url = "https://example.com/start" }, context);
+        _ = await tool.ExecuteAsync(new WebFetchRequest { Reference = "https://example.com/start" }, context);
         var firstInvocationDigests = fetcher.LastAuthorizedDirectUrlDigests;
-        _ = await tool.ExecuteAsync(new WebFetchRequest { Url = "https://redirect.example/independent" }, context);
+        _ = await tool.ExecuteAsync(new WebFetchRequest { Reference = "https://redirect.example/independent" }, context);
 
         // Assert
         Assert.DoesNotContain(
@@ -663,10 +680,10 @@ public sealed class WebFetchTests
         // Act
         var active = authority.IsActive("web_fetch", sessionId, runId);
         var response = await tool.ExecuteAsync(
-            new WebFetchRequest { UserUrlId = references[0].Id },
+            new WebFetchRequest { Reference = references[0].Id },
             context);
         var replay = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
-            new WebFetchRequest { UserUrlId = references[0].Id },
+            new WebFetchRequest { Reference = references[0].Id },
             context));
 
         // Assert
@@ -736,7 +753,7 @@ public sealed class WebFetchTests
 
         // Act
         var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(
-            new WebFetchRequest { Url = proposedUrl },
+            new WebFetchRequest { Reference = proposedUrl },
             context));
 
         // Assert
@@ -774,7 +791,7 @@ public sealed class WebFetchTests
             DirectFetchApprovalOutcome.Unavailable);
         var fetcher = new StubFetcher();
         var tool = new WebFetchTool(fetcher, authority, new WebFetchOptions(), prompt);
-        var request = new WebFetchRequest { Url = "https://proposed.example/reset/SECRET?token=protected" };
+        var request = new WebFetchRequest { Reference = "https://proposed.example/reset/SECRET?token=protected" };
 
         // Act
         var response = await tool.ExecuteAsync(request, context);
@@ -914,7 +931,7 @@ public sealed class WebFetchTests
 
         // Act
         var exception = await Assert.ThrowsAsync<WebFetchException>(() => tool.ExecuteAsync(
-            new WebFetchRequest { UserUrlId = references[0].Id },
+            new WebFetchRequest { Reference = references[0].Id },
             changedContext));
 
         // Assert

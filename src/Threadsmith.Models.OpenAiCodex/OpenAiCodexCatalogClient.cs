@@ -141,7 +141,7 @@ public sealed class OpenAiCodexCatalogClient
                 StructuredOutput = true,
             },
             Cost = new ModelCostMetadata(),
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
+            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             IntendedWorkloadClasses = Enum.GetValues<WorkloadClass>(),
             DefaultReasoningLevel = defaultLevel,
             SupportedReasoningLevels = supported,

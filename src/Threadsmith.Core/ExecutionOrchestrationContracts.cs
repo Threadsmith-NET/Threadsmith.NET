@@ -1,5 +1,7 @@
 namespace Threadsmith.Core;
 
+using System.Text.Json.Serialization;
+
 /// <summary>Durable execution-orchestration checkpoint phases appended without renumbering legacy run phases.</summary>
 public enum ExecutionCheckpointPhase
 {
@@ -102,18 +104,9 @@ public sealed record ExecutionOperationRecord
     public string? Reconciliation { get; init; }
 }
 
-/// <summary>Versioned plan-step-correlated model mutation proposal.</summary>
+/// <summary>Model-authored mutation proposal correlated to host-owned plan context.</summary>
 public sealed record MutationProposalEnvelope
 {
-    /// <summary>Current supported schema.</summary>
-    public int SchemaVersion { get; init; } = 1;
-
-    /// <summary>Owning plan revision.</summary>
-    public required int PlanRevision { get; init; }
-
-    /// <summary>Approved plan steps addressed by the proposal.</summary>
-    public required IReadOnlyList<StepId> PlanStepIds { get; init; }
-
     /// <summary>Model-authored changes from which the host creates an identity-bound mutation set.</summary>
     public required MutationProposalSet MutationSet { get; init; }
 
@@ -149,28 +142,102 @@ public sealed record MutationProposalSet
     public string? ValidationPolicy { get; init; } = "default";
 }
 
-/// <summary>One model-authored change without a host-owned mutation identity.</summary>
-public sealed record MutationProposalChange
+/// <summary>One model-authored operation without a host-owned mutation identity.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[JsonDerivedType(typeof(CreateFileMutationProposal), "CreateFile")]
+[JsonDerivedType(typeof(DeleteFileMutationProposal), "DeleteFile")]
+[JsonDerivedType(typeof(ReplaceTextMutationProposal), "ReplaceText")]
+[JsonDerivedType(typeof(RenameSymbolMutationProposal), "RenameSymbol")]
+[JsonDerivedType(typeof(MoveFileMutationProposal), "MoveFile")]
+public abstract record MutationProposalChange
 {
-    /// <summary>Typed mutation operation.</summary>
-    public required MutationType Type { get; init; }
-
     /// <summary>Slash-normalized repository-relative source path.</summary>
     public required string RelativePath { get; init; }
+}
 
-    /// <summary>Expected baseline hash, or <see langword="null"/> for creation.</summary>
+/// <summary>Model-authored file creation.</summary>
+public sealed record CreateFileMutationProposal : MutationProposalChange
+{
+    /// <summary>Complete content for the new file.</summary>
+    public required FileContentDescriptor Content { get; init; }
+
+    /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
+    public FileLifecycleRisk? LifecycleRisk { get; init; }
+
+    /// <summary>Optional project-file association.</summary>
+    public string? ProjectFilePath { get; init; }
+}
+
+/// <summary>Model-authored file deletion.</summary>
+public sealed record DeleteFileMutationProposal : MutationProposalChange
+{
+    /// <summary>Expected baseline hash.</summary>
     public string? BaselineSha256 { get; init; }
 
-    /// <summary>Exact source identity for delete and move operations.</summary>
-    public ExpectedFileIdentity? ExpectedIdentity { get; init; }
+    /// <summary>Exact source identity for the deletion.</summary>
+    public required ExpectedFileIdentity ExpectedIdentity { get; init; }
 
-    /// <summary>Slash-normalized destination for a move operation.</summary>
-    public string? DestinationRelativePath { get; init; }
+    /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
+    public FileLifecycleRisk? LifecycleRisk { get; init; }
 
-    /// <summary>Required destination state for create and move operations.</summary>
-    public DestinationExpectation? DestinationExpectation { get; init; } = Threadsmith.Core.DestinationExpectation.Absent;
+    /// <summary>Optional project-file association.</summary>
+    public string? ProjectFilePath { get; init; }
+}
 
-    /// <summary>Explicit content for create or move-plus-edit.</summary>
+/// <summary>Model-authored exact text replacement.</summary>
+public sealed record ReplaceTextMutationProposal : MutationProposalChange
+{
+    /// <summary>Expected baseline hash.</summary>
+    public string? BaselineSha256 { get; init; }
+
+    /// <summary>Zero-based character offset for replacement.</summary>
+    public required int StartOffset { get; init; }
+
+    /// <summary>Number of baseline characters replaced.</summary>
+    public required int Length { get; init; }
+
+    /// <summary>Expected text at the replacement range.</summary>
+    public required string ExpectedText { get; init; }
+
+    /// <summary>Replacement text.</summary>
+    public required string ReplacementText { get; init; }
+
+    /// <summary>Stable semantic symbol correlated to the change when available.</summary>
+    public string? RelatedSymbolId { get; init; }
+
+    /// <summary>Optional project-file association.</summary>
+    public string? ProjectFilePath { get; init; }
+}
+
+/// <summary>Model-authored compiler-aware symbol rename.</summary>
+public sealed record RenameSymbolMutationProposal : MutationProposalChange
+{
+    /// <summary>Expected declaration-file baseline hash.</summary>
+    public string? BaselineSha256 { get; init; }
+
+    /// <summary>Stable semantic symbol selected for rename.</summary>
+    public required string RelatedSymbolId { get; init; }
+
+    /// <summary>New symbol identifier.</summary>
+    public required string ReplacementText { get; init; }
+
+    /// <summary>Optional project-file association.</summary>
+    public string? ProjectFilePath { get; init; }
+}
+
+/// <summary>Model-authored file relocation.</summary>
+public sealed record MoveFileMutationProposal : MutationProposalChange
+{
+    /// <summary>Expected baseline hash.</summary>
+    public string? BaselineSha256 { get; init; }
+
+    /// <summary>Exact source identity for the relocation.</summary>
+    public required ExpectedFileIdentity ExpectedIdentity { get; init; }
+
+    /// <summary>Slash-normalized destination for the relocation.</summary>
+    public required string DestinationRelativePath { get; init; }
+
+    /// <summary>Optional complete content for a move-plus-edit operation.</summary>
     public FileContentDescriptor? Content { get; init; }
 
     /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
@@ -178,21 +245,6 @@ public sealed record MutationProposalChange
 
     /// <summary>Optional project-file association.</summary>
     public string? ProjectFilePath { get; init; }
-
-    /// <summary>Zero-based character offset for replacement.</summary>
-    public int? StartOffset { get; init; }
-
-    /// <summary>Number of baseline characters replaced.</summary>
-    public int? Length { get; init; }
-
-    /// <summary>Expected text at the replacement range.</summary>
-    public string? ExpectedText { get; init; }
-
-    /// <summary>Replacement text.</summary>
-    public string? ReplacementText { get; init; } = string.Empty;
-
-    /// <summary>Stable semantic symbol correlated to the change when available.</summary>
-    public string? RelatedSymbolId { get; init; }
 }
 
 /// <summary>Atomic durable continuation for one approved-plan execution.</summary>

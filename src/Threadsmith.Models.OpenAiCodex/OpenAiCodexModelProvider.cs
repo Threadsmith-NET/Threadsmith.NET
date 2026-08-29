@@ -48,8 +48,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         var profileOutputLimit = _profile.EffectiveRequestOutputTokenReserve;
-        var maximumOutputTokens = request.MaximumOutputTokens ?? profileOutputLimit;
-        if (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit)
+        if (request.MaximumOutputTokens is { } maximumOutputTokens
+            && (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit))
         {
             throw new ModelProviderException(
                 $"The requested output ceiling must be between 1 and the resolved profile request reserve of "
@@ -69,7 +69,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             using var message = CreateRequest(
                 request,
                 accessToken,
-                maximumOutputTokens,
                 canonicalTools,
                 toolNameMap);
             HttpResponseMessage response;
@@ -91,7 +90,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                     using StreamReader reader = new(stream);
-                    await foreach (var chunk in ReadEventsAsync(reader, toolNameMap, timeout.Token).ConfigureAwait(false))
+                    await foreach (var chunk in ReadEventsAsync(
+                        reader,
+                        toolNameMap,
+                        request.MaximumOutputTokens ?? profileOutputLimit,
+                        timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
                     }
@@ -136,7 +139,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     continue;
                 }
 
-                throw CreateFailure(response.StatusCode);
+                try
+                {
+                    throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new ModelProviderTimeoutException("The Codex error response timed out.", exception);
+                }
             }
         }
     }
@@ -144,7 +154,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private HttpRequestMessage CreateRequest(
         ModelStreamRequest request,
         string accessToken,
-        int maximumOutputTokens,
         IReadOnlyList<ModelToolDefinition> canonicalTools,
         ModelToolWireNameMap toolNameMap)
     {
@@ -153,7 +162,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
-            ["max_output_tokens"] = maximumOutputTokens,
             ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
             ["input"] = CreateInput(request, toolNameMap),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
@@ -287,9 +295,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
         StreamReader reader,
         ModelToolWireNameMap toolNameMap,
+        int maximumOutputTokens,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var pendingToolCalls = new List<PendingCodexToolCall>();
+        long streamedOutputBytes = 0;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -311,6 +321,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.output_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } text)
                     {
+                        AddStreamedOutput(text);
                         yield return new ModelChunk { Text = text };
                     }
 
@@ -319,6 +330,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.reasoning_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } reasoning)
                     {
+                        AddStreamedOutput(reasoning);
                         yield return new ModelChunk { Reasoning = reasoning };
                     }
 
@@ -327,9 +339,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     if (root.TryGetProperty("item", out var item)
                         && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal))
                     {
-                        pendingToolCalls.Add(new PendingCodexToolCall(
-                            GetString(item, "name"),
-                            GetString(item, "arguments")));
+                        var name = GetString(item, "name");
+                        var arguments = GetString(item, "arguments");
+                        AddStreamedOutput(name);
+                        AddStreamedOutput(arguments);
+                        pendingToolCalls.Add(new PendingCodexToolCall(name, arguments));
                     }
 
                     break;
@@ -355,6 +369,24 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.failed":
                 case "error":
                     throw new ModelProviderException("The Codex Responses stream reported a provider error.");
+            }
+        }
+
+        void AddStreamedOutput(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            // Codex's byte-level tokenizer cannot produce more tokens than the UTF-8 bytes
+            // representing streamed model-visible output. Treating every byte as one token
+            // therefore enforces the ceiling conservatively without an endpoint parameter.
+            streamedOutputBytes = checked(streamedOutputBytes + Encoding.UTF8.GetByteCount(value));
+            if (streamedOutputBytes > maximumOutputTokens)
+            {
+                throw new ModelProviderException(
+                    $"The Codex response exceeded the host-owned output ceiling of {maximumOutputTokens} tokens.");
             }
         }
     }
@@ -419,17 +451,87 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return new ModelUsage(input, output, Cache: cache);
     }
 
-    private static Exception CreateFailure(HttpStatusCode statusCode)
+    private static async Task<Exception> CreateFailureAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(response);
+        var statusCode = response.StatusCode;
+        var details = await ReadErrorDetailsAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var suffix = details is null ? string.Empty : $" {details}";
         return statusCode switch
         {
             HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
                 or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout =>
-                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}."),
+                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.{suffix}"),
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-                new ModelProviderException("Codex authentication is missing, expired, or unauthorized."),
-            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}."),
+                new ModelProviderException($"Codex authentication is missing, expired, or unauthorized.{suffix}"),
+            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}.{suffix}"),
         };
+    }
+
+    private static async Task<string?> ReadErrorDetailsAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        const int maximumCharacters = 4096;
+        try
+        {
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using StreamReader reader = new(stream, Encoding.UTF8);
+            var body = new StringBuilder(maximumCharacters);
+            var buffer = new char[1024];
+            while (body.Length <= maximumCharacters)
+            {
+                var remaining = maximumCharacters + 1 - body.Length;
+                var count = await reader.ReadAsync(
+                    buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                    cancellationToken).ConfigureAwait(false);
+                if (count is 0)
+                {
+                    break;
+                }
+
+                body.Append(buffer, 0, count);
+            }
+
+            if (body.Length is 0 or > maximumCharacters)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(body.ToString());
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var error = root.TryGetProperty("error", out var nestedError)
+                && nestedError.ValueKind == JsonValueKind.Object
+                ? nestedError
+                : root;
+            var code = GetString(error, "code");
+            var parameter = GetString(error, "param");
+            var parts = new[]
+            {
+                IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
+                IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
+            }.Where(part => !string.IsNullOrWhiteSpace(part));
+            var details = string.Join(' ', parts);
+            return details.Length == 0 ? null : details;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsSafeErrorIdentifier(string? value, int maximumLength)
+    {
+        return value is { Length: > 0 } && value.Length <= maximumLength
+            && value.All(character => char.IsAsciiLetterOrDigit(character)
+                || character is '_' or '-' or '.');
     }
 
     private static bool IsTransient(HttpStatusCode statusCode)

@@ -4820,7 +4820,7 @@ public static class Milestone1Tests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            object response = command switch
+            var response = command switch
             {
                 CreateSessionCommand => _sessionId,
                 OpenRepositoryCommand open => new RepositoryOpenResult(

@@ -1,6 +1,7 @@
 namespace Threadsmith.NativeTools.Tests;
 
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
@@ -50,6 +51,14 @@ public sealed class Plan41InventoryToolTests
         Assert.Equal(1, comparison.Ahead);
         Assert.Equal(0, comparison.Behind);
         Assert.Contains(comparison.ChangedPaths, entry => entry.Path == "tracked.txt");
+
+        var logExecution = await new GitLogTool(service).ExecuteAsync(
+            new GitLogRequest { Revision = "feature", MaximumCommits = int.MaxValue },
+            CreateExecutionContext(repository.Path));
+        Assert.NotNull(logExecution.ModelResultContent);
+        Assert.Contains("feature commit", logExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("authorEmail", logExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("test@example.invalid", logExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Verifies Git queries cannot discover a worktree rooted above the opened directory.</summary>
@@ -109,8 +118,6 @@ public sealed class Plan41InventoryToolTests
             new GitDiffRequest
             {
                 Mode = null,
-                MaximumEntries = null,
-                MaximumPatchCharacters = null,
             });
 
         Assert.NotEmpty(log.Commits);
@@ -132,6 +139,8 @@ public sealed class Plan41InventoryToolTests
         Assert.Equal("git-blame", source.Kind);
         Assert.Equal("tracked.txt", source.Identifier);
         Assert.Equal("HEAD", source.Range);
+        Assert.NotNull(execution.ModelResultContent);
+        Assert.DoesNotContain("authorEmail", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Verifies git_diff validates mode-specific revision requirements before execution.</summary>
@@ -265,11 +274,10 @@ public sealed class Plan41InventoryToolTests
             {
                 Revision = "HEAD",
                 Path = "large.txt",
-                MaximumCharacters = 512 * 1024,
             });
 
         Assert.True(result.IsTruncated);
-        Assert.Equal(512 * 1024, result.Content.Length);
+        Assert.Equal(131072, result.Content.Length);
     }
 
     /// <summary>Verifies NUL-delimited status parsing preserves non-ASCII rename paths.</summary>
@@ -317,6 +325,11 @@ public sealed class Plan41InventoryToolTests
         Assert.DoesNotContain(execution.Value.Entries, entry => entry.Path.StartsWith("secret/", StringComparison.Ordinal));
         Assert.Empty(execution.Value.Patch);
         Assert.True(execution.IsTruncated);
+        Assert.NotNull(execution.ModelResultContent);
+        Assert.Contains("tracked.txt", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        using var projection = JsonDocument.Parse(execution.ModelResultContent);
+        Assert.NotEmpty(projection.RootElement.GetProperty("changedPaths").EnumerateArray());
     }
 
     /// <summary>Verifies commit-show patches and branch paths honor descendant policy.</summary>
@@ -376,7 +389,6 @@ public sealed class Plan41InventoryToolTests
         {
             WorkspaceId = workspaceId,
             RepositoryPath = repository.Path,
-            SelectedSolutionPath = "caller-controlled.sln",
         });
 
         // Assert
@@ -394,25 +406,37 @@ public sealed class Plan41InventoryToolTests
         {
             WorkspaceId = workspaceId,
             RepositoryPath = repository.Path,
-            SelectedSolutionPath = "caller-controlled.sln",
         });
         Assert.Contains(resources, path => path.EndsWith("Inventory.Tests.csproj", StringComparison.Ordinal));
         Assert.Contains(resources, path => path.EndsWith("Directory.Packages.props", StringComparison.Ordinal));
 
         var inventoryTool = new DotNetInventoryTool(service);
+        var execution = await inventoryTool.ExecuteAsync(
+            new DotNetInventoryInput(),
+            CreateExecutionContext(repository.Path, workspaceId: workspaceId));
+        Assert.NotNull(execution.ModelResultContent);
+        Assert.Contains("Inventory.Tests.csproj", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Contains("Example.Package", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("repositoryRevision", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("usedEvaluation", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workspaceId", inventoryTool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("repositoryPath", inventoryTool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("selectedSolutionPath", inventoryTool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        using (var schema = JsonDocument.Parse(inventoryTool.Definition.InputSchema.JsonSchema))
+        {
+            Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
+            Assert.Empty(schema.RootElement.GetProperty("properties").EnumerateObject());
+        }
+
         var policy = new DefaultPolicyEngine();
         var decision = policy.Evaluate(
             inventoryTool,
-            new DotNetInventoryRequest
-            {
-                WorkspaceId = workspaceId,
-                RepositoryPath = repository.Path,
-                SelectedSolutionPath = "caller-controlled.sln",
-            },
+            new DotNetInventoryInput(),
             CreateInvocationContext(
                 repository.Path,
                 prohibitedPaths: ["Directory.Packages.props"],
-                allowedExecutables: ["git"]));
+                allowedExecutables: ["git"],
+                workspaceId: workspaceId));
         Assert.False(decision.IsAllowed);
     }
 
@@ -433,6 +457,15 @@ public sealed class Plan41InventoryToolTests
         Assert.Equal(5, tools.Select(tool => tool.Definition.Id).Distinct().Count());
         Assert.All(tools, tool => Assert.Equal(ToolSideEffect.ReadOnly, tool.Definition.SideEffect));
         Assert.All(tools, tool => Assert.InRange(tool.Definition.MaximumOutputBytes, 1, 512 * 1024));
+        Assert.DoesNotContain("maximumEntries", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumPatchCharacters", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumCharacters", tools[2].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumLines", tools[3].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumPaths", tools[4].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "exitCode",
+            JsonSerializer.Serialize(new GitStatusOutput("main", [], false)),
+            StringComparison.OrdinalIgnoreCase);
         Assert.All(tools, tool => Assert.Equal("git", tool.GetExecutable(tool switch
         {
             GitDiffTool => new GitDiffRequest(),
@@ -457,7 +490,8 @@ public sealed class Plan41InventoryToolTests
 
     private static ToolExecutionContext CreateExecutionContext(
         string repositoryPath,
-        IReadOnlyList<string>? prohibitedPaths = null)
+        IReadOnlyList<string>? prohibitedPaths = null,
+        WorkspaceId? workspaceId = null)
     {
         return new ToolExecutionContext(
             ToolInvocationId.New(),
@@ -466,17 +500,20 @@ public sealed class Plan41InventoryToolTests
             CreateInvocationContext(
                 repositoryPath,
                 prohibitedPaths,
-                allowedExecutables: ["git"]));
+                allowedExecutables: ["git"],
+                workspaceId: workspaceId));
     }
 
     private static ToolInvocationContext CreateInvocationContext(
         string repositoryPath,
         IReadOnlyList<string>? prohibitedPaths = null,
-        IReadOnlyList<string>? allowedExecutables = null)
+        IReadOnlyList<string>? allowedExecutables = null,
+        WorkspaceId? workspaceId = null)
     {
         return new ToolInvocationContext
         {
             RepositoryPath = repositoryPath,
+            WorkspaceId = workspaceId,
             TrustLevel = RepositoryTrustLevel.TrustedRead,
             ApprovedRoots = ["."],
             ProhibitedPaths = prohibitedPaths ?? [],

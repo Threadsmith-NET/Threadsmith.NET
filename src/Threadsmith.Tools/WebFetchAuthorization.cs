@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Host-owned progressive tool activation policy.</summary>
@@ -643,6 +644,32 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         return GetReferenceHost(_userReferences, userUrlId, static reference => reference.Url);
     }
 
+    /// <summary>Returns the policy-visible hosts for one host-classified route.</summary>
+    public IReadOnlyList<string> GetRouteHosts(string reference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        lock (_gate)
+        {
+            PruneCore();
+            if (_searchReferences.TryGetValue(reference, out var searchReference))
+            {
+                return [searchReference.Url.IdnHost];
+            }
+
+            if (_userReferences.TryGetValue(reference, out var userReference))
+            {
+                return [userReference.Url.IdnHost];
+            }
+
+            if (IsOpaqueReference(reference))
+            {
+                throw StaleReference("web fetch");
+            }
+        }
+
+        return GetDirectRouteHosts(reference);
+    }
+
     /// <summary>Resolves and consumes one current route.</summary>
     public WebFetchAuthorization Resolve(ToolExecutionContext context, WebFetchRequest request)
     {
@@ -652,50 +679,53 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            if (request.SearchResultId is not null)
+            if (_searchReferences.TryGetValue(request.Reference, out var searchReference))
             {
-                if (!_searchReferences.TryGetValue(request.SearchResultId, out var reference)
-                    || !string.Equals(reference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
-                    || reference.SessionId != context.SessionId
-                    || reference.ProducingRunId != context.RunId
-                    || reference.ScopeGeneration != _scopeGeneration)
+                if (!string.Equals(searchReference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                    || searchReference.SessionId != context.SessionId
+                    || searchReference.ProducingRunId != context.RunId
+                    || searchReference.ScopeGeneration != _scopeGeneration)
                 {
                     throw StaleReference("search result");
                 }
 
-                _searchReferences.Remove(request.SearchResultId);
+                _searchReferences.Remove(request.Reference);
                 IncrementGenerationCore();
                 return new WebFetchAuthorization(
-                    reference.Url,
+                    searchReference.Url,
                     WebFetchSourceKind.SearchResult,
                     new HashSet<string>(StringComparer.Ordinal));
             }
 
-            if (request.UserUrlId is not null)
+            if (_userReferences.TryGetValue(request.Reference, out var userReference))
             {
-                if (!_userReferences.TryGetValue(request.UserUrlId, out var reference)
-                    || !string.Equals(reference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
-                    || reference.SessionId != context.SessionId
-                    || reference.RunId != context.RunId
-                    || reference.ScopeGeneration != _scopeGeneration
+                if (!string.Equals(userReference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                    || userReference.SessionId != context.SessionId
+                    || userReference.RunId != context.RunId
+                    || userReference.ScopeGeneration != _scopeGeneration
                     || !HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath)
                     || !string.Equals(
-                        reference.PolicyFingerprint,
+                        userReference.PolicyFingerprint,
                         CreatePolicyFingerprint(context.Invocation),
                         StringComparison.Ordinal))
                 {
                     throw StaleReference("current-user URL");
                 }
 
-                _userReferences.Remove(request.UserUrlId);
+                _userReferences.Remove(request.Reference);
                 IncrementGenerationCore();
                 return new WebFetchAuthorization(
-                    reference.Url,
+                    userReference.Url,
                     WebFetchSourceKind.CurrentUserMessage,
-                    new HashSet<string>([reference.UrlDigest], StringComparer.Ordinal));
+                    new HashSet<string>([userReference.UrlDigest], StringComparer.Ordinal));
             }
 
-            var uri = WebFetchUrlPolicy.Normalize(request.Url ?? string.Empty, _options.Current.MaximumUrlCharacters);
+            if (IsOpaqueReference(request.Reference))
+            {
+                throw StaleReference("web fetch");
+            }
+
+            var uri = WebFetchUrlPolicy.Normalize(request.Reference, _options.Current.MaximumUrlCharacters);
             var digest = WebFetchUrlPolicy.Digest(uri);
             if (_invocationGrants.TryGetValue(context.ToolInvocationId, out var invocationGrant)
                 && invocationGrant.SessionId == context.SessionId
@@ -919,24 +949,27 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            if (request.SearchResultId is not null)
+            if (_searchReferences.TryGetValue(request.Reference, out var searchReference))
             {
-                return _searchReferences.TryGetValue(request.SearchResultId, out var reference)
-                    && string.Equals(reference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
-                    && string.Equals(reference.Url.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase);
+                return string.Equals(searchReference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                    && string.Equals(searchReference.Url.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase);
             }
 
-            if (request.UserUrlId is not null)
+            if (_userReferences.TryGetValue(request.Reference, out var userReference))
             {
-                return _userReferences.TryGetValue(request.UserUrlId, out var reference)
-                    && string.Equals(reference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
-                    && string.Equals(reference.Url.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase);
+                return string.Equals(userReference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                    && string.Equals(userReference.Url.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (IsOpaqueReference(request.Reference))
+            {
+                return false;
             }
 
             Uri normalized;
             try
             {
-                normalized = WebFetchUrlPolicy.Normalize(request.Url ?? string.Empty, _options.Current.MaximumUrlCharacters);
+                normalized = WebFetchUrlPolicy.Normalize(request.Reference, _options.Current.MaximumUrlCharacters);
             }
             catch (WebFetchException)
             {
@@ -970,6 +1003,13 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             QueryPresent = !string.IsNullOrEmpty(normalized.Query),
             UrlDigest = WebFetchUrlPolicy.Digest(normalized),
         };
+    }
+
+    /// <summary>Returns whether a selector has the closed shape of a host-issued opaque reference.</summary>
+    public static bool IsOpaqueReference(string reference)
+    {
+        return reference.Length is > 0 and <= 128
+            && reference.All(Uri.IsHexDigit);
     }
 
     /// <summary>Configures live schema-3 consent validation for ergonomic routes.</summary>
@@ -1150,6 +1190,7 @@ public sealed record WebFetchAuthorization(
 /// <summary>Progressively disclosed governed readable web-fetch tool.</summary>
 public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHostAuthorizedNetworkClaims
 {
+    private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly WebFetchAuthorizationAuthority _authorization;
     private readonly IWebContentFetcher _fetcher;
     private readonly IDirectFetchApprovalPrompt _approvalPrompt;
@@ -1169,7 +1210,7 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
         _approvalPrompt = approvalPrompt ?? new UnavailableDirectFetchApprovalPrompt();
         Definition = ToolDefinitionFactory.Create<WebFetchRequest, WebFetchResponse>(
             "web_fetch",
-            "Retrieves one authorized public HTTPS textual document. Use searchResultId for a search result, userUrlId for a URL in the current user message, or url for an explicitly granted or separately approved direct destination.",
+            "Retrieves one authorized public HTTPS textual document. Pass the host-issued search or current-user URL reference, or an explicitly granted or separately approved direct URL, in reference.",
             ToolCategory.ExternalSearch,
             RepositoryTrustLevel.UntrustedInspection,
             ApprovalLevel.None,
@@ -1198,7 +1239,8 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (input.Url is { } directUrl && !_authorization.HasDirectGrant(context, directUrl))
+        if (!WebFetchAuthorizationAuthority.IsOpaqueReference(input.Reference)
+            && !_authorization.HasDirectGrant(context, input.Reference))
         {
             if (!_authorization.IsRunProgressivelyActive(context.SessionId, context.RunId)
                 || !_authorization.HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
@@ -1208,7 +1250,7 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                     ToolErrorClassification.DirectAuthorizationRequired);
             }
 
-            var normalized = WebFetchUrlPolicy.Normalize(directUrl, int.MaxValue);
+            var normalized = WebFetchUrlPolicy.Normalize(input.Reference, int.MaxValue);
             var approvalRequest = _authorization.CreateApprovalRequest(context, normalized);
             var outcome = await _approvalPrompt.RequestApprovalAsync(
                 approvalRequest,
@@ -1252,13 +1294,23 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
             authorization.SourceKind,
             authorization.AuthorizedDirectUrlDigests,
             cancellationToken);
+        var modelResult = new WebFetchModelResult(
+            response.Provenance.FinalUrl,
+            response.Title,
+            response.MediaType,
+            response.Text,
+            new WebFetchModelTruncation(
+                response.Truncation.Stage.ToString(),
+                response.Truncation.Reason),
+            response.TrustBoundary);
         return new ToolExecution<WebFetchResponse>(
             response,
             [new ToolProvenanceSource(
                 "external-web-fetch-untrusted",
                 response.Provenance.FinalUrl,
                 $"mediaType={response.MediaType};source={response.Provenance.SourceKind};sourceDigest={response.SourceDigest};extractor={response.ExtractionMethod};retrieved={response.Provenance.RetrievedAt:O}")],
-            response.Truncation.Stage != WebFetchTruncationStage.None);
+            response.Truncation.Stage != WebFetchTruncationStage.None,
+            ModelResultContent: JsonSerializer.Serialize(modelResult, ModelJsonOptions));
     }
 
     /// <inheritdoc />
@@ -1279,38 +1331,23 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
     /// <inheritdoc />
     protected override void ValidateInput(WebFetchRequest input)
     {
-        var routeCount = (string.IsNullOrWhiteSpace(input.SearchResultId) ? 0 : 1)
-            + (string.IsNullOrWhiteSpace(input.UserUrlId) ? 0 : 1)
-            + (string.IsNullOrWhiteSpace(input.Url) ? 0 : 1);
-        if (routeCount != 1)
+        if (string.IsNullOrWhiteSpace(input.Reference))
         {
-            throw new ToolArgumentValidationException("Specify exactly one of searchResultId, userUrlId, or url.");
+            throw new ToolArgumentValidationException("Reference is required.");
         }
 
-        ValidateOpaqueReference(input.SearchResultId, "search result");
-        ValidateOpaqueReference(input.UserUrlId, "current-user URL");
-        if (input.Url is not null)
+        if (!WebFetchAuthorizationAuthority.IsOpaqueReference(input.Reference))
         {
-            _ = WebFetchUrlPolicy.Normalize(input.Url, int.MaxValue);
+            _ = WebFetchUrlPolicy.Normalize(input.Reference, int.MaxValue);
         }
     }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetNetworkHosts(WebFetchRequest input)
     {
-        if (input.SearchResultId is not null)
-        {
-            return [_authorization.GetSearchResultHost(input.SearchResultId)];
-        }
-
-        if (input.UserUrlId is not null)
-        {
-            return [_authorization.GetUserUrlHost(input.UserUrlId)];
-        }
-
         try
         {
-            return _authorization.GetDirectRouteHosts(input.Url ?? string.Empty);
+            return _authorization.GetRouteHosts(input.Reference);
         }
         catch (WebFetchException)
         {
@@ -1321,22 +1358,9 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
     /// <inheritdoc />
     protected override string? DescribeActivity(WebFetchRequest input)
     {
-        if (input.SearchResultId is not null)
-        {
-            return "authorized search result";
-        }
-
-        return input.UserUrlId is not null
-            ? "current user URL"
+        return WebFetchAuthorizationAuthority.IsOpaqueReference(input.Reference)
+            ? "authorized web reference"
             : "direct public URL";
-    }
-
-    private static void ValidateOpaqueReference(string? value, string source)
-    {
-        if (value is not null && (value.Length > 128 || value.Any(character => !Uri.IsHexDigit(character))))
-        {
-            throw new ToolArgumentValidationException($"The {source} reference is malformed.");
-        }
     }
 
     private static int CalculateMaximumOutputBytes(WebFetchOptions options)
@@ -1346,6 +1370,16 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                 + (options.MaximumUrlCharacters * ((options.MaximumRedirects * 2) + 4))
                 + (128 * 1024));
     }
+
+    private sealed record WebFetchModelResult(
+        string ResolvedUrl,
+        string? Title,
+        string MediaType,
+        string Content,
+        WebFetchModelTruncation Truncation,
+        string TrustWarning);
+
+    private sealed record WebFetchModelTruncation(string Stage, string? Reason);
 
     private sealed class UnavailableDirectFetchApprovalPrompt : IDirectFetchApprovalPrompt
     {

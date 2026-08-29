@@ -29,17 +29,20 @@ public sealed class Plan42NativeValidationToolTests
         var process = new RecordingProcessManager();
         var service = new NativeValidationToolService(process);
 
-        var result = await service.InspectPackagesAsync(
-            repository.Path,
-            RunId.New(),
+        var execution = await new NuGetHealthTool(service).ExecuteAsync(
             new NuGetDependencyHealthRequest { ProjectPath = "src/App/App.csproj" },
+            CreateToolExecutionContext(repository.Path),
             TestContext.Current.CancellationToken);
+        var result = execution.Value;
 
         Assert.Equal(2, result.Dependencies.Count);
         Assert.Contains(result.Dependencies, dependency => dependency.Id == "Direct" && dependency.IsDirect);
         Assert.Contains(result.Dependencies, dependency => dependency.Id == "Transitive" && !dependency.IsDirect);
         Assert.True(result.IsOffline);
         Assert.Equal(ValidationAuthority.Exploratory, result.Authority);
+        Assert.NotNull(execution.ModelResultContent);
+        Assert.Contains("\"authority\":\"Exploratory\"", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("inspectedAt", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(process.Requests);
     }
 
@@ -134,6 +137,17 @@ public sealed class Plan42NativeValidationToolTests
         Assert.Equal(ValidationAuthority.Exploratory, analyzer.Authority);
         Assert.Equal(ValidationAuthority.Exploratory, format.Authority);
         Assert.Single(query.Items);
+
+        var toolExecution = await new DotNetBuildTool(service).ExecuteAsync(
+            new BuildToolRequest { TargetPath = "App.csproj" },
+            CreateToolExecutionContext(repository.Path, runId),
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(toolExecution.ModelResultContent);
+        Assert.Contains("\"success\":true", toolExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Contains("CS0168", toolExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("invocationId", toolExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("effectiveArguments", toolExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("duration", toolExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Verifies targeted tests accept only host-issued identity and filters.</summary>
@@ -166,21 +180,21 @@ public sealed class Plan42NativeValidationToolTests
         var service = new NativeValidationToolService(process);
         var runId = RunId.New();
 
-        var discovery = await service.DiscoverTestsAsync(
-            repository.Path,
-            runId,
+        var context = CreateToolExecutionContext(repository.Path, runId);
+        var discoveryExecution = await new TestDiscoveryTool(service).ExecuteAsync(
             new TestDiscoveryRequest
             {
                 ProjectPath = "Tests.csproj",
-                TraitName = "Category",
-                TraitValue = "Fast",
+                Trait = new TestTraitSelector { Name = "Category", Value = "Fast" },
             },
+            context,
             TestContext.Current.CancellationToken);
-        var result = await service.RunTargetedTestAsync(
-            repository.Path,
-            runId,
+        var discovery = discoveryExecution.Value;
+        var resultExecution = await new TargetedTestTool(service).ExecuteAsync(
             new TargetedTestRequest { TestId = discovery.Tests.Single().Id },
+            context,
             TestContext.Current.CancellationToken);
+        var result = resultExecution.Value;
 
         Assert.Single(discovery.Tests);
         Assert.Equal("trait=Category AND traitValue=Fast", discovery.EffectiveFilter);
@@ -190,10 +204,58 @@ public sealed class Plan42NativeValidationToolTests
         Assert.Contains("--filter", process.Requests[1].Arguments);
         Assert.Contains(result.EffectiveFilter, process.Requests[1].Arguments);
         Assert.Equal(ValidationAuthority.Exploratory, result.Authority);
+        Assert.NotNull(discoveryExecution.ModelResultContent);
+        Assert.Contains(discovery.Tests.Single().Id.Value, discoveryExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("discoveryId", discoveryExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(resultExecution.ModelResultContent);
+        Assert.Contains("\"outcome\":\"Passed\"", resultExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Contains("\"output\":null", resultExecution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("effectiveFilter", resultExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunTargetedTestAsync(
             repository.Path,
             runId,
             new TargetedTestRequest { TestId = new DiscoveredTestId("model-supplied") },
+            TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Diagnostic paging uses one-shot opaque continuations rather than model-selected page bounds.</summary>
+    [Fact]
+    public async Task DiagnosticQuery_MultiplePages_UsesOpaqueContinuationAsync()
+    {
+        using var repository = new TemporaryRepository();
+        repository.Write("App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var diagnostics = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(1, 101).Select(index =>
+                $"{repository.Path}\\File{index}.cs(1,1): warning CS0168: unused {index} [{repository.Path}\\App.csproj]"));
+        var process = new RecordingProcessManager
+        {
+            ResultFactory = request => Successful(request, diagnostics),
+        };
+        var service = new NativeValidationToolService(process);
+        var runId = RunId.New();
+        await service.BuildAsync(
+            repository.Path,
+            runId,
+            new BuildToolRequest { TargetPath = "App.csproj" },
+            TestContext.Current.CancellationToken);
+
+        var first = await service.QueryDiagnosticsAsync(
+            repository.Path,
+            new DiagnosticQuery { Code = "CS0168" },
+            TestContext.Current.CancellationToken);
+        var second = await service.QueryDiagnosticsAsync(
+            repository.Path,
+            new DiagnosticQuery { ContinuationToken = first.ContinuationToken },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(100, first.Items.Count);
+        Assert.NotNull(first.ContinuationToken);
+        Assert.Single(second.Items);
+        Assert.Null(second.ContinuationToken);
+        await Assert.ThrowsAsync<ArgumentException>(() => service.QueryDiagnosticsAsync(
+            repository.Path,
+            new DiagnosticQuery { ContinuationToken = first.ContinuationToken },
             TestContext.Current.CancellationToken));
     }
 
@@ -225,8 +287,7 @@ public sealed class Plan42NativeValidationToolTests
             new TestDiscoveryRequest
             {
                 ProjectPath = "Tests.csproj",
-                TraitName = "Category",
-                TraitValue = "Fast",
+                Trait = new TestTraitSelector { Name = "Category", Value = "Fast" },
             },
             TestContext.Current.CancellationToken);
         var result = await service.RunTargetedTestAsync(
@@ -364,7 +425,37 @@ public sealed class Plan42NativeValidationToolTests
         Assert.Equal(RepositoryTrustLevel.TrustedBuild, tools.Single(tool => tool.Definition.Id == "test_run_targeted").Definition.RequiredTrust);
         Assert.Equal(ToolSideEffect.ExecutesCode, tools.Single(tool => tool.Definition.Id == "dotnet_format_check").Definition.SideEffect);
         Assert.Contains("testId", tools.Single(tool => tool.Definition.Id == "test_run_targeted").Definition.InputSchema.JsonSchema);
+        Assert.All(tools, tool => Assert.DoesNotContain("timeoutSeconds", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("maximumDependencies", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumAdvisories", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        var diagnosticSchema = tools.Single(tool => tool.Definition.Id == "diagnostic_query").Definition.InputSchema.JsonSchema;
+        Assert.Contains("continuationToken", diagnosticSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("pageSize", diagnosticSchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"page\"", diagnosticSchema, StringComparison.OrdinalIgnoreCase);
+        var discoverySchema = tools.Single(tool => tool.Definition.Id == "test_discover").Definition.InputSchema.JsonSchema;
+        Assert.Contains("trait", discoverySchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("traitName", discoverySchema, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maximumTests", discoverySchema, StringComparison.OrdinalIgnoreCase);
+        Assert.Throws<ToolArgumentValidationException>(() => tools
+            .Single(tool => tool.Definition.Id == "test_discover")
+            .DeserializeInput("{\"projectPath\":\"Tests.csproj\",\"trait\":{\"name\":\"\",\"value\":\"Fast\"}}"));
         _ = JsonDocument.Parse(tools[0].Definition.InputSchema.JsonSchema);
+    }
+
+    private static ToolExecutionContext CreateToolExecutionContext(string repositoryPath, RunId? runId = null)
+    {
+        return new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            runId ?? RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = repositoryPath,
+                TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                ApprovedRoots = ["."],
+                AllowedExecutables = ["dotnet"],
+                RequestedBy = "plan-42-tests",
+            });
     }
 
     private static ProcessExecutionResult Successful(ProcessExecutionRequest request, string output)

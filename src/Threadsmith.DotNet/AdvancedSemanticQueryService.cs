@@ -15,6 +15,8 @@ using Threadsmith.Core;
 /// <summary>Runs bounded advanced C# queries against snapshots from the existing semantic workspace.</summary>
 public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService, ICodeExploreService
 {
+    private const int MaximumGeneratedDocuments = 100;
+    private const int MaximumGeneratedContentCharacters = 16_384;
     private const int MaximumCurrentSourceFileBytes = 1024 * 1024;
     private const int MaximumCodeExploreCatalogEntries = 50_000;
     private const int MaximumCodeExploreCatalogs = 4;
@@ -509,7 +511,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateGeneratedQuery(request);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
@@ -538,7 +539,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (documents.Count >= request.MaximumDocuments)
+                if (documents.Count >= MaximumGeneratedDocuments)
                 {
                     truncated = true;
                     break;
@@ -546,10 +547,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
                 var text = await document.GetTextAsync(cancellationToken);
                 var content = request.IncludeContent ? text.ToString() : null;
-                var contentTruncated = content is { Length: var length } && length > request.MaximumContentCharacters;
+                var contentTruncated = content is { Length: var length } && length > MaximumGeneratedContentCharacters;
                 if (contentTruncated)
                 {
-                    content = content?[..request.MaximumContentCharacters];
+                    content = content?[..MaximumGeneratedContentCharacters];
                 }
 
                 var filePath = document.FilePath ?? document.Name;
@@ -9221,14 +9222,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || requiredAttributes.Count > CSharpPatternConstraints.MaximumPredicateValues)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern predicate counts exceed host limits.");
-        }
-    }
-
-    private static void ValidateGeneratedQuery(GeneratedCodeQuery request)
-    {
-        if (request.MaximumDocuments is < 1 or > 500 || request.MaximumContentCharacters is < 1 or > 65_536)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request), "Generated-code bounds are outside host limits.");
         }
     }
 

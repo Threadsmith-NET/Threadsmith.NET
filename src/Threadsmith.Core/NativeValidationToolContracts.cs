@@ -94,12 +94,6 @@ public sealed record NuGetDependencyHealthRequest
 
     /// <summary>Offline or explicitly configured-source advisory mode.</summary>
     public PackageHealthSourceMode SourceMode { get; init; }
-
-    /// <summary>Maximum returned dependencies.</summary>
-    public int MaximumDependencies { get; init; } = 1000;
-
-    /// <summary>Maximum returned advisories.</summary>
-    public int MaximumAdvisories { get; init; } = 200;
 }
 
 /// <summary>Normalized package health with freshness and completeness.</summary>
@@ -127,9 +121,6 @@ public abstract record DotNetValidationTargetRequest
 
     /// <summary>Optional validated target framework.</summary>
     public string? TargetFramework { get; init; }
-
-    /// <summary>Bounded timeout in seconds.</summary>
-    public int TimeoutSeconds { get; init; } = 120;
 }
 
 /// <summary>Exploratory typed build request.</summary>
@@ -143,9 +134,6 @@ public sealed record FormatCheckRequest
 {
     /// <summary>Repository-relative solution or project path.</summary>
     public required string TargetPath { get; init; }
-
-    /// <summary>Bounded timeout in seconds.</summary>
-    public int TimeoutSeconds { get; init; } = 120;
 }
 
 /// <summary>Normalized exploratory validation invocation.</summary>
@@ -200,11 +188,8 @@ public sealed record DiagnosticQuery
     /// <summary>Optional baseline classification.</summary>
     public DiagnosticClassification? BaselineClass { get; init; }
 
-    /// <summary>Zero-based page index.</summary>
-    public int Page { get; init; }
-
-    /// <summary>Bounded page size.</summary>
-    public int PageSize { get; init; } = 100;
+    /// <summary>Optional opaque host-issued token for the next page of an earlier query.</summary>
+    public string? ContinuationToken { get; init; }
 }
 
 /// <summary>One diagnostic plus its run provenance.</summary>
@@ -220,9 +205,17 @@ public sealed record DiagnosticQueryItem(
 public sealed record DiagnosticQueryResult(
     IReadOnlyList<DiagnosticQueryItem> Items,
     int Total,
-    int Page,
-    int PageSize,
-    bool HasMore);
+    string? ContinuationToken);
+
+/// <summary>Atomic exact trait selector for test discovery.</summary>
+public sealed record TestTraitSelector
+{
+    /// <summary>Exact bounded trait name.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Exact bounded trait value.</summary>
+    public required string Value { get; init; }
+}
 
 /// <summary>Typed test discovery request for one host-validated project.</summary>
 public sealed record TestDiscoveryRequest
@@ -239,17 +232,8 @@ public sealed record TestDiscoveryRequest
     /// <summary>Optional exact method filter.</summary>
     public string? MethodName { get; init; }
 
-    /// <summary>Optional exact trait name filter.</summary>
-    public string? TraitName { get; init; }
-
-    /// <summary>Optional exact trait value filter.</summary>
-    public string? TraitValue { get; init; }
-
-    /// <summary>Maximum returned tests.</summary>
-    public int MaximumTests { get; init; } = 500;
-
-    /// <summary>Bounded timeout in seconds.</summary>
-    public int TimeoutSeconds { get; init; } = 120;
+    /// <summary>Optional atomic exact trait filter.</summary>
+    public TestTraitSelector? Trait { get; init; }
 }
 
 /// <summary>Stable host-issued discovered test identity.</summary>
@@ -286,9 +270,6 @@ public sealed record TargetedTestRequest
 
     /// <summary>Optional validated target framework.</summary>
     public string? TargetFramework { get; init; }
-
-    /// <summary>Bounded timeout in seconds.</summary>
-    public int TimeoutSeconds { get; init; } = 120;
 }
 
 /// <summary>Normalized targeted test result.</summary>

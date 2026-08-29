@@ -20,8 +20,14 @@ public sealed record NuGetAdvisorySourceOptions(
 /// <summary>Runs bounded exploratory .NET health and validation operations through the tracked process owner.</summary>
 public sealed partial class NativeValidationToolService : INativeValidationToolService
 {
+    private const int DiagnosticPageSize = 100;
+    private const int MaximumAdvisories = 200;
     private const int MaximumOutputCharacters = 512 * 1024;
+    private const int MaximumDependencies = 1000;
+    private const int MaximumDiscoveredTests = 500;
+    private const int OperationTimeoutSeconds = 120;
     private const long MaximumAssetsBytes = 16 * 1024 * 1024;
+    private readonly ConcurrentDictionary<string, DiagnosticContinuation> _diagnosticContinuations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DiagnosticRun> _diagnosticRuns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StoredDiscoveredTest> _discoveredTests = new(StringComparer.Ordinal);
     private readonly IProcessManager _processManager;
@@ -100,11 +106,6 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.MaximumDependencies is < 1 or > 1000 || request.MaximumAdvisories is < 1 or > 200)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request), "Package result bounds are outside host limits.");
-        }
-
         var root = NormalizeRoot(repositoryPath);
         var project = ResolveTarget(root, request.ProjectPath, requireProject: true);
         var assetsPath = Path.Combine(Path.GetDirectoryName(project) ?? root, "obj", "project.assets.json");
@@ -169,7 +170,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                         {
                             collected.AddRange(ParseAdvisories(
                                 process.StandardOutput,
-                                request.MaximumAdvisories - collected.Count));
+                                MaximumAdvisories - collected.Count));
                         }
                         catch (JsonException)
                         {
@@ -185,7 +186,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 sourceNames.AddRange(_sources.Select(source => source.Source.GetLeftPart(UriPartial.Authority)));
                 advisories = collected
                     .Distinct()
-                    .Take(request.MaximumAdvisories)
+                    .Take(MaximumAdvisories)
                     .ToArray();
 
                 if (advisoryOutputTruncated)
@@ -198,9 +199,9 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         NuGetDependencyNode[] boundedDependencies = [.. dependencies
             .OrderBy(item => item.TargetFramework, StringComparer.Ordinal)
             .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
-            .Take(request.MaximumDependencies)];
+            .Take(MaximumDependencies)];
         var truncated = boundedDependencies.Length != dependencies.Count
-            || advisories.Count >= request.MaximumAdvisories
+            || advisories.Count >= MaximumAdvisories
             || omissions.Any(omission => omission.Contains("truncated", StringComparison.OrdinalIgnoreCase));
         var complete = File.Exists(assetsPath)
             && (request.SourceMode == PackageHealthSourceMode.Offline
@@ -263,7 +264,6 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateTimeout(request.TimeoutSeconds);
         var root = NormalizeRoot(repositoryPath);
         var target = ResolveTarget(root, request.TargetPath, requireProject: false);
         string[] arguments =
@@ -274,7 +274,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(request.TimeoutSeconds),
+            TimeSpan.FromSeconds(OperationTimeoutSeconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         var invocationId = CreateIdentity(string.Join('|', runId.Value, ValidationInvocationKind.FormatCheck, DateTimeOffset.UtcNow.Ticks, target));
@@ -310,12 +310,24 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
     {
         ArgumentNullException.ThrowIfNull(query);
         var root = NormalizeRoot(repositoryPath);
-        if (query.Page < 0 || query.PageSize is < 1 or > 500)
+        var offset = 0;
+        var effectiveQuery = query;
+        if (query.ContinuationToken is { } continuationToken)
         {
-            throw new ArgumentOutOfRangeException(nameof(query), "Diagnostic page bounds are invalid.");
+            if (HasDiagnosticFilters(query)
+                || continuationToken.Length > 128
+                || continuationToken.Any(character => !Uri.IsHexDigit(character))
+                || !_diagnosticContinuations.TryRemove(continuationToken, out var continuation)
+                || !RepositoryPathsEqual(continuation.RepositoryPath, root))
+            {
+                throw new ArgumentException("The diagnostic continuation token is invalid, expired, or combined with new filters.", nameof(query));
+            }
+
+            effectiveQuery = continuation.Query;
+            offset = continuation.Offset;
         }
 
-        if (new[] { query.InvocationId, query.Project, query.File, query.Code }
+        if (new[] { effectiveQuery.InvocationId, effectiveQuery.Project, effectiveQuery.File, effectiveQuery.Code }
             .Any(value => value is { Length: > 1024 }))
         {
             throw new ArgumentOutOfRangeException(nameof(query), "Diagnostic query text exceeds host limits.");
@@ -328,57 +340,66 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             .ThenBy(run => run.InvocationId, StringComparer.Ordinal)
             .SelectMany(run => run.Diagnostics.Select(diagnostic =>
                 new DiagnosticQueryItem(run.InvocationId, run.RunId, run.ScopePath, run.Origin, ValidationAuthority.Exploratory, diagnostic)));
-        if (!string.IsNullOrWhiteSpace(query.InvocationId))
+        if (!string.IsNullOrWhiteSpace(effectiveQuery.InvocationId))
         {
-            items = items.Where(item => item.InvocationId.Equals(query.InvocationId, StringComparison.Ordinal));
+            items = items.Where(item => item.InvocationId.Equals(effectiveQuery.InvocationId, StringComparison.Ordinal));
         }
 
-        if (query.RunId is { } runId)
+        if (effectiveQuery.RunId is { } runId)
         {
             items = items.Where(item => item.RunId == runId);
         }
 
-        if (!string.IsNullOrWhiteSpace(query.Project))
+        if (!string.IsNullOrWhiteSpace(effectiveQuery.Project))
         {
-            items = items.Where(item => item.Diagnostic.Project.Equals(query.Project, StringComparison.OrdinalIgnoreCase));
+            items = items.Where(item => item.Diagnostic.Project.Equals(effectiveQuery.Project, StringComparison.OrdinalIgnoreCase));
         }
 
-        if (!string.IsNullOrWhiteSpace(query.File))
+        if (!string.IsNullOrWhiteSpace(effectiveQuery.File))
         {
-            var file = query.File.Replace('\\', '/');
+            var file = effectiveQuery.File.Replace('\\', '/');
             items = items.Where(item => string.Equals(item.Diagnostic.File, file, StringComparison.OrdinalIgnoreCase));
         }
 
-        if (!string.IsNullOrWhiteSpace(query.Code))
+        if (!string.IsNullOrWhiteSpace(effectiveQuery.Code))
         {
-            items = items.Where(item => item.Diagnostic.Code.Equals(query.Code, StringComparison.OrdinalIgnoreCase));
+            items = items.Where(item => item.Diagnostic.Code.Equals(effectiveQuery.Code, StringComparison.OrdinalIgnoreCase));
         }
 
-        if (query.Severity is { } severity)
+        if (effectiveQuery.Severity is { } severity)
         {
             items = items.Where(item => item.Diagnostic.Severity == severity);
         }
 
-        if (query.Origin is { } origin)
+        if (effectiveQuery.Origin is { } origin)
         {
             items = items.Where(item => item.Origin == origin);
         }
 
-        if (query.BaselineClass is { } classification)
+        if (effectiveQuery.BaselineClass is { } classification)
         {
             items = items.Where(item => item.Diagnostic.Classification == classification);
         }
 
         DiagnosticQueryItem[] all = [.. items];
-        var requestedOffset = (long)query.Page * query.PageSize;
-        var offset = requestedOffset >= all.Length ? all.Length : (int)requestedOffset;
-        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(query.PageSize)];
+        offset = Math.Min(offset, all.Length);
+        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(DiagnosticPageSize)];
+        string? nextToken = null;
+        if (offset + page.Length < all.Length)
+        {
+            nextToken = CreateIdentity($"diagnostic-continuation|{Guid.NewGuid():N}");
+            _diagnosticContinuations[nextToken] = new DiagnosticContinuation(
+                root,
+                effectiveQuery with { ContinuationToken = null },
+                offset + page.Length,
+                DateTimeOffset.UtcNow);
+        }
+
+        TrimIndexes();
         return Task.FromResult(new DiagnosticQueryResult(
             page,
             all.Length,
-            query.Page,
-            query.PageSize,
-            offset + page.Length < all.Length));
+            nextToken));
     }
 
     /// <inheritdoc />
@@ -389,43 +410,38 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateTimeout(request.TimeoutSeconds);
         ValidateTestFilters(request);
-        if (request.MaximumTests is < 1 or > 500)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request), "Test discovery returns at most 500 identities.");
-        }
 
         var root = NormalizeRoot(repositoryPath);
         var projectPath = ResolveTarget(root, request.ProjectPath, requireProject: true);
         var project = ReadTestProject(root, projectPath);
-        var traitFilter = request.TraitName is not null && request.TraitValue is not null
-            ? $"{request.TraitName}={EscapeTestFilterValue(request.TraitValue)}"
+        var traitFilter = request.Trait is { } trait
+            ? $"{trait.Name}={EscapeTestFilterValue(trait.Value)}"
             : null;
         var cases = await _testDiscoverer.DiscoverCasesAsync(
             runId,
             root,
             [project],
             traitFilter,
-            TimeSpan.FromSeconds(request.TimeoutSeconds),
+            TimeSpan.FromSeconds(OperationTimeoutSeconds),
             cancellationToken);
         DiscoveredTest[] discovered = [.. cases
             .Where(testCase => testCase.FullyQualifiedName.Length <= 1024)
             .Select(testCase => CreateDiscoveredTest(root, testCase))];
         var overlongNamesOmitted = discovered.Length != cases.Count;
-        if (request.TraitName is not null && request.TraitValue is not null)
+        if (request.Trait is { } selectedTrait)
         {
             discovered = [.. discovered.Select(test => test with
             {
                 Traits = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    [request.TraitName] = request.TraitValue,
+                    [selectedTrait.Name] = selectedTrait.Value,
                 },
             })];
         }
 
         DiscoveredTest[] all = [.. ApplyTestFilters(discovered, request)];
-        DiscoveredTest[] bounded = [.. all.Take(request.MaximumTests)];
+        DiscoveredTest[] bounded = [.. all.Take(MaximumDiscoveredTests)];
         foreach (var test in bounded)
         {
             _discoveredTests[test.Id.Value] = new StoredDiscoveredTest(root, test);
@@ -477,7 +493,6 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             throw new ArgumentOutOfRangeException(nameof(request), "Test identity length is invalid.");
         }
 
-        ValidateTimeout(request.TimeoutSeconds);
         var root = NormalizeRoot(repositoryPath);
         _ = ResolveTestProjectPath(root, request.TestId);
         if (!_discoveredTests.TryGetValue(request.TestId.Value, out var stored))
@@ -509,7 +524,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(request.TimeoutSeconds),
+            TimeSpan.FromSeconds(OperationTimeoutSeconds),
             cancellationToken);
         var selection = new TestSelection { Projects = [project] };
         var normalized = TestResultNormalizer.Normalize(project, process, selection.RelatedMutationIds);
@@ -537,7 +552,6 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         DiagnosticOrigin origin,
         CancellationToken cancellationToken)
     {
-        ValidateTimeout(request.TimeoutSeconds);
         var root = NormalizeRoot(repositoryPath);
         var target = ResolveTarget(root, request.TargetPath, requireProject: false);
         ValidateFramework(request.TargetFramework);
@@ -553,7 +567,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(request.TimeoutSeconds),
+            TimeSpan.FromSeconds(OperationTimeoutSeconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         Diagnostic[] diagnostics = [.. DiagnosticNormalizer.Normalize(
@@ -912,32 +926,35 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
     private static void ValidateTestFilters(TestDiscoveryRequest request)
     {
-        if ((request.TraitValue is null) != (request.TraitName is null))
+        if (request.Trait is { } trait)
         {
-            throw new ArgumentException("Trait discovery requires both an exact trait name and value.", nameof(request));
+            ArgumentException.ThrowIfNullOrWhiteSpace(trait.Name);
+            ArgumentException.ThrowIfNullOrWhiteSpace(trait.Value);
+            if (trait.Name.Length > 128
+                || trait.Name.Any(character => !char.IsAsciiLetterOrDigit(character)
+                    && character is not '_' and not '.'))
+            {
+                throw new ArgumentException("Trait names contain only ASCII letters, digits, underscores, and periods.", nameof(request));
+            }
         }
 
-        if (request.TraitName is not null
-            && (request.TraitName.Length > 128
-                || request.TraitName.Any(character => !char.IsAsciiLetterOrDigit(character)
-                    && character is not '_' and not '.')))
-        {
-            throw new ArgumentException("Trait names contain only ASCII letters, digits, underscores, and periods.", nameof(request));
-        }
-
-        if (new[] { request.Namespace, request.ClassName, request.MethodName, request.TraitName, request.TraitValue }
+        if (new[] { request.Namespace, request.ClassName, request.MethodName, request.Trait?.Name, request.Trait?.Value }
             .Any(value => value is { Length: > 512 }))
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Test discovery filters exceed host limits.");
         }
     }
 
-    private static void ValidateTimeout(int timeoutSeconds)
+    private static bool HasDiagnosticFilters(DiagnosticQuery query)
     {
-        if (timeoutSeconds is < 1 or > 300)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds));
-        }
+        return query.InvocationId is not null
+            || query.RunId is not null
+            || query.Project is not null
+            || query.File is not null
+            || query.Code is not null
+            || query.Severity is not null
+            || query.Origin is not null
+            || query.BaselineClass is not null;
     }
 
     private static void ValidateFramework(string? framework)
@@ -1039,10 +1056,10 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             tests = tests.Where(test => string.Equals(test.MethodName, request.MethodName, StringComparison.Ordinal));
         }
 
-        if (!string.IsNullOrWhiteSpace(request.TraitName))
+        if (request.Trait is { } trait)
         {
-            tests = tests.Where(test => test.Traits.TryGetValue(request.TraitName, out var value)
-                && (request.TraitValue is null || value.Equals(request.TraitValue, StringComparison.Ordinal)));
+            tests = tests.Where(test => test.Traits.TryGetValue(trait.Name, out var value)
+                && value.Equals(trait.Value, StringComparison.Ordinal));
         }
 
         return tests;
@@ -1057,8 +1074,8 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 (Name: "namespace", Value: request.Namespace),
                 (Name: "class", Value: request.ClassName),
                 (Name: "method", Value: request.MethodName),
-                (Name: "trait", Value: request.TraitName),
-                (Name: "traitValue", Value: request.TraitValue),
+                (Name: "trait", Value: request.Trait?.Name),
+                (Name: "traitValue", request.Trait?.Value),
             }
                 .Where(part => !string.IsNullOrWhiteSpace(part.Value))
                 .Select(part => $"{part.Name}={part.Value}"),
@@ -1079,6 +1096,14 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         foreach (var key in _discoveredTests.Keys.OrderBy(key => key, StringComparer.Ordinal).Skip(10000))
         {
             _discoveredTests.TryRemove(key, out _);
+        }
+
+        foreach (var key in _diagnosticContinuations
+            .OrderByDescending(item => item.Value.CreatedAt)
+            .Skip(1000)
+            .Select(item => item.Key))
+        {
+            _diagnosticContinuations.TryRemove(key, out _);
         }
     }
 
@@ -1118,6 +1143,12 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         string ScopePath,
         DiagnosticOrigin Origin,
         IReadOnlyList<Diagnostic> Diagnostics,
+        DateTimeOffset CreatedAt);
+
+    private sealed record DiagnosticContinuation(
+        string RepositoryPath,
+        DiagnosticQuery Query,
+        int Offset,
         DateTimeOffset CreatedAt);
 
     private sealed record StoredDiscoveredTest(string RepositoryPath, DiscoveredTest Test);

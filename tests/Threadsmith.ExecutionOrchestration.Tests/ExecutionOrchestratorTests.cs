@@ -1001,6 +1001,32 @@ public sealed class ExecutionOrchestratorTests
             secondStepId);
     }
 
+    private static string SerializePlanProposal(ImplementationPlan plan)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            schemaVersion = plan.SchemaVersion,
+            plan.Revision,
+            plan.Summary,
+            steps = plan.Steps.Select(step => new
+            {
+                stepId = step.StepId.Value.ToString("D"),
+                step.Title,
+                step.Description,
+                fileIntents = step.FileIntents.Select(intent => new
+                {
+                    kind = intent.Kind.ToString(),
+                    intent.Path,
+                    intent.DestinationPath,
+                }),
+                step.ExpectedOutcome,
+                step.Validation,
+            }),
+            plan.Risks,
+            plan.OutstandingQuestions,
+        });
+    }
+
     private static async Task AssertContinuationRejectedAsync(
         ExecutionOrchestrator orchestrator,
         ContinueExecutionRequest continuation)
@@ -1250,7 +1276,7 @@ public sealed class ExecutionOrchestratorTests
             {
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
-                    JsonSerializer.Serialize(new PlanModelOutput(_plan))),
+                    SerializePlanProposal(_plan)),
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }

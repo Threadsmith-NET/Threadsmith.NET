@@ -29,54 +29,41 @@ public sealed partial class SessionApplication :
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schemaVersion", "plan"],
+          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
           "properties": {
-            "schemaVersion": { "type": "integer", "const": 1 },
-            "plan": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
-              "properties": {
-                "schemaVersion": { "type": "integer", "const": 2 },
-                "revision": { "type": "integer", "minimum": 1 },
-                "summary": { "type": "string" },
-                "steps": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
-                    "properties": {
-                      "stepId": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["value"],
-                        "properties": { "value": { "type": "string", "format": "uuid" } }
-                      },
-                      "title": { "type": "string" },
-                      "description": { "type": "string" },
-                      "fileIntents": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["kind", "path"],
-                          "properties": {
-                            "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
-                            "path": { "type": "string" },
-                            "destinationPath": { "type": "string" }
-                          }
-                        }
-                      },
-                      "expectedOutcome": { "type": "string" },
-                      "validation": { "type": "array", "items": { "type": "string" } }
+            "schemaVersion": { "type": "integer", "const": 2 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "summary": { "type": "string" },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+                "properties": {
+                  "stepId": { "type": "string", "format": "uuid" },
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "fileIntents": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "path"],
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
+                        "path": { "type": "string" },
+                        "destinationPath": { "type": "string" }
+                      }
                     }
-                  }
-                },
-                "risks": { "type": "array", "items": { "type": "string" } },
-                "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "expectedOutcome": { "type": "string" },
+                  "validation": { "type": "array", "items": { "type": "string" } }
+                }
               }
-            }
+            },
+            "risks": { "type": "array", "items": { "type": "string" } },
+            "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
           }
         }
         """;

@@ -310,13 +310,28 @@ public sealed class SkillSubsystemTests
         };
 
         // Act
-        _ = await tool.ExecuteAsync(
-            new InvokeSkillInput { Selector = "test-skill", InputJson = "{}" },
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"test-skill\",\"input\":{\"scope\":\"current\"}}"));
+        var execution = await tool.ExecuteAsync(
+            input,
             context);
 
         // Assert
         Assert.NotNull(workflows.Request);
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
+        Assert.Equal("{\"scope\":\"current\"}", workflows.Request.InputJson);
+        Assert.Contains("\"input\":{}", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("inputJson", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.Contains("invocationId", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.Contains("payloadJson", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
+        var hostResultJson = JsonSerializer.Serialize(execution.Value);
+        Assert.Contains("\"invocationId\":\"", hostResultJson, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"Completed\"", hostResultJson, StringComparison.Ordinal);
+        Assert.Contains("\"payloadJson\":\"{\\u0022question", hostResultJson, StringComparison.Ordinal);
+        Assert.NotNull(execution.ModelResultContent);
+        Assert.Contains("\"payload\":{\"question\":\"continue?\"}", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("invocationId", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("digest", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Verifies skill procedure model-tool projection preserves strict argument preference.</summary>
@@ -1062,6 +1077,15 @@ public sealed class SkillSubsystemTests
                 InvocationId = request.InvocationId,
                 Package = package,
                 Status = SkillInvocationStatus.Completed,
+                HostActions =
+                [
+                    new SkillHostActionProposal
+                    {
+                        Kind = SkillHostActionKind.AskUserInput,
+                        StepId = "confirm",
+                        PayloadJson = "{\"question\":\"continue?\"}",
+                    },
+                ],
                 Reason = "test complete",
                 Checkpoint = checkpoint,
             });

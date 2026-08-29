@@ -382,10 +382,12 @@ public static class Milestone5Tests
         var modelTool = Assert.Single(modelRequest.Tools);
         Assert.Equal(contextTool.Id, modelTool.Name);
         Assert.Equal(contextTool.Description, modelTool.Description);
-        Assert.Contains("mutationSet requires rationale and mutations", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("Each mutation item requires type and relativePath", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("use baselineSha256", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("Do not use plan file-intent or legacy names kind, path, baselineHash", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("host already owns the approved plan revision and step identities", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("operation-specific shape", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("relativePath and, when advertised, baselineSha256", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("never use plan file-intent or legacy names kind, path, baselineHash", modelTool.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("planRevision", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("planStepIds", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
         var strictMutationSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
             modelTool.Name,
             modelTool.ArgumentsJsonSchema);
@@ -397,21 +399,25 @@ public static class Milestone5Tests
             Assert.Contains(
                 strictRoot.GetProperty("required").EnumerateArray(),
                 item => item.GetString() == "mutationSet");
-            var mutationItem = strictRoot
-                .GetProperty("properties")
-                .GetProperty("mutationSet")
-                .GetProperty("properties")
-                .GetProperty("mutations")
-                .GetProperty("items");
+            var mutationItem = strictRoot.GetProperty("properties")
+                .GetProperty("mutationSet").GetProperty("properties")
+                .GetProperty("mutations").GetProperty("items");
+            Assert.Equal(5, mutationItem.GetProperty("anyOf").GetArrayLength());
+            var replaceText = strictRoot.GetProperty("$defs").GetProperty("replaceText");
             Assert.Contains(
-                mutationItem.GetProperty("required").EnumerateArray(),
+                replaceText.GetProperty("required").EnumerateArray(),
                 item => item.GetString() == "type");
             Assert.Contains(
-                mutationItem.GetProperty("required").EnumerateArray(),
+                replaceText.GetProperty("required").EnumerateArray(),
                 item => item.GetString() == "relativePath");
             Assert.Contains(
-                mutationItem.GetProperty("required").EnumerateArray(),
-                item => item.GetString() == "baselineSha256");
+                replaceText.GetProperty("required").EnumerateArray(),
+                item => item.GetString() == "expectedText");
+            Assert.False(replaceText.GetProperty("properties").TryGetProperty(
+                "destinationRelativePath",
+                out _));
+            Assert.False(strictRoot.GetProperty("$defs").GetProperty("createFile")
+                .GetProperty("properties").TryGetProperty("expectedText", out _));
         }
 
         Assert.Equal(contextTool.JsonSchema, modelTool.ArgumentsJsonSchema);
@@ -447,15 +453,12 @@ public static class Milestone5Tests
         var baselineFile = Assert.Single(repository.Baseline.Files);
         var envelope = new MutationProposalEnvelope
         {
-            PlanRevision = 1,
-            PlanStepIds = [stepId],
             MutationSet = new MutationProposalSet
             {
                 Mutations =
                 [
-                    new MutationProposalChange
+                    new ReplaceTextMutationProposal
                     {
-                        Type = MutationType.ReplaceText,
                         RelativePath = "src/SectorEntityStandardizer.cs",
                         BaselineSha256 = baselineFile.Sha256,
                         StartOffset = 0,
@@ -556,22 +559,18 @@ public static class Milestone5Tests
             file => file.RelativePath == "Contracts/IRetriever.cs");
         var envelope = new MutationProposalEnvelope
         {
-            PlanRevision = 1,
-            PlanStepIds = [stepId],
             MutationSet = new MutationProposalSet
             {
                 Mutations =
                 [
-                    new MutationProposalChange
+                    new RenameSymbolMutationProposal
                     {
-                        Type = MutationType.RenameSymbol,
                         RelativePath = "Contracts/IRetriever.cs",
                         RelatedSymbolId = "T:Demo.IRetriever",
                         ReplacementText = "IRetrieval",
                     },
-                    new MutationProposalChange
+                    new MoveFileMutationProposal
                     {
-                        Type = MutationType.MoveFile,
                         RelativePath = "Contracts/IRetriever.cs",
                         DestinationRelativePath = "Contracts/IRetrieval.cs",
                         ExpectedIdentity = new ExpectedFileIdentity
@@ -796,19 +795,16 @@ public static class Milestone5Tests
             StringComparison.Ordinal);
         Assert.Contains("IRetrieval", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
 
-        string CreateArguments(string relatedSymbolId)
+        static string CreateArguments(string relatedSymbolId)
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new RenameSymbolMutationProposal
                         {
-                            Type = MutationType.RenameSymbol,
                             RelativePath = "Contracts/IRetriever.cs",
                             RelatedSymbolId = relatedSymbolId,
                             ReplacementText = "IRetrieval",
@@ -932,15 +928,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/Example.cs",
                             BaselineSha256 = baselineFile.Sha256,
                             StartOffset = offset,
@@ -1037,15 +1030,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new CreateFileMutationProposal
                         {
-                            Type = MutationType.CreateFile,
                             RelativePath = "src/Example.cs",
                             Content = new FileContentDescriptor
                             {
@@ -1194,15 +1184,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/Foo.cs",
                             BaselineSha256 = upperSha256,
                             StartOffset = upperOffset,
@@ -1210,9 +1197,8 @@ public static class Milestone5Tests
                             ExpectedText = string.Empty,
                             ReplacementText = "    public void UpperCaseEdit() { }\n",
                         },
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/foo.cs",
                             BaselineSha256 = lowerSha256,
                             StartOffset = lowerOffset,
@@ -1319,15 +1305,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/Example.cs",
                             BaselineSha256 = baselineSha256,
                             StartOffset = startOffset,
@@ -1428,15 +1411,12 @@ public static class Milestone5Tests
         var stepId = StepId.New();
         var envelope = new MutationProposalEnvelope
         {
-            PlanRevision = 1,
-            PlanStepIds = [stepId],
             MutationSet = new MutationProposalSet
             {
                 Mutations =
                 [
-                    new MutationProposalChange
+                    new CreateFileMutationProposal
                     {
-                        Type = MutationType.CreateFile,
                         RelativePath = "src/Added.cs",
                         Content = new FileContentDescriptor
                         {
@@ -1614,15 +1594,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/SectorEntityStandardizer.cs",
                             BaselineSha256 = baselineFile.Sha256,
                             StartOffset = 0,
@@ -1860,15 +1837,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/SectorEntityStandardizer.cs",
                             BaselineSha256 = baselineFile.Sha256,
                             StartOffset = 0,
@@ -2006,15 +1980,12 @@ public static class Milestone5Tests
         {
             var envelope = new MutationProposalEnvelope
             {
-                PlanRevision = 1,
-                PlanStepIds = [stepId],
                 MutationSet = new MutationProposalSet
                 {
                     Mutations =
                     [
-                        new MutationProposalChange
+                        new ReplaceTextMutationProposal
                         {
-                            Type = MutationType.ReplaceText,
                             RelativePath = "src/SectorEntityStandardizer.cs",
                             BaselineSha256 = baselineFile.Sha256,
                             StartOffset = 0,
@@ -2125,15 +2096,12 @@ public static class Milestone5Tests
         var baselineFile = Assert.Single(repository.Baseline.Files);
         var envelope = new MutationProposalEnvelope
         {
-            PlanRevision = 1,
-            PlanStepIds = [stepId],
             MutationSet = new MutationProposalSet
             {
                 Mutations =
                 [
-                    new MutationProposalChange
+                    new ReplaceTextMutationProposal
                     {
-                        Type = MutationType.ReplaceText,
                         RelativePath = "../escape.cs",
                         BaselineSha256 = baselineFile.Sha256,
                         StartOffset = 0,
@@ -4169,22 +4137,20 @@ public static class Milestone5Tests
         Assert.Equal(stepId, fromObject);
     }
 
-    /// <summary>MutationProposalEnvelope.PlanStepIds tolerates bare UUID strings in JSON.</summary>
+    /// <summary>The mutation proposal discriminates operation-specific contracts without model-owned plan ids.</summary>
     [Fact]
-    public static void MutationProposalEnvelope_PlanStepIds_BareUuidStrings_Deserializes()
+    public static void MutationProposalEnvelope_OperationDiscriminator_DeserializesSpecificContract()
     {
         // Arrange
-        var stepId = StepId.New();
-        var json = $$"""
+        var json = """
             {
-              "schemaVersion": 1,
-              "planRevision": 1,
-              "planStepIds": ["{{stepId.Value}}"],
               "mutationSet": {
                 "mutations": [
                   {
                     "type": "ReplaceText",
                     "relativePath": "src/Example.cs",
+                    "startOffset": 0,
+                    "length": 3,
                     "expectedText": "old",
                     "replacementText": "new"
                   }
@@ -4196,17 +4162,50 @@ public static class Milestone5Tests
         var options = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
-            Converters = { new JsonStringEnumConverter() },
         };
-        options.Converters.Add(new StepIdJsonConverter());
 
         // Act
         var envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(json, options);
 
         // Assert
         Assert.NotNull(envelope);
-        Assert.Single(envelope.PlanStepIds);
-        Assert.Equal(stepId, envelope.PlanStepIds[0]);
+        var change = Assert.IsType<ReplaceTextMutationProposal>(Assert.Single(envelope.MutationSet.Mutations));
+        Assert.Equal("old", change.ExpectedText);
+        Assert.Equal("new", change.ReplacementText);
+    }
+
+    /// <summary>Operation-specific mutation DTOs reject fields owned by a different operation.</summary>
+    [Fact]
+    public static void MutationProposalEnvelope_IrrelevantOperationField_RejectsJson()
+    {
+        // Arrange
+        var json = """
+            {
+              "mutationSet": {
+                "mutations": [
+                  {
+                    "type": "ReplaceText",
+                    "relativePath": "src/Example.cs",
+                    "startOffset": 0,
+                    "length": 3,
+                    "expectedText": "old",
+                    "replacementText": "new",
+                    "destinationRelativePath": "src/Elsewhere.cs"
+                  }
+                ],
+                "rationale": "test"
+              }
+            }
+            """;
+        var options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        };
+
+        // Act + Assert
+        _ = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<MutationProposalEnvelope>(json, options));
     }
 
     private sealed class RedactingSanitizer : IOutputSanitizer

@@ -9,7 +9,12 @@ using Threadsmith.Core;
 /// <summary>Executes closed, bounded, local-only Git inspection queries.</summary>
 public sealed class GitQueryService : IGitQueryService
 {
+    private const int MaximumBlameLines = 500;
     private const int MaximumCapturedCharacters = 512 * 1024;
+    private const int MaximumChangedPaths = 500;
+    private const int MaximumDiffEntries = 200;
+    private const int MaximumPatchCharacters = 131072;
+    private const int MaximumShowCharacters = 131072;
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
@@ -61,9 +66,7 @@ public sealed class GitQueryService : IGitQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var mode = request.Mode ?? GitComparisonMode.WorkingTree;
-        var maximumEntries = request.MaximumEntries ?? 200;
-        var maximumPatchCharacters = request.MaximumPatchCharacters ?? 131072;
-        ValidateDiff(request, mode, maximumEntries, maximumPatchCharacters);
+        ValidateDiff(request, mode);
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var path = ValidatePath(root, request.Path);
         var comparison = BuildComparison(request, mode);
@@ -110,13 +113,13 @@ public sealed class GitQueryService : IGitQueryService
         IReadOnlyList<GitDiffEntry> allEntries = ParseNameStatus(names.Text)
             .Select(entry => entry with { IsBinary = binaryPaths.Contains(entry.Path) })
             .ToArray();
-        GitDiffEntry[] entries = [.. allEntries.Take(maximumEntries)];
+        GitDiffEntry[] entries = [.. allEntries.Take(MaximumDiffEntries)];
         var truncated = names.IsTruncated
             || numstat.IsTruncated
             || patch.IsTruncated
             || entries.Length < allEntries.Count
-            || patch.Text.Length > maximumPatchCharacters;
-        var boundedPatch = patch.Text[..Math.Min(patch.Text.Length, maximumPatchCharacters)];
+            || patch.Text.Length > MaximumPatchCharacters;
+        var boundedPatch = patch.Text[..Math.Min(patch.Text.Length, MaximumPatchCharacters)];
         return new GitDiffResult(
             mode,
             request.BaseRevision,
@@ -135,12 +138,8 @@ public sealed class GitQueryService : IGitQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var revision = NormalizeRevisionOrDefault(request.Revision);
-        var maximumCommits = request.MaximumCommits ?? 50;
+        var maximumCommits = Math.Clamp(request.MaximumCommits ?? 50, 1, 500);
         ValidateRevision(revision, nameof(request.Revision));
-        if (maximumCommits is < 1 or > 500)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request.MaximumCommits));
-        }
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var path = ValidatePath(root, request.Path);
@@ -163,12 +162,7 @@ public sealed class GitQueryService : IGitQueryService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var maximumCharacters = request.MaximumCharacters ?? 131072;
         ValidateRevision(request.Revision, nameof(request.Revision));
-        if (maximumCharacters is < 1 or > MaximumCapturedCharacters)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request.MaximumCharacters));
-        }
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var path = ValidatePath(root, request.Path);
@@ -193,11 +187,11 @@ public sealed class GitQueryService : IGitQueryService
             var blob = await RunBytesAsync(root, ["cat-file", "-p", objectExpression], cancellationToken);
             var binary = blob.IsBinary;
             var content = binary ? string.Empty : StrictUtf8.GetString(blob.Bytes);
-            var truncated = blob.IsTruncated || content.Length > maximumCharacters;
+            var truncated = blob.IsTruncated || content.Length > MaximumShowCharacters;
             return new GitShowResult(
                 request.Revision,
                 kind,
-                content[..Math.Min(content.Length, maximumCharacters)],
+                content[..Math.Min(content.Length, MaximumShowCharacters)],
                 binary,
                 truncated);
         }
@@ -206,11 +200,11 @@ public sealed class GitQueryService : IGitQueryService
             ? ["show", "--no-ext-diff", "--no-textconv", "--format=fuller", "--binary", request.Revision, .. Pathspec(path)]
             : ["ls-tree", objectExpression];
         var objectOutput = await RunAsync(root, objectArguments, cancellationToken);
-        var objectTruncated = objectOutput.IsTruncated || objectOutput.Text.Length > maximumCharacters;
+        var objectTruncated = objectOutput.IsTruncated || objectOutput.Text.Length > MaximumShowCharacters;
         return new GitShowResult(
             request.Revision,
             kind,
-            objectOutput.Text[..Math.Min(objectOutput.Text.Length, maximumCharacters)],
+            objectOutput.Text[..Math.Min(objectOutput.Text.Length, MaximumShowCharacters)],
             false,
             objectTruncated);
     }
@@ -223,10 +217,8 @@ public sealed class GitQueryService : IGitQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var revision = NormalizeRevisionOrDefault(request.Revision);
-        var maximumLines = request.MaximumLines ?? 500;
         ValidateRevision(revision, nameof(request.Revision));
-        if (maximumLines is < 1 or > 2000
-            || request.StartLine is < 1
+        if (request.StartLine is < 1
             || request.EndLine is < 1
             || request.StartLine > request.EndLine)
         {
@@ -240,7 +232,10 @@ public sealed class GitQueryService : IGitQueryService
         if (request.StartLine is not null)
         {
             arguments.Add("-L");
-            arguments.Add($"{request.StartLine},{request.EndLine ?? request.StartLine + maximumLines - 1}");
+            var implicitEndLine = (int)Math.Min(
+                int.MaxValue,
+                (long)request.StartLine.Value + MaximumBlameLines - 1);
+            arguments.Add($"{request.StartLine},{request.EndLine ?? implicitEndLine}");
         }
 
         arguments.Add(revision);
@@ -248,7 +243,7 @@ public sealed class GitQueryService : IGitQueryService
         arguments.Add(path);
         var output = await RunAsync(root, arguments, cancellationToken);
         var allLines = ParseBlame(output.Text);
-        GitBlameRange[] lines = [.. allLines.Take(maximumLines)];
+        GitBlameRange[] lines = [.. allLines.Take(MaximumBlameLines)];
         return new GitBlameResult(path, lines, output.IsTruncated || allLines.Count > lines.Length);
     }
 
@@ -259,13 +254,8 @@ public sealed class GitQueryService : IGitQueryService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var maximumPaths = request.MaximumPaths ?? 500;
         ValidateRevision(request.BaseRevision, nameof(request.BaseRevision));
         ValidateRevision(request.TargetRevision, nameof(request.TargetRevision));
-        if (maximumPaths is < 1 or > 2000)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request.MaximumPaths));
-        }
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var mergeBaseOutput = await RunAsync(
@@ -296,7 +286,7 @@ public sealed class GitQueryService : IGitQueryService
             ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", mergeBase, request.TargetRevision],
             cancellationToken);
         var allPaths = ParseNameStatus(changedPathsOutput.Text);
-        GitDiffEntry[] paths = [.. allPaths.Take(maximumPaths)];
+        GitDiffEntry[] paths = [.. allPaths.Take(MaximumChangedPaths)];
         return new GitBranchComparisonResult(
             request.BaseRevision,
             request.TargetRevision,
@@ -322,16 +312,8 @@ public sealed class GitQueryService : IGitQueryService
 
     private static void ValidateDiff(
         GitDiffRequest request,
-        GitComparisonMode mode,
-        int maximumEntries,
-        int maximumPatchCharacters)
+        GitComparisonMode mode)
     {
-        if (maximumEntries is < 1 or > 2000
-            || maximumPatchCharacters is < 1 or > MaximumCapturedCharacters)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request));
-        }
-
         if (mode == GitComparisonMode.Commit)
         {
             ValidateRevision(request.BaseRevision, nameof(request.BaseRevision));

@@ -9,7 +9,7 @@ public static class ModelVisibleSourceFrontierBuilder
 {
     private const int MaximumEntries = 256;
 
-    /// <summary>Derives exact code-explore source ranges retained verbatim in the current model request.</summary>
+    /// <summary>Derives exact code-explore source ranges retained in the current model request after host output sanitization.</summary>
     public static ModelVisibleSourceFrontier Build(
         IReadOnlyList<ModelMessage> messages,
         string repositoryPath,
@@ -36,37 +36,12 @@ public static class ModelVisibleSourceFrontierBuilder
 
             foreach (var content in message.Content.Where(part => part.Kind == ModelContentPartKind.Json))
             {
-                if (!TryDeserializeCodeExploreResult(content.Content, out var result))
-                {
-                    continue;
-                }
-
-                var fileSections = result.FileSections;
-                if (!HasUsableCodeExploreResultShape(result, fileSections))
-                {
-                    continue;
-                }
-
-                foreach (var section in fileSections)
-                {
-                    if (entries.Count >= MaximumEntries)
-                    {
-                        break;
-                    }
-
-                    if (!TryCreateEntry(
-                        section,
-                        message,
-                        normalizedRepositoryPath,
-                        workspaceId,
-                        result.WorkspaceGeneration,
-                        out var entry))
-                    {
-                        continue;
-                    }
-
-                    entries.Add(entry);
-                }
+                AddJsonCodeExploreEntries(
+                    content.Content,
+                    message,
+                    normalizedRepositoryPath,
+                    workspaceId,
+                    entries);
             }
         }
 
@@ -78,6 +53,46 @@ public static class ModelVisibleSourceFrontierBuilder
             entries.Count,
             entries.Count,
             entries.Sum(entry => entry.EmittedCharacters));
+    }
+
+    private static void AddJsonCodeExploreEntries(
+        string content,
+        ModelMessage message,
+        string normalizedRepositoryPath,
+        WorkspaceId? workspaceId,
+        List<ModelVisibleSourceEntry> entries)
+    {
+        if (entries.Count >= MaximumEntries || !TryDeserializeCodeExploreResult(content, out var result))
+        {
+            return;
+        }
+
+        var fileSections = result.FileSections;
+        if (!HasUsableCodeExploreResultShape(result, fileSections))
+        {
+            return;
+        }
+
+        foreach (var section in fileSections)
+        {
+            if (entries.Count >= MaximumEntries)
+            {
+                break;
+            }
+
+            if (!TryCreateEntry(
+                section,
+                message,
+                normalizedRepositoryPath,
+                workspaceId,
+                result.WorkspaceGeneration,
+                out var entry))
+            {
+                continue;
+            }
+
+            entries.Add(entry);
+        }
     }
 
     private static bool TryDeserializeCodeExploreResult(

@@ -360,6 +360,10 @@
     "findSymbol": { "maxResults": 1000 },
     "findReferences": { "maxResults": 1000 },
     "findImplementations": { "maxResults": 1000 },
+    "codeExplore": {
+      // TUI-only diagnostic switch that includes future code_explore output in tool completion blocks.
+      "inspectCodeExploreOutput": false
+    },
     "runProcess": {
       "defaultTimeoutSeconds": 30,
       "maxTimeoutSeconds": 60,

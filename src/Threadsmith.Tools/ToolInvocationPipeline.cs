@@ -48,6 +48,7 @@ public interface IToolInvocationPipeline
 public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 {
     private const int MaximumActivityDetailCharacters = 240;
+    private const int MaximumPreflightReasonCharacters = 512;
     private static readonly ActivitySource _activitySource = new("Threadsmith.Tools");
     private static readonly Meter _meter = new("Threadsmith.Tools");
     private static readonly Histogram<double> _latency = _meter.CreateHistogram<double>(
@@ -140,7 +141,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     FailedOrdinal = planned.Request.Ordinal,
                     FailedToolId = planned.Request.Invocation.ToolId,
                     ErrorClassification = ToolErrorClassification.InvalidArguments,
-                    SafeReason = "Tool arguments do not match the declared input schema or host invariants.",
+                    SafeReason = CreatePreflightSafeReason(planned.PreparationError),
                 };
             }
         }
@@ -582,6 +583,24 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     authoritativeElapsedMilliseconds);
             }
 
+            string? modelResultContent = null;
+            if (!string.IsNullOrEmpty(execution.ModelResultContent))
+            {
+                modelResultContent = _sanitizer.Sanitize(execution.ModelResultContent);
+                if (Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
+                {
+                    return await CompleteFailureAsync(
+                        request,
+                        invocationId,
+                        ToolErrorClassification.OutputLimitExceeded,
+                        "The sanitized model-visible tool result exceeded its declared output bound.",
+                        startedAt,
+                        isTruncated: true,
+                        source,
+                        authoritativeElapsedMilliseconds);
+                }
+            }
+
             var duration = authoritativeElapsedMilliseconds is { } measured
                 ? TimeSpan.FromMilliseconds(measured)
                 : TimeSpan.Zero;
@@ -600,7 +619,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     IsTruncated: execution.IsTruncated,
                     Source: source,
                     ElapsedMilliseconds: authoritativeElapsedMilliseconds,
-                    Outcome: OperationActivityOutcome.Completed),
+                    Outcome: OperationActivityOutcome.Completed,
+                    ModelResultContent: modelResultContent),
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -609,6 +629,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ToolId = tool.Definition.Id,
                 Succeeded = true,
                 ResultJson = resultJson,
+                ModelResultContent = modelResultContent,
                 Sources = execution.Sources,
                 IsTruncated = execution.IsTruncated,
                 ErrorClassification = ToolErrorClassification.None,
@@ -685,6 +706,37 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
         }
+    }
+
+    private string CreatePreflightSafeReason(string? preparationError)
+    {
+        if (string.IsNullOrWhiteSpace(preparationError))
+        {
+            return "Tool arguments do not match the declared input schema or host invariants.";
+        }
+
+        var sanitized = _sanitizer.Sanitize(preparationError);
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "Tool arguments do not match the declared input schema or host invariants."
+            : BoundSingleLine(sanitized, MaximumPreflightReasonCharacters);
+    }
+
+    private static string BoundSingleLine(string value, int maximumCharacters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+        foreach (var character in value)
+        {
+            if (builder.Length == maximumCharacters)
+            {
+                break;
+            }
+
+            builder.Append(char.IsWhiteSpace(character) || char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private string? CreateActivityDetail(ITool tool, object input)

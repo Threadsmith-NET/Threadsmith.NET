@@ -1090,6 +1090,20 @@ public sealed class SemanticEngine : ISemanticEngine
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>Captures semantic readiness before deciding whether code_explore can return source.</summary>
+    internal CodeExploreReadinessSnapshot CaptureCodeExploreReadinessSnapshot()
+    {
+        lock (_gate)
+        {
+            return new CodeExploreReadinessSnapshot(
+                _solution,
+                _compiledProjects.ToHashSet(),
+                _confidence,
+                _lastRequest?.RepositoryPath,
+                _generation);
+        }
+    }
+
     /// <summary>Captures immutable Roslyn references for one fenced advanced semantic query.</summary>
     internal AdvancedSemanticSnapshot CaptureAdvancedSnapshot()
     {

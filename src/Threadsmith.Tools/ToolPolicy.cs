@@ -76,7 +76,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        if (tool.GetExecutable(input) is { } executable)
+        if (tool.GetExecutable(input, context) is { } executable)
         {
             if (Path.IsPathFullyQualified(executable)
                 || executable.Contains('/')

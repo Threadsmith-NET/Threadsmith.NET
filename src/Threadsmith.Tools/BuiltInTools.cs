@@ -356,7 +356,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 {
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
         "search",
-        "Search file contents for exact literals, configuration keys, routes, log messages, comments, and docs. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, source-bearing natural-language or exact exploration, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
+        "Search file contents for concise exact literals, configuration keys, routes, log messages, comments, and docs. query is limited to 500 characters; do not paste source blocks, tool output, or long regular expressions as the query. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, source-bearing natural-language or exact exploration, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
         ToolCategory.FileSearch,
         RepositoryTrustLevel.TrustedRead,
         ApprovalLevel.None,
@@ -534,7 +534,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(
-                $"query is limited to 500 characters and maximumMatches to 0..{_limits.SearchMaxMatches} (0 uses the host default).");
+                $"query is limited to 500 characters; use a concise literal or regex, not pasted source/tool output. maximumMatches is limited to 0..{_limits.SearchMaxMatches} (0 uses the host default).");
         }
 
         if (input.UseRegularExpression)

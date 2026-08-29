@@ -37,9 +37,9 @@ public static class CompositionBoundariesTests
             p => Assert.True(IsInitOnly(p), $"{p.Name} must be init-only."));
     }
 
-    /// <summary>The five sub-records preserve all 32 already-initialized dependencies.</summary>
+    /// <summary>The five sub-records preserve all 33 already-initialized dependencies.</summary>
     [Fact]
-    public static void SubRecords_PreserveThirtyTwoDependencies()
+    public static void SubRecords_PreserveThirtyThreeDependencies()
     {
         var total = SubRecordPropertyCount<HostCompositionInputs>()
             + SubRecordPropertyCount<PersistenceCompositionInputs>()
@@ -47,14 +47,14 @@ public static class CompositionBoundariesTests
             + SubRecordPropertyCount<SemanticCompositionInputs>()
             + SubRecordPropertyCount<IntegrationCompositionInputs>();
 
-        Assert.Equal(32, total);
+        Assert.Equal(33, total);
     }
 
     /// <summary>Each sub-record has one clear responsibility with the expected dependency distribution.</summary>
     [Theory]
     [InlineData(typeof(HostCompositionInputs), 10)]
     [InlineData(typeof(PersistenceCompositionInputs), 11)]
-    [InlineData(typeof(ToolPolicyCompositionInputs), 7)]
+    [InlineData(typeof(ToolPolicyCompositionInputs), 8)]
     [InlineData(typeof(SemanticCompositionInputs), 2)]
     [InlineData(typeof(IntegrationCompositionInputs), 2)]
     public static void SubRecord_HasExpectedResponsibilitySize(Type subRecord, int expected)

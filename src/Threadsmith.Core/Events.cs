@@ -264,7 +264,8 @@ public sealed record ToolInvocationCompleted(
     bool IsTruncated = false,
     ToolActivitySource? Source = null,
     long? ElapsedMilliseconds = null,
-    OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown) : DomainEvent(SessionId, OccurredAt);
+    OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown,
+    string? ModelResultContent = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A semantic check started.</summary>
 public sealed record SemanticCheckStarted(
@@ -327,6 +328,9 @@ public enum ModelCorrectionCategory
 
     /// <summary>Post-apply validation correction.</summary>
     PostApplyValidation,
+
+    /// <summary>Empty assistant response correction.</summary>
+    EmptyResponse,
 }
 
 /// <summary>A recoverable model request was rejected and retried through a bounded corrective message.</summary>

@@ -2395,6 +2395,152 @@ public static class Milestone4Tests
         }
     }
 
+    /// <summary>A valid tool batch resets the corrective-turn count before later unrelated corrections.</summary>
+    [Fact]
+    public static async Task CorrectiveTurns_ResetAfterAcceptedToolBatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-correction-reset-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var capture = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var tool = new CountingReadTool();
+            var registry = new ToolRegistry([tool]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new ResetAfterToolBatchModelProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry,
+                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("correction reset"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "exercise independent tool corrections"));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+            Assert.Equal(1, tool.ExecutionCount);
+            Assert.Equal(4, model.Requests.Count);
+            ModelCorrectionAttempted[] corrections = [.. observed.OfType<ModelCorrectionAttempted>()];
+            Assert.Equal(2, corrections.Length);
+            Assert.All(corrections, correction =>
+            {
+                Assert.Equal(ModelCorrectionCategory.ToolBatch, correction.Category);
+                Assert.Equal(1, correction.AttemptNumber);
+                Assert.Equal(2, correction.MaximumAttempts);
+            });
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>An empty model response after tools is corrected instead of completing silently.</summary>
+    [Fact]
+    public static async Task EmptyResponseAfterTools_RequestsCorrectionAndDeliversAnswer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-empty-response-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var capture = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var tool = new CountingReadTool();
+            var registry = new ToolRegistry([tool]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new EmptyAfterToolThenTextModelProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry,
+                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("empty correction"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "inspect then answer"));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+            Assert.Equal(1, tool.ExecutionCount);
+            Assert.Equal(3, model.Requests.Count);
+            Assert.Equal(
+                "Answered after empty response correction.",
+                string.Concat(observed.OfType<ModelOutputObserved>().Select(item => item.Text)));
+            var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+            Assert.Equal(ModelCorrectionCategory.EmptyResponse, correction.Category);
+            Assert.Equal(1, correction.AttemptNumber);
+            Assert.Contains("assistant text", correction.SafeReason, StringComparison.Ordinal);
+            Assert.Contains(
+                model.Requests[2].Messages,
+                message => message.Role == ModelMessageRole.Developer
+                    && string.Equals(
+                        message.SectionId,
+                        "active-turn-empty-response-correction:1",
+                        StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>A never-delivered oversized tool group fails capacity rather than silently truncating its first delivery.</summary>
     [Fact]
     public static async Task NeverDeliveredLargeToolResult_FailsBeforeContinuationDispatch()
@@ -2535,6 +2681,139 @@ public static class Milestone4Tests
                         StringComparison.Ordinal)));
             Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>code_explore remains advertised without a workspace so its availability guidance can reach the model.</summary>
+    [Fact]
+    public static async Task SessionApplication_CodeExploreWithoutWorkspace_ReturnsAvailabilityToModel()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-code-explore-no-workspace-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var service = new UnexpectedCodeExploreService();
+            var registry = new ToolRegistry([new CodeExploreTool(service)]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new CodeExploreNoWorkspaceThenTextModelProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore availability"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "inspect repository without workspace"));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+            Assert.False(service.WasCalled);
+            Assert.Equal(2, model.Requests.Count);
+            var advertised = Assert.Single(model.Requests[0].Tools, tool => tool.Name == "code_explore");
+            Assert.True(advertised.PreferStrictArguments);
+            Assert.Contains(
+                model.Requests[1].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains(
+                        nameof(CodeExploreAvailabilityStatus.NoWorkspaceOpen),
+                        StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Removed internal code-explore controls return a precise model-visible schema-path correction.</summary>
+    [Fact]
+    public static async Task SessionApplication_CodeExploreInternalControl_ReturnsSpecificCorrection()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-code-explore-internal-correction-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var capture = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var service = new UnexpectedCodeExploreService();
+            var registry = new ToolRegistry([new CodeExploreTool(service)]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var model = new CodeExploreInternalControlThenTextModelProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence),
+                evidence,
+                registry);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore internal control correction"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "inspect repository with an internal code_explore control"));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+            Assert.False(service.WasCalled);
+            Assert.Equal(2, model.Requests.Count);
+            var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+            Assert.Equal(ModelCorrectionCategory.ToolBatch, correction.Category);
+            Assert.Contains("$.limits", correction.SafeReason, StringComparison.Ordinal);
+            Assert.Contains(
+                model.Requests[1].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains("$.limits", StringComparison.Ordinal)));
         }
         finally
         {
@@ -4120,6 +4399,92 @@ public static class Milestone4Tests
         }
     }
 
+    private sealed class CodeExploreNoWorkspaceThenTextModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                var advertised = Assert.Single(request.Tools, tool => tool.Name == "code_explore");
+                Assert.True(advertised.PreferStrictArguments);
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "code_explore",
+                        "{\"query\":\"ContextCompaction\"}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            Assert.Contains(
+                request.Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains(
+                        nameof(CodeExploreAvailabilityStatus.NoWorkspaceOpen),
+                        StringComparison.Ordinal)));
+            yield return new ModelChunk { Text = "No-workspace availability was visible." };
+        }
+    }
+
+    private sealed class CodeExploreInternalControlThenTextModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                var advertised = Assert.Single(request.Tools, tool => tool.Name == "code_explore");
+                Assert.True(advertised.PreferStrictArguments);
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "code_explore",
+                        "{\"query\":\"OpenAI Codex provider authentication credentials API key token\",\"limits\":{\"maximumFiles\":20}}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            Assert.Contains(
+                request.Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && string.Equals(message.ToolName, "code_explore", StringComparison.Ordinal)
+                    && message.Content.Any(part => part.Content.Contains("$.limits", StringComparison.Ordinal)));
+            yield return new ModelChunk { Text = "Internal-control correction was visible." };
+        }
+    }
+
+    private sealed class UnexpectedCodeExploreService : ICodeExploreService
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            WasCalled = true;
+            throw new InvalidOperationException("The no-workspace branch should not call the semantic service.");
+        }
+    }
+
     private sealed class SearchThenSemanticThenPlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
@@ -4559,6 +4924,77 @@ public static class Milestone4Tests
             }
 
             yield return new ModelChunk { Text = "Corrected without tools." };
+        }
+    }
+
+    private sealed class ResetAfterToolBatchModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count is 1 or 3)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "counting_read",
+                        "{\"path\":123}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            if (Requests.Count == 2)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "counting_read",
+                        "{\"path\":\".\"}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            yield return new ModelChunk { Text = "Independent correction succeeded." };
+        }
+    }
+
+    private sealed class EmptyAfterToolThenTextModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "counting_read",
+                        "{\"path\":\".\"}"),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            if (Requests.Count == 2)
+            {
+                yield break;
+            }
+
+            yield return new ModelChunk { Text = "Answered after empty response correction." };
         }
     }
 

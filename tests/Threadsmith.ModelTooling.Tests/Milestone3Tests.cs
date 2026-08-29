@@ -1154,6 +1154,108 @@ public static class Milestone3Tests
         }
     }
 
+    /// <summary>Raw model-exchange request diagnostics include only provider-visible content parts.</summary>
+    [Fact]
+    public static async Task ModelExchangeLog_Request_DropsHostOnlyContentParts()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"threadsmith-model-log-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            const string visibleContent = "# code_explore result\nvisible markdown";
+            const string hiddenContent = "{\"hidden\":\"structured-sidecar\"}";
+            var log = new JsonlModelExchangeLog(path);
+            var request = CreateRequestWithHostOnlySidecar(visibleContent, hiddenContent);
+
+            await log.AppendRequestSummaryAsync(request);
+            await log.AppendRequestAsync(request);
+
+            var lines = await File.ReadAllLinesAsync(path);
+            Assert.Equal(2, lines.Length);
+            Assert.DoesNotContain("structured-sidecar", string.Join('\n', lines), StringComparison.Ordinal);
+
+            using var summaryDocument = JsonDocument.Parse(lines[0]);
+            var messageSummary = Assert.Single(summaryDocument.RootElement
+                .GetProperty("Payload")
+                .GetProperty("Messages")
+                .EnumerateArray());
+            Assert.Equal(1, messageSummary.GetProperty("PartCount").GetInt32());
+            Assert.Equal(visibleContent.Length, messageSummary.GetProperty("ContentCharacters").GetInt32());
+            var summaryKind = Assert.Single(messageSummary.GetProperty("ContentKinds").EnumerateArray());
+            Assert.Equal(ModelContentPartKind.Text.ToString(), summaryKind.GetString());
+
+            using var requestDocument = JsonDocument.Parse(lines[1]);
+            var rawMessage = Assert.Single(requestDocument.RootElement
+                .GetProperty("Payload")
+                .GetProperty("Messages")
+                .EnumerateArray());
+            var rawPart = Assert.Single(rawMessage.GetProperty("Content").EnumerateArray());
+            Assert.Equal(visibleContent, rawPart.GetProperty("Content").GetString());
+            Assert.True(rawPart.GetProperty("IsModelVisible").GetBoolean());
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    /// <summary>OpenAI-compatible request serialization omits host-only structured sidecars.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_ToolMessages_ExcludeHostOnlyContentPartsFromProviderRequest()
+    {
+        string? requestBody = null;
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return Response(HttpStatusCode.OK, "data: [DONE]\n");
+        });
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(handler),
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+        const string visibleContent = "# code_explore result\nvisible markdown";
+        const string hiddenContent = "{\"hidden\":\"structured-sidecar\"}";
+
+        await CollectAsync(provider, CreateRequestWithHostOnlySidecar(visibleContent, hiddenContent));
+
+        Assert.NotNull(requestBody);
+        Assert.Contains("# code_explore result", requestBody, StringComparison.Ordinal);
+        Assert.Contains("visible markdown", requestBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("structured-sidecar", requestBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>Wire estimates are based on provider-visible content, not host-only sidecar size.</summary>
+    [Fact]
+    public static void ModelWireEstimator_IgnoresHostOnlyContentParts()
+    {
+        var visibleOnly = CreateRequestWithHostOnlySidecar("visible", string.Empty) with
+        {
+            Messages =
+            [
+                CreateToolResultMessageWithHostOnlySidecar("visible", null),
+            ],
+        };
+        var withHidden = CreateRequestWithHostOnlySidecar("visible", new string('h', 10_000));
+
+        var visibleEstimate = ModelWireEstimator.Estimate(
+            visibleOnly.Messages,
+            visibleOnly.Tools,
+            visibleOnly.ToolTransportMode,
+            stablePrefixMessageCount: 0,
+            outputReserveTokens: 0);
+        var hiddenEstimate = ModelWireEstimator.Estimate(
+            withHidden.Messages,
+            withHidden.Tools,
+            withHidden.ToolTransportMode,
+            stablePrefixMessageCount: 0,
+            outputReserveTokens: 0);
+
+        Assert.Equal(visibleEstimate.WireInputTokens, hiddenEstimate.WireInputTokens);
+    }
+
     /// <summary>The adapter sends host-authorized tools using the OpenAI function-tool contract.</summary>
     [Fact]
     public static async Task OpenAiAdapter_ModelTools_AreSentAsFunctionDefinitions()
@@ -2710,6 +2812,50 @@ public static class Milestone3Tests
         }
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    }
+
+    private static ModelStreamRequest CreateRequestWithHostOnlySidecar(
+        string visibleContent,
+        string hiddenContent)
+    {
+        return new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "continue after code_explore",
+            Messages = [CreateToolResultMessageWithHostOnlySidecar(visibleContent, hiddenContent)],
+        };
+    }
+
+    private static ModelMessage CreateToolResultMessageWithHostOnlySidecar(
+        string visibleContent,
+        string? hiddenContent)
+    {
+        List<ModelContentPart> content =
+        [
+            new()
+            {
+                Kind = ModelContentPartKind.Text,
+                Content = visibleContent,
+            },
+        ];
+        if (!string.IsNullOrWhiteSpace(hiddenContent))
+        {
+            content.Add(new ModelContentPart
+            {
+                Kind = ModelContentPartKind.Json,
+                Content = hiddenContent,
+                IsModelVisible = false,
+            });
+        }
+
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.Tool,
+            SectionId = "tool-result",
+            ToolCallId = "call-code-explore",
+            ToolName = "code_explore",
+            Content = content,
+        };
     }
 
     private static ModelMessage CreateStructuredMessage(

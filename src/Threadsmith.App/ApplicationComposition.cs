@@ -517,6 +517,7 @@ internal static class ApplicationComposition
             {
                 sessionApplication,
                 sessionLifecycle,
+                tools.CodeExploreOutputOptions,
                 hookApplication,
                 planApprovalPolicy,
                 executionOrchestrator,
@@ -819,6 +820,9 @@ internal sealed record ToolPolicyCompositionInputs
 
     /// <summary>Gets mutable repository-scoped tool availability state.</summary>
     internal required ToolStateManager ToolStateManager { get; init; }
+
+    /// <summary>Gets host-owned per-session code_explore output state.</summary>
+    internal required CodeExploreOutputOptions CodeExploreOutputOptions { get; init; }
 
     /// <summary>Gets transient governed web-fetch authority for fresh message intake.</summary>
     internal required WebFetchAuthorizationAuthority WebFetchAuthorization { get; init; }

@@ -8,6 +8,7 @@ using Threadsmith.Core;
 internal static class TuiPresentationFormatter
 {
     private const int MaximumToolDetailLength = 240;
+    private const int MaximumToolInspectionCharacters = 96 * 1024;
     private const int DiffContextLines = 2;
     private const string BlockOuterIndent = " ";
 
@@ -34,22 +35,41 @@ internal static class TuiPresentationFormatter
     private sealed record TuiBlockLine(
         TuiBlockLineKind Kind,
         string Text,
-        TuiTextRole Role);
+        TuiTextRole Role,
+        bool PreserveText = false);
 
     /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
     /// <param name="started">The matching invocation start event.</param>
     /// <param name="completed">The invocation completion event.</param>
     /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
-    /// <returns>A two-line terminal-neutral TUI presentation block.</returns>
+    /// <param name="inspectCodeExploreOutput">Whether successful code_explore blocks include final model-visible output.</param>
+    /// <returns>A terminal-neutral TUI presentation block.</returns>
     internal static string FormatToolCompletion(
         ToolInvocationStarted started,
         ToolInvocationCompleted completed,
-        bool showOperationDurations)
+        bool showOperationDurations,
+        bool inspectCodeExploreOutput = false)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
 
         var source = completed.Source ?? started.Source;
+        var lines = new List<TuiBlockLine>
+        {
+            new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), TuiTextRole.Muted),
+        };
+        if (ShouldInspectCodeExploreOutput(started, completed, inspectCodeExploreOutput))
+        {
+            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, "Output:", TuiTextRole.Muted));
+            lines.Add(new TuiBlockLine(
+                TuiBlockLineKind.Body,
+                PrepareInspectionOutput(
+                    completed.ModelResultContent ?? completed.ResultJson ?? string.Empty,
+                    completed.ModelResultContent is null),
+                TuiTextRole.Muted,
+                PreserveText: true));
+        }
+
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
                 "TOOLS",
@@ -58,7 +78,7 @@ internal static class TuiPresentationFormatter
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 TuiTextRole.ToolSuccess,
                 GetToolOutcomeRole(completed)),
-            [new TuiBlockLine(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), TuiTextRole.Muted)],
+            lines,
             ChildIndent: "  ");
 
         return FormatBlock(block);
@@ -372,7 +392,7 @@ internal static class TuiPresentationFormatter
                 continue;
             }
 
-            AppendBodyLine(builder, line.Text, childIndent, outerIndent);
+            AppendBodyLine(builder, line.Text, childIndent, outerIndent, line.PreserveText);
         }
     }
 
@@ -380,9 +400,10 @@ internal static class TuiPresentationFormatter
         StringBuilder builder,
         string text,
         string childIndent,
-        string outerIndent)
+        string outerIndent,
+        bool preserveText)
     {
-        foreach (var line in SplitBlockText(text))
+        foreach (var line in SplitBlockText(text, preserveText))
         {
             builder.Append(outerIndent);
             builder.Append(childIndent);
@@ -417,7 +438,7 @@ internal static class TuiPresentationFormatter
         builder.AppendLine();
     }
 
-    private static IReadOnlyList<string> SplitBlockText(string text)
+    private static IReadOnlyList<string> SplitBlockText(string text, bool preserveText = false)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Length == 0)
@@ -425,10 +446,50 @@ internal static class TuiPresentationFormatter
             return [string.Empty];
         }
 
-        return [.. text.Replace("\r\n", "\n", StringComparison.Ordinal)
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
-            .Split('\n')
-            .Select(TruncateForDisplay)];
+            .Split('\n');
+        return preserveText
+            ? lines
+            : [.. lines.Select(TruncateForDisplay)];
+    }
+
+    private static bool ShouldInspectCodeExploreOutput(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        bool inspectCodeExploreOutput)
+    {
+        return inspectCodeExploreOutput
+            && completed.Succeeded
+            && string.Equals(started.ToolName, "code_explore", StringComparison.Ordinal)
+            && (!string.IsNullOrWhiteSpace(completed.ModelResultContent)
+                || !string.IsNullOrWhiteSpace(completed.ResultJson));
+    }
+
+    private static string PrepareInspectionOutput(string output, bool isJson)
+    {
+        var displayOutput = isJson ? FormatJsonForInspection(output) : output;
+        var bounded = displayOutput.Length <= MaximumToolInspectionCharacters
+            ? displayOutput
+            : displayOutput[..MaximumToolInspectionCharacters]
+                + Environment.NewLine
+                + "[code_explore inspection truncated by TUI display bound]";
+        return TerminalControlEncoder.Encode(bounded);
+    }
+
+    private static string FormatJsonForInspection(string output)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            return JsonSerializer.Serialize(
+                document.RootElement,
+                new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (JsonException)
+        {
+            return output;
+        }
     }
 
     private static void AppendCompactHunkBody(StringBuilder builder, IReadOnlyList<string> body)

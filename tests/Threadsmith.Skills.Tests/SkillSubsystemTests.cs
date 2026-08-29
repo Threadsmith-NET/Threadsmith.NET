@@ -319,6 +319,73 @@ public sealed class SkillSubsystemTests
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
     }
 
+    /// <summary>Verifies skill procedure model-tool projection preserves strict argument preference.</summary>
+    [Fact]
+    public async Task ModelSkillProcedureRunner_PropagatesStrictToolArgumentPreference()
+    {
+        // Arrange
+        var model = new CapturingSkillToolModelProvider();
+        var registry = new ToolRegistry([new CodeExploreTool(new ThrowingCodeExploreService())]);
+        var runner = new ModelSkillProcedureRunner(
+            model,
+            registry,
+            new ThrowingToolInvocationPipeline(),
+            new Threadsmith.Telemetry.SecretOutputSanitizer(),
+            (request, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = Environment.CurrentDirectory,
+                    TrustLevel = request.Trust,
+                    RequestedBy = "skill-test",
+                });
+            });
+        var profileId = new ModelProfileId(Guid.NewGuid());
+        var request = new SkillInvocationRequest
+        {
+            InvocationId = SkillInvocationId.New(),
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Selector = "test-skill",
+            InputJson = "{}",
+            Trust = RepositoryTrustLevel.TrustedBuild,
+            Phase = RunPhase.EvidenceCollection,
+            HostBudget = new SkillBudget { ContentTokens = 1_000, ModelTurns = 1, ToolCalls = 1 },
+        };
+        var plan = new SkillInvocationPlan
+        {
+            Request = request,
+            Package = PackageIdentity(),
+            Scope = SkillScope.Maintained,
+            Verification = SkillVerificationState.Maintained,
+            Compatibility = new SkillCompatibilityResult
+            {
+                IsCompatible = true,
+                AvailableRequiredTools = ["code_explore"],
+                CompatibleModels = [profileId],
+            },
+            ModelProfileId = profileId,
+            AvailableToolIds = ["code_explore"],
+            EffectiveBudget = request.HostBudget,
+        };
+        var step = new SkillWorkflowStep
+        {
+            StepId = "inspect",
+            Kind = SkillWorkflowStepKind.CollectEvidence,
+        };
+
+        // Act
+        var result = await runner.RunAsync(plan, step, 1, [], "{}");
+
+        // Assert
+        Assert.Equal("{\"summary\":\"ok\"}", result.OutputJson);
+        var modelRequest = Assert.Single(model.Requests);
+        var tool = Assert.Single(modelRequest.Tools, definition => definition.Name == "code_explore");
+        Assert.True(tool.PreferStrictArguments);
+        Assert.False(modelRequest.AllowMultipleToolCalls);
+    }
+
     /// <summary>Verifies required procedure assets cannot be silently dropped under context pressure.</summary>
     [Fact]
     public async Task ContentLoader_RequiredAssetPressure_FailsClosed()
@@ -1041,6 +1108,51 @@ public sealed class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(new SkillProcedureResult(_output, ModelTurns: 1, ToolCalls: 0));
+        }
+    }
+
+    private sealed class CapturingSkillToolModelProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            yield return new ModelChunk { Text = "{\"summary\":\"ok\"}" };
+        }
+    }
+
+    private sealed class ThrowingCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            return Task.FromException<CodeExploreResult>(
+                new InvalidOperationException("The skill projection test should not execute code_explore."));
+        }
+    }
+
+    private sealed class ThrowingToolInvocationPipeline : IToolInvocationPipeline
+    {
+        public Task<ToolInvocationResult> InvokeAsync(
+            ToolInvocationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<ToolInvocationResult>(
+                new InvalidOperationException("The skill projection test should not invoke tools."));
+        }
+
+        public ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests)
+        {
+            throw new InvalidOperationException("The skill projection test should not preflight tool batches.");
         }
     }
 

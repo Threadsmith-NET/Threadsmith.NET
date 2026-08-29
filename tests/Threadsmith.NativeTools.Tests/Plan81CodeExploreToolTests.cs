@@ -60,6 +60,33 @@ public sealed class Plan81CodeExploreToolTests
         Assert.Single(replayedById.FileSections);
     }
 
+    /// <summary>Source guarantees describe model-visible source as sanitized instead of byte-verbatim.</summary>
+    [Fact]
+    public async Task CodeExplore_SourceGuarantees_DoNotClaimVerbatimModelVisibleBytes()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Example.Worker",
+                ExactSymbolAnchors = ["Example.Worker"],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var guarantee = Assert.Single(result.Presentation?.SourceGuarantees ?? []);
+        Assert.Equal(CodeExploreSourceGuaranteeKind.ReadEquivalent, guarantee.Kind);
+        Assert.True(guarantee.IsCurrent);
+        Assert.False(guarantee.IsVerbatim);
+        Assert.True(guarantee.IsLineNumbered);
+        Assert.True(guarantee.IsReadEquivalent);
+        Assert.Contains("host output sanitization", guarantee.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("verbatim", guarantee.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Simple exact overload anchors tolerate conventional spaces and include ref/out/in/ref-readonly parameter kinds.</summary>
     [Fact]
     public async Task CodeExplore_SimpleOverloadAnchors_CanonicalizeWhitespaceAndRefKinds()
@@ -820,6 +847,66 @@ public sealed class Plan81CodeExploreToolTests
             reason.Contains("too small", StringComparison.Ordinal));
     }
 
+    /// <summary>An opened but not-yet-loaded workspace returns actionable availability instead of throwing.</summary>
+    [Fact]
+    public async Task CodeExplore_UnloadedWorkspace_ReturnsAvailabilityInsteadOfThrowing()
+    {
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan81-unavailable-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repositoryPath);
+        await using var events = new DomainEventStream();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        try
+        {
+            var workspaceId = WorkspaceId.New();
+            var service = new AdvancedSemanticQueryService(registry);
+            var reader = new TestCodeExploreSourceReader(new ToolInvocationContext
+            {
+                RepositoryPath = repositoryPath,
+                WorkspaceId = workspaceId,
+                TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                ApprovedRoots = ["."],
+                RequestedBy = "plan-81-tests",
+            });
+
+            var result = await service.QueryCodeExploreAsync(
+                workspaceId,
+                new CodeExploreRequest { Query = "Example.Worker", Limits = CreateWideLimits() },
+                reader,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(CodeExploreAvailabilityStatus.SemanticWorkspaceUnavailable, result.Availability?.Status);
+            Assert.Equal(SemanticConfidenceLevel.None, result.Confidence);
+            Assert.Empty(result.FileSections);
+            Assert.Contains(
+                result.Availability?.RecommendedActions ?? [],
+                action => action.Kind == CodeExploreNextActionKind.WaitForWorkspace);
+            Assert.Equal(0, reader.IsPathAllowedCallCount);
+        }
+        finally
+        {
+            Directory.Delete(repositoryPath, recursive: true);
+        }
+    }
+
+    /// <summary>Caller cancellation is observed before workspace-scale path inspection begins.</summary>
+    [Fact]
+    public async Task CodeExplore_CancelledBeforeScale_DoesNotInspectWorkspacePaths()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var reader = fixture.CreateSourceReader();
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest { Query = "Example.Worker", Limits = CreateWideLimits() },
+                reader,
+                cancellation.Token));
+
+        Assert.Equal(0, reader.IsPathAllowedCallCount);
+    }
+
     /// <summary>The tool adapter fails closed for null-location symbol metadata returned across the service boundary.</summary>
     [Fact]
     public async Task CodeExploreTool_NullLocationSymbolMetadata_IsOmittedByPolicyAdapter()
@@ -1023,8 +1110,11 @@ public sealed class Plan81CodeExploreToolTests
             _context = context;
         }
 
+        public int IsPathAllowedCallCount { get; private set; }
+
         public bool IsPathAllowed(string path)
         {
+            IsPathAllowedCallCount++;
             try
             {
                 _ = NormalizeAndValidate(path);

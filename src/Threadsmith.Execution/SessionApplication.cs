@@ -1006,7 +1006,7 @@ public sealed partial class SessionApplication :
             "\n",
             continuationMessages.Select(message =>
                 $"<continuation role=\"{message.Role}\" tool=\"{message.ToolName}\" call=\"{message.ToolCallId}\">"
-                + $"{System.Security.SecurityElement.Escape(string.Concat(message.Content.Select(part => part.Content)))}"
+                + $"{System.Security.SecurityElement.Escape(message.GetModelVisibleContent())}"
                 + "</continuation>"));
     }
 
@@ -1036,7 +1036,7 @@ public sealed partial class SessionApplication :
             .Where(item => item.message.Role == ModelMessageRole.Tool)
             .Where(item => firstNeverDeliveredMessageIndex is null
                 || item.index < firstNeverDeliveredMessageIndex.Value)
-            .OrderByDescending(item => item.message.Content.Sum(part => part.Content.Length))
+            .OrderByDescending(item => item.message.GetModelVisibleContentLength())
             .Select(item => item.index))
         {
             if (estimate.WireInputTokens <= tokenBudget)
@@ -1045,7 +1045,7 @@ public sealed partial class SessionApplication :
             }
 
             var original = continuationMessages[index];
-            var content = string.Concat(original.Content.Select(part => part.Content));
+            var content = original.GetModelVisibleContent();
             var low = 0;
             var high = Math.Max(0, content.Length - 1);
             var smallest = CreateReducedToolResultMessage(original, content, 0);
@@ -1103,11 +1103,21 @@ public sealed partial class SessionApplication :
         return original with { Content = [CreateJsonContentPart(reduced)] };
     }
 
-    private static ModelContentPart CreateJsonContentPart(string content)
+    private static ModelContentPart CreateJsonContentPart(string content, bool isModelVisible = true)
     {
         return new ModelContentPart
         {
             Kind = ModelContentPartKind.Json,
+            Content = content,
+            IsModelVisible = isModelVisible,
+        };
+    }
+
+    private static ModelContentPart CreateTextContentPart(string content)
+    {
+        return new ModelContentPart
+        {
+            Kind = ModelContentPartKind.Text,
             Content = content,
         };
     }
@@ -1130,15 +1140,23 @@ public sealed partial class SessionApplication :
     private static ModelMessage CreateToolResultMessage(
         string toolCallId,
         string toolName,
-        string content)
+        string content,
+        bool isJson,
+        string? structuredContent)
     {
+        List<ModelContentPart> contentParts = [isJson ? CreateJsonContentPart(content) : CreateTextContentPart(content)];
+        if (!isJson && !string.IsNullOrWhiteSpace(structuredContent))
+        {
+            contentParts.Add(CreateJsonContentPart(structuredContent, isModelVisible: false));
+        }
+
         return new ModelMessage
         {
             Role = ModelMessageRole.Tool,
             SectionId = "tool-result",
             ToolCallId = toolCallId,
             ToolName = toolName,
-            Content = [CreateJsonContentPart(content)],
+            Content = contentParts,
         };
     }
 
@@ -1189,11 +1207,9 @@ public sealed partial class SessionApplication :
         var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
             ? "code_explore"
             : "find_symbol";
-        var suggestedCall = suggestedTool == "code_explore" && isExactPathQuery
-            ? $"Call code_explore with query '{suggestedQuery}' and a pathAnchors entry for that repository-relative .cs path before text search."
-            : suggestedTool == "code_explore"
-                ? $"Call code_explore with query '{suggestedQuery}' as an exact symbol anchor before text search."
-                : $"Call find_symbol with query '{suggestedQuery}' before text search.";
+        var suggestedCall = suggestedTool == "code_explore"
+            ? $"Call code_explore with query '{suggestedQuery}' before text search."
+            : $"Call find_symbol with query '{suggestedQuery}' before text search.";
         content = $"A semantic workspace is loaded and {suggestedTool} is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
             + $"{suggestedCall} The rejected search query was '{boundedQuery}'. "
             + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";

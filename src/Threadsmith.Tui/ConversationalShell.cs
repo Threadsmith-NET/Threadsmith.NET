@@ -812,6 +812,7 @@ public sealed class ConversationalShell
     private readonly IMutationApprovalPolicy? _mutationApprovalPolicy;
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IToolStateManager? _toolStateManager;
+    private readonly CodeExploreOutputOptions _codeExploreOutputOptions;
     private readonly IGitQueryService? _gitQueries;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
@@ -836,6 +837,7 @@ public sealed class ConversationalShell
     /// <param name="directFetchApprovalPrompt">Serialized inline approval boundary.</param>
     /// <param name="userConfigurationPath">Ordinary user configuration path used to persist theme selection.</param>
     /// <param name="validationStages">Host-owned resolved validation stages for post-apply status projection.</param>
+    /// <param name="codeExploreOutputOptions">Host-owned per-session code_explore output state.</param>
     public ConversationalShell(
         TuiPresenter presenter,
         IDomainEventStream events,
@@ -855,7 +857,8 @@ public sealed class ConversationalShell
         WebFetchAuthorizationAuthority? webFetchAuthorization = null,
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
         string? userConfigurationPath = null,
-        IReadOnlyList<MutationValidationStage>? validationStages = null)
+        IReadOnlyList<MutationValidationStage>? validationStages = null,
+        CodeExploreOutputOptions? codeExploreOutputOptions = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
@@ -875,6 +878,7 @@ public sealed class ConversationalShell
         _extensionManager = extensionManager;
         _sessionUsage = sessionUsage;
         _toolStateManager = toolStateManager;
+        _codeExploreOutputOptions = codeExploreOutputOptions ?? CodeExploreOutputOptions.FromConfiguration(configuration);
         _mutationApprovalPolicy = mutationApprovalPolicy;
         _planApprovalPolicy = planApprovalPolicy;
         _activeModelSelectionAvailable = activeModelSelectionAvailable;
@@ -917,6 +921,7 @@ public sealed class ConversationalShell
     /// <param name="directFetchApprovalPrompt">Serialized inline approval boundary.</param>
     /// <param name="themePreferenceStore">Optional user-level theme persistence boundary.</param>
     /// <param name="validationStages">Host-owned resolved validation stages for post-apply status projection.</param>
+    /// <param name="codeExploreOutputOptions">Host-owned per-session code_explore output state.</param>
     internal ConversationalShell(
         TuiPresenter presenter,
         IDomainEventStream events,
@@ -940,7 +945,8 @@ public sealed class ConversationalShell
         WebFetchAuthorizationAuthority? webFetchAuthorization = null,
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
         IThemePreferenceStore? themePreferenceStore = null,
-        IReadOnlyList<MutationValidationStage>? validationStages = null)
+        IReadOnlyList<MutationValidationStage>? validationStages = null,
+        CodeExploreOutputOptions? codeExploreOutputOptions = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
@@ -955,6 +961,7 @@ public sealed class ConversationalShell
         _sessionUsage = sessionUsage;
         _showSessionStatus = showSessionStatus;
         _toolStateManager = toolStateManager;
+        _codeExploreOutputOptions = codeExploreOutputOptions ?? new CodeExploreOutputOptions();
         _mutationApprovalPolicy = mutationApprovalPolicy;
         _planApprovalPolicy = planApprovalPolicy;
         _activeModelSelectionAvailable = activeModelSelectionAvailable;
@@ -1008,7 +1015,8 @@ public sealed class ConversationalShell
             dispatcher.QueueAsync);
         var transcript = new ConversationTranscript(
             string.Empty,
-            _displayOptions.ShowOperationDurations);
+            _displayOptions.ShowOperationDurations,
+            () => _codeExploreOutputOptions.GetInspectCodeExploreOutput(sessionId));
         await using var subscription = _events.Subscribe(dispatcher.QueueAsync);
         var semanticCompletion = new TaskCompletionSource<SemanticLoadCompleted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1133,9 +1141,6 @@ public sealed class ConversationalShell
 
         startupStatus.AppendLine($"  Semantic confidence: {semanticStatus}")
             .AppendLine("  Mode: Interactive")
-            .AppendLine(_showSessionStatus
-                ? "  Session status: Composer-adjacent (fixed footer unavailable through PrettyPrompt public APIs)"
-                : "  Session status: Disabled by tui:footer:enabled")
             .AppendLine();
         await _surface.WriteAsync(
             startupStatus.ToString(),
@@ -1747,6 +1752,24 @@ public sealed class ConversationalShell
                 if (string.Equals(commandText, "/tools", StringComparison.OrdinalIgnoreCase))
                 {
                     await ManageToolsAsync(lifetime.Token);
+                    continue;
+                }
+
+                if (TryGetCommandArgument(commandText, "/code_explore_output", out var codeExploreOutputArgument))
+                {
+                    await HandleCodeExploreOutputCommandAsync(
+                        sessionId,
+                        codeExploreOutputArgument,
+                        lifetime.Token);
+                    continue;
+                }
+
+                if (TryGetCommandArgument(commandText, "/code_explore_inspect", out var codeExploreInspectArgument))
+                {
+                    await HandleCodeExploreInspectCommandAsync(
+                        sessionId,
+                        codeExploreInspectArgument,
+                        lifetime.Token);
                     continue;
                 }
 
@@ -2594,6 +2617,86 @@ public sealed class ConversationalShell
         }
     }
 
+    private async Task HandleCodeExploreOutputCommandAsync(
+        SessionId sessionId,
+        string argument,
+        CancellationToken cancellationToken)
+    {
+        if (!CodeExploreOutputOptions.TryParseOutputFormat(argument, out var outputFormat))
+        {
+            await _surface.WriteAsync(
+                "Usage: /code_explore_output {structured|markdown}\n",
+                TuiTextRole.Error,
+                cancellationToken);
+            return;
+        }
+
+        var snapshot = await _presenter.SetCodeExploreOutputFormatAsync(
+            sessionId,
+            outputFormat,
+            cancellationToken);
+        await _surface.WriteAsync(
+            $"code_explore output format is {snapshot.OutputFormat.ToString().ToLowerInvariant()} for this session.\n",
+            TuiTextRole.Status,
+            cancellationToken);
+    }
+
+    private async Task HandleCodeExploreInspectCommandAsync(
+        SessionId sessionId,
+        string argument,
+        CancellationToken cancellationToken)
+    {
+        bool inspect;
+        if (string.Equals(argument, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            inspect = true;
+        }
+        else if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            inspect = false;
+        }
+        else
+        {
+            await _surface.WriteAsync(
+                "Usage: /code_explore_inspect {on|off}\n",
+                TuiTextRole.Error,
+                cancellationToken);
+            return;
+        }
+
+        var snapshot = await _presenter.SetCodeExploreOutputInspectionAsync(
+            sessionId,
+            inspect,
+            cancellationToken);
+        await _surface.WriteAsync(
+            $"code_explore output inspection is {(snapshot.InspectCodeExploreOutput ? "on" : "off")} for this session.\n",
+            TuiTextRole.Status,
+            cancellationToken);
+    }
+
+    private static bool TryGetCommandArgument(
+        string commandText,
+        string command,
+        out string argument)
+    {
+        if (string.Equals(commandText, command, StringComparison.OrdinalIgnoreCase))
+        {
+            argument = string.Empty;
+            return true;
+        }
+
+        if (commandText.StartsWith(command, StringComparison.OrdinalIgnoreCase)
+            && commandText.Length > command.Length
+            && char.IsWhiteSpace(commandText[command.Length]))
+        {
+            argument = commandText[command.Length..].Trim();
+            return true;
+        }
+
+        argument = string.Empty;
+        return false;
+    }
+
     private static string FormatHelpText()
     {
         const int descriptionColumn = 42;
@@ -2610,6 +2713,8 @@ public sealed class ConversationalShell
             ("/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
             ("/extensions", "Browse, load, and unload extensions (Up/Down, Enter)"),
             ("/tools", "Browse and toggle repository tool availability (Up/Down, Enter)"),
+            ("/code_explore_output {structured|markdown}", "Set code_explore output format for this session"),
+            ("/code_explore_inspect {on|off}", "Show future code_explore outputs in the tool block for this session"),
             ("/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
             ("/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource|prompt|auth|logout|revoke|switch-account|diagnose]", "Manage MCP profiles and capabilities"),
             ("/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Govern lifecycle hooks"),

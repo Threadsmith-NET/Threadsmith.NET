@@ -30,8 +30,39 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal(2, catalog.Models.Count);
         Assert.Contains(catalog.Models, model => model.Name == "Future Model");
-        Assert.Contains("client_version=", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
+        Assert.Contains("client_version=0.144.0", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
         Assert.Equal("account-1", handler.Request?.Headers.GetValues("ChatGPT-Account-Id").Single());
+    }
+
+    /// <summary>Discovery requires the source-backed Codex backend model slug.</summary>
+    [Fact]
+    public async Task Discovery_MissingSlug_ReturnsActionableDiagnostic()
+    {
+        var client = new OpenAiCodexCatalogClient(new HttpClient(new RecordingHandler(_ => JsonResponse(
+            "{\"models\":[{\"id\":\"codex-id\",\"display_name\":\"Only Display\"}]}"))));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverAsync(
+            "not-a-jwt",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("The Codex model response did not contain any usable model identifiers.", exception.Message);
+        Assert.DoesNotContain("codex-id", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Only Display", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Discovery reports unusable metadata shape without exposing raw response bodies.</summary>
+    [Fact]
+    public async Task Discovery_NoUsableModelIdentifiers_ReturnsActionableDiagnostic()
+    {
+        var client = new OpenAiCodexCatalogClient(new HttpClient(new RecordingHandler(_ => JsonResponse(
+            "{\"models\":[{\"display_name\":\"Only Display\"}]}"))));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverAsync(
+            "not-a-jwt",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("The Codex model response did not contain any usable model identifiers.", exception.Message);
+        Assert.DoesNotContain("Only Display", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Catalog snapshots contain metadata only and round-trip dynamic models.</summary>

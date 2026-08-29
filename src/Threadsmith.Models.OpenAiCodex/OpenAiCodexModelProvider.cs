@@ -233,7 +233,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         JsonArray input = [];
         foreach (var message in request.Messages)
         {
-            var content = string.Concat(message.Content.Select(part => part.Content));
+            var content = message.GetModelVisibleContent();
             if (message.Role == ModelMessageRole.Assistant
                 && message.ToolCallId is not null
                 && message.ToolName is not null)

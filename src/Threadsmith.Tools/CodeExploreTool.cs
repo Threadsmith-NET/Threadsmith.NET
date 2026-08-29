@@ -6,18 +6,57 @@ using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 
-/// <summary>Resolves exact C# anchors and returns bounded current source from one semantic generation.</summary>
-public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult>
+/// <summary>Minimal model-facing arguments for C# code exploration.</summary>
+public sealed record CodeExploreInput
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreRequest, CodeExploreResult>(
+    /// <summary>Natural-language question, symbol, file, or code term to explore.</summary>
+    public required string Query { get; init; }
+
+    /// <summary>Optional result-file hint; omission uses the host's adaptive default.</summary>
+    public int MaxFiles { get; init; } = 8;
+}
+
+/// <summary>Resolves C# queries and returns bounded current source from one semantic generation.</summary>
+public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
+{
+    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
         "code_explore",
-        "Primary source-bearing C# exploration tool for natural-language C# architecture or behavior questions, exact symbols, stable symbol ids, and repository-relative C# path anchors. Use before find_symbol, search, or read_file when the question needs current declaration source, structural survey, flow, or compact impact evidence. Natural-language query terms drive bounded deterministic Roslyn declaration discovery/ranking when exact anchors are not known; they are inert only in that they are never executed and never provider-reranked. For path anchors, include line when selecting a containing declaration; a containing-declaration path anchor without line is treated as bounded whole-file source and will not identify a flow symbol. Do not answer implementation questions from this tool description; when source is available, inspect the repository implementation and cite returned files/declarations. Use returned continuation anchors for focused follow-up.",
+        "Explore current C# code using a natural-language question, exact symbol, file, or code term. Returns relevant dependencies and grouped line-numbered source. Provide query and optionally maxFiles; the host owns all traversal, timeout, byte, and source budgets. Use this before text search or raw file reads for C# implementation questions, and inspect its result before choosing a fallback.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,
         ToolSideEffect.ReadOnly,
         TimeSpan.FromSeconds(60),
-        1024 * 1024);
+        1024 * 1024)
+    with
+    {
+        RequiresWorkspace = false,
+        PreferStrictArguments = true,
+    };
+
+    private static readonly string[] ImpactIntentPhrases =
+    [
+        " affected ",
+        " blast radius ",
+        " callers of ",
+        " callers for ",
+        " dependent project ",
+        " dependent projects ",
+        " dependents of ",
+        " downstream of ",
+        " impact ",
+        " projects depend on ",
+        " references to ",
+        " tests depend on ",
+        " usages of ",
+        " uses of ",
+        " what calls ",
+        " what depends on ",
+        " what uses ",
+        " who calls ",
+        " who depends on ",
+        " who uses ",
+    ];
 
     private readonly ICodeExploreService _service;
     private readonly IProcessManager? _processManager;
@@ -36,16 +75,33 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     public override ToolDefinition Definition => _definition;
 
     /// <inheritdoc />
-    public override async Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
-        CodeExploreRequest input,
+    public override Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
+        CodeExploreInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        return ExecuteAsync(CreateRequest(input), context, cancellationToken);
+    }
+
+    /// <summary>Executes an internal host-authored request with explicit semantic anchors and limits.</summary>
+    public async Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
+        CodeExploreRequest request,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request);
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        var workspaceId = context.Invocation.WorkspaceId
-            ?? throw new InvalidOperationException("Code exploration requires an opened workspace.");
+        var effectiveInput = ApplyModelBudget(request, context.Invocation, out var budgetSource);
+        if (context.Invocation.WorkspaceId is not { } workspaceId)
+        {
+            var unavailable = CreateNoWorkspaceResult(effectiveInput);
+            unavailable = ApplyBudgetSource(unavailable, budgetSource);
+            unavailable = BoundResultForModelBudget(unavailable, context.Invocation);
+            return new(unavailable, [new ToolProvenanceSource("repository", context.Invocation.RepositoryPath)], IsTruncated(unavailable));
+        }
+
         var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager);
-        var effectiveInput = ApplyModelBudget(input, context.Invocation, out var budgetSource);
         var result = await _service.QueryCodeExploreAsync(
             workspaceId,
             effectiveInput,
@@ -67,43 +123,122 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     }
 
     /// <inheritdoc />
-    protected override string DescribeActivity(CodeExploreRequest input)
+    protected override string DescribeActivity(CodeExploreInput input)
     {
-        var anchorCount = input.ExactSymbolAnchors.Count + input.SymbolIds.Count + input.PathAnchors.Count;
-        var mode = input.Mode == CodeExploreMode.Auto ? "auto" : input.Mode.ToString().ToLowerInvariant();
-        return anchorCount == 0
-            ? $"{BoundActivity(input.Query)} ({mode})"
-            : $"{BoundActivity(input.Query)} ({mode}, {anchorCount} anchors)";
+        return BoundActivity(input.Query);
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(CodeExploreRequest input)
+    protected override void ValidateInput(CodeExploreInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
-        ArgumentNullException.ThrowIfNull(input.Limits);
         if (input.Query.Length > 1024)
         {
             throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
         }
+    }
 
-        if (!Enum.IsDefined(input.Mode))
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> GetResourcePaths(
+        CodeExploreInput input,
+        ToolInvocationContext context)
+    {
+        return QueryLooksLikePath(input.Query)
+            ? [context.RepositoryPath, input.Query]
+            : [context.RepositoryPath];
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreInput input)
+    {
+        return _processManager is null ? null : "git";
+    }
+
+    /// <inheritdoc />
+    protected override string? GetExecutable(CodeExploreInput input, ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.WorkspaceId is null ? null : GetExecutable(input);
+    }
+
+    private static CodeExploreRequest CreateRequest(CodeExploreInput input)
+    {
+        var limits = new CodeExploreLimits();
+        var maximumFiles = input.MaxFiles <= 0
+            ? limits.MaximumFiles
+            : Math.Clamp(input.MaxFiles, 1, 16);
+        if (CodeExploreContinuationCursor.TryCreateRequest(input.Query, limits, maximumFiles, out var continuationRequest)
+            && continuationRequest is not null)
+        {
+            return continuationRequest;
+        }
+
+        return new CodeExploreRequest
+        {
+            Query = input.Query,
+            Mode = DeriveMode(input.Query),
+            Limits = limits with { MaximumFiles = maximumFiles },
+        };
+    }
+
+    private static CodeExploreMode DeriveMode(string query)
+    {
+        return LooksLikeImpactQuery(query)
+            ? CodeExploreMode.Impact
+            : CodeExploreMode.Auto;
+    }
+
+    private static bool LooksLikeImpactQuery(string query)
+    {
+        var normalized = NormalizeQueryForIntent(query);
+        return ImpactIntentPhrases.Any(phrase => normalized.Contains(phrase, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeQueryForIntent(string query)
+    {
+        var builder = new StringBuilder(query.Length + 2);
+        builder.Append(' ');
+        foreach (var character in query)
+        {
+            builder.Append(char.IsLetterOrDigit(character) || character is '_' or '-'
+                ? char.ToLowerInvariant(character)
+                : ' ');
+        }
+
+        builder.Append(' ');
+        var compact = string.Join(' ', builder
+            .ToString()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return " " + compact + " ";
+    }
+
+    private static void ValidateRequest(CodeExploreRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Query);
+        ArgumentNullException.ThrowIfNull(request.Limits);
+        if (request.Query.Length > 1024)
+        {
+            throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
+        }
+
+        if (!Enum.IsDefined(request.Mode))
         {
             throw new ToolArgumentValidationException("code exploration mode is not supported.");
         }
 
-        if (!Enum.IsDefined(input.AssociatedArtifacts))
+        if (!Enum.IsDefined(request.AssociatedArtifacts))
         {
             throw new ToolArgumentValidationException("associated artifact mode is not supported.");
         }
 
-        ValidateLimits(input.Limits);
-        var anchorCount = input.ExactSymbolAnchors.Count + input.SymbolIds.Count + input.PathAnchors.Count;
-        if (anchorCount > input.Limits.MaximumAnchors)
+        ValidateLimits(request.Limits);
+        var anchorCount = request.ExactSymbolAnchors.Count + request.SymbolIds.Count + request.PathAnchors.Count;
+        if (anchorCount > request.Limits.MaximumAnchors)
         {
             throw new ToolArgumentValidationException("the request contains more exact anchors than maximumAnchors.");
         }
 
-        foreach (var anchor in input.ExactSymbolAnchors.Concat(input.SymbolIds))
+        foreach (var anchor in request.ExactSymbolAnchors.Concat(request.SymbolIds))
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor);
             if (anchor.Length > 2048)
@@ -112,7 +247,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             }
         }
 
-        foreach (var anchor in input.PathAnchors)
+        foreach (var anchor in request.PathAnchors)
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
@@ -141,12 +276,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             }
         }
 
-        if (input.AssociatedArtifactPathAnchors.Count > input.Limits.MaximumAssociatedArtifactCandidates)
+        if (request.AssociatedArtifactPathAnchors.Count > request.Limits.MaximumAssociatedArtifactCandidates)
         {
             throw new ToolArgumentValidationException("associated artifact path anchor count must not exceed maximumAssociatedArtifactCandidates.");
         }
 
-        foreach (var anchor in input.AssociatedArtifactPathAnchors)
+        foreach (var anchor in request.AssociatedArtifactPathAnchors)
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
@@ -171,31 +306,69 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         }
     }
 
-    /// <inheritdoc />
-    protected override IReadOnlyList<string> GetResourcePaths(
-        CodeExploreRequest input,
-        ToolInvocationContext context)
+    private static CodeExploreResult CreateNoWorkspaceResult(CodeExploreRequest input)
     {
-        var paths = new List<string> { context.RepositoryPath };
-        paths.AddRange(input.PathAnchors.Select(anchor => anchor.Path));
-        paths.AddRange(input.AssociatedArtifactPathAnchors.Select(anchor => anchor.Path));
-        if (QueryLooksLikePath(input.Query))
-        {
-            paths.Add(input.Query);
-        }
-
-        return paths;
-    }
-
-    /// <inheritdoc />
-    protected override string? GetExecutable(CodeExploreRequest input)
-    {
-        return _processManager is not null
-            && input.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
-            && input.Limits.MaximumAssociatedArtifacts > 0
-            && input.Limits.MaximumAssociatedArtifactNameMatches > 0
-            ? "git"
-            : null;
+        const string reason = "No workspace is open for code_explore. Open or select a C# workspace, then retry semantic source exploration.";
+        var action = new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.OpenWorkspace,
+            "Open or select a C# workspace before retrying code_explore.");
+        var availability = new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.NoWorkspaceOpen,
+            reason,
+            true,
+            null,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            [action]);
+        var coverage = new CodeExploreCoverage(
+            false,
+            false,
+            false,
+            true,
+            [reason]);
+        var scale = new CodeExploreRepositoryScale(
+            CodeExploreRepositoryScaleTier.Unknown,
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            null,
+            null,
+            input.AssociatedArtifactPathAnchors.Count);
+        var adaptiveBudget = new CodeExploreAdaptiveBudget(
+            scale,
+            input.Limits.MaximumFiles,
+            input.Limits.MaximumSourceCharacters,
+            input.Limits.MaximumPerFileSourceCharacters,
+            Math.Clamp(input.Limits.MaximumSourceCharacters / 512, 1, 64),
+            1,
+            CodeExplorePresentationVerbosity.Compact,
+            "no workspace; request source limits retained");
+        var presentation = new CodeExplorePresentation(
+            $"Availability: {availability.Status}. {reason}",
+            [],
+            [new CodeExploreNotShownTarget(CodeExploreNotShownTargetKind.General, null, null, reason)],
+            [action]);
+        return new CodeExploreResult(
+            0,
+            SemanticConfidenceLevel.None,
+            [],
+            [],
+            coverage,
+            coverage.Omissions,
+            [],
+            Allocation: new CodeExploreAllocationSummary(
+                input.Limits.MaximumSourceCharacters,
+                0,
+                0,
+                adaptiveBudget.BudgetSource,
+                []),
+            Availability: availability,
+            Presentation: presentation,
+            AdaptiveBudget: adaptiveBudget,
+            FileRelevance: []);
     }
 
     private static void ValidateLimits(CodeExploreLimits limits)
@@ -268,9 +441,20 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CodeExploreResult result,
         string? budgetSource)
     {
-        return budgetSource is null || result.Allocation is null
-            ? result
-            : result with { Allocation = result.Allocation with { BudgetSource = budgetSource } };
+        if (budgetSource is null)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            Allocation = result.Allocation is null
+                ? null
+                : result.Allocation with { BudgetSource = result.Allocation.BudgetSource + "; " + budgetSource },
+            AdaptiveBudget = result.AdaptiveBudget is null
+                ? null
+                : result.AdaptiveBudget with { BudgetSource = result.AdaptiveBudget.BudgetSource + "; " + budgetSource },
+        };
     }
 
     private static CodeExploreResult BoundResultForModelBudget(
@@ -289,14 +473,16 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         }
 
         var bounded = result;
+        bounded = TrimPresentation(bounded, maximumSerializedBytes);
+        bounded = TrimFileRelevance(bounded, maximumSerializedBytes);
         bounded = TrimCandidateSummaries(bounded, maximumSerializedBytes);
         bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
         bounded = TrimFlow(bounded, maximumSerializedBytes);
-        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
         bounded = TrimAssociatedArtifacts(bounded, maximumSerializedBytes);
         bounded = TrimBackReferences(bounded, maximumSerializedBytes);
         bounded = TrimEmissions(bounded, maximumSerializedBytes);
         bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
+        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
         bounded = TrimFileSections(bounded, maximumSerializedBytes);
         if (GetSerializedByteCount(bounded) <= maximumSerializedBytes)
         {
@@ -313,6 +499,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             BackReferences = [],
             Emissions = [],
             AssociatedArtifacts = [],
+            Presentation = null,
+            FileRelevance = [],
             ArtifactCoverage = bounded.ArtifactCoverage is null
                 ? null
                 : bounded.ArtifactCoverage with
@@ -348,6 +536,72 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             },
         };
         return minimal;
+    }
+
+    private static CodeExploreResult TrimPresentation(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var presentation = result.Presentation;
+        while (presentation is not null && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            if (!string.IsNullOrWhiteSpace(presentation.ModelSummary))
+            {
+                presentation = presentation with { ModelSummary = string.Empty };
+            }
+            else if (presentation.NotShownTargets.Count > 0)
+            {
+                presentation = presentation with { NotShownTargets = TakeHalf(presentation.NotShownTargets) };
+            }
+            else if (presentation.SourceGuarantees.Count > 0)
+            {
+                presentation = presentation with { SourceGuarantees = TakeHalf(presentation.SourceGuarantees) };
+            }
+            else if (presentation.NextActions.Count > 0)
+            {
+                presentation = presentation with { NextActions = TakeHalf(presentation.NextActions) };
+            }
+            else
+            {
+                presentation = null;
+            }
+
+            result = result with
+            {
+                Presentation = presentation,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    private static CodeExploreResult TrimFileRelevance(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var fileRelevance = result.FileRelevance;
+        while (fileRelevance is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        {
+            fileRelevance = TakeHalf(fileRelevance);
+            result = result with
+            {
+                FileRelevance = fileRelevance,
+                Omissions = AddResultBoundOmission(result.Omissions),
+                Coverage = result.Coverage with
+                {
+                    OutputComplete = false,
+                    Omissions = AddResultBoundOmission(result.Coverage.Omissions),
+                },
+            };
+        }
+
+        return result;
     }
 
     private static CodeExploreResult TrimCandidateSummaries(
@@ -443,7 +697,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         CodeExploreResult result,
         int maximumSerializedBytes)
     {
-        while (result.ContinuationTargets.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (result.ContinuationTargets.Count > 1 && GetSerializedByteCount(result) > maximumSerializedBytes)
         {
             result = result with
             {
@@ -716,12 +970,25 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
     {
         while (result.FileSections.Count > 0 && GetSerializedByteCount(result) > maximumSerializedBytes)
         {
-            var fileSections = result.FileSections.Take(result.FileSections.Count / 2).ToArray();
+            var retainedCount = result.FileSections.Count / 2;
+            var fileSections = result.FileSections.Take(retainedCount).ToArray();
+            var removedSections = result.FileSections.Skip(retainedCount).ToArray();
+            var continuationTargets = AddTrimmedSectionContinuations(
+                result.ContinuationTargets,
+                removedSections,
+                result.WorkspaceGeneration);
             result = result with
             {
                 FileSections = fileSections,
+                ContinuationTargets = continuationTargets,
                 Flow = NullRemovedSourceSectionIndexes(result.Flow, fileSections.Length),
                 Allocation = TrimAllocationToFileSections(result.Allocation, fileSections),
+                Presentation = TrimPresentationToFileSections(
+                    result.Presentation,
+                    fileSections,
+                    removedSections,
+                    result.WorkspaceGeneration),
+                FileRelevance = MarkFileRelevanceAfterFileSectionTrim(result.FileRelevance, removedSections),
                 Omissions = AddResultBoundOmission(result.Omissions),
                 Coverage = result.Coverage with
                 {
@@ -767,6 +1034,61 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             : null;
     }
 
+    private static IReadOnlyList<CodeExploreContinuationTarget> AddTrimmedSectionContinuations(
+        IReadOnlyList<CodeExploreContinuationTarget> existingTargets,
+        IReadOnlyList<CodeExploreFileSection> removedSections,
+        long workspaceGeneration)
+    {
+        if (removedSections.Count == 0)
+        {
+            return existingTargets;
+        }
+
+        var targets = existingTargets.ToList();
+        foreach (var section in removedSections)
+        {
+            var target = CreateTrimmedSectionContinuation(section, workspaceGeneration);
+            if (!targets.Any(existing => IsSameContinuationTarget(existing, target)))
+            {
+                targets.Add(target);
+            }
+        }
+
+        return targets;
+    }
+
+    private static CodeExploreContinuationTarget CreateTrimmedSectionContinuation(
+        CodeExploreFileSection section,
+        long workspaceGeneration)
+    {
+        return new CodeExploreContinuationTarget(
+            CodeExploreAnchorKind.Path,
+            section.FilePath,
+            section.FilePath,
+            section.Source.Range.StartLine,
+            section.Source.Range.EndLine,
+            false,
+            CodeExplorePathSelectionMode.ExactLineRange,
+            section.Source.FileSha256,
+            workspaceGeneration,
+            "Retry with this exact path range; source was removed only to fit the selected model request budget.");
+    }
+
+    private static bool IsSameContinuationTarget(
+        CodeExploreContinuationTarget left,
+        CodeExploreContinuationTarget right)
+    {
+        return left.Kind == right.Kind
+            && string.Equals(left.Anchor, right.Anchor, StringComparison.Ordinal)
+            && string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && left.StartLine == right.StartLine
+            && left.EndLine == right.EndLine
+            && left.StartAtLine == right.StartAtLine
+            && left.SelectionMode == right.SelectionMode
+            && string.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256, StringComparison.OrdinalIgnoreCase)
+            && left.WorkspaceGeneration == right.WorkspaceGeneration;
+    }
+
     private static CodeExploreAllocationSummary? TrimAllocationToFileSections(
         CodeExploreAllocationSummary? allocation,
         IReadOnlyList<CodeExploreFileSection> fileSections)
@@ -787,6 +1109,88 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             SpentSourceCharacters = files.Sum(file => file.SpentCharacters),
             Files = files,
         };
+    }
+
+    private static CodeExplorePresentation? TrimPresentationToFileSections(
+        CodeExplorePresentation? presentation,
+        IReadOnlyList<CodeExploreFileSection> fileSections,
+        IReadOnlyList<CodeExploreFileSection> removedSections,
+        long workspaceGeneration)
+    {
+        if (presentation is null)
+        {
+            return null;
+        }
+
+        var retainedPaths = fileSections
+            .Select(section => section.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var notShownTargets = presentation.NotShownTargets.ToList();
+        foreach (var section in removedSections)
+        {
+            var target = new CodeExploreNotShownTarget(
+                CodeExploreNotShownTargetKind.Source,
+                section.FilePath,
+                section.Source.Range,
+                "Source was removed only to fit the selected model request budget; use the exact path continuation target if needed.",
+                section.FilePath,
+                section.Source.FileSha256,
+                workspaceGeneration);
+            if (!notShownTargets.Any(existing => IsSameNotShownTarget(existing, target)))
+            {
+                notShownTargets.Add(target);
+            }
+        }
+
+        return presentation with
+        {
+            SourceGuarantees = presentation.SourceGuarantees
+                .Where(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.BackReference
+                    || retainedPaths.Contains(guarantee.FilePath))
+                .ToArray(),
+            NotShownTargets = notShownTargets.ToArray(),
+            NextActions = presentation.NextActions
+                .Where(action => action.FilePath is null
+                    || retainedPaths.Contains(action.FilePath)
+                    || action.Kind == CodeExploreNextActionKind.FollowContinuation)
+                .ToArray(),
+        };
+    }
+
+    private static bool IsSameNotShownTarget(
+        CodeExploreNotShownTarget left,
+        CodeExploreNotShownTarget right)
+    {
+        return left.Kind == right.Kind
+            && string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && Equals(left.Range, right.Range)
+            && string.Equals(left.ContinuationAnchor, right.ContinuationAnchor, StringComparison.Ordinal)
+            && string.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256, StringComparison.OrdinalIgnoreCase)
+            && left.WorkspaceGeneration == right.WorkspaceGeneration;
+    }
+
+    private static IReadOnlyList<CodeExploreFileRelevanceSummary>? MarkFileRelevanceAfterFileSectionTrim(
+        IReadOnlyList<CodeExploreFileRelevanceSummary>? fileRelevance,
+        IReadOnlyList<CodeExploreFileSection> removedSections)
+    {
+        if (fileRelevance is null || removedSections.Count == 0)
+        {
+            return fileRelevance;
+        }
+
+        var removedPaths = removedSections
+            .Select(section => section.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return fileRelevance
+            .Select(summary => removedPaths.Contains(summary.FilePath)
+                ? summary with
+                {
+                    SpentCharacters = 0,
+                    OutputStatus = CodeExploreFileOutputStatus.RemovedByModelBudget,
+                    Reason = summary.Reason + " Final source was removed during model-budget trimming; use the exact continuation target if needed.",
+                }
+                : summary)
+            .ToArray();
     }
 
     private static T[] TakeHalf<T>(IReadOnlyList<T> items)
@@ -843,6 +1247,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
         var artifactCoverage = ConfineArtifactCoverage(result.ArtifactCoverage, associatedArtifacts, context, associatedArtifactOmitted);
         var backReferences = ConfineBackReferences(result.BackReferences, context, out var backReferenceOmitted);
         var emissions = ConfineEmissions(result.Emissions, context, out var emissionOmitted);
+        var availability = ConfineAvailability(result.Availability, context, out var availabilityOmitted);
+        var presentation = ConfinePresentation(result.Presentation, context, out var presentationOmitted);
+        var fileRelevance = ConfineFileRelevance(result.FileRelevance, context, out var fileRelevanceOmitted);
         var alternativesOmitted = result.ResolvedAnchors
             .Zip(resolutions)
             .Any(item => item.First.Alternatives.Count != item.Second.Alternatives.Count);
@@ -855,8 +1262,23 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             || candidateSummaryOmitted
             || allocationOmitted
             || backReferenceOmitted
-            || emissionOmitted;
+            || emissionOmitted
+            || availabilityOmitted
+            || presentationOmitted
+            || fileRelevanceOmitted;
         var omitted = csharpOmitted || associatedArtifactOmitted;
+        var hadVisibleSourceBeforeConfinement = HasVisibleCodeExploreSource(
+            result.FileSections,
+            result.BackReferences);
+        var hasVisibleSourceAfterConfinement = HasVisibleCodeExploreSource(
+            sections,
+            backReferences);
+        availability = ReclassifyAvailabilityAfterConfinement(
+            availability,
+            hadVisibleSourceBeforeConfinement,
+            hasVisibleSourceAfterConfinement,
+            omitted);
+        presentation = UpdatePresentationAfterAvailabilityConfinement(presentation, availability);
         var omissions = AddPolicyOmission(result.Omissions, omitted);
         return result with
         {
@@ -871,6 +1293,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             ArtifactCoverage = artifactCoverage,
             BackReferences = backReferences,
             Emissions = emissions,
+            Availability = availability,
+            Presentation = presentation,
+            FileRelevance = fileRelevance,
             Omissions = omissions,
             Coverage = result.Coverage with
             {
@@ -879,6 +1304,130 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
                 Omissions = AddPolicyOmission(result.Coverage.Omissions, csharpOmitted),
             },
         };
+    }
+
+    private static bool HasVisibleCodeExploreSource(
+        IReadOnlyList<CodeExploreFileSection> sections,
+        IReadOnlyList<CodeExploreBackReference>? backReferences)
+    {
+        return sections.Any(section => section.Source.NumberedLines.Count > 0)
+            || backReferences is { Count: > 0 };
+    }
+
+    private static CodeExploreAvailability? ReclassifyAvailabilityAfterConfinement(
+        CodeExploreAvailability? availability,
+        bool hadVisibleSourceBeforeConfinement,
+        bool hasVisibleSourceAfterConfinement,
+        bool omitted)
+    {
+        if (availability is null
+            || availability.Status != CodeExploreAvailabilityStatus.Available
+            || !omitted
+            || !hadVisibleSourceBeforeConfinement
+            || hasVisibleSourceAfterConfinement)
+        {
+            return availability;
+        }
+
+        return availability with
+        {
+            Status = CodeExploreAvailabilityStatus.NoSourceAfterPolicy,
+            Reason = "Post-query path-policy confinement removed all visible code_explore source from this result.",
+            IsRetryable = false,
+            GranularFallbackMayHelp = true,
+            RecommendedActions = [new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.AskUser,
+                "Ask the user whether the workspace scope or approved roots should be adjusted before retrying.")],
+        };
+    }
+
+    private static CodeExplorePresentation? UpdatePresentationAfterAvailabilityConfinement(
+        CodeExplorePresentation? presentation,
+        CodeExploreAvailability? availability)
+    {
+        if (presentation is null || availability is null || availability.Status == CodeExploreAvailabilityStatus.Available)
+        {
+            return presentation;
+        }
+
+        return presentation with
+        {
+            ModelSummary = $"Availability: {availability.Status}. {availability.Reason}",
+            NextActions = availability.RecommendedActions.Count > 0
+                ? availability.RecommendedActions
+                : presentation.NextActions,
+        };
+    }
+
+    private static CodeExploreAvailability? ConfineAvailability(
+        CodeExploreAvailability? availability,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (availability is null)
+        {
+            return null;
+        }
+
+        var actions = availability.RecommendedActions
+            .Where(action => action.FilePath is null || IsAllowed(action.FilePath, context))
+            .ToArray();
+        omitted = actions.Length != availability.RecommendedActions.Count;
+        return availability with { RecommendedActions = actions };
+    }
+
+    private static CodeExplorePresentation? ConfinePresentation(
+        CodeExplorePresentation? presentation,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (presentation is null)
+        {
+            return null;
+        }
+
+        var guarantees = presentation.SourceGuarantees
+            .Where(guarantee => IsAllowed(guarantee.FilePath, context))
+            .ToArray();
+        var notShownTargets = presentation.NotShownTargets
+            .Where(target => target.FilePath is null || IsAllowed(target.FilePath, context))
+            .ToArray();
+        var nextActions = presentation.NextActions
+            .Where(action => action.FilePath is null || IsAllowed(action.FilePath, context))
+            .ToArray();
+        omitted = guarantees.Length != presentation.SourceGuarantees.Count
+            || notShownTargets.Length != presentation.NotShownTargets.Count
+            || nextActions.Length != presentation.NextActions.Count;
+        var summary = omitted
+            ? "Presentation was confined by invocation path policy; rely on returned structured fields and safe continuations."
+            : presentation.ModelSummary;
+        return presentation with
+        {
+            ModelSummary = summary,
+            SourceGuarantees = guarantees,
+            NotShownTargets = notShownTargets,
+            NextActions = nextActions,
+        };
+    }
+
+    private static IReadOnlyList<CodeExploreFileRelevanceSummary>? ConfineFileRelevance(
+        IReadOnlyList<CodeExploreFileRelevanceSummary>? fileRelevance,
+        ToolInvocationContext context,
+        out bool omitted)
+    {
+        omitted = false;
+        if (fileRelevance is null)
+        {
+            return null;
+        }
+
+        var confined = fileRelevance
+            .Where(summary => IsAllowed(summary.FilePath, context))
+            .ToArray();
+        omitted = confined.Length != fileRelevance.Count;
+        return confined;
     }
 
     private static IReadOnlyList<CodeExploreBackReference>? ConfineBackReferences(
@@ -1548,11 +2097,6 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             return mediaKind;
         }
 
-        private static bool IsExistingRegularFile(string normalized)
-        {
-            return IsExistingRegularFile(new FileInfo(normalized));
-        }
-
         private static bool IsExistingRegularFile(FileSystemInfo info)
         {
             return info.Exists
@@ -2016,5 +2560,419 @@ public sealed class CodeExploreTool : Tool<CodeExploreRequest, CodeExploreResult
             var hash = SHA256.HashData(bytes);
             return Convert.ToHexString(hash).ToLowerInvariant();
         }
+    }
+}
+
+/// <summary>Creates and parses host-owned code_explore continuation cursors carried through the minimal query schema.</summary>
+internal static class CodeExploreContinuationCursor
+{
+    /// <summary>Prefix that marks a pasteable code_explore continuation query cursor.</summary>
+    internal const string Prefix = "code_explore:continue:";
+
+    private const int MaximumCursorCharacters = 960;
+    private const int MaximumPayloadBytes = 4096;
+    private const int MaximumEmbeddedQueryCharacters = 240;
+
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Creates a replay cursor for an omitted or partial C# source continuation.</summary>
+    internal static string? CreateSource(CodeExploreContinuationTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "source",
+            Kind = target.Kind.ToString(),
+            Anchor = target.Anchor,
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            StartAtLine = target.StartAtLine,
+            SelectionMode = target.SelectionMode?.ToString(),
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Mode = nameof(CodeExploreMode.Auto),
+        });
+    }
+
+    /// <summary>Creates a replay cursor for a compact blast-radius continuation.</summary>
+    internal static string? CreateImpact(CodeExploreContinuationTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "impact",
+            Kind = target.Kind.ToString(),
+            Anchor = target.Anchor,
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            StartAtLine = target.StartAtLine,
+            SelectionMode = target.SelectionMode?.ToString(),
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Mode = nameof(CodeExploreMode.Impact),
+        });
+    }
+
+    /// <summary>Creates a replay cursor for an omitted or partial associated-artifact continuation.</summary>
+    internal static string? CreateArtifact(
+        CodeExploreArtifactContinuationTarget target,
+        CodeExploreAssociatedArtifact? artifact,
+        string? query)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Create(new CursorPayload
+        {
+            Version = 1,
+            Type = "artifact",
+            Path = target.FilePath,
+            StartLine = target.StartLine,
+            EndLine = target.EndLine,
+            ExpectedFileSha256 = target.ExpectedFileSha256,
+            WorkspaceGeneration = target.WorkspaceGeneration,
+            Query = BoundEmbeddedQuery(query),
+            OriginSymbolId = artifact?.OriginSymbolId,
+            OriginPath = artifact?.OriginFilePath,
+            OriginStartLine = artifact?.OriginRange.StartLine,
+            OriginEndLine = artifact?.OriginRange.EndLine,
+            Mode = nameof(CodeExploreMode.Auto),
+        });
+    }
+
+    /// <summary>Attempts to convert a query-carried continuation cursor back into a host-owned code_explore request.</summary>
+    internal static bool TryCreateRequest(
+        string query,
+        CodeExploreLimits limits,
+        int maximumFiles,
+        out CodeExploreRequest? request)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        request = null;
+        if (!TryReadPayload(query, out var payload) || payload.Version != 1)
+        {
+            return false;
+        }
+
+        var boundedLimits = limits with { MaximumFiles = maximumFiles };
+        if (string.Equals(payload.Type, "artifact", StringComparison.Ordinal))
+        {
+            return TryCreateArtifactRequest(payload, boundedLimits, out request);
+        }
+
+        if (string.Equals(payload.Type, "impact", StringComparison.Ordinal))
+        {
+            return TryCreateSourceOrImpactRequest(payload, boundedLimits, CodeExploreMode.Impact, out request);
+        }
+
+        if (string.Equals(payload.Type, "source", StringComparison.Ordinal))
+        {
+            var mode = TryParseEnum(payload.Mode, out CodeExploreMode parsedMode)
+                ? parsedMode
+                : CodeExploreMode.Auto;
+            return TryCreateSourceOrImpactRequest(payload, boundedLimits, mode, out request);
+        }
+
+        return false;
+    }
+
+    private static bool TryCreateArtifactRequest(
+        CursorPayload payload,
+        CodeExploreLimits limits,
+        out CodeExploreRequest? request)
+    {
+        request = null;
+        if (string.IsNullOrWhiteSpace(payload.Path))
+        {
+            return false;
+        }
+
+        var query = FirstNonWhiteSpace(
+            payload.Query,
+            payload.OriginSymbolId,
+            payload.OriginPath,
+            payload.Path);
+        var pathAnchors = CreateArtifactOriginAnchors(payload);
+        request = new CodeExploreRequest
+        {
+            Query = query,
+            Mode = CodeExploreMode.Auto,
+            AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
+            SymbolIds = string.IsNullOrWhiteSpace(payload.OriginSymbolId)
+                ? []
+                : [payload.OriginSymbolId],
+            PathAnchors = pathAnchors,
+            AssociatedArtifactPathAnchors =
+            [
+                new CodeExploreArtifactPathAnchor
+                {
+                    Path = payload.Path,
+                    Line = payload.StartLine,
+                    EndLine = payload.EndLine,
+                    ExpectedFileSha256 = payload.ExpectedFileSha256,
+                    ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+                },
+            ],
+            Limits = limits,
+        };
+        return true;
+    }
+
+    private static IReadOnlyList<CodeExplorePathAnchor> CreateArtifactOriginAnchors(
+        CursorPayload payload)
+    {
+        if (!string.IsNullOrWhiteSpace(payload.OriginSymbolId)
+            || string.IsNullOrWhiteSpace(payload.OriginPath))
+        {
+            return [];
+        }
+
+        var selectionMode = payload.OriginStartLine is null
+            ? CodeExplorePathSelectionMode.WholeFile
+            : payload.OriginEndLine is null
+                ? CodeExplorePathSelectionMode.ContainingDeclaration
+                : CodeExplorePathSelectionMode.ExactLineRange;
+        return
+        [
+            new CodeExplorePathAnchor
+            {
+                Path = payload.OriginPath,
+                Line = payload.OriginStartLine,
+                EndLine = payload.OriginEndLine,
+                SelectionMode = selectionMode,
+                ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+            },
+        ];
+    }
+
+    private static bool TryCreateSourceOrImpactRequest(
+        CursorPayload payload,
+        CodeExploreLimits limits,
+        CodeExploreMode mode,
+        out CodeExploreRequest? request)
+    {
+        request = null;
+        if (!TryParseEnum(payload.Kind, out CodeExploreAnchorKind kind))
+        {
+            return false;
+        }
+
+        var anchor = FirstNonWhiteSpace(payload.Anchor, payload.Path);
+        if (string.IsNullOrWhiteSpace(anchor))
+        {
+            return false;
+        }
+
+        if (kind == CodeExploreAnchorKind.Path || !string.IsNullOrWhiteSpace(payload.Path))
+        {
+            var path = FirstNonWhiteSpace(payload.Path, anchor);
+            var selectionMode = TryParseEnum(payload.SelectionMode, out CodeExplorePathSelectionMode parsedSelectionMode)
+                ? parsedSelectionMode
+                : CodeExplorePathSelectionMode.Auto;
+            request = new CodeExploreRequest
+            {
+                Query = path,
+                Mode = mode,
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor
+                    {
+                        Path = path,
+                        Line = payload.StartLine,
+                        EndLine = payload.EndLine,
+                        StartAtLine = payload.StartAtLine,
+                        SelectionMode = selectionMode,
+                        ExpectedFileSha256 = payload.ExpectedFileSha256,
+                        ExpectedWorkspaceGeneration = payload.WorkspaceGeneration,
+                    },
+                ],
+                Limits = limits,
+            };
+            return true;
+        }
+
+        if (kind == CodeExploreAnchorKind.SymbolId)
+        {
+            request = new CodeExploreRequest
+            {
+                Query = anchor,
+                Mode = mode,
+                SymbolIds = [anchor],
+                Limits = limits,
+            };
+            return true;
+        }
+
+        request = new CodeExploreRequest
+        {
+            Query = anchor,
+            Mode = mode,
+            ExactSymbolAnchors = [anchor],
+            Limits = limits,
+        };
+        return true;
+    }
+
+    private static string? Create(CursorPayload payload)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, SerializerOptions);
+        var cursor = Prefix + Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return cursor.Length <= MaximumCursorCharacters ? cursor : null;
+    }
+
+    private static bool TryReadPayload(string query, out CursorPayload payload)
+    {
+        payload = new CursorPayload();
+        var token = FindCursorToken(query);
+        if (token is null || !TryDecodeBase64Url(token, out var bytes))
+        {
+            return false;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<CursorPayload>(bytes, SerializerOptions);
+            if (parsed is null)
+            {
+                return false;
+            }
+
+            payload = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static string? FindCursorToken(string query)
+    {
+        var start = query.IndexOf(Prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var tokenStart = start + Prefix.Length;
+        var tokenEnd = tokenStart;
+        while (tokenEnd < query.Length && IsBase64UrlCharacter(query[tokenEnd]))
+        {
+            tokenEnd++;
+        }
+
+        return tokenEnd == tokenStart ? null : query[tokenStart..tokenEnd];
+    }
+
+    private static bool TryDecodeBase64Url(string token, out byte[] bytes)
+    {
+        bytes = [];
+        var base64 = token.Replace('-', '+').Replace('_', '/');
+        base64 = (base64.Length % 4) switch
+        {
+            0 => base64,
+            2 => base64 + "==",
+            3 => base64 + "=",
+            _ => string.Empty,
+        };
+        if (base64.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            bytes = Convert.FromBase64String(base64);
+            return bytes.Length <= MaximumPayloadBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseEnum<TEnum>(string? value, out TEnum result)
+        where TEnum : struct, Enum
+    {
+        return Enum.TryParse(value, ignoreCase: false, out result) && Enum.IsDefined(result);
+    }
+
+    private static string FirstNonWhiteSpace(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+    }
+
+    private static string? BoundEmbeddedQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        if (query.Length <= MaximumEmbeddedQueryCharacters)
+        {
+            return query;
+        }
+
+        var length = MaximumEmbeddedQueryCharacters;
+        if (char.IsHighSurrogate(query[length - 1])
+            && length < query.Length
+            && char.IsLowSurrogate(query[length]))
+        {
+            length--;
+        }
+
+        return query[..length];
+    }
+
+    private static bool IsBase64UrlCharacter(char character)
+    {
+        return char.IsAsciiLetterOrDigit(character) || character is '-' or '_';
+    }
+
+    private sealed record CursorPayload
+    {
+        public int Version { get; init; }
+
+        public string Type { get; init; } = string.Empty;
+
+        public string? Kind { get; init; }
+
+        public string? Anchor { get; init; }
+
+        public string? Path { get; init; }
+
+        public int? StartLine { get; init; }
+
+        public int? EndLine { get; init; }
+
+        public bool StartAtLine { get; init; }
+
+        public string? SelectionMode { get; init; }
+
+        public string? ExpectedFileSha256 { get; init; }
+
+        public long? WorkspaceGeneration { get; init; }
+
+        public string? Mode { get; init; }
+
+        public string? Query { get; init; }
+
+        public string? OriginSymbolId { get; init; }
+
+        public string? OriginPath { get; init; }
+
+        public int? OriginStartLine { get; init; }
+
+        public int? OriginEndLine { get; init; }
     }
 }

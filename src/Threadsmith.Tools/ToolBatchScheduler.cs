@@ -252,9 +252,17 @@ internal sealed class ToolConflictPlanner
                 .ToArray();
             return new PlannedToolInvocation(request, registration, claims);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is KeyNotFoundException or ToolArgumentValidationException)
         {
             return new PlannedToolInvocation(request, null, [], exception.Message);
+        }
+        catch (Exception)
+        {
+            return new PlannedToolInvocation(
+                request,
+                null,
+                [],
+                "Tool arguments do not match the declared input schema or host invariants.");
         }
     }
 

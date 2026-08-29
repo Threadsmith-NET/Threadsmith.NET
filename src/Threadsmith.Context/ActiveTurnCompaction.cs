@@ -1036,7 +1036,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 64L
                 + (message.ToolCallId?.Length ?? 0)
                 + (message.ToolName?.Length ?? 0)
-                + message.Content.Sum(part => 32L + part.Content.Length))
+                + message.Content.Where(static part => part.IsModelVisible).Sum(static part => 32L + part.Content.Length))
             + group.FilesRead.Sum(path => 16L + path.Length)
             + group.FilesChanged.Sum(path => 16L + path.Length)
             + 128;
@@ -1259,11 +1259,13 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                     role = message.Role.ToString(),
                     message.ToolCallId,
                     message.ToolName,
-                    content = message.Content.Select(part => new
-                    {
-                        kind = part.Kind.ToString(),
-                        text = part.Content,
-                    }),
+                    content = message.Content
+                        .Where(static part => part.IsModelVisible)
+                        .Select(part => new
+                        {
+                            kind = part.Kind.ToString(),
+                            text = part.Content,
+                        }),
                 }),
             }),
             filesRead = files.FilesRead,

@@ -48,6 +48,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M26 | Planned | Packaged local documentation bundle and maintained natural Q&A skill. | [Details](milestones/milestone-26-packaged-local-documentation-help-skill.md) |
 | M27 | Complete | Low-friction URL-only MCP OAuth onboarding with dynamic client registration. | [Details](milestones/milestone-27-low-friction-mcp-oauth-dynamic-registration.md) |
 | M28 | Active | Roslyn-backed task-sufficient code exploration with source, flow, ranking, safe deduplication, and associated artifacts. | [Details](milestones/milestone-28-roslyn-backed-code-exploration.md) |
+| M29 | Planned | Deployable Markdown prompts, descriptions, corrections, and provider instructions with cached loading and bounded customization. | [Details](milestones/milestone-29-deployable-prompt-customization.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

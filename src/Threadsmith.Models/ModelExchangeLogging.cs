@@ -57,7 +57,9 @@ public sealed class JsonlModelExchangeLog
                 Kind = ModelExchangeLogEntryKind.Request,
                 RunId = request.RunId,
                 ToolContinuationRound = request.ToolContinuationRound,
-                Payload = JsonSerializer.SerializeToElement(request, SerializerOptions),
+                Payload = JsonSerializer.SerializeToElement(
+                    CreateProviderVisibleRequest(request),
+                    SerializerOptions),
             },
             cancellationToken);
     }
@@ -218,15 +220,27 @@ public sealed class JsonlModelExchangeLog
                     SectionId = message.SectionId,
                     ToolCallId = message.ToolCallId,
                     ToolName = message.ToolName,
-                    PartCount = message.Content.Count,
-                    ContentCharacters = message.Content.Sum(part => part.Content.Length),
+                    PartCount = message.Content.Count(static part => part.IsModelVisible),
+                    ContentCharacters = message.GetModelVisibleContentLength(),
                     ContentKinds = message.Content
+                        .Where(static part => part.IsModelVisible)
                         .Select(part => part.Kind.ToString())
                         .Distinct(StringComparer.Ordinal)
                         .ToArray(),
                 })
                 .ToArray(),
             WireEstimate = request.WireEstimate,
+        };
+    }
+
+    private static ModelStreamRequest CreateProviderVisibleRequest(ModelStreamRequest request)
+    {
+        return request with
+        {
+            Messages = [.. request.Messages.Select(message => message with
+            {
+                Content = [.. message.Content.Where(static part => part.IsModelVisible)],
+            })],
         };
     }
 

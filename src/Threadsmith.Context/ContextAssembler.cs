@@ -1391,7 +1391,14 @@ public sealed class ContextAssembler : IContextAssembler
 
     private static string ComputeMessageDigest(IEnumerable<ModelMessage> messages)
     {
-        var encoded = JsonSerializer.Serialize(messages);
+        var encoded = JsonSerializer.Serialize(messages.Select(message => new
+        {
+            message.Role,
+            message.SectionId,
+            message.ToolCallId,
+            message.ToolName,
+            Content = message.GetModelVisibleContent(),
+        }));
         return "sha256:"
             + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(encoded)));
     }
@@ -1401,7 +1408,7 @@ public sealed class ContextAssembler : IContextAssembler
     {
         return [.. messages.Select(message =>
         {
-            var content = string.Concat(message.Content.Select(part => part.Content));
+            var content = message.GetModelVisibleContent();
             var volatility = message.SectionId switch
             {
                 "host-policy" => ContextVolatilityClass.Process,
@@ -1503,7 +1510,7 @@ public sealed class ContextAssembler : IContextAssembler
             "\n",
             messages.Select(message =>
                 $"<request_local_message role=\"{message.Role}\" section=\"{Escape(message.SectionId)}\">"
-                + Escape(string.Concat(message.Content.Select(part => part.Content)))
+                + Escape(message.GetModelVisibleContent())
                 + "</request_local_message>"));
     }
 

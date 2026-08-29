@@ -29,4 +29,10 @@ internal sealed class CorrectiveTurnState
         attemptNumber = AttemptsUsed;
         return true;
     }
+
+    /// <summary>Starts a new correction sequence after the model makes accepted progress.</summary>
+    public void Reset()
+    {
+        AttemptsUsed = 0;
+    }
 }

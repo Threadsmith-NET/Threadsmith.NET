@@ -1717,28 +1717,28 @@ Expected: cancellation/timeout terminates tracked process trees, bounded results
 ### MTP-195 — Call hierarchy dispatch, cycles, and traversal limits
 
 1. Open a trusted multi-project C# solution containing direct/static/constructor, interface, virtual/override, extension, local-function, delegate, recursive, generic, and mutually recursive calls.
-2. Resolve stable root IDs with `find_symbol`, then invoke `call_hierarchy` for incoming, outgoing, and both directions at depths 0, 1, and 3.
-3. Repeat with very small node/edge/time limits and cancel a large traversal.
+2. Resolve stable root IDs with `find_symbol`, then invoke `call_hierarchy` with the simplified model schema for incoming, outgoing, and both directions at depths 0, 1, and 3.
+3. Confirm the model-facing schema rejects nested `limits` while the host still discloses node/edge/time omissions when internal bounds are reached, then cancel a large traversal.
 4. Change a source file and cross the semantic invalidation boundary while a long query is active.
 
-Expected: deterministic nodes/edges include source provenance, compiler-known dispatch, ambiguity, cycle closure, confidence, and one workspace generation. Depth/node/edge/time bounds report precise omissions; reflection/dynamic/runtime-only targets are never claimed complete. Cancellation returns no partial success, and a result from a no-longer-current generation is discarded.
+Expected: the model-visible result is a compact call list or symbol fallback with source path/range, compiler-known dispatch, ambiguity, cycle closure, and bounded omissions. The host-owned structured result retains source provenance, confidence, one workspace generation, and internal traversal metadata. Depth is the only model-visible traversal hint; node/edge/time bounds are host-owned and report precise omissions. Reflection/dynamic/runtime-only targets are never claimed complete. Cancellation returns no partial success, and a result from a no-longer-current generation is discarded.
 
 ### MTP-196 — Explainable symbol impact and degraded confidence
 
-1. Query `symbol_impact` for an interface member referenced by production code, implemented/overridden in multiple projects, consumed by dependent test projects, and declared or referenced in generated and linked files.
-2. Inspect every node and relationship reason; repeat with small graph bounds.
+1. Query `symbol_impact` with only a stable symbol ID for an interface member referenced by production code, implemented/overridden in multiple projects, consumed by dependent test projects, and declared or referenced in generated and linked files.
+2. Inspect the ranked model-visible impact list and compact relationship reasons; confirm nested traversal limits are rejected and host-owned bounds still disclose omissions when reached.
 3. Break one project or remove build trust, reload semantic state, and repeat.
 
-Expected: the graph contains only loaded reference, caller, implementation/override, dependent project/test, and generated/linked evidence with a non-empty reason per edge. It discloses bounds, dynamic/runtime/diagnostic omissions, confidence, and generation and never presents impact as whole-program proof or mutation approval. Below `PartialCompilation`, the tool is unavailable/fails with the current confidence rather than silently using text heuristics.
+Expected: the model-visible result contains ranked loaded reference, caller, implementation/override, dependent project/test, and generated/linked evidence with compact reasons and bounded omissions. The host-owned structured graph retains confidence, generation, and internal traversal metadata. Impact never presents itself as whole-program proof or mutation approval. Below `PartialCompilation`, the tool is unavailable/fails with the current confidence rather than silently using text heuristics.
 
 ### MTP-197 — Closed C# pattern schema and malicious-input denial
 
-1. Invoke `csharp_pattern_search` for declaration, type, method, property, field, attribute, invocation, object-creation, and member-access shapes.
-2. Exercise exact name, containing type, each documented closed modifier, attribute matching with and without the `Attribute` suffix, named capture, file/directory scope, result limit, and time limit.
-3. Submit an unknown schema version, unsupported modifier, malformed/oversized identifier or capture, rooted/escaping scope, source/regex/script fragments, and unexpected executable fields.
+1. Invoke `csharp_pattern_search` with the flat model schema for declaration, type, method, property, field, attribute, invocation, object-creation, and member-access shapes.
+2. Exercise exact name, containing type, file/directory scope, each documented closed modifier, and attribute matching with and without the `Attribute` suffix.
+3. Confirm nested `pattern`, schema version, capture, result-limit, and timeout fields are rejected; submit unsupported modifier, malformed/oversized identifier, rooted/escaping scope, source/regex/script fragments, and unexpected executable fields.
 4. Hash the repository before and after and monitor child process/network activity.
 
-Expected: matches carry exact source ranges, bounded capture text, confidence, generation, completeness, and omissions. Unsupported or escaping input fails before query execution. No assembly/analyzer/plugin is loaded, no process/network starts, and repository hashes remain unchanged.
+Expected: the model-visible result contains bounded file/range matches and omissions, while the host-owned structured result retains confidence, generation, and completeness metadata. Unsupported or escaping input fails before query execution. No assembly/analyzer/plugin is loaded, no process/network starts, and repository hashes remain unchanged.
 
 ### MTP-198 — Generated-code inventory, provenance, bounds, and parity
 

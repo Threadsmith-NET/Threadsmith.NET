@@ -19,6 +19,8 @@ public sealed record CodeExploreInput
 /// <summary>Resolves C# queries and returns bounded current source from one semantic generation.</summary>
 public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 {
+    private const string ResultBoundOmission = "Code exploration metadata was bounded to fit the selected model request budget.";
+
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
         "code_explore",
         "Explore current C# code using a natural-language question, exact symbol, file, or code term. Returns relevant dependencies and grouped line-numbered source. Provide query and optionally maxFiles; the host owns all traversal, timeout, byte, and source budgets. Use this before text search or raw file reads for C# implementation questions, and inspect its result before choosing a fallback.",
@@ -120,6 +122,14 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             new("semantic-workspace", workspaceId.Value.ToString("D")),
         ];
         return new(result, sources, IsTruncated(result));
+    }
+
+    /// <summary>Progressively reduces one code exploration result to an exact serialized UTF-8 ceiling.</summary>
+    internal static CodeExploreResult BoundResultToMaximumBytes(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        return BoundResultToMaximumBytesCore(result, maximumSerializedBytes);
     }
 
     /// <inheritdoc />
@@ -461,12 +471,21 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         CodeExploreResult result,
         ToolInvocationContext context)
     {
-        if (context.ModelEffectiveInputBudgetTokens is not { } effectiveInputTokens || effectiveInputTokens <= 0)
+        if (CodeExploreModelBudget.GetMaximumResultBytes(context) is not { } maximumSerializedBytes)
         {
             return result;
         }
 
-        var maximumSerializedBytes = (int)Math.Clamp((long)effectiveInputTokens * 3, 1024, 1024 * 1024);
+        return BoundResultToMaximumBytes(result, maximumSerializedBytes);
+    }
+
+    private static CodeExploreResult BoundResultToMaximumBytesCore(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSerializedBytes);
+
         if (GetSerializedByteCount(result) <= maximumSerializedBytes)
         {
             return result;
@@ -535,7 +554,44 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
                 Omissions = AddResultBoundOmission(bounded.Coverage.Omissions),
             },
         };
-        return minimal;
+        if (GetSerializedByteCount(minimal) <= maximumSerializedBytes)
+        {
+            return minimal;
+        }
+
+        return CreateTerminalModelBudgetResult(result, maximumSerializedBytes);
+    }
+
+    private static CodeExploreResult CreateTerminalModelBudgetResult(
+        CodeExploreResult result,
+        int maximumSerializedBytes)
+    {
+        var terminal = new CodeExploreResult(
+            result.WorkspaceGeneration,
+            result.Confidence,
+            [],
+            [],
+            new CodeExploreCoverage(
+                SymbolResolutionComplete: false,
+                CompiledProjectCoverageComplete: false,
+                SourceComplete: false,
+                OutputComplete: false,
+                Omissions: []),
+            [ResultBoundOmission],
+            []);
+        if (GetSerializedByteCount(terminal) <= maximumSerializedBytes)
+        {
+            return terminal;
+        }
+
+        terminal = terminal with { Omissions = [] };
+        if (GetSerializedByteCount(terminal) <= maximumSerializedBytes)
+        {
+            return terminal;
+        }
+
+        throw new InvalidOperationException(
+            "The minimum code exploration result exceeds the selected model request budget.");
     }
 
     private static CodeExploreResult TrimPresentation(
@@ -830,7 +886,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             content.Range.EndLine,
             content.FileSha256,
             workspaceGeneration,
-            "Retry with this explicit associated artifact path anchor and digest; artifact content was omitted to fit the selected model request budget.");
+            "Retry with this explicit associated artifact path anchor and digest; artifact content was omitted to fit the selected model request budget.")
+        {
+            OriginSymbolId = artifact.OriginSymbolId,
+            OriginFilePath = artifact.OriginFilePath,
+            OriginRange = artifact.OriginRange,
+        };
         if (!continuationTargets.Any(existing => IsSameArtifactContinuation(existing, target)))
         {
             continuationTargets.Add(target);
@@ -1214,10 +1275,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static IReadOnlyList<string> AddResultBoundOmission(IReadOnlyList<string> omissions)
     {
-        const string omission = "Code exploration metadata was bounded to fit the selected model request budget.";
-        return omissions.Contains(omission, StringComparer.Ordinal)
+        return omissions.Contains(ResultBoundOmission, StringComparer.Ordinal)
             ? omissions
-            : [.. omissions, omission];
+            : [.. omissions, ResultBoundOmission];
     }
 
     private static CodeExploreResult Confine(CodeExploreResult result, ToolInvocationContext context)
@@ -1750,7 +1810,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         }
 
         var continuations = coverage.ContinuationTargets
-            .Where(target => IsAllowed(target.FilePath, context))
+            .Where(target => IsAllowed(target.FilePath, context)
+                && (target.OriginFilePath is null || IsAllowed(target.OriginFilePath, context)))
             .ToArray();
         var omitted = alreadyOmitted || continuations.Length != coverage.ContinuationTargets.Count;
         return coverage with
@@ -2563,6 +2624,26 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
     }
 }
 
+/// <summary>Derives the shared selected-model ceiling for structured and Markdown code-explore results.</summary>
+internal static class CodeExploreModelBudget
+{
+    private const int BytesPerEffectiveInputToken = 3;
+    private const int MinimumResultBytes = 1024;
+    private const int MaximumResultBytes = 1024 * 1024;
+
+    /// <summary>Returns the selected-model result ceiling when model resolution supplied an effective input budget.</summary>
+    internal static int? GetMaximumResultBytes(ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.ModelEffectiveInputBudgetTokens is { } effectiveInputTokens && effectiveInputTokens > 0
+            ? (int)Math.Clamp(
+                (long)effectiveInputTokens * BytesPerEffectiveInputToken,
+                MinimumResultBytes,
+                MaximumResultBytes)
+            : null;
+    }
+}
+
 /// <summary>Creates and parses host-owned code_explore continuation cursors carried through the minimal query schema.</summary>
 internal static class CodeExploreContinuationCursor
 {
@@ -2624,7 +2705,7 @@ internal static class CodeExploreContinuationCursor
         string? query)
     {
         ArgumentNullException.ThrowIfNull(target);
-        return Create(new CursorPayload
+        var payload = new CursorPayload
         {
             Version = 1,
             Type = "artifact",
@@ -2634,12 +2715,13 @@ internal static class CodeExploreContinuationCursor
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
             Query = BoundEmbeddedQuery(query),
-            OriginSymbolId = artifact?.OriginSymbolId,
-            OriginPath = artifact?.OriginFilePath,
-            OriginStartLine = artifact?.OriginRange.StartLine,
-            OriginEndLine = artifact?.OriginRange.EndLine,
+            OriginSymbolId = target.OriginSymbolId ?? artifact?.OriginSymbolId,
+            OriginPath = target.OriginFilePath ?? artifact?.OriginFilePath,
+            OriginStartLine = target.OriginRange?.StartLine ?? artifact?.OriginRange.StartLine,
+            OriginEndLine = target.OriginRange?.EndLine ?? artifact?.OriginRange.EndLine,
             Mode = nameof(CodeExploreMode.Auto),
-        });
+        };
+        return Create(payload) ?? Create(payload with { Query = null });
     }
 
     /// <summary>Attempts to convert a query-carried continuation cursor back into a host-owned code_explore request.</summary>

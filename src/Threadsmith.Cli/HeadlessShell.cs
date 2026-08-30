@@ -1024,7 +1024,7 @@ public sealed class HeadlessShell
             cancellationToken);
         var semanticConfidence = await WaitForSemanticReadinessAsync(sessionId, cancellationToken);
         await _output.WriteLineAsync(
-            $"Semantic confidence: {semanticConfidence}".AsMemory(),
+            $"Reticulating Splines: {semanticConfidence}".AsMemory(),
             cancellationToken);
         if (semanticConfidence < SemanticConfidenceLevel.PartialCompilation)
         {

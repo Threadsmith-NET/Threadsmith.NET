@@ -601,6 +601,32 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 }
             }
 
+            var isTruncated = execution.IsTruncated;
+            if (tool is IPostSanitizationToolOutputBoundary outputBoundary)
+            {
+                var boundedOutput = outputBoundary.BoundSanitizedOutput(
+                    resultJson,
+                    modelResultContent,
+                    request.Context);
+                resultJson = boundedOutput.ResultJson;
+                modelResultContent = boundedOutput.ModelResultContent;
+                isTruncated |= boundedOutput.WasTruncated;
+                if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes
+                    || (modelResultContent is not null
+                        && Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes))
+                {
+                    return await CompleteFailureAsync(
+                        request,
+                        invocationId,
+                        ToolErrorClassification.OutputLimitExceeded,
+                        "The bounded sanitized tool output exceeded its declared output bound.",
+                        startedAt,
+                        isTruncated: true,
+                        source,
+                        authoritativeElapsedMilliseconds);
+                }
+            }
+
             var duration = authoritativeElapsedMilliseconds is { } measured
                 ? TimeSpan.FromMilliseconds(measured)
                 : TimeSpan.Zero;
@@ -616,7 +642,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     invocationId,
                     true,
                     resultJson,
-                    IsTruncated: execution.IsTruncated,
+                    IsTruncated: isTruncated,
                     Source: source,
                     ElapsedMilliseconds: authoritativeElapsedMilliseconds,
                     Outcome: OperationActivityOutcome.Completed,
@@ -631,7 +657,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
                 Sources = execution.Sources,
-                IsTruncated = execution.IsTruncated,
+                IsTruncated = isTruncated,
                 ErrorClassification = ToolErrorClassification.None,
                 Duration = duration,
             };

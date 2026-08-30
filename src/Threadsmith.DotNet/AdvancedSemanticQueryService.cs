@@ -23,6 +23,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumNaturalLanguageCandidateSummaries = 64;
     private const int MaximumNaturalLanguageGraphSeeds = 8;
     private const int MaximumNaturalLanguageGraphEdges = 128;
+    private const int NaturalLanguageDefaultCoLocationBoost = 60;
+    private const int NaturalLanguageToolIntentCoLocationBoost = 10;
+    private const int NaturalLanguageDefaultGraphBoost = 260;
+    private const int NaturalLanguageSurveyGraphBoost = 35;
+    private const int ToolIntentMaximumRankedBackfill = 3;
+    private const int ToolIntentMaximumSelectedPerType = 1;
+    private const int ToolIntentMaximumSelectedPerFile = 3;
+    private const int SurveyIntentMaximumSelectedPerType = 3;
+    private const int SurveyIntentMaximumSelectedPerFile = 5;
     private const int MinimumUsefulSourceCharacters = 256;
     private const int MinimumDedupSourceCharacters = 256;
     private const int MaximumArtifactLiteralLength = 512;
@@ -35,11 +44,88 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumFileRelevanceSummaries = 24;
     private const int MaximumCodeExploreScaleProjects = 121;
     private const int MaximumCodeExploreScaleDocuments = 2_501;
+    private const string AppSettingsArtifactStem = "appsettings";
+    private const string GlobalNamespaceAlias = "global::";
 
     private static readonly TimeSpan NonCooperativeCompilationBackstop = TimeSpan.FromSeconds(2);
 
     private static readonly HashSet<string> ArtifactFocusTerms = new(
-        ["additional", "artifact", "configuration", "config", "json", "markdown", "prompt", "project", "resource", "schema", "template", "xml"],
+        [
+            "additionaldocument",
+            "additionaldocuments",
+            "additionalfile",
+            "additionalfiles",
+            "analyzerconfig",
+            "artifact",
+            "artifacts",
+            "configuration",
+            "configurations",
+            "config",
+            "prompt",
+            "prompts",
+            "resource",
+            "resources",
+            "schema",
+            "schemas",
+            "template",
+            "templates",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ArtifactFocusQualifierTerms = new(
+        ["artifact", "artifacts", "doc", "docs", "document", "documents", "documentation", "file", "files", "item", "items", "metadata"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ArtifactFocusContextTerms = new(
+        ["additional", "analyzer", "markdown", "project", "text"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ArtifactFocusExtensions = new(
+        [
+            "config",
+            "csproj",
+            "editorconfig",
+            "fsproj",
+            "globalconfig",
+            "gql",
+            "graphql",
+            "handlebars",
+            "http",
+            "json",
+            "jsonc",
+            "liquid",
+            "markdown",
+            "md",
+            "mustache",
+            "prompt",
+            "prompty",
+            "props",
+            "rest",
+            "resx",
+            "ruleset",
+            "schema",
+            "scriban",
+            "targets",
+            "template",
+            "tmpl",
+            "txt",
+            "vbproj",
+            "xml",
+            "yaml",
+            "yml",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> AmbiguousArtifactFocusExtensions = new(
+        ["config", "json", "xml"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ConventionalJsonArtifactStems = new(
+        ["global", "launchsettings", "package", "packages.lock"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ConventionalConfigArtifactStems = new(
+        ["app", "nuget", "packages", "web"],
         StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> PromptContextTerms = new(
@@ -61,6 +147,40 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static readonly HashSet<string> NaturalLanguageStopWords = new(
         ["a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could", "did", "do", "does", "for", "from", "has", "have", "how", "i", "in", "into", "is", "it", "its", "me", "of", "on", "or", "please", "show", "that", "the", "their", "this", "through", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with", "without"],
         StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ToolCapabilityIntentTerms = new(
+        ["agentic", "capability", "capabilities", "compiler", "efficient", "efficiency", "explain", "semantic", "semantics", "tool", "tools", "workflow", "workflows"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> ToolContractTypeNames = new(
+        ["CallHierarchyTool", "CodeExploreTool", "FindImplementationsTool", "FindReferencesTool", "FindSymbolTool", "GeneratedCodeTool", "SymbolImpactTool", "CSharpPatternSearchTool"],
+        StringComparer.Ordinal);
+
+    private static readonly HashSet<string> ToolServiceContractNames = new(
+        ["IAdvancedSemanticQueryService", "ICodeExploreService", "ISemanticEngineResolver"],
+        StringComparer.Ordinal);
+
+    private static readonly Dictionary<string, string> SemanticToolIdFamilies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["call_hierarchy"] = "call_hierarchy",
+        ["code_explore"] = "code_explore",
+        ["csharp_pattern_search"] = "csharp_pattern",
+        ["find_implementations"] = "implementations",
+        ["find_references"] = "references",
+        ["find_symbol"] = "symbol",
+        ["generated_code_query"] = "generated_code",
+        ["symbol_impact"] = "impact",
+    };
+
+    private static readonly string[] ToolCapabilitySurveyFamilies =
+    [
+        "code_explore",
+        "symbol",
+        "references",
+        "implementations",
+        "impact",
+        "call_hierarchy",
+    ];
 
     private readonly Lock _catalogGate = new();
     private readonly Dictionary<string, CodeExploreDeclarationCatalog> _codeExploreCatalogs = new(StringComparer.Ordinal);
@@ -648,7 +768,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
-        var anchors = BuildCodeExploreAnchors(request).ToList();
+        var anchors = BuildCodeExploreAnchors(request, queryInterpretation).ToList();
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
@@ -656,6 +776,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var allocationFiles = new List<CodeExploreAllocationFileSummary>();
         var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
         CodeExploreDiscoverySummary? discovery = null;
+        CodeExploreNaturalLanguageIntent? naturalLanguageIntent = null;
         CodeExploreFlow? flow = null;
         CodeExploreBlastRadius? blastRadius = null;
         var alternativesCapped = false;
@@ -677,6 +798,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 anchors.AddRange(naturalLanguage.Anchors);
                 queryInterpretation = queryInterpretation with { UnresolvedTerms = naturalLanguage.UnresolvedTerms };
                 discovery = naturalLanguage.Discovery;
+                naturalLanguageIntent = naturalLanguage.Intent;
                 candidateSummaries = naturalLanguage.Candidates;
                 omissions.AddRange(naturalLanguage.Omissions);
             }
@@ -785,7 +907,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     request,
                     resolutions,
                     timeout.Token);
-                if (ShouldBuildCodeExploreFlow(request, flowAnchors))
+                if (ShouldBuildCodeExploreFlow(request, flowAnchors, naturalLanguageIntent))
                 {
                     flow = await BuildCodeExploreFlowAsync(
                         snapshot,
@@ -802,7 +924,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     omissions.Add("Flow mode requires at least two resolved source-bearing symbol anchors.");
                 }
 
-                if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors))
+                if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors, naturalLanguageIntent))
                 {
                     blastRadius = await BuildCodeExploreBlastRadiusAsync(
                         snapshot,
@@ -2286,7 +2408,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var inspectedDirectories = new HashSet<string>(PathComparer);
         var candidates = new List<CodeExploreArtifactCandidate>();
         var logicalCandidates = new List<CodeExploreLogicalArtifactCandidate>();
-        var candidateKeys = new HashSet<string>(StringComparer.Ordinal);
+        var candidateKeys = new HashSet<CodeExploreArtifactCandidateKey>(CodeExploreArtifactCandidateKeyComparer.Instance);
+        var logicalCandidateKeys = new HashSet<string>(StringComparer.Ordinal);
         var omissions = new List<string>();
         var candidateAttempts = 0;
         var policyExcludedCandidates = 0;
@@ -2329,7 +2452,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
 
             var key = CreateLogicalArtifactCandidateKey(candidate);
-            if (!candidateKeys.Add(key))
+            if (!logicalCandidateKeys.Add(key))
             {
                 return CodeExploreArtifactCandidateAdmission.Duplicate;
             }
@@ -2408,28 +2531,31 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 cancellationToken);
         }
 
-        foreach (var projectGroup in origins
-            .Where(origin => origin.Project is not null)
-            .GroupBy(origin => origin.Project?.Id)
-            .OrderBy(group => group.First().ProjectName, StringComparer.Ordinal))
+        if (ShouldIncludeProjectArtifacts(request, queryInterpretation))
         {
-            if (candidateLimitReached)
+            foreach (var projectGroup in origins
+                .Where(origin => origin.Project is not null)
+                .GroupBy(origin => origin.Project?.Id)
+                .OrderBy(group => group.First().ProjectName, StringComparer.Ordinal))
             {
-                break;
-            }
+                if (candidateLimitReached)
+                {
+                    break;
+                }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            await AddProjectArtifactCandidatesAsync(
-                snapshot,
-                artifactReader,
-                request,
-                queryInterpretation,
-                projectGroup.First(),
-                inspectedDirectories,
-                AddCandidate,
-                TryContinueArtifactCandidateDiscovery,
-                omissions,
-                cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                await AddProjectArtifactCandidatesAsync(
+                    snapshot,
+                    artifactReader,
+                    request,
+                    queryInterpretation,
+                    projectGroup.First(),
+                    inspectedDirectories,
+                    AddCandidate,
+                    TryContinueArtifactCandidateDiscovery,
+                    omissions,
+                    cancellationToken);
+            }
         }
 
         if (candidateLimitReached)
@@ -2700,7 +2826,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreArtifactEvidenceLevel.ProjectProven,
                 origin,
                 [$"Roslyn loaded this additional document for selected project '{project.Name}'."],
-                10));
+                GetProjectArtifactRank(document.FilePath, queryInterpretation, 10)));
             if (admission == CodeExploreArtifactCandidateAdmission.LimitReached)
             {
                 return;
@@ -2727,15 +2853,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreArtifactEvidenceLevel.ProjectProven,
                 origin,
                 [$"Roslyn loaded this analyzer configuration document for selected project '{project.Name}'."],
-                11));
+                GetProjectArtifactRank(document.FilePath, queryInterpretation, 11)));
             if (admission == CodeExploreArtifactCandidateAdmission.LimitReached)
             {
                 return;
             }
         }
 
-        if (!ShouldIncludeProjectMetadata(request, queryInterpretation)
-            || project.FilePath is null
+        if (project.FilePath is null
             || !tryContinueDiscovery())
         {
             return;
@@ -2747,7 +2872,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             CodeExploreArtifactEvidenceLevel.ProjectProven,
             origin,
             [$"Selected C# source belongs to loaded project '{project.Name}'; project metadata is associated but is not runtime authority."],
-            30));
+            GetProjectArtifactRank(project.FilePath, queryInterpretation, 30)));
         if (projectMetadataAdmission == CodeExploreArtifactCandidateAdmission.LimitReached)
         {
             return;
@@ -2757,6 +2882,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             snapshot,
             artifactReader,
             request,
+            queryInterpretation,
             origin,
             inspectedDirectories,
             addCandidate,
@@ -2769,6 +2895,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
+        CodeExploreQueryInterpretation queryInterpretation,
         CodeExploreArtifactOrigin origin,
         ISet<string> inspectedDirectories,
         Func<CodeExploreArtifactCandidate, CodeExploreArtifactCandidateAdmission> addCandidate,
@@ -2854,7 +2981,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreArtifactEvidenceLevel.BoundedTextualInference,
                 origin,
                 [$"Project metadata text contains '{element.Name.LocalName}' Include/Update for this checked-in artifact; conditions, imports, removes, and item evaluation were not applied, so this association is textual and the artifact remains untrusted data."],
-                relationship == CodeExploreArtifactRelationshipKind.ProjectResource ? 31 : 32));
+                GetProjectArtifactRank(
+                    artifactPath,
+                    queryInterpretation,
+                    relationship == CodeExploreArtifactRelationshipKind.ProjectResource ? 31 : 32)));
             if (admission == CodeExploreArtifactCandidateAdmission.LimitReached)
             {
                 return;
@@ -3215,7 +3345,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             endLine,
             expectedFileSha256,
             candidate.ExpectedWorkspaceGeneration ?? snapshot.Generation,
-            reason);
+            reason)
+        {
+            OriginSymbolId = candidate.Origin.OriginSymbolId,
+            OriginFilePath = candidate.Origin.RelativeOriginFilePath,
+            OriginRange = candidate.Origin.OriginRange,
+        };
     }
 
     private static CodeExploreArtifactOrigin CreateArtifactOrigin(
@@ -3463,13 +3598,130 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             && !include.Contains('?', StringComparison.Ordinal);
     }
 
-    private static bool ShouldIncludeProjectMetadata(
+    private static bool ShouldIncludeProjectArtifacts(
         CodeExploreRequest request,
         CodeExploreQueryInterpretation queryInterpretation)
     {
         return request.AssociatedArtifacts == CodeExploreAssociatedArtifactsMode.Enabled
-            || queryInterpretation.Terms.Any(ArtifactFocusTerms.Contains)
-            || queryInterpretation.ExactIdentifiers.Any(ArtifactFocusTerms.Contains);
+            || QueryContainsExplicitArtifactFileName(request.Query, queryInterpretation)
+            || queryInterpretation.PathLikeSpans.Any(IsExplicitArtifactPathSpan)
+            || QueryContainsStandaloneArtifactFocus(request.Query)
+            || HasQualifiedArtifactFocus(queryInterpretation);
+    }
+
+    private static bool QueryContainsStandaloneArtifactFocus(string query)
+    {
+        return ExtractCodeExploreTokens(query).Any(token =>
+            !token.Contains('.', StringComparison.Ordinal)
+            && !token.Contains('/', StringComparison.Ordinal)
+            && !token.Contains('\\', StringComparison.Ordinal)
+            && ArtifactFocusTerms.Contains(token.Replace("-", string.Empty, StringComparison.Ordinal)
+                .Replace("_", string.Empty, StringComparison.Ordinal)));
+    }
+
+    private static bool QueryContainsExplicitArtifactFileName(
+        string query,
+        CodeExploreQueryInterpretation queryInterpretation)
+    {
+        var hasArtifactQualifier = queryInterpretation.Terms
+            .Concat(queryInterpretation.ExactIdentifiers)
+            .Any(ArtifactFocusQualifierTerms.Contains);
+        return ExtractCodeExploreTokens(query)
+            .Any(token => IsExplicitArtifactFileNameToken(token, hasArtifactQualifier));
+    }
+
+    private static bool IsExplicitArtifactFileNameToken(string token, bool hasArtifactQualifier)
+    {
+        var fileName = Path.GetFileName(token);
+        if (fileName.Equals("editorconfig", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("globalconfig", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var extension = Path.GetExtension(fileName).TrimStart('.');
+        if (!fileName.Contains('.', StringComparison.Ordinal)
+            || !ArtifactFocusExtensions.Contains(extension))
+        {
+            return false;
+        }
+
+        var nameSegments = fileName.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var underscoreIsFileShape = token.Contains('_', StringComparison.Ordinal)
+            && (nameSegments.Length <= 2 || !IsQualifiedIdentifierName(fileName));
+        var hasFileShape = token.Contains('/', StringComparison.Ordinal)
+            || token.Contains('\\', StringComparison.Ordinal)
+            || token.Contains('-', StringComparison.Ordinal)
+            || underscoreIsFileShape;
+        return hasFileShape
+            || hasArtifactQualifier
+            || IsConventionalArtifactFileName(fileName, extension)
+            || (nameSegments.Length == 2
+                && !AmbiguousArtifactFocusExtensions.Contains(extension));
+    }
+
+    private static bool IsConventionalArtifactFileName(string fileName, string extension)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (extension.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            return stem.Equals(AppSettingsArtifactStem, StringComparison.OrdinalIgnoreCase)
+                || stem.StartsWith($"{AppSettingsArtifactStem}.", StringComparison.OrdinalIgnoreCase)
+                || ConventionalJsonArtifactStems.Contains(stem);
+        }
+
+        return extension.Equals("config", StringComparison.OrdinalIgnoreCase)
+            && ConventionalConfigArtifactStems.Contains(stem);
+    }
+
+    private static bool IsExplicitArtifactPathSpan(string pathSpan)
+    {
+        var fileName = Path.GetFileName(pathSpan);
+        var extension = Path.GetExtension(fileName).TrimStart('.');
+        return ArtifactFocusExtensions.Contains(extension)
+            || ArtifactFocusExtensions.Contains(fileName.TrimStart('.'));
+    }
+
+    private static bool HasQualifiedArtifactFocus(CodeExploreQueryInterpretation queryInterpretation)
+    {
+        var terms = queryInterpretation.Terms
+            .Concat(queryInterpretation.ExactIdentifiers)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!terms.Any(ArtifactFocusQualifierTerms.Contains))
+        {
+            return false;
+        }
+
+        return terms.Any(term => ArtifactFocusContextTerms.Contains(term)
+            || ArtifactFocusExtensions.Contains(term.TrimStart('.')));
+    }
+
+    private static int GetProjectArtifactRank(
+        string path,
+        CodeExploreQueryInterpretation queryInterpretation,
+        int defaultRank)
+    {
+        return QueryExplicitlyNamesArtifact(path, queryInterpretation) ? 1 : defaultRank;
+    }
+
+    private static bool QueryExplicitlyNamesArtifact(
+        string path,
+        CodeExploreQueryInterpretation queryInterpretation)
+    {
+        var fileName = Path.GetFileName(path);
+        if (queryInterpretation.PathLikeSpans.Any(span =>
+            string.Equals(Path.GetFileName(span), fileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        var queryTerms = queryInterpretation.Terms
+            .Concat(queryInterpretation.ExactIdentifiers)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fileNameTerms = fileName
+            .TrimStart('.')
+            .Split(['.', '-', '_'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return fileNameTerms.Length > 0 && fileNameTerms.All(queryTerms.Contains);
     }
 
     private static void AddUniqueDirectory(ISet<string> directories, string directory)
@@ -3584,17 +3836,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return CodeExploreArtifactMediaKind.Text;
     }
 
-    private static string CreateArtifactCandidateKey(CodeExploreArtifactCandidate candidate)
+    private static CodeExploreArtifactCandidateKey CreateArtifactCandidateKey(CodeExploreArtifactCandidate candidate)
     {
-        return string.Join(
-            '|',
+        return new CodeExploreArtifactCandidateKey(
             Path.GetFullPath(candidate.FilePath),
             candidate.Relationship,
-            candidate.StartLine?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            candidate.EndLine?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            candidate.Origin.RelativeOriginFilePath,
-            candidate.Origin.OriginRange.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            candidate.Origin.OriginRange.EndLine.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            candidate.StartLine,
+            candidate.EndLine,
+            candidate.ExpectedFileSha256,
+            candidate.ExpectedWorkspaceGeneration);
     }
 
     private static string CreateLogicalArtifactCandidateKey(CodeExploreLogicalArtifactCandidate candidate)
@@ -3777,6 +4027,41 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         string? ExpectedFileSha256 = null,
         long? ExpectedWorkspaceGeneration = null);
 
+    private readonly record struct CodeExploreArtifactCandidateKey(
+        string FilePath,
+        CodeExploreArtifactRelationshipKind Relationship,
+        int? StartLine,
+        int? EndLine,
+        string? ExpectedFileSha256,
+        long? ExpectedWorkspaceGeneration);
+
+    private sealed class CodeExploreArtifactCandidateKeyComparer : IEqualityComparer<CodeExploreArtifactCandidateKey>
+    {
+        internal static CodeExploreArtifactCandidateKeyComparer Instance { get; } = new();
+
+        public bool Equals(CodeExploreArtifactCandidateKey left, CodeExploreArtifactCandidateKey right)
+        {
+            return PathComparer.Equals(left.FilePath, right.FilePath)
+                && left.Relationship == right.Relationship
+                && left.StartLine == right.StartLine
+                && left.EndLine == right.EndLine
+                && StringComparer.OrdinalIgnoreCase.Equals(left.ExpectedFileSha256, right.ExpectedFileSha256)
+                && left.ExpectedWorkspaceGeneration == right.ExpectedWorkspaceGeneration;
+        }
+
+        public int GetHashCode(CodeExploreArtifactCandidateKey candidate)
+        {
+            var hash = default(HashCode);
+            hash.Add(candidate.FilePath, PathComparer);
+            hash.Add(candidate.Relationship);
+            hash.Add(candidate.StartLine);
+            hash.Add(candidate.EndLine);
+            hash.Add(candidate.ExpectedFileSha256, StringComparer.OrdinalIgnoreCase);
+            hash.Add(candidate.ExpectedWorkspaceGeneration);
+            return hash.ToHashCode();
+        }
+    }
+
     private sealed record CodeExploreLogicalArtifactCandidate(
         string LogicalName,
         CodeExploreArtifactRelationshipKind Relationship,
@@ -3873,6 +4158,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         string? ContainingType,
         string? ContainingNamespace,
         string Kind,
+        Accessibility DeclaredAccessibility,
         string ProjectName,
         string TargetFramework,
         string FilePath,
@@ -3892,6 +4178,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int CoveredTermCount,
         string AmbiguityGroup);
 
+    private sealed record NaturalLanguageIntentAdjustment(
+        int Score,
+        CodeExploreSelectionReason Reasons,
+        CodeExploreCandidateTier Tier);
+
     private sealed record CodeExploreScaleProject(
         Project Project,
         bool ProjectFileAllowed,
@@ -3901,6 +4192,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private sealed record NaturalLanguageCodeExploreDiscovery(
         IReadOnlyList<CodeExploreAnchor> Anchors,
         CodeExploreQueryInterpretation Interpretation,
+        CodeExploreNaturalLanguageIntent Intent,
         CodeExploreDiscoverySummary Discovery,
         CodeExploreCandidateSummary[] Candidates,
         IReadOnlyList<string> UnresolvedTerms,
@@ -3917,6 +4209,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         Rejected,
         Duplicate,
         LimitReached,
+    }
+
+    private enum CodeExploreNaturalLanguageIntent
+    {
+        Exact,
+        Impact,
+        Flow,
+        ToolCapabilityExplanation,
+        Survey,
     }
 
     private sealed record CodeExplorePriorCoverage(
@@ -4067,22 +4368,31 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool ShouldBuildCodeExploreFlow(
         CodeExploreRequest request,
-        IReadOnlyList<CodeExploreFlowAnchor> anchors)
+        IReadOnlyList<CodeExploreFlowAnchor> anchors,
+        CodeExploreNaturalLanguageIntent? naturalLanguageIntent)
     {
-        return anchors.Count >= 2 && request.Mode is CodeExploreMode.Auto
-            or CodeExploreMode.Survey
-            or CodeExploreMode.Flow
-            or CodeExploreMode.Impact;
+        if (anchors.Count < 2)
+        {
+            return false;
+        }
+
+        return request.Mode is CodeExploreMode.Survey or CodeExploreMode.Flow or CodeExploreMode.Impact
+            || (request.Mode == CodeExploreMode.Auto
+                && naturalLanguageIntent is not CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+                    and not CodeExploreNaturalLanguageIntent.Survey);
     }
 
     private static bool ShouldBuildCodeExploreBlastRadius(
         CodeExploreRequest request,
-        IReadOnlyList<CodeExploreFlowAnchor> anchors)
+        IReadOnlyList<CodeExploreFlowAnchor> anchors,
+        CodeExploreNaturalLanguageIntent? naturalLanguageIntent)
     {
-        return anchors.Count > 0 && (request.Mode is CodeExploreMode.Survey
-            or CodeExploreMode.Flow
-            or CodeExploreMode.Impact
-            || (request.Mode == CodeExploreMode.Auto && anchors.Count >= 2));
+        return anchors.Count > 0
+            && (request.Mode is CodeExploreMode.Survey or CodeExploreMode.Flow or CodeExploreMode.Impact
+                || (request.Mode == CodeExploreMode.Auto
+                    && anchors.Count >= 2
+                    && naturalLanguageIntent is not CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+                        and not CodeExploreNaturalLanguageIntent.Survey));
     }
 
     private static async Task<CodeExploreFlow> BuildCodeExploreFlowAsync(
@@ -5900,7 +6210,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static IReadOnlyList<CodeExploreAnchor> BuildCodeExploreAnchors(CodeExploreRequest request)
+    private static IReadOnlyList<CodeExploreAnchor> BuildCodeExploreAnchors(
+        CodeExploreRequest request,
+        CodeExploreQueryInterpretation queryInterpretation)
     {
         var anchors = new List<CodeExploreAnchor>();
         anchors.AddRange(request.PathAnchors.Select(anchor => new CodeExploreAnchor(
@@ -5938,7 +6250,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return anchors;
         }
 
-        if (IsCSharpPathSpan(request.Query) || IsExactSymbolAnchor(request.Query))
+        if (IsCSharpPathSpan(request.Query)
+            || (IsExactSymbolAnchor(request.Query)
+                && !MentionsKnownSemanticToolId(queryInterpretation)))
         {
             return [new CodeExploreAnchor(CodeExploreAnchorKind.Query, request.Query, null, null, false, CodeExplorePathSelectionMode.Auto, null, null, null)];
         }
@@ -5961,13 +6275,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             projection,
             cancellationToken);
         var allowedEntries = GetAllowedCodeExploreCatalogEntries(catalog, sourceReader, cancellationToken);
+        var intent = ClassifyNaturalLanguageIntent(request, interpretation);
         var ranked = RankNaturalLanguageCandidates(
             allowedEntries,
             interpretation,
+            intent,
             cancellationToken);
         ranked = await ApplyGraphConnectivityAsync(
             snapshot,
             ranked,
+            interpretation,
+            intent,
             cancellationToken);
         ranked = ApplyNaturalLanguageRelativeFloor(ranked);
         var rankedByIdentity = ranked
@@ -6032,10 +6350,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var symbolSlots = Math.Max(0, request.Limits.MaximumAnchors - anchors.Count);
-        var selected = rankedByIdentity
-            .Where(candidate => !selectedIdentityIds.Contains(candidate.Entry.Identity.Id))
-            .Take(symbolSlots)
-            .ToArray();
+        var omissions = new List<string>(catalog.Omissions);
+        var selected = SelectNaturalLanguageCandidates(
+            rankedByIdentity,
+            selectedIdentityIds,
+            symbolSlots,
+            interpretation,
+            intent,
+            omissions);
         foreach (var candidate in selected)
         {
             if (!selectedIdentityIds.Add(candidate.Entry.Identity.Id))
@@ -6065,7 +6387,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .Select((candidate, index) => CreateCandidateSummary(
                 candidate,
                 pinnedSummaryCount + index + 1,
-                selectedIds.Contains(candidate.Entry.Identity.Id))));
+                selectedIds.Contains(candidate.Entry.Identity.Id),
+                intent)));
         var ambiguityGroups = CreateAmbiguityGroups(rankedByIdentity, selectedIds);
         var unresolvedTerms = interpretation.Terms
             .Where(term => !ranked.Any(candidate => CandidateCoversTerm(candidate.Entry, term)))
@@ -6073,10 +6396,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var candidateLimitReached = rankedByIdentity.Length > maximumCandidateSummaries;
-        var omissions = new List<string>(catalog.Omissions);
         if (candidateLimitReached)
         {
             omissions.Add("Natural-language candidate summaries were capped by the host result limit.");
+        }
+
+        if (intent is CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation or CodeExploreNaturalLanguageIntent.Survey
+            && rankedByIdentity.Any(candidate => candidate.Reasons.HasFlag(CodeExploreSelectionReason.GraphConnected)))
+        {
+            omissions.Add("Natural-language graph connectivity was treated as low-weight corroboration for survey/tool intent; direct query-term and tool-contract evidence kept priority.");
+        }
+
+        if (intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            && allowedEntries.Any(IsPrivateImplementationHelper))
+        {
+            omissions.Add("Private/internal helper candidates were down-ranked for tool/capability explanation intent unless directly identified by the query.");
         }
 
         if (ranked.Length == 0 && summaries.Count == 0)
@@ -6087,6 +6421,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new NaturalLanguageCodeExploreDiscovery(
             anchors,
             interpretation with { UnresolvedTerms = unresolvedTerms },
+            intent,
             new CodeExploreDiscoverySummary(
                 allowedEntries.Length,
                 rankedByIdentity.Length + pinnedSummaryCount,
@@ -6266,6 +6601,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             containingType,
             containingNamespace,
             kindName,
+            symbol.DeclaredAccessibility,
             location.ProjectName,
             location.TargetFramework,
             filePath,
@@ -6386,6 +6722,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate[] RankNaturalLanguageCandidates(
         IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
         CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
         CancellationToken cancellationToken)
     {
         var termCounts = entries
@@ -6395,11 +6732,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var nameCounts = entries
             .GroupBy(entry => NormalizeComparableName(entry.Name), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var usesSemanticToolProfile = UsesSemanticToolCapabilityProfile(interpretation, intent);
+        var semanticToolIdFamilies = GetMentionedSemanticToolIdFamilies(interpretation);
         var preliminary = new List<CodeExploreRankedCandidate>();
         foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var rank = RankNaturalLanguageCandidate(entry, interpretation, termCounts, nameCounts, entries.Count);
+            var rank = RankNaturalLanguageCandidate(
+                entry,
+                interpretation,
+                intent,
+                usesSemanticToolProfile,
+                semanticToolIdFamilies,
+                termCounts,
+                nameCounts,
+                entries.Count);
             if (rank is not null)
             {
                 preliminary.Add(rank);
@@ -6409,12 +6756,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var fileCounts = preliminary
             .GroupBy(candidate => candidate.Entry.FilePath, PathComparer)
             .ToDictionary(group => group.Key, group => group.Count(), PathComparer);
+        var coLocationBoost = intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            ? NaturalLanguageToolIntentCoLocationBoost
+            : NaturalLanguageDefaultCoLocationBoost;
         return OrderNaturalLanguageCandidates(preliminary
             .Select(candidate => fileCounts.GetValueOrDefault(candidate.Entry.FilePath) > 1
                 ? candidate with
                 {
                     Reasons = candidate.Reasons | CodeExploreSelectionReason.CoLocated,
-                    Score = candidate.Score + 60,
+                    Score = candidate.Score + coLocationBoost,
                 }
                 : candidate));
     }
@@ -6460,6 +6810,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static async Task<CodeExploreRankedCandidate[]> ApplyGraphConnectivityAsync(
         AdvancedSemanticSnapshot snapshot,
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
         CancellationToken cancellationToken)
     {
         if (ranked.Count <= 1)
@@ -6503,7 +6855,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     if (edgeCount >= MaximumNaturalLanguageGraphEdges)
                     {
-                        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds);
+                        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds, interpretation, intent);
                     }
 
                     edgeCount++;
@@ -6516,7 +6868,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds);
+        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds, interpretation, intent);
     }
 
     private static async Task<IReadOnlyList<ISymbol>> FindNaturalLanguageConnectedSymbolsAsync(
@@ -6558,17 +6910,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate[] BoostGraphConnectedCandidates(
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
         IReadOnlySet<string> connectedIds,
-        IReadOnlySet<string> seedIds)
+        IReadOnlySet<string> seedIds,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent)
     {
         if (connectedIds.Count == 0)
         {
             return [.. ranked];
         }
 
+        var isSurveyLike = intent is CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            or CodeExploreNaturalLanguageIntent.Survey;
+        var scoreBoost = isSurveyLike
+            ? NaturalLanguageSurveyGraphBoost
+            : NaturalLanguageDefaultGraphBoost;
         return OrderNaturalLanguageCandidates(ranked.Select(candidate =>
         {
             if (!connectedIds.Contains(candidate.Entry.Identity.Id)
-                || seedIds.Contains(candidate.Entry.Identity.Id))
+                || seedIds.Contains(candidate.Entry.Identity.Id)
+                || (isSurveyLike && !HasDirectNaturalLanguageEvidence(candidate, interpretation)))
             {
                 return candidate;
             }
@@ -6576,16 +6936,560 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var reasons = (candidate.Reasons | CodeExploreSelectionReason.GraphConnected) & ~CodeExploreSelectionReason.Peripheral;
             return candidate with
             {
-                Tier = MinTier(candidate.Tier, CodeExploreCandidateTier.GraphConnected),
+                Tier = isSurveyLike
+                    ? candidate.Tier
+                    : MinTier(candidate.Tier, CodeExploreCandidateTier.GraphConnected),
                 Reasons = reasons,
-                Score = candidate.Score + 260,
+                Score = candidate.Score + scoreBoost,
             };
         }));
+    }
+
+    private static CodeExploreRankedCandidate[] SelectNaturalLanguageCandidates(
+        IReadOnlyList<CodeExploreRankedCandidate> rankedByIdentity,
+        IReadOnlySet<string> alreadySelectedIds,
+        int maximumCandidates,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
+        List<string> omissions)
+    {
+        if (maximumCandidates <= 0)
+        {
+            return [];
+        }
+
+        if (!RequiresNaturalLanguageDiversity(intent))
+        {
+            return
+            [
+                .. rankedByIdentity
+                    .Where(candidate => !alreadySelectedIds.Contains(candidate.Entry.Identity.Id))
+                    .Take(maximumCandidates),
+            ];
+        }
+
+        var selected = new List<CodeExploreRankedCandidate>();
+        var selectedIds = alreadySelectedIds.ToHashSet(StringComparer.Ordinal);
+        var fileCounts = new Dictionary<string, int>(PathComparer);
+        var typeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var cappedCandidates = 0;
+        var usesSemanticToolProfile = UsesSemanticToolCapabilityProfile(interpretation, intent);
+        var toolCapabilityFamilies = usesSemanticToolProfile
+            ? GetToolCapabilitySelectionFamilies(interpretation, intent)
+            : [];
+
+        foreach (var candidate in rankedByIdentity.Where(candidate => HasExactCandidateReason(candidate.Reasons)))
+        {
+            if (selected.Count >= maximumCandidates)
+            {
+                break;
+            }
+
+            if (selectedIds.Contains(candidate.Entry.Identity.Id))
+            {
+                continue;
+            }
+
+            AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+            TrackNaturalLanguageCandidate(candidate, fileCounts, typeCounts);
+        }
+
+        if (usesSemanticToolProfile
+            && selected.Count < maximumCandidates)
+        {
+            var compositionCandidate = rankedByIdentity.FirstOrDefault(candidate =>
+                !selectedIds.Contains(candidate.Entry.Identity.Id)
+                && IsToolCompositionEntry(candidate.Entry, interpretation)
+                && TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts));
+            if (compositionCandidate is not null)
+            {
+                AddNaturalLanguageCandidate(selected, selectedIds, compositionCandidate);
+            }
+        }
+
+        foreach (var family in toolCapabilityFamilies)
+        {
+            if (selected.Count >= maximumCandidates)
+            {
+                break;
+            }
+
+            var candidate = SelectToolCapabilityFamilyCandidate(
+                rankedByIdentity,
+                selectedIds,
+                family,
+                intent,
+                fileCounts,
+                typeCounts);
+            if (candidate is not null)
+            {
+                AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+            }
+
+            if (selected.Count >= maximumCandidates)
+            {
+                break;
+            }
+        }
+
+        var selectionLimit = usesSemanticToolProfile && selected.Count > 0
+            ? Math.Min(maximumCandidates, selected.Count + ToolIntentMaximumRankedBackfill)
+            : maximumCandidates;
+
+        foreach (var candidate in rankedByIdentity)
+        {
+            if (selected.Count >= selectionLimit)
+            {
+                break;
+            }
+
+            if (selectedIds.Contains(candidate.Entry.Identity.Id))
+            {
+                continue;
+            }
+
+            if (usesSemanticToolProfile
+                && !HasExactCandidateReason(candidate.Reasons)
+                && ShouldSkipToolCapabilityBackfill(candidate, toolCapabilityFamilies))
+            {
+                continue;
+            }
+
+            if (!TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts))
+            {
+                cappedCandidates++;
+                continue;
+            }
+
+            AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+        }
+
+        if (selected.Count == 0)
+        {
+            selected.AddRange(rankedByIdentity
+                .Where(candidate => !alreadySelectedIds.Contains(candidate.Entry.Identity.Id))
+                .Take(maximumCandidates));
+        }
+
+        if (cappedCandidates > 0)
+        {
+            omissions.Add($"Natural-language diversity capped {cappedCandidates} same-file or same-type candidate(s) so one implementation cluster could not consume all selected anchors.");
+        }
+
+        return [.. selected];
+    }
+
+    private static bool ShouldSkipToolCapabilityBackfill(
+        CodeExploreRankedCandidate candidate,
+        IReadOnlyList<string> requestedFamilies)
+    {
+        var isUnrequestedToolSurface = IsSemanticToolFamilySpecificEntry(candidate.Entry)
+            && !requestedFamilies.Any(family =>
+                CandidateMatchesToolCapabilityFamily(candidate.Entry, family));
+        var hasInsufficientDirectEvidence = candidate.CoveredTermCount < 2
+            && (IsToolCapabilityContractCandidate(candidate.Entry)
+                || IsSemanticToolContainingType(candidate.Entry));
+        return isUnrequestedToolSurface || hasInsufficientDirectEvidence;
+    }
+
+    private static bool IsSemanticToolFamilySpecificEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return IsSemanticToolTypeEntry(entry)
+            || IsSemanticToolDefinitionEntry(entry)
+            || IsSemanticToolDataContractEntry(entry)
+            || IsSemanticToolContainingType(entry)
+            || IsSemanticToolDataContractContainingType(entry);
+    }
+
+    private static CodeExploreRankedCandidate? SelectToolCapabilityFamilyCandidate(
+        IReadOnlyList<CodeExploreRankedCandidate> rankedCandidates,
+        IReadOnlySet<string> selectedIds,
+        string family,
+        CodeExploreNaturalLanguageIntent intent,
+        Dictionary<string, int> fileCounts,
+        Dictionary<string, int> typeCounts)
+    {
+        var familyCandidates = rankedCandidates
+            .Where(candidate => !selectedIds.Contains(candidate.Entry.Identity.Id)
+                && CandidateMatchesToolCapabilityFamily(candidate.Entry, family))
+            .OrderBy(candidate => IsSemanticToolDefinitionEntry(candidate.Entry) ? 0 : 1)
+            .ToArray();
+        return familyCandidates.FirstOrDefault(candidate =>
+            TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts));
+    }
+
+    private static IReadOnlyList<string> GetToolCapabilitySelectionFamilies(
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        if (intent != CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation)
+        {
+            return [];
+        }
+
+        var families = new List<string>(GetMentionedToolCapabilityFamilies(interpretation));
+        if (ShouldExpandSemanticToolSurvey(interpretation))
+        {
+            foreach (var family in ToolCapabilitySurveyFamilies)
+            {
+                AddMentionedToolCapabilityFamily(families, family, isMentioned: true);
+            }
+        }
+
+        return families;
+    }
+
+    private static bool UsesSemanticToolCapabilityProfile(
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        return intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            && (interpretation.Terms.Any(term => term is "semantic" or "semantics")
+                || HasAnyTermPair(interpretation, "code", "explore")
+                || CountMentionedToolCapabilityFamilies(interpretation) >= 2
+                || MentionsKnownSemanticToolId(interpretation)
+                || interpretation.ExactIdentifiers.Any(identifier =>
+                    ToolContractTypeNames.Contains(identifier)
+                    || SemanticToolNameContainsKnownFamily(identifier)));
+    }
+
+    private static bool RequiresNaturalLanguageDiversity(CodeExploreNaturalLanguageIntent intent)
+    {
+        return intent is CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            or CodeExploreNaturalLanguageIntent.Survey;
+    }
+
+    private static bool TryAdmitNaturalLanguageCandidate(
+        CodeExploreRankedCandidate candidate,
+        CodeExploreNaturalLanguageIntent intent,
+        Dictionary<string, int> fileCounts,
+        Dictionary<string, int> typeCounts)
+    {
+        var maximumPerType = intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            ? ToolIntentMaximumSelectedPerType
+            : SurveyIntentMaximumSelectedPerType;
+        var maximumPerFile = intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            ? ToolIntentMaximumSelectedPerFile
+            : SurveyIntentMaximumSelectedPerFile;
+        var typeKey = GetNaturalLanguageTypeClusterKey(candidate.Entry);
+        if (typeCounts.GetValueOrDefault(typeKey) >= maximumPerType
+            || fileCounts.GetValueOrDefault(candidate.Entry.FilePath) >= maximumPerFile)
+        {
+            return false;
+        }
+
+        TrackNaturalLanguageCandidate(candidate, fileCounts, typeCounts);
+        return true;
+    }
+
+    private static void TrackNaturalLanguageCandidate(
+        CodeExploreRankedCandidate candidate,
+        Dictionary<string, int> fileCounts,
+        Dictionary<string, int> typeCounts)
+    {
+        var typeKey = GetNaturalLanguageTypeClusterKey(candidate.Entry);
+        typeCounts[typeKey] = typeCounts.GetValueOrDefault(typeKey) + 1;
+        fileCounts[candidate.Entry.FilePath] = fileCounts.GetValueOrDefault(candidate.Entry.FilePath) + 1;
+    }
+
+    private static void AddNaturalLanguageCandidate(
+        List<CodeExploreRankedCandidate> selected,
+        HashSet<string> selectedIds,
+        CodeExploreRankedCandidate candidate)
+    {
+        selected.Add(candidate);
+        selectedIds.Add(candidate.Entry.Identity.Id);
+    }
+
+    private static string GetNaturalLanguageTypeClusterKey(CodeExploreDeclarationCatalogEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.ContainingType))
+        {
+            return NormalizeComparableName(entry.ContainingType);
+        }
+
+        return IsTypeDeclarationKind(entry.Kind)
+            ? NormalizeComparableName(entry.FullyQualifiedName)
+            : entry.FilePath;
+    }
+
+    private static NaturalLanguageIntentAdjustment CalculateIntentRelevanceAdjustment(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
+        bool usesSemanticToolProfile,
+        int coveredTermCount,
+        CodeExploreSelectionReason existingReasons)
+    {
+        var score = 0;
+        var reasons = CodeExploreSelectionReason.None;
+        var tier = CodeExploreCandidateTier.Peripheral;
+        if (intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation)
+        {
+            if (!usesSemanticToolProfile
+                && (IsSemanticToolTypeEntry(entry) || IsSemanticToolContainingType(entry))
+                && coveredTermCount <= 1
+                && !HasExactCandidateReason(existingReasons))
+            {
+                score -= 320;
+            }
+
+            if (usesSemanticToolProfile && IsSemanticToolTypeEntry(entry))
+            {
+                score += 680;
+                reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
+                tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+            }
+
+            if (usesSemanticToolProfile && IsSemanticToolDefinitionEntry(entry))
+            {
+                score += 780;
+                reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
+                tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+            }
+
+            if (IsToolCompositionEntry(entry, interpretation))
+            {
+                score += 520;
+                reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
+                tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            }
+
+            if (usesSemanticToolProfile && IsSemanticServiceContractEntry(entry))
+            {
+                score += 380;
+                reasons |= CodeExploreSelectionReason.UserFocus;
+                tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            }
+
+            if (usesSemanticToolProfile && IsSemanticToolDataContractEntry(entry))
+            {
+                score += 180;
+                reasons |= CodeExploreSelectionReason.UserFocus;
+                tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            }
+
+            if (IsToolConstructorEntry(entry))
+            {
+                score -= 170;
+            }
+
+            if (IsPrivateImplementationHelper(entry) && !HasExactCandidateReason(existingReasons))
+            {
+                score -= 520;
+            }
+        }
+        else if (intent == CodeExploreNaturalLanguageIntent.Survey)
+        {
+            if (IsPrivateImplementationHelper(entry) && !HasExactCandidateReason(existingReasons))
+            {
+                score -= 180;
+            }
+
+            if (IsToolConstructorEntry(entry) && coveredTermCount <= 1)
+            {
+                score -= 70;
+            }
+        }
+
+        return new NaturalLanguageIntentAdjustment(score, reasons, tier);
+    }
+
+    private static bool HasDirectNaturalLanguageEvidence(
+        CodeExploreRankedCandidate candidate,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        return (candidate.Reasons & (CodeExploreSelectionReason.Path
+            | CodeExploreSelectionReason.QualifiedName
+            | CodeExploreSelectionReason.ExactIdentifier
+            | CodeExploreSelectionReason.ContainingType
+            | CodeExploreSelectionReason.MultiTerm
+            | CodeExploreSelectionReason.UserFocus)) != 0
+            || GetMentionedToolCapabilityFamilies(interpretation)
+                .Any(family => CandidateMatchesToolCapabilityFamily(candidate.Entry, family));
+    }
+
+    private static bool HasExactCandidateReason(CodeExploreSelectionReason reasons)
+    {
+        return (reasons & (CodeExploreSelectionReason.Pinned
+            | CodeExploreSelectionReason.Path
+            | CodeExploreSelectionReason.QualifiedName
+            | CodeExploreSelectionReason.ExactIdentifier)) != 0;
+    }
+
+    private static bool IsSemanticToolTypeEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return IsTypeDeclarationKind(entry.Kind)
+            && ToolContractTypeNames.Contains(entry.Name);
+    }
+
+    private static bool IsToolCapabilityContractCandidate(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return IsSemanticToolTypeEntry(entry)
+            || IsSemanticToolDefinitionEntry(entry)
+            || IsSemanticServiceContractEntry(entry)
+            || IsSemanticToolDataContractEntry(entry);
+    }
+
+    private static bool IsSemanticToolDefinitionEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase)
+            && (entry.Name.Contains("definition", StringComparison.OrdinalIgnoreCase)
+                || entry.DisplayName.Contains("definition", StringComparison.OrdinalIgnoreCase))
+            && IsSemanticToolContainingType(entry);
+    }
+
+    private static bool IsSemanticServiceContractEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.Kind.Equals("Interface", StringComparison.OrdinalIgnoreCase)
+            && ToolServiceContractNames.Contains(entry.Name);
+    }
+
+    private static bool IsSemanticToolDataContractEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        if (!IsTypeDeclarationKind(entry.Kind))
+        {
+            return false;
+        }
+
+        return IsSemanticToolDataContractName(entry.Name);
+    }
+
+    private static bool IsSemanticToolDataContractContainingType(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.ContainingType is { } containingType
+            && IsSemanticToolDataContractName(containingType);
+    }
+
+    private static bool IsSemanticToolDataContractName(string name)
+    {
+        return (name.EndsWith("Input", StringComparison.Ordinal)
+            || name.EndsWith("Output", StringComparison.Ordinal)
+            || name.EndsWith("Result", StringComparison.Ordinal)
+            || name.EndsWith("Request", StringComparison.Ordinal))
+            && SemanticToolNameContainsKnownFamily(name);
+    }
+
+    private static bool IsToolCompositionEntry(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        return IsToolCompositionEntry(entry)
+            && (interpretation.Terms.Any(term => term is "semantic" or "semantics")
+                || interpretation.Terms.Any(term => !ToolCapabilityIntentTerms.Contains(term)
+                    && entry.Terms.Contains(term, StringComparer.OrdinalIgnoreCase)));
+    }
+
+    private static bool IsToolCompositionEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        if (entry.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase)
+            || entry.Kind.Equals("EnumMember", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var path = entry.RelativeFilePath.Replace('\\', '/');
+        var inCompositionFile = path.EndsWith("HostFoundation.cs", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("ApplicationComposition.cs", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("Composition", StringComparison.OrdinalIgnoreCase)
+            || entry.ContainingType?.Contains("Composition", StringComparison.OrdinalIgnoreCase) == true
+            || entry.ContainingType?.Contains("HostFoundation", StringComparison.OrdinalIgnoreCase) == true;
+        var declaration = NormalizeComparableName(string.Join(
+            ' ',
+            entry.Name,
+            entry.DisplayName,
+            entry.ContainingType ?? string.Empty));
+        var hasRegistrationName = declaration.Contains("register", StringComparison.Ordinal)
+            || declaration.Contains("capabilities", StringComparison.Ordinal)
+            || declaration.Contains("capability", StringComparison.Ordinal)
+            || declaration.Contains("createtools", StringComparison.Ordinal)
+            || declaration.Contains("semantictool", StringComparison.Ordinal);
+        return inCompositionFile && hasRegistrationName;
+    }
+
+    private static bool IsToolConstructorEntry(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.Kind.Equals("Constructor", StringComparison.OrdinalIgnoreCase)
+            && IsSemanticToolContainingType(entry);
+    }
+
+    private static bool IsPrivateImplementationHelper(CodeExploreDeclarationCatalogEntry entry)
+    {
+        if (entry.DeclaredAccessibility is Accessibility.Public
+            or Accessibility.Protected
+            or Accessibility.ProtectedOrInternal)
+        {
+            return false;
+        }
+
+        return entry.Kind.Equals("Method", StringComparison.OrdinalIgnoreCase)
+            || entry.Kind.Equals("Constructor", StringComparison.OrdinalIgnoreCase)
+            || entry.Kind.Equals("LocalFunction", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSemanticToolContainingType(CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.ContainingType is { } containingType
+            && ToolContractTypeNames.Any(typeName => containingType.EndsWith(typeName, StringComparison.Ordinal));
+    }
+
+    private static bool IsTypeDeclarationKind(string kind)
+    {
+        return kind.Equals("Class", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Interface", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Struct", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Record", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("NamedType", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Delegate", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("Enum", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SemanticToolNameContainsKnownFamily(string name)
+    {
+        return name.Contains("CodeExplore", StringComparison.Ordinal)
+            || name.Contains("CallHierarchy", StringComparison.Ordinal)
+            || name.Contains("SymbolImpact", StringComparison.Ordinal)
+            || name.Contains("FindSymbol", StringComparison.Ordinal)
+            || name.Contains("FindReferences", StringComparison.Ordinal)
+            || name.Contains("FindImplementations", StringComparison.Ordinal)
+            || name.Contains("CSharpPattern", StringComparison.Ordinal)
+            || name.Contains("GeneratedCode", StringComparison.Ordinal);
+    }
+
+    private static bool CandidateMatchesToolCapabilityFamily(
+        CodeExploreDeclarationCatalogEntry entry,
+        string family)
+    {
+        var comparable = NormalizeComparableName(string.Join(
+            ' ',
+            entry.Name,
+            entry.DisplayName,
+            entry.ContainingType ?? string.Empty));
+        return family switch
+        {
+            "code_explore" => comparable.Contains("codeexplore", StringComparison.Ordinal)
+                || comparable.Contains("codeexploretool", StringComparison.Ordinal),
+            "symbol" => comparable.Contains("findsymbol", StringComparison.Ordinal),
+            "references" => comparable.Contains("findreferences", StringComparison.Ordinal),
+            "implementations" => comparable.Contains("findimplementations", StringComparison.Ordinal),
+            "impact" => comparable.Contains("symbolimpact", StringComparison.Ordinal),
+            "call_hierarchy" => comparable.Contains("callhierarchy", StringComparison.Ordinal)
+                || (comparable.Contains("call", StringComparison.Ordinal)
+                    && comparable.Contains("hierarchy", StringComparison.Ordinal)),
+            "csharp_pattern" => comparable.Contains("csharppattern", StringComparison.Ordinal),
+            "generated_code" => comparable.Contains("generatedcode", StringComparison.Ordinal),
+            "compiler" => comparable.Contains("csharppattern", StringComparison.Ordinal)
+                || comparable.Contains("generatedcode", StringComparison.Ordinal),
+            _ => false,
+        };
     }
 
     private static CodeExploreRankedCandidate? RankNaturalLanguageCandidate(
         CodeExploreDeclarationCatalogEntry entry,
         CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
+        bool usesSemanticToolProfile,
+        IReadOnlyList<string> semanticToolIdFamilies,
         IReadOnlyDictionary<string, int> termCounts,
         IReadOnlyDictionary<string, int> nameCounts,
         int catalogEntryCount)
@@ -6630,6 +7534,22 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             else
             {
                 score += 220;
+            }
+        }
+
+        var matchesKnownToolId = (IsSemanticToolTypeEntry(entry)
+                || IsSemanticToolDefinitionEntry(entry))
+            && semanticToolIdFamilies.Any(family =>
+                CandidateMatchesToolCapabilityFamily(entry, family));
+        if (matchesKnownToolId)
+        {
+            reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
+            tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+            score += 650;
+            if (IsSemanticToolDefinitionEntry(entry))
+            {
+                reasons |= CodeExploreSelectionReason.ExactIdentifier;
+                score += 350;
             }
         }
 
@@ -6692,6 +7612,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         score += CalculateKindRelevanceAdjustment(entry, interpretation, coveredTerms.Length, reasons);
+        var intentAdjustment = CalculateIntentRelevanceAdjustment(
+            entry,
+            interpretation,
+            intent,
+            usesSemanticToolProfile,
+            coveredTerms.Length,
+            reasons);
+        score += intentAdjustment.Score;
+        reasons |= intentAdjustment.Reasons;
+        tier = MinTier(tier, intentAdjustment.Tier);
         if (IsWeakLowSignalCandidate(entry, coveredTerms.Length, reasons))
         {
             score -= 100;
@@ -6719,7 +7649,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreCandidateSummary CreateCandidateSummary(
         CodeExploreRankedCandidate candidate,
         int rank,
-        bool selected)
+        bool selected,
+        CodeExploreNaturalLanguageIntent intent)
     {
         var location = new CodeExploreLocation(
             candidate.Entry.ProjectName,
@@ -6736,7 +7667,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.Reasons,
             rank,
             selected,
-            CreateNaturalLanguageSelectionReason(candidate, selected),
+            CreateNaturalLanguageSelectionReason(candidate, selected, intent),
             candidate.AmbiguityGroup);
     }
 
@@ -6870,6 +7801,221 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || interpretation.Terms.Count > 0;
     }
 
+    private static CodeExploreNaturalLanguageIntent ClassifyNaturalLanguageIntent(
+        CodeExploreRequest request,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        if (request.Mode == CodeExploreMode.Impact)
+        {
+            return CodeExploreNaturalLanguageIntent.Impact;
+        }
+
+        if (request.Mode == CodeExploreMode.Flow)
+        {
+            return CodeExploreNaturalLanguageIntent.Flow;
+        }
+
+        if (interpretation.PathLikeSpans.Count > 0
+            || interpretation.StableSymbolIds.Count > 0
+            || interpretation.QualifiedNames.Count > 0)
+        {
+            return CodeExploreNaturalLanguageIntent.Exact;
+        }
+
+        if (HasToolCapabilityExplanationFocus(interpretation))
+        {
+            return CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation;
+        }
+
+        if (HasImpactFocus(interpretation))
+        {
+            return CodeExploreNaturalLanguageIntent.Impact;
+        }
+
+        if (HasFlowFocus(interpretation))
+        {
+            return CodeExploreNaturalLanguageIntent.Flow;
+        }
+
+        return CodeExploreNaturalLanguageIntent.Survey;
+    }
+
+    private static bool HasToolCapabilityExplanationFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        var termSet = interpretation.Terms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var exactSet = interpretation.ExactIdentifiers.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var capabilityTermCount = termSet.Count(ToolCapabilityIntentTerms.Contains);
+        var familyCount = CountMentionedToolCapabilityFamilies(interpretation);
+        var hasKnownToolId = MentionsKnownSemanticToolId(interpretation);
+        var hasExplanationVerb = termSet.Contains("explain")
+            || termSet.Contains("help")
+            || termSet.Contains("improve")
+            || termSet.Contains("efficient")
+            || termSet.Contains("efficiency")
+            || termSet.Contains("workflow")
+            || termSet.Contains("workflows")
+            || termSet.Contains("capability")
+            || termSet.Contains("capabilities")
+            || termSet.Contains("agentic");
+        var hasExplicitToolCapabilityContext = termSet.Contains("tool")
+            || termSet.Contains("tools")
+            || termSet.Contains("capability")
+            || termSet.Contains("capabilities")
+            || termSet.Contains("agentic")
+            || termSet.Contains("workflow")
+            || termSet.Contains("workflows")
+            || exactSet.Any(identifier => identifier.Contains("Tool", StringComparison.Ordinal))
+            || hasKnownToolId;
+        var hasToolContext = hasExplicitToolCapabilityContext
+            || termSet.Contains("semantic")
+            || termSet.Contains("semantics");
+        if ((HasImpactFocus(interpretation) || HasFlowFocus(interpretation))
+            && !hasExplicitToolCapabilityContext)
+        {
+            return false;
+        }
+
+        return hasKnownToolId
+            || (hasExplicitToolCapabilityContext && familyCount >= 2)
+            || (hasToolContext && hasExplanationVerb)
+            || (hasToolContext && capabilityTermCount >= 2);
+    }
+
+    private static bool HasImpactFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(term => term is "impact" or "affected" or "caller" or "callers"
+            or "dependent" or "dependents" or "downstream" or "usage" or "usages" or "uses");
+    }
+
+    private static bool HasFlowFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(term => term is "flow" or "call" or "chain" or "path"
+            or "dispatch" or "through" or "sequence");
+    }
+
+    private static int CountMentionedToolCapabilityFamilies(CodeExploreQueryInterpretation interpretation)
+    {
+        return GetMentionedToolCapabilityFamilies(interpretation).Count;
+    }
+
+    private static IReadOnlyList<string> GetMentionedToolCapabilityFamilies(
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var families = new List<string>();
+        var semanticToolIdFamilies = GetMentionedSemanticToolIdFamilies(interpretation);
+        foreach (var family in semanticToolIdFamilies)
+        {
+            AddMentionedToolCapabilityFamily(families, family, isMentioned: true);
+        }
+
+        if (semanticToolIdFamilies.Count > 0)
+        {
+            AddStronglyMentionedToolCapabilityFamilies(families, interpretation);
+            var hasExplicitCompilerToolFocus = interpretation.Terms.Any(term =>
+                term is "compiler" or "diagnostic" or "diagnostics");
+            AddMentionedToolCapabilityFamily(families, "csharp_pattern", hasExplicitCompilerToolFocus);
+            AddMentionedToolCapabilityFamily(families, "generated_code", hasExplicitCompilerToolFocus);
+            return families;
+        }
+
+        var hasCodeExploreFamily = HasAnyTermPair(interpretation, "code", "explore")
+            || interpretation.ExactIdentifiers.Any(identifier => identifier.Contains("code_explore", StringComparison.OrdinalIgnoreCase)
+                || identifier.Contains("CodeExplore", StringComparison.Ordinal));
+        AddMentionedToolCapabilityFamily(families, "code_explore", hasCodeExploreFamily);
+        AddMentionedToolCapabilityFamily(families, "symbol", interpretation.Terms.Any(term => term is "symbol" or "symbols" or "lookup" or "declaration" or "declarations"));
+        AddMentionedToolCapabilityFamily(families, "references", interpretation.Terms.Any(term => term is "reference" or "references" or "usage" or "usages"));
+        AddMentionedToolCapabilityFamily(families, "implementations", interpretation.Terms.Any(term => term is "implementation" or "implementations" or "override" or "overrides" or "derived"));
+        AddMentionedToolCapabilityFamily(families, "impact", interpretation.Terms.Any(term => term is "impact" or "blast" or "radius" or "affected" or "dependent" or "dependents"));
+        AddMentionedToolCapabilityFamily(families, "call_hierarchy", interpretation.Terms.Any(term => term is "call" or "calls" or "caller" or "callers" or "hierarchy" or "flow"));
+        var hasCompilerToolFocus = interpretation.Terms.Any(term => term is "compiler" or "diagnostic" or "diagnostics");
+        AddMentionedToolCapabilityFamily(families, "csharp_pattern", hasCompilerToolFocus);
+        AddMentionedToolCapabilityFamily(families, "generated_code", hasCompilerToolFocus);
+        return families;
+    }
+
+    private static void AddStronglyMentionedToolCapabilityFamilies(
+        List<string> families,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var hasSymbolFamily = HasAnyTermPair(interpretation, "symbol", "lookup")
+            || HasAnyTermPair(interpretation, "symbol", "declaration");
+        var hasImplementationFamily = HasAnyTermPair(interpretation, "interface", "implementation")
+            || HasAnyTermPair(interpretation, "implementation", "override")
+            || HasAnyTermPair(interpretation, "derived", "override");
+        var hasImpactFamily = HasAnyTermPair(interpretation, "impact", "analysis")
+            || HasAnyTermPair(interpretation, "blast", "radius");
+        AddMentionedToolCapabilityFamily(
+            families,
+            "code_explore",
+            HasAnyTermPair(interpretation, "code", "explore"));
+        AddMentionedToolCapabilityFamily(
+            families,
+            "symbol",
+            hasSymbolFamily);
+        AddMentionedToolCapabilityFamily(
+            families,
+            "references",
+            HasAnyTermPair(interpretation, "reference", "usage"));
+        AddMentionedToolCapabilityFamily(
+            families,
+            "implementations",
+            hasImplementationFamily);
+        AddMentionedToolCapabilityFamily(
+            families,
+            "impact",
+            hasImpactFamily);
+        AddMentionedToolCapabilityFamily(
+            families,
+            "call_hierarchy",
+            HasAnyTermPair(interpretation, "call", "hierarchy"));
+    }
+
+    private static bool ShouldExpandSemanticToolSurvey(CodeExploreQueryInterpretation interpretation)
+    {
+        var hasSemanticFocus = interpretation.Terms.Any(term => term is "semantic" or "semantics");
+        return hasSemanticFocus
+            && (!MentionsKnownSemanticToolId(interpretation)
+                || interpretation.Terms.Contains("tools", StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static bool MentionsKnownSemanticToolId(CodeExploreQueryInterpretation interpretation)
+    {
+        return GetMentionedSemanticToolIdFamilies(interpretation).Count > 0;
+    }
+
+    private static IReadOnlyList<string> GetMentionedSemanticToolIdFamilies(
+        CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.ExactIdentifiers
+            .Concat(interpretation.Terms)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(token => SemanticToolIdFamilies.GetValueOrDefault(token))
+            .Where(static family => family is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void AddMentionedToolCapabilityFamily(
+        List<string> families,
+        string family,
+        bool isMentioned)
+    {
+        if (isMentioned && !families.Contains(family, StringComparer.Ordinal))
+        {
+            families.Add(family);
+        }
+    }
+
+    private static bool HasAnyTermPair(
+        CodeExploreQueryInterpretation interpretation,
+        string first,
+        string second)
+    {
+        return interpretation.Terms.Contains(first, StringComparer.OrdinalIgnoreCase)
+            && interpretation.Terms.Contains(second, StringComparer.OrdinalIgnoreCase);
+    }
+
     private static IEnumerable<string> ExtractCodeExploreTokens(string query)
     {
         var builder = new StringBuilder(query.Length);
@@ -6919,8 +8065,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsQualifiedIdentifierName(string value)
     {
-        return value.Contains('.')
-            && value.Split('.', StringSplitOptions.RemoveEmptyEntries).All(part => SyntaxFacts.IsValidIdentifier(part));
+        var normalized = value.StartsWith(GlobalNamespaceAlias, StringComparison.Ordinal)
+            ? value[GlobalNamespaceAlias.Length..]
+            : value;
+        return normalized.Contains('.')
+            && normalized.Split('.', StringSplitOptions.RemoveEmptyEntries).All(part => SyntaxFacts.IsValidIdentifier(part));
     }
 
     private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, long generation)
@@ -6931,7 +8080,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static string NormalizeComparableName(string value)
     {
         var normalized = NormalizeSymbolAnchor(value)
-            .Replace("global::", string.Empty, StringComparison.Ordinal)
+            .Replace(GlobalNamespaceAlias, string.Empty, StringComparison.Ordinal)
             .Replace('+', '.')
             .Trim();
         return normalized.ToLowerInvariant();
@@ -7296,19 +8445,67 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static string CreateNaturalLanguageSelectionReason(
         CodeExploreRankedCandidate candidate,
-        bool selected)
+        bool selected,
+        CodeExploreNaturalLanguageIntent intent)
     {
         var prefix = selected ? "Selected" : "Retained";
-        return $"{prefix} natural-language candidate in {candidate.Tier} tier: {FormatSelectionReasons(candidate.Reasons)}.";
+        if (HasExactCandidateReason(candidate.Reasons))
+        {
+            return $"{prefix} because the query explicitly identifies this declaration.";
+        }
+
+        if (intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation)
+        {
+            if (IsSemanticToolDefinitionEntry(candidate.Entry))
+            {
+                return $"{prefix} as a model-facing semantic tool definition.";
+            }
+
+            if (IsSemanticToolTypeEntry(candidate.Entry))
+            {
+                return $"{prefix} as a public semantic tool implementation.";
+            }
+
+            if (IsToolCompositionEntry(candidate.Entry))
+            {
+                return $"{prefix} to show where semantic tools are composed for agent use.";
+            }
+
+            if (IsSemanticServiceContractEntry(candidate.Entry))
+            {
+                return $"{prefix} as a public semantic exploration service contract.";
+            }
+        }
+
+        return $"{prefix} because it {FormatSelectionReasons(candidate.Reasons)}.";
     }
 
     private static string FormatSelectionReasons(CodeExploreSelectionReason reasons)
     {
-        var names = Enum.GetValues<CodeExploreSelectionReason>()
-            .Where(reason => reason != CodeExploreSelectionReason.None && (reasons & reason) == reason)
-            .Select(reason => reason.ToString())
-            .ToArray();
-        return names.Length == 0 ? "no exposed reason" : string.Join(", ", names);
+        var descriptions = new List<string>();
+        if (reasons.HasFlag(CodeExploreSelectionReason.MultiTerm))
+        {
+            descriptions.Add("matches multiple query terms");
+        }
+
+        if (reasons.HasFlag(CodeExploreSelectionReason.ContainingType))
+        {
+            descriptions.Add("is corroborated by its containing type");
+        }
+
+        if (reasons.HasFlag(CodeExploreSelectionReason.UserFocus))
+        {
+            descriptions.Add("matches the requested focus");
+        }
+
+        if (reasons.HasFlag(CodeExploreSelectionReason.GraphConnected))
+        {
+            descriptions.Add("is connected by compiler-known relationships");
+        }
+
+        return descriptions.Count == 0
+            ? "matches the natural-language question"
+            : string.Join(" and ", descriptions);
     }
 
     private static int ResolveNaturalLanguageCandidateSummaryLimit(
@@ -9011,7 +10208,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static string NormalizeSymbolAnchorPreservingParameters(string value)
     {
-        var normalized = value.Trim().Replace("global::", string.Empty, StringComparison.Ordinal).Replace('+', '.');
+        var normalized = value.Trim().Replace(GlobalNamespaceAlias, string.Empty, StringComparison.Ordinal).Replace('+', '.');
         var builder = new StringBuilder(normalized.Length);
         var pendingWhitespace = false;
         foreach (var character in normalized)

@@ -140,6 +140,28 @@ public sealed class Plan82CodeExploreFlowTests
         Assert.Contains(blastRadius.Omissions, omission => omission.Contains("not exhaustive validation scope", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>Auto mode preserves flow and compact impact evidence for explicit multi-anchor exploration.</summary>
+    [Fact]
+    public async Task CodeExplore_AutoModeWithExactMultiAnchors_PreservesGraphEvidence()
+    {
+        await using var fixture = await CodeExploreFlowFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "StartThroughBridge to FinishTerminal",
+                Mode = CodeExploreMode.Auto,
+                ExactSymbolAnchors = ["FlowSample.EntryPoint.StartThroughBridge", "FlowSample.EntryPoint.FinishTerminal"],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Flow);
+        Assert.NotNull(result.BlastRadius);
+    }
+
     /// <summary>Unresolved dynamic call-site boundaries are capped and reported without unbounded boundary growth.</summary>
     [Fact]
     public async Task CodeExplore_UnresolvedCallBoundaries_AreCappedWithOmission()

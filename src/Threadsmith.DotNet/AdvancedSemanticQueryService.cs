@@ -21,6 +21,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumCodeExploreCatalogEntries = 50_000;
     private const int MaximumCodeExploreCatalogs = 4;
     private const int MaximumNaturalLanguageCandidateSummaries = 64;
+    private const int NaturalLanguageNameSegmentBaseScore = 480;
+    private const int NaturalLanguageNameSegmentConceptScore = 100;
+    private const int NaturalLanguagePrimaryNameSegmentConceptScore = 80;
+    private const int NaturalLanguageMaximumNameSegmentCoverageScore = 100;
+    private const int NaturalLanguageRareNameSegmentScore = 120;
+    private const int MinimumNaturalLanguageRelativeFloorCandidates = 12;
     private const int MaximumNaturalLanguageGraphSeeds = 8;
     private const int MaximumNaturalLanguageGraphEdges = 128;
     private const int NaturalLanguageDefaultCoLocationBoost = 60;
@@ -735,11 +741,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             ?? throw new InvalidOperationException("Code exploration requires a captured semantic solution.");
         var repositoryPath = readiness.RepositoryPath
             ?? throw new InvalidOperationException("Code exploration requires an opened repository path.");
+        var workspacePath = readiness.WorkspacePath
+            ?? throw new InvalidOperationException("Code exploration requires an opened project or solution path.");
         var snapshot = new AdvancedSemanticSnapshot(
             solution,
             readiness.CompiledProjects,
             readiness.Confidence,
             repositoryPath,
+            workspacePath,
             readiness.Generation);
         CodeExploreRepositoryScale repositoryScale;
         try
@@ -1740,6 +1749,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CreateTimeoutAvailabilityActions(continuationTargets));
         }
 
+        if (IsProjectScopedCodeExploreSnapshot(snapshot))
+        {
+            return CreateProjectScopedCodeExploreAvailability(snapshot, hasVisibleSource);
+        }
+
         if (!hasVisibleSource
             && resolutions.Count > 0
             && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
@@ -1778,6 +1792,44 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             SemanticConfidenceLevel.PartialCompilation,
             !coverage.SourceComplete,
             []);
+    }
+
+    private static bool IsProjectScopedCodeExploreSnapshot(AdvancedSemanticSnapshot snapshot)
+    {
+        return Path.GetExtension(snapshot.WorkspacePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static CodeExploreAvailability CreateProjectScopedCodeExploreAvailability(
+        AdvancedSemanticSnapshot snapshot,
+        bool hasVisibleSource)
+    {
+        var actions = new List<CodeExploreNextActionHint>();
+        if (hasVisibleSource)
+        {
+            actions.Add(new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.UseReturnedSource,
+                "Use the returned source only for the loaded project's advertised ranges."));
+        }
+
+        const string granularFallback = "Keep complete returned file sections as current source evidence and do not reread those ranges. "
+            + "Search once for the most distinctive missing identifier, then read only the exact missing ranges. "
+            + "Do not retry semantic discovery for this subject until the workspace changes.";
+        actions.Add(new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.UseGranularFallback,
+            granularFallback));
+        actions.Add(new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.OpenWorkspace,
+            "Load the repository solution to obtain compiler-aware cross-project source and usage coverage."));
+        var reason = $"The semantic workspace was loaded from one project ({Path.GetFileName(snapshot.WorkspacePath)}); "
+            + "referenced projects may be metadata-only and upstream projects or tests are outside this result.";
+        return new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.ProjectScopedPartial,
+            reason,
+            true,
+            snapshot.Confidence,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            actions);
     }
 
     private static IReadOnlyList<CodeExploreNextActionHint> CreateTimeoutAvailabilityActions(
@@ -6276,9 +6328,36 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             cancellationToken);
         var allowedEntries = GetAllowedCodeExploreCatalogEntries(catalog, sourceReader, cancellationToken);
         var intent = ClassifyNaturalLanguageIntent(request, interpretation);
+        var nameSegmentEvidence = NaturalLanguageNameSegmentMatcher.Create(
+            allowedEntries
+                .Select(entry => new NaturalLanguageNameSegmentCandidate(entry.Identity.Id, entry.Name))
+                .ToArray(),
+            request.Query,
+            cancellationToken);
+        if (ShouldUseProjectScopeFallback(snapshot, allowedEntries, interpretation, nameSegmentEvidence, intent))
+        {
+            var scopeOmission = $"The requested subject was not found in the loaded project's source scope ({Path.GetFileName(snapshot.WorkspacePath)}).";
+            return new NaturalLanguageCodeExploreDiscovery(
+                [],
+                interpretation with { UnresolvedTerms = interpretation.Terms },
+                intent,
+                new CodeExploreDiscoverySummary(
+                    allowedEntries.Length,
+                    0,
+                    0,
+                    catalog.IsComplete,
+                    !catalog.IsComplete,
+                    [],
+                    "loaded project source scope"),
+                [],
+                interpretation.Terms,
+                [.. catalog.Omissions, scopeOmission]);
+        }
+
         var ranked = RankNaturalLanguageCandidates(
             allowedEntries,
             interpretation,
+            nameSegmentEvidence,
             intent,
             cancellationToken);
         ranked = await ApplyGraphConnectivityAsync(
@@ -6722,6 +6801,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate[] RankNaturalLanguageCandidates(
         IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
         CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
         CodeExploreNaturalLanguageIntent intent,
         CancellationToken cancellationToken)
     {
@@ -6741,6 +6821,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var rank = RankNaturalLanguageCandidate(
                 entry,
                 interpretation,
+                nameSegmentEvidence,
                 intent,
                 usesSemanticToolProfile,
                 semanticToolIdFamilies,
@@ -6787,14 +6868,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate[] ApplyNaturalLanguageRelativeFloor(
         IReadOnlyList<CodeExploreRankedCandidate> ranked)
     {
-        if (ranked.Count <= 12)
+        if (ranked.Count <= MinimumNaturalLanguageRelativeFloorCandidates)
         {
             return [.. ranked];
         }
 
         var strongest = ranked.Max(candidate => candidate.Score);
         var relativeFloor = Math.Max(90, Math.Min(400, strongest / 3));
-        var minimumBackfillCount = Math.Min(12, ranked.Count);
+        var minimumBackfillCount = Math.Min(MinimumNaturalLanguageRelativeFloorCandidates, ranked.Count);
         return
         [
             .. ranked
@@ -7487,6 +7568,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate? RankNaturalLanguageCandidate(
         CodeExploreDeclarationCatalogEntry entry,
         CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
         CodeExploreNaturalLanguageIntent intent,
         bool usesSemanticToolProfile,
         IReadOnlyList<string> semanticToolIdFamilies,
@@ -7535,6 +7617,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             {
                 score += 220;
             }
+        }
+
+        nameSegmentEvidence.MatchesByIdentity.TryGetValue(entry.Identity.Id, out var nameSegmentMatch);
+        if (nameSegmentMatch?.IsStrong == true)
+        {
+            reasons |= CodeExploreSelectionReason.NameSegment | CodeExploreSelectionReason.MultiTerm;
+            tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
+            var matchedConceptScore = nameSegmentMatch.MatchedConcepts.Count
+                * NaturalLanguageMaximumNameSegmentCoverageScore;
+            var declarationCoverage = Math.Min(
+                NaturalLanguageMaximumNameSegmentCoverageScore,
+                matchedConceptScore / Math.Max(1, nameSegmentMatch.DeclarationSegmentCount));
+            score += NaturalLanguageNameSegmentBaseScore
+                + (nameSegmentMatch.MatchedConcepts.Count * NaturalLanguageNameSegmentConceptScore)
+                + (nameSegmentMatch.MatchedPrimaryConceptCount * NaturalLanguagePrimaryNameSegmentConceptScore)
+                + declarationCoverage;
+        }
+        else if (nameSegmentMatch?.IsRareSingleTerm == true)
+        {
+            reasons |= CodeExploreSelectionReason.NameSegment;
+            score += NaturalLanguageRareNameSegmentScore;
         }
 
         var matchesKnownToolId = (IsSemanticToolTypeEntry(entry)
@@ -7679,7 +7782,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyList<CodeExploreCandidateSummary> candidateSummaries,
         CodeExploreAdaptiveBudget adaptiveBudget)
     {
-        var reason = "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
+        var projectScoped = IsProjectScopedCodeExploreSnapshot(snapshot);
+        var reason = projectScoped
+            ? "Natural-language discovery did not find the requested declaration in the loaded project's source scope."
+            : "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
         var resolution = new CodeExploreAnchorResolution(
             request.Query,
             CodeExploreAnchorKind.Query,
@@ -7690,20 +7796,22 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             reason);
         var coverage = new CodeExploreCoverage(
             false,
-            snapshot.Confidence == SemanticConfidenceLevel.FullSemantic,
+            !projectScoped && snapshot.Confidence == SemanticConfidenceLevel.FullSemantic,
             false,
             true,
             [reason]);
-        var availability = new CodeExploreAvailability(
-            CodeExploreAvailabilityStatus.NoMatchingDeclarations,
-            "No compiler-known C# declaration or confined C# path matched the request.",
-            false,
-            snapshot.Confidence,
-            SemanticConfidenceLevel.PartialCompilation,
-            true,
-            [new CodeExploreNextActionHint(
-                CodeExploreNextActionKind.RefineAnchor,
-                "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+        var availability = projectScoped
+            ? CreateProjectScopedCodeExploreAvailability(snapshot, hasVisibleSource: false)
+            : new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.NoMatchingDeclarations,
+                "No compiler-known C# declaration or confined C# path matched the request.",
+                false,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.RefineAnchor,
+                    "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
         var allocation = new CodeExploreAllocationSummary(
             request.Limits.MaximumSourceCharacters,
             0,
@@ -7801,6 +7909,36 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || interpretation.Terms.Count > 0;
     }
 
+    private static bool ShouldUseProjectScopeFallback(
+        AdvancedSemanticSnapshot snapshot,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        if (!IsProjectScopedCodeExploreSnapshot(snapshot)
+            || intent is not (CodeExploreNaturalLanguageIntent.Impact or CodeExploreNaturalLanguageIntent.Flow))
+        {
+            return false;
+        }
+
+        var exactIdentifierMatch = interpretation.ExactIdentifiers
+            .Select(NormalizeComparableName)
+            .Any(identifier => entries.Any(entry => IdentifierMatchesEntry(identifier, entry)));
+        if (exactIdentifierMatch)
+        {
+            return false;
+        }
+
+        if (nameSegmentEvidence.PrimaryConceptCount > 0)
+        {
+            return !nameSegmentEvidence.HasPrimaryEvidence;
+        }
+
+        return nameSegmentEvidence.CanEvaluateStrongQueryEvidence
+            && !nameSegmentEvidence.HasStrongCoOccurrence;
+    }
+
     private static CodeExploreNaturalLanguageIntent ClassifyNaturalLanguageIntent(
         CodeExploreRequest request,
         CodeExploreQueryInterpretation interpretation)
@@ -7884,7 +8022,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static bool HasImpactFocus(CodeExploreQueryInterpretation interpretation)
     {
         return interpretation.Terms.Any(term => term is "impact" or "affected" or "caller" or "callers"
-            or "dependent" or "dependents" or "downstream" or "usage" or "usages" or "uses");
+            or "dependency" or "dependencies" or "dependent" or "dependents" or "downstream"
+            or "reference" or "referenced" or "references"
+            or "usage" or "usages" or "use" or "used" or "uses");
     }
 
     private static bool HasFlowFocus(CodeExploreQueryInterpretation interpretation)
@@ -8058,7 +8198,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         return value.Length > 1
             && SyntaxFacts.IsValidIdentifier(value)
-            && (value.Any(char.IsUpper)
+            && (value[1..].Any(char.IsUpper)
                 || value.Any(char.IsDigit)
                 || value.Contains('_', StringComparison.Ordinal));
     }
@@ -8483,7 +8623,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static string FormatSelectionReasons(CodeExploreSelectionReason reasons)
     {
         var descriptions = new List<string>();
-        if (reasons.HasFlag(CodeExploreSelectionReason.MultiTerm))
+        if (reasons.HasFlag(CodeExploreSelectionReason.NameSegment))
+        {
+            descriptions.Add(reasons.HasFlag(CodeExploreSelectionReason.MultiTerm)
+                ? "matches multiple query concepts in its declaration name"
+                : "matches a catalog-verified declaration-name segment");
+        }
+        else if (reasons.HasFlag(CodeExploreSelectionReason.MultiTerm))
         {
             descriptions.Add("matches multiple query terms");
         }
@@ -10951,6 +11097,7 @@ internal sealed record CodeExploreReadinessSnapshot(
     IReadOnlySet<ProjectId> CompiledProjects,
     SemanticConfidenceLevel Confidence,
     string? RepositoryPath,
+    string? WorkspacePath,
     long Generation);
 
 /// <summary>Immutable compiler-aware state captured for one advanced query.</summary>
@@ -10959,4 +11106,5 @@ internal sealed record AdvancedSemanticSnapshot(
     IReadOnlySet<ProjectId> CompiledProjects,
     SemanticConfidenceLevel Confidence,
     string RepositoryPath,
+    string WorkspacePath,
     long Generation);

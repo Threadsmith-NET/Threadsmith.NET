@@ -41,12 +41,24 @@ public sealed partial class SessionApplication
                 loopState,
                 cancellationToken);
             invocationContext = round.InvocationContext;
-            var outcome = await ExecuteConversationRoundAsync(
-                round,
-                loopState,
-                maximumModelRounds,
-                correctiveTurns,
-                cancellationToken);
+            ConversationRoundOutcome outcome;
+            try
+            {
+                outcome = await ExecuteConversationRoundAsync(
+                    round,
+                    loopState,
+                    maximumModelRounds,
+                    correctiveTurns,
+                    cancellationToken);
+            }
+            finally
+            {
+                if (round.InvocationContext?.ModelVisibleToolSnapshotId is { } snapshotId)
+                {
+                    _conversationToolSnapshots?.Release(snapshotId);
+                }
+            }
+
             var plan = CompleteRoundPlan(
                 outcome.Plan,
                 outcome.TextOutput,
@@ -130,13 +142,15 @@ public sealed partial class SessionApplication
         var planningToolsWithheld = phase == RunPhase.EvidenceCollection
             && maximumPlanningToolRounds > 0
             && modelRound > maximumPlanningToolRounds;
-        var conversationDefinitions = CreateConversationDefinitions(
+        var conversationTools = ConversationToolAvailability.CreateSnapshot(
             _toolPipeline,
             _toolRegistry,
             registration.SessionId,
             runId,
             invocationContext,
             planningToolsWithheld);
+        var conversationDefinitions = conversationTools.Definitions;
+
         var modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, phase);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
@@ -245,6 +259,19 @@ public sealed partial class SessionApplication
             requestEnvelope,
             modelVisibleContinuation.Messages,
             loopState.HistoryRewriteGeneration);
+        if (invocationContext is not null)
+        {
+            invocationContext = invocationContext with
+            {
+                Sensitivity = modelRequest.ContainsSensitiveData
+                    ? ConversationSensitivity.Sensitive
+                    : ConversationSensitivity.None,
+                ModelVisibleToolSnapshotId = _conversationToolSnapshots?.Capture(
+                    registration.SessionId,
+                    runId,
+                    conversationTools.Registrations),
+            };
+        }
 
         return new ConversationRound(
             runId,
@@ -1315,23 +1342,6 @@ public sealed partial class SessionApplication
                 ["usageReported"] = usageReported.ToString(),
             },
             cancellationToken: CancellationToken.None);
-    }
-
-    private static ToolDefinition[] CreateConversationDefinitions(
-        IToolInvocationPipeline? toolPipeline,
-        IToolRegistry? toolRegistry,
-        SessionId sessionId,
-        RunId runId,
-        ToolInvocationContext? invocationContext,
-        bool planningToolsWithheld)
-    {
-        return !planningToolsWithheld
-            && toolPipeline is not null
-            && toolRegistry is not null
-            ? [.. toolRegistry.GetDefinitions(sessionId, runId)
-                .Where(definition => (definition.SideEffect == ToolSideEffect.ReadOnly
-                    || definition.ConversationAvailable) && IsAdvertisedToModel(definition, invocationContext))]
-            : [];
     }
 
     private static List<ModelToolDefinition> CreateModelTools(

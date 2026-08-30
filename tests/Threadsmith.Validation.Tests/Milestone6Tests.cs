@@ -1563,6 +1563,23 @@ public sealed class Milestone6Tests
             return Task.CompletedTask;
         }
 
+        public async Task PublishCommittedBatchAsync(
+            IReadOnlyList<IDomainEvent> domainEvents,
+            Func<bool> tryCommit,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!tryCommit())
+            {
+                return;
+            }
+
+            foreach (var domainEvent in domainEvents)
+            {
+                await PublishAsync(domainEvent, CancellationToken.None);
+            }
+        }
+
         public ValueTask DisposeAsync()
         {
             return ValueTask.CompletedTask;

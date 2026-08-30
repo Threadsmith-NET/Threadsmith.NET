@@ -152,6 +152,57 @@ public sealed class Plan94CodeExploreAgentQualityTests
             IsToolCapabilitySelectionReason(summary.Reason));
     }
 
+    /// <summary>Co-occurring prose concepts in a declaration name outrank loose structural term matches.</summary>
+    [Fact]
+    public async Task CodeExplore_DeclarationNameSegmentCoOccurrence_PrioritizesNamedDeclaration()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Widget service: locate its declaration, explain its behavior, and identify direct use sites.",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var candidate = Assert.Single(result.CandidateSummaries ?? [], summary =>
+            string.Equals(summary.Symbol?.DisplayName, "Threadsmith.App.WidgetService", StringComparison.Ordinal));
+        Assert.True(candidate.Selected, CreateCandidateDiagnostic(result));
+        Assert.InRange(candidate.Rank, 1, 2);
+        Assert.True(candidate.Reasons.HasFlag(CodeExploreSelectionReason.NameSegment));
+        Assert.True(candidate.Reasons.HasFlag(CodeExploreSelectionReason.MultiTerm));
+        Assert.False(candidate.Reasons.HasFlag(CodeExploreSelectionReason.ExactIdentifier));
+    }
+
+    /// <summary>Project-scoped impact queries fail compactly when the named subject is outside loaded source.</summary>
+    [Fact]
+    public async Task CodeExplore_ProjectScopedMissingNamedSubject_UsesCompactFallback()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+            "src/Threadsmith.Tools/Threadsmith.Tools.csproj");
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Widget service: locate its declaration and compare model resolution dependencies.",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
+        Assert.Empty(result.CandidateSummaries ?? []);
+        Assert.Empty(result.FileSections);
+        Assert.Contains(result.Availability?.RecommendedActions ?? [], action =>
+            action.Kind == CodeExploreNextActionKind.UseGranularFallback);
+    }
+
     /// <summary>Generic tool/workflow prose falls back to repository declarations instead of forcing semantic-tool families.</summary>
     [Theory]
     [InlineData("Explain how deployment tools improve workflow efficiency.")]
@@ -171,7 +222,11 @@ public sealed class Plan94CodeExploreAgentQualityTests
             fixture.CreateSourceReader(),
             TestContext.Current.CancellationToken);
 
-        AssertSelectedSymbolContaining(result, "DeploymentWorkflow.CreateDeploymentPlan", "Method");
+        Assert.Contains(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol?.DisplayName.Contains(
+                "Threadsmith.Tools.DeploymentWorkflow",
+                StringComparison.Ordinal) == true);
         Assert.DoesNotContain(result.Omissions, omission =>
             omission.Contains("No matching C# declarations", StringComparison.OrdinalIgnoreCase));
     }
@@ -728,7 +783,8 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
         public WorkspaceId WorkspaceId { get; }
 
-        public static async Task<CodeExploreAgentQualityFixture> CreateAsync()
+        public static async Task<CodeExploreAgentQualityFixture> CreateAsync(
+            string workspaceRelativePath = "Repo.slnx")
         {
             var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan94-{Guid.NewGuid():N}");
             Directory.CreateDirectory(repositoryPath);
@@ -746,7 +802,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
                     SessionId.New(),
                     workspaceId,
                     repositoryPath,
-                    Path.Combine(repositoryPath, "Repo.slnx"),
+                    Path.Combine(repositoryPath, workspaceRelativePath),
                     RepositoryTrustLevel.TrustedBuild),
                 TestContext.Current.CancellationToken);
             Assert.True(
@@ -876,6 +932,8 @@ public sealed class Plan94CodeExploreAgentQualityTests
                         return "deploy:" + environment;
                     }
                 }
+
+                public sealed record ModelResolution(string ProfileId);
                 """);
             Write(repositoryPath, "src/Threadsmith.Tools/CodeExploreTool.cs", """
                 namespace Threadsmith.Tools;

@@ -608,6 +608,11 @@ public sealed class HeadlessShell
                 return 2;
             }
 
+            if (!await EnsureSemanticRequestReadinessAsync(sessionId, cancellationToken))
+            {
+                return 2;
+            }
+
             var runId = await _dispatcher.DispatchAsync(
                 new SubmitRequestCommand(sessionId, request),
                 cancellationToken);
@@ -1022,9 +1027,16 @@ public sealed class HeadlessShell
         await _output.WriteLineAsync(
             $"Baseline files: {baseline.Files.Count}".AsMemory(),
             cancellationToken);
+        return true;
+    }
+
+    private async Task<bool> EnsureSemanticRequestReadinessAsync(
+        SessionId sessionId,
+        CancellationToken cancellationToken)
+    {
         var semanticConfidence = await WaitForSemanticReadinessAsync(sessionId, cancellationToken);
         await _output.WriteLineAsync(
-            $"Reticulating Splines: {semanticConfidence}".AsMemory(),
+            $"Semantic confidence: {semanticConfidence}".AsMemory(),
             cancellationToken);
         if (semanticConfidence < SemanticConfidenceLevel.PartialCompilation)
         {

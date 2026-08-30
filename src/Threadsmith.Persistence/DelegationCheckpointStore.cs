@@ -24,7 +24,7 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
     }
 
     /// <inheritdoc />
-    public async Task SaveAsync(
+    public async Task<bool> SaveAsync(
         DelegationCheckpoint checkpoint,
         CancellationToken cancellationToken = default)
     {
@@ -48,7 +48,11 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
                 generation = excluded.generation,
                 phase = excluded.phase,
                 checkpoint_json = excluded.checkpoint_json,
-                updated_at = excluded.updated_at;
+                updated_at = excluded.updated_at
+            WHERE COALESCE(
+                    CAST(json_extract(delegation_runs.checkpoint_json, '$.Revision') AS INTEGER),
+                    1)
+                < CAST(json_extract(excluded.checkpoint_json, '$.Revision') AS INTEGER);
             """;
         command.Parameters.AddWithValue("$delegation", checkpoint.DelegationId.Value.ToString("D"));
         command.Parameters.AddWithValue("$session", checkpoint.Provenance.SessionId.Value.ToString("D"));
@@ -58,8 +62,9 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
         command.Parameters.AddWithValue("$phase", (int)checkpoint.Phase);
         command.Parameters.AddWithValue("$json", json);
         command.Parameters.AddWithValue("$updated", checkpoint.RecordedAt.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return affected > 0;
     }
 
     /// <inheritdoc />
@@ -103,7 +108,8 @@ public sealed class DelegationCheckpointStore : IDelegationCheckpointStore
             || checkpoint.DelegationId == default
             || checkpoint.Provenance.SessionId == default
             || checkpoint.Provenance.ParentRunId == default
-            || checkpoint.Provenance.Generation < 1)
+            || checkpoint.Provenance.Generation < 1
+            || checkpoint.Revision < 1)
         {
             throw new InvalidDataException("Delegation checkpoint identity or schema is invalid.");
         }

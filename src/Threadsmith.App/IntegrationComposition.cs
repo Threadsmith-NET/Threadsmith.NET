@@ -151,7 +151,11 @@ internal static class IntegrationComposition
                 var decision = await toolPipeline.InvokeAsync(
                     new ToolInvocationRequest
                     {
-                        ExpectedRegistration = policyTool,
+                        ExpectedRegistration = new ToolRegistration(
+                            policyTool,
+                            new ToolActivitySource(
+                                ToolActivitySourceKind.Mcp,
+                                profile.Id)),
                         SessionId = SessionId.New(),
                         RunId = RunId.New(),
                         Phase = RunPhase.Intake,

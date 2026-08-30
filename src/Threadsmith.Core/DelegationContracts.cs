@@ -135,8 +135,64 @@ public sealed record AgentAssignmentScope
 /// <summary>Hierarchical limits reserved for one child.</summary>
 public sealed record AgentResourceBudget
 {
+    /// <summary>Creates a usage-metering policy with no cumulative quota enforcement.</summary>
+    public static AgentResourceBudget CreateTelemetryOnly(TimeSpan wallTime)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(wallTime, TimeSpan.Zero);
+        return new AgentResourceBudget
+        {
+            EnforceLimits = false,
+            ModelTokens = 0,
+            ToolCalls = 0,
+            EvidenceItems = 0,
+            Files = 0,
+            Bytes = 0,
+            Mutations = 0,
+            Processes = 0,
+            Builds = 0,
+            Tests = 0,
+            Corrections = 0,
+            WallTime = wallTime,
+        };
+    }
+
+    /// <summary>Aggregates child policies without converting telemetry-only usage into quotas.</summary>
+    public static AgentResourceBudget Aggregate(IReadOnlyList<AgentResourceBudget> budgets)
+    {
+        ArgumentNullException.ThrowIfNull(budgets);
+        ArgumentOutOfRangeException.ThrowIfZero(budgets.Count);
+        if (budgets.Any(item => item is null))
+        {
+            throw new ArgumentException("Resource policies cannot contain null entries.", nameof(budgets));
+        }
+
+        var wallTime = TimeSpan.FromTicks(checked(budgets.Sum(item => item.WallTime.Ticks)));
+        if (budgets.Any(item => !item.EnforceLimits))
+        {
+            return CreateTelemetryOnly(wallTime);
+        }
+
+        return new AgentResourceBudget
+        {
+            ModelTokens = checked(budgets.Sum(item => item.ModelTokens)),
+            ToolCalls = checked(budgets.Sum(item => item.ToolCalls)),
+            EvidenceItems = checked(budgets.Sum(item => item.EvidenceItems)),
+            Files = checked(budgets.Sum(item => item.Files)),
+            Bytes = checked(budgets.Sum(item => item.Bytes)),
+            Mutations = checked(budgets.Sum(item => item.Mutations)),
+            Processes = checked(budgets.Sum(item => item.Processes)),
+            Builds = checked(budgets.Sum(item => item.Builds)),
+            Tests = checked(budgets.Sum(item => item.Tests)),
+            Corrections = checked(budgets.Sum(item => item.Corrections)),
+            WallTime = wallTime,
+        };
+    }
+
     /// <summary>Maximum model tokens.</summary>
     public long ModelTokens { get; init; } = 32_000;
+
+    /// <summary>Whether cumulative resource limits are enforced instead of recorded as telemetry only.</summary>
+    public bool EnforceLimits { get; init; } = true;
 
     /// <summary>Maximum tool calls.</summary>
     public int ToolCalls { get; init; } = 32;
@@ -224,6 +280,9 @@ public sealed record AgentPolicySnapshot
     /// <summary>Whether non-agent infrastructure processes may be invoked.</summary>
     public bool AllowProcesses { get; init; }
 
+    /// <summary>Frozen repository-relative prohibited path patterns.</summary>
+    public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
+
     /// <summary>Sensitivity classification used for model routing.</summary>
     public ConversationSensitivity Sensitivity { get; init; } = ConversationSensitivity.None;
 
@@ -263,6 +322,9 @@ public sealed record AgentAssignment
 
     /// <summary>Explicit questions or tasks.</summary>
     public IReadOnlyList<string> Tasks { get; init; } = [];
+
+    /// <summary>Frozen caller-supplied context treated as untrusted task data.</summary>
+    public string InitialContext { get; init; } = string.Empty;
 
     /// <summary>Structured output schema id and version.</summary>
     public required string OutputSchema { get; init; }
@@ -396,6 +458,9 @@ public sealed record AgentFindingSet
 
     /// <summary>Attempt generation.</summary>
     public required int Generation { get; init; }
+
+    /// <summary>Bounded child-authored synthesis of the cited result.</summary>
+    public string Summary { get; init; } = string.Empty;
 
     /// <summary>Typed findings.</summary>
     public IReadOnlyList<AgentFinding> Findings { get; init; } = [];
@@ -556,6 +621,12 @@ public sealed record AgentRunOutcome
     /// <summary>Sanitized terminal reason.</summary>
     public required string Reason { get; init; }
 
+    /// <summary>Effective selected model retained for provenance and inspection.</summary>
+    public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Exact parent and child-tool evidence identities rendered to this child.</summary>
+    public IReadOnlyList<EvidenceId> DeliveredEvidenceIds { get; init; } = [];
+
     /// <summary>Read-only findings when produced.</summary>
     public AgentFindingSet? Findings { get; init; }
 
@@ -571,6 +642,9 @@ public sealed record DelegationCheckpoint
 {
     /// <summary>Current schema version.</summary>
     public int SchemaVersion { get; init; } = 1;
+
+    /// <summary>Monotonic write revision used to reject late stale checkpoint saves.</summary>
+    public long Revision { get; init; } = 1;
 
     /// <summary>Delegation identity.</summary>
     public required DelegationId DelegationId { get; init; }
@@ -601,6 +675,18 @@ public interface IAgentAssignmentRunner
     Task<AgentRunOutcome> RunAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Promotes validated child-local results after the authoritative join checkpoint is durable.</summary>
+public interface IAgentOutcomeJoiner
+{
+    /// <summary>Conditionally commits role-specific joined results without exposing child transcripts.</summary>
+    /// <returns>Whether the supplied commit arbiter accepted and committed the join.</returns>
+    Task<bool> JoinAsync(
+        DelegationPlan plan,
+        IReadOnlyList<AgentRunOutcome> outcomes,
+        Func<bool> tryCommit,
         CancellationToken cancellationToken = default);
 }
 
@@ -710,8 +796,9 @@ public interface IWorkerIntegrationCoordinator
 /// <summary>Persists delegation checkpoints without exposing storage implementation types.</summary>
 public interface IDelegationCheckpointStore
 {
-    /// <summary>Atomically writes one delegation checkpoint.</summary>
-    Task SaveAsync(
+    /// <summary>Atomically writes one checkpoint unless an equal or newer revision is already durable.</summary>
+    /// <returns><see langword="true"/> only when this revision became durable.</returns>
+    Task<bool> SaveAsync(
         DelegationCheckpoint checkpoint,
         CancellationToken cancellationToken = default);
 

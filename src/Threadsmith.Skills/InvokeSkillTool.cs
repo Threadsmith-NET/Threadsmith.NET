@@ -48,7 +48,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         EnabledByDefault = true,
         Version = "1.0.0",
         Description = "Invokes one explicit enabled verified declarative skill with schema-validated JSON input.",
-        Category = ToolCategory.RepositoryInspection,
+        Category = ToolCategory.Workflow,
         InputSchema = new ToolSchema(
             nameof(InvokeSkillInput),
             1,

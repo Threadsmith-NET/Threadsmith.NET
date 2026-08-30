@@ -173,6 +173,16 @@ public sealed record ModelWireEstimate
     public long TotalCapacityTokens => (long)WireInputTokens + OutputReserveTokens;
 }
 
+/// <summary>Immutable wire-token estimate for one canonical tool inventory.</summary>
+public readonly record struct ModelWireToolEstimate
+{
+    /// <summary>Estimated native tool-schema tokens.</summary>
+    public int NativeToolTokens { get; init; }
+
+    /// <summary>Estimated textual tool-schema tokens.</summary>
+    public int TextToolTokens { get; init; }
+}
+
 /// <summary>Whether and how a provider reports cache token counters.</summary>
 public enum CacheUsageAvailability
 {
@@ -478,6 +488,23 @@ public static class ModelToolCanonicalizer
 /// <summary>Provider-neutral wire estimator over canonical structured messages and tools.</summary>
 public static class ModelWireEstimator
 {
+    /// <summary>Estimates one canonical tool inventory for reuse across continuation rounds.</summary>
+    public static ModelWireToolEstimate EstimateTools(
+        IReadOnlyList<ModelToolDefinition> tools,
+        ToolTransportMode toolTransportMode)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        return new ModelWireToolEstimate
+        {
+            NativeToolTokens = toolTransportMode == ToolTransportMode.Native
+                ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
+                : 0,
+            TextToolTokens = toolTransportMode == ToolTransportMode.Text
+                ? EstimateCharacters(ModelToolCanonicalizer.RenderText(tools).Length)
+                : 0,
+        };
+    }
+
     /// <summary>Estimates deterministic framing and content capacity.</summary>
     public static ModelWireEstimate Estimate(
         IReadOnlyList<ModelMessage> messages,
@@ -486,11 +513,27 @@ public static class ModelWireEstimator
         int stablePrefixMessageCount,
         int outputReserveTokens)
     {
-        ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(tools);
+        return Estimate(
+            messages,
+            EstimateTools(tools, toolTransportMode),
+            stablePrefixMessageCount,
+            outputReserveTokens);
+    }
+
+    /// <summary>Estimates deterministic framing and content capacity from a reusable tool estimate.</summary>
+    public static ModelWireEstimate Estimate(
+        IReadOnlyList<ModelMessage> messages,
+        ModelWireToolEstimate tools,
+        int stablePrefixMessageCount,
+        int outputReserveTokens)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
         ArgumentOutOfRangeException.ThrowIfNegative(stablePrefixMessageCount);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(stablePrefixMessageCount, messages.Count);
         ArgumentOutOfRangeException.ThrowIfNegative(outputReserveTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(tools.NativeToolTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(tools.TextToolTokens);
 
         var sections = new Dictionary<string, int>(StringComparer.Ordinal);
         var logicalTokens = 0;
@@ -498,7 +541,10 @@ public static class ModelWireEstimator
         for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
-            var tokens = EstimateCharacters(message.GetModelVisibleContentLength());
+            var tokens = checked(
+                EstimateCharacters(message.GetModelVisibleContentLength())
+                + EstimateCharacters(message.ToolCallId?.Length ?? 0)
+                + EstimateCharacters(message.ToolName?.Length ?? 0));
             sections[message.SectionId] = sections.TryGetValue(message.SectionId, out var current)
                 ? checked(current + tokens)
                 : tokens;
@@ -509,21 +555,19 @@ public static class ModelWireEstimator
             }
         }
 
-        var nativeToolTokens = toolTransportMode == ToolTransportMode.Native
-            ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
-            : 0;
-        var textToolTokens = toolTransportMode == ToolTransportMode.Text
-            ? EstimateCharacters(ModelToolCanonicalizer.RenderText(tools).Length)
-            : 0;
         var framingTokens = checked((messages.Count * 3) + 3);
-        var wireInputTokens = checked(logicalTokens + nativeToolTokens + textToolTokens + framingTokens);
+        var wireInputTokens = checked(
+            logicalTokens
+            + tools.NativeToolTokens
+            + tools.TextToolTokens
+            + framingTokens);
         return new ModelWireEstimate
         {
             LogicalTokens = logicalTokens,
             WireInputTokens = wireInputTokens,
             StablePrefixTokens = stablePrefixTokens,
-            NativeToolTokens = nativeToolTokens,
-            TextToolTokens = textToolTokens,
+            NativeToolTokens = tools.NativeToolTokens,
+            TextToolTokens = tools.TextToolTokens,
             FramingTokens = framingTokens,
             OutputReserveTokens = outputReserveTokens,
             SectionTokens = new ReadOnlyDictionary<string, int>(sections),

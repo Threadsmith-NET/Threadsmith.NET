@@ -529,13 +529,38 @@ Execution writes versioned checkpoints at safe phase boundaries and write-ahead 
 
 Threadsmith can delegate one bounded child layer for parallel exploration, isolated implementation, and independent security, test, performance, and architecture review. Child agents are asynchronous runs inside the Threadsmith process; they are never separate agent executables. Existing Git, build, test, MCP, and authorized tool processes remain tracked infrastructure and do not host an agent.
 
+During an ordinary trusted conversation with an open semantic workspace, the model can call `delegate_agents` to fork one to three Explorer assignments by default and wait for their joined result. The tool is advertised only when a configured model can satisfy its streaming, tool-call, structured-output, and child-context requirements; sensitive assignments repeat selection with the frozen sensitivity policy. Trusted machine/user configuration may adjust the child count only within the compiled one-to-eight ceiling. Each child request contains only `task`, `context`, and `toolAccess`:
+
+```json
+{
+  "agents": [
+    {
+      "task": "Trace how child assignments are admitted and joined.",
+      "context": "Focus on the execution scheduler and cite current repository files.",
+      "toolAccess": "readOnly"
+    },
+    {
+      "task": "Review cancellation and checkpoint behavior.",
+      "context": "Identify terminal outcomes and any explicit omissions.",
+      "toolAccess": "inherit"
+    }
+  ]
+}
+```
+
+`readOnly` admits only approval-free, non-network read tools that were visible to the parent request. `inherit` starts from the parent's exact currently eligible read-only surface and may retain eligible network-backed read tools, but both modes remove mutation, process/code-execution, approval-required, workflow-transition, and delegation tools. Every retained call remains narrowed by child trust, path, phase, per-tool bounds, network, and sensitivity policy, so children cannot approve, mutate, run commands, change host state, or create descendants. Model-supplied child context is untrusted data and cannot widen those boundaries.
+
+The parent waits asynchronously at the tool-call boundary while children run concurrently through the existing scheduler. The joined result leads with a delegation ID and includes assignment IDs, statuses, cited findings, uncertainties, omissions, conservative same-subject disagreement signals, and bounded usage. Raw child transcripts, hidden reasoning, provider payloads, and raw tool JSON do not cross the join. The host stores the joined checkpoint before validated findings enter parent evidence, and monotonically revisioned persistence rejects stale progress writes that arrive after terminal state. An ordinary child with no usable cited finding is failed rather than presented as complete research; usable siblings still join as `Partial`.
+
 Every child has a frozen role, objective, tasks, stopping condition, output schema, baseline, scope, model and reasoning selection, tool allow/deny set, trust ceiling, sensitivity, deadline, dependencies, and hierarchical budget. Read-only children cannot receive mutation tools or mutation trust. Children receive bounded governed evidence—not the parent or sibling transcript—and only schema-valid cited findings cross the join boundary.
 
 Implementation workers require an approved Plan-37 plan and host-proven non-overlapping ownership. Ambiguous paths, directories, symbols, projects, generated outputs, solution files, central package/build configuration, or other shared surfaces fall back to serial execution. Each eligible worker gets a detached worktree under the host-managed temporary root and repeats the normal mutation proposal, exact-diff, approval, transaction, validation, correction, and cancellation gates there. A worktree isolates file state; it is not a security sandbox.
 
 Worker results are frozen structured change sets, not branches to merge. Before selected changes enter the primary worktree, Threadsmith rejects incomplete or stale packages, out-of-scope paths, worker overlap, and changed parent baselines. The parent converts and restages selected changes through the existing transactional workspace, presents one fresh aggregate diff under the current mutation policy, and reruns aggregate affected builds/tests. Threadsmith does not merge, commit, rebase, cherry-pick, push, or resolve conflicts automatically.
 
-Use `/agents <delegation-id>` to inspect the durable run tree. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative admission limits under `agents` as documented in `.threadsmith/config.example`. See [parallel-agent operations](operations/parallel-agents.md).
+Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative scheduler admission limits under `agents` as documented in `.threadsmith/config.example`; trusted machine/user `agents:delegation` settings remain separately bounded by compiled ceilings. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
+
+Interactive steering and double-`Esc` cancellation are not available. The current inline terminal deliberately has no concurrent input reader while a run is active; adding one would race PrettyPrompt and weaken native scrollback, selection, paste, and command handling. Use `Ctrl+C` to cancel the active conversation run, or use the explicit `/agents` cancellation commands once the composer is available.
 
 ## Tools and tool availability
 

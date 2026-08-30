@@ -5,6 +5,19 @@ using Threadsmith.Core;
 /// <summary>One atomically resolved tool plus immutable host-owned source metadata.</summary>
 public sealed record ToolRegistration(ITool Tool, ToolActivitySource Source);
 
+/// <summary>Compares complete request-fenced tool registration identities.</summary>
+internal static class ToolRegistrationIdentity
+{
+    /// <summary>Returns whether tool instance and host-owned source metadata are unchanged.</summary>
+    public static bool Matches(ToolRegistration current, ToolRegistration expected)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(expected);
+        return ReferenceEquals(current.Tool, expected.Tool)
+            && current.Source == expected.Source;
+    }
+}
+
 /// <summary>Resolves registered tool contracts by stable identifier.</summary>
 public interface IToolRegistry
 {
@@ -13,6 +26,9 @@ public interface IToolRegistry
 
     /// <summary>Returns enabled definitions eligible for one session and run.</summary>
     IReadOnlyList<ToolDefinition> GetDefinitions(SessionId sessionId, RunId runId);
+
+    /// <summary>Returns one atomic enabled registration snapshot eligible for a session and run.</summary>
+    IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId);
 
     /// <summary>All registered definitions in deterministic order, including disabled tools.</summary>
     IReadOnlyList<ToolDefinition> AllDefinitions { get; }
@@ -89,6 +105,21 @@ public sealed class ToolRegistry : IToolRegistry
                 .Where(definition => _stateManager is null || _stateManager.IsEnabled(definition.Id))
                 .Where(definition => _activationPolicy is null || _activationPolicy.IsActive(definition.Id, sessionId, runId))
                 .OrderBy(definition => definition.Id, StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId)
+    {
+        lock (_gate)
+        {
+            return _tools.Values
+                .Where(tool => _stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
+                .Where(tool => _activationPolicy is null
+                    || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId))
+                .OrderBy(tool => tool.Definition.Id, StringComparer.Ordinal)
+                .Select(tool => new ToolRegistration(tool, GetSourceUnsafe(tool.Definition.Id)))
                 .ToArray();
         }
     }
@@ -267,6 +298,13 @@ public sealed class ToolRegistry : IToolRegistry
         return _stateManager is null || _stateManager.IsEnabled(toolId)
             ? resolved
             : throw new KeyNotFoundException($"Tool '{toolId}' is disabled.");
+    }
+
+    private ToolActivitySource GetSourceUnsafe(string toolId)
+    {
+        return _sources.TryGetValue(toolId, out var source)
+            ? source
+            : new ToolActivitySource(ToolActivitySourceKind.Unknown);
     }
 
     private static void Validate(ITool tool, string parameterName)

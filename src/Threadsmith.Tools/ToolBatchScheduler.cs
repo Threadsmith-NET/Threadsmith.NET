@@ -243,7 +243,15 @@ internal sealed class ToolConflictPlanner
     {
         try
         {
-            var registration = _registry.GetRegistration(request.Invocation.ToolId);
+            var current = _registry.GetRegistration(request.Invocation.ToolId);
+            var expected = request.Invocation.ExpectedRegistration;
+            if (expected is not null && !ToolRegistrationIdentity.Matches(current, expected))
+            {
+                throw new ToolArgumentValidationException(
+                    $"Tool '{request.Invocation.ToolId}' no longer matches the approved capability identity.");
+            }
+
+            var registration = expected ?? current;
             var input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
             IReadOnlyList<ToolResourceClaim> claims = registration.Tool
                 .GetSchedulingClaims(input, request.Invocation.Context)

@@ -23,7 +23,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
         "code_explore",
-        "Explore current C# code using a natural-language question, exact symbol, file, or code term. Returns relevant dependencies and grouped line-numbered source. Provide query and optionally maxFiles; the host owns all traversal, timeout, byte, and source budgets. Use this before text search or raw file reads for C# implementation questions, and inspect its result before choosing a fallback.",
+        "Explore current C# code using a natural-language question, exact symbol, file, or code term. Returns relevant dependencies and grouped line-numbered source. Provide query and optionally maxFiles; the host owns all traversal, timeout, byte, and source budgets. Use this before text search or raw file reads for C# implementation questions, and inspect its result before choosing a fallback. Treat complete returned source ranges as evidence without rereading them. When a result reports ProjectScopedPartial, use its granular fallback and do not call code_explore again for that subject until the workspace changes.",
         ToolCategory.SemanticSearch,
         RepositoryTrustLevel.TrustedBuild,
         ApprovalLevel.None,

@@ -130,6 +130,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 92 | `plan-92-advanced-semantic-tool-schema-maintenance.md` | Advanced semantic model-facing schema simplification and projection hardening |
 | 93 | `plan-93-codex-headless-auth-json-numeric-compatibility.md` | Codex headless OAuth JSON numeric compatibility |
 | 94 | `plan-94-code-explore-agent-execution-quality.md` | Code explore agent-execution ranking and presentation quality |
+| 95 | `plan-95-subagent-efficiency-code-explore-role-model-routing.md` | Subagent efficiency, residual code explore precision, and role-specific provider/model routing |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

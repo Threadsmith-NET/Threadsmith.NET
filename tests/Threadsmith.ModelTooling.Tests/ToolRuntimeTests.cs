@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
@@ -37,7 +38,13 @@ public static class ToolRuntimeTests
             var projections = new InMemoryProjectionStore();
             await using var persistenceSubscription = events.Subscribe(store.AppendAsync);
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
+            await using var failingEvidenceSubscription = events.Subscribe((domainEvent, _) =>
+                domainEvent is EvidenceAdded
+                    ? Task.FromException(new InvalidOperationException("evidence observer failed"))
+                    : Task.CompletedTask);
             var pipeline = CreatePipeline(events, [new ListFilesTool()]);
+            var sanitizer = new TestSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
             var model = new FakeModelProvider(new ScriptedSession
             {
                 Turns =
@@ -53,10 +60,11 @@ public static class ToolRuntimeTests
                 events,
                 model,
                 CreateBudget(),
-                new TestSanitizer(),
+                sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 pipeline,
                 (_, _) => Task.FromResult(CreateContext(repository)),
+                evidenceStore: evidence,
                 toolRegistry: pipeline.Registry);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
@@ -72,6 +80,7 @@ public static class ToolRuntimeTests
             Assert.Equal("model", started.RequestedBy);
             Assert.True(completed.Succeeded);
             Assert.Contains("sample.txt", completed.ResultJson, StringComparison.Ordinal);
+            Assert.Single(evidence.Snapshot(sessionId), item => item.RunId == runId);
 
             var snapshot = await new TuiPresenter(dispatcher, projections).RenderAsync(sessionId);
             Assert.Contains("Tool list_files (model): succeeded", snapshot.Workspace, StringComparison.Ordinal);
@@ -2837,6 +2846,49 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>A request-fenced registration is rejected before replacement validation or claims execute.</summary>
+    [Fact]
+    public static async Task BatchPreflight_ReplacedExpectedRegistration_RunsNoReplacementCallbacks()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var registry = new ToolRegistry([]);
+            var executionOrder = new ConcurrentQueue<string>();
+            var original = new LabeledDynamicTool("dynamic_read", "original", executionOrder);
+            var replacement = new ValidationCountingTool("dynamic_read");
+            var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "test-extension");
+            registry.RegisterOrReplace(original, source);
+            var expected = registry.GetRegistration(original.Definition.Id);
+            registry.RegisterOrReplace(replacement, source, original);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                new TestSanitizer(),
+                NullLogger<ToolInvocationPipeline>.Instance,
+                CreateBudget());
+
+            var preflight = pipeline.PreflightBatch(
+                [CreateBatchRequest(
+                    0,
+                    "call-dynamic",
+                    original.Definition.Id,
+                    CreateContext(repository),
+                    expectedRegistration: expected)]);
+
+            Assert.False(preflight.Succeeded);
+            Assert.Equal(0, replacement.ValidationCalls);
+            Assert.Empty(executionOrder);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Fail-fast drains and returns the cancelled outcome of every started sibling.</summary>
     [Fact]
     public static async Task Batch_FailFastCancellation_PreservesStartedResults()
@@ -3067,13 +3119,15 @@ public static class ToolRuntimeTests
         string correlationId,
         string toolId,
         ToolInvocationContext context,
-        string argumentsJson = "{}")
+        string argumentsJson = "{}",
+        ToolRegistration? expectedRegistration = null)
     {
         return new ToolBatchRequest(
             ordinal,
             correlationId,
             new ToolInvocationRequest
             {
+                ExpectedRegistration = expectedRegistration,
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = toolId,
@@ -4159,6 +4213,33 @@ public static class ToolRuntimeTests
 
         protected override void ValidateInput(BarrierReadInput input)
         {
+        }
+    }
+
+    private sealed class ValidationCountingTool : Tool<BarrierReadInput, BarrierReadOutput>
+    {
+        private readonly ToolDefinition _definition;
+
+        public ValidationCountingTool(string id)
+        {
+            _definition = CreateReadDefinition(id, ToolConcurrencyMode.SerializedPerRegistration, 1);
+        }
+
+        public override ToolDefinition Definition => _definition;
+
+        public int ValidationCalls { get; private set; }
+
+        public override Task<ToolExecution<BarrierReadOutput>> ExecuteAsync(
+            BarrierReadInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException("A replaced tool must not execute.");
+        }
+
+        protected override void ValidateInput(BarrierReadInput input)
+        {
+            ValidationCalls++;
         }
     }
 

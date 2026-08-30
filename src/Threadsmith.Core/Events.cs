@@ -666,7 +666,8 @@ public sealed record DelegationCheckpointWritten(
     RunId ParentRunId,
     DelegationCheckpointPhase Phase,
     int Generation,
-    string NextAction) : DomainEvent(SessionId, OccurredAt);
+    string NextAction,
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>One child reached an observable lifecycle state.</summary>
 public sealed record AgentRunLifecycleObserved(
@@ -678,7 +679,8 @@ public sealed record AgentRunLifecycleObserved(
     AgentRole Role,
     AgentRunStatus Status,
     int Generation,
-    string Reason) : DomainEvent(SessionId, OccurredAt);
+    string Reason,
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A metadata-only skill catalog refresh completed.</summary>
 public sealed record SkillCatalogRefreshed(
@@ -898,4 +900,51 @@ public interface IDomainEventStream : IAsyncDisposable
 
     /// <summary>Publishes an event and waits until every current subscriber handles it.</summary>
     Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Prepares one ordered event batch, invokes the synchronous producer commit, then exposes the batch.
+    /// </summary>
+    /// <remarks>
+    /// Caller cancellation may abort only before <paramref name="tryCommit"/> begins. Once committed, subscriber
+    /// delivery is observed without rolling producer state back.
+    /// </remarks>
+    Task PublishCommittedBatchAsync(
+        IReadOnlyList<IDomainEvent> domainEvents,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Reports subscriber delivery failure after a committed domain-event batch became authoritative.</summary>
+public sealed class CommittedDomainEventDeliveryException : InvalidOperationException
+{
+    private const string DefaultMessage =
+        "A committed domain-event batch could not be delivered to every subscriber.";
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    public CommittedDomainEventDeliveryException()
+        : base(DefaultMessage)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="message">Delivery failure explanation.</param>
+    public CommittedDomainEventDeliveryException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="innerException">Exception raised by a committed-batch subscriber.</param>
+    public CommittedDomainEventDeliveryException(Exception innerException)
+        : base(DefaultMessage, innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="message">Delivery failure explanation.</param>
+    /// <param name="innerException">Exception raised by a committed-batch subscriber.</param>
+    public CommittedDomainEventDeliveryException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }

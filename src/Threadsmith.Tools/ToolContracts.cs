@@ -35,6 +35,9 @@ public enum ToolCategory
 
     /// <summary>Explicitly consented outbound information retrieval.</summary>
     ExternalSearch,
+
+    /// <summary>Host-owned workflow orchestration.</summary>
+    Workflow,
 }
 
 /// <summary>Whether a tool can change externally visible state.</summary>
@@ -274,6 +277,9 @@ public sealed record ToolInvocationContext
     /// <summary>Effective repository trust.</summary>
     public RepositoryTrustLevel TrustLevel { get; init; }
 
+    /// <summary>Sensitivity frozen for the active model/tool request.</summary>
+    public ConversationSensitivity Sensitivity { get; init; }
+
     /// <summary>Repository-relative or absolute roots that tools may inspect.</summary>
     public IReadOnlyList<string> ApprovedRoots { get; init; } = ["."];
 
@@ -298,6 +304,9 @@ public sealed record ToolInvocationContext
     /// <summary>Tool identifiers for which repository configuration raises approval to user level.</summary>
     public IReadOnlyList<string> RequireApprovalToolIds { get; init; } = [];
 
+    /// <summary>Opaque identity for the host-owned model-visible tool snapshot, when frozen.</summary>
+    public Guid? ModelVisibleToolSnapshotId { get; init; }
+
     /// <summary>Logical secret references available to this invocation.</summary>
     public IReadOnlyList<string> AllowedSecretReferences { get; init; } = [];
 
@@ -321,7 +330,7 @@ public sealed record ToolInvocationContext
 public sealed record ToolInvocationRequest
 {
     /// <summary>The exact dynamic registration authorized for this invocation, when identity pinning is required.</summary>
-    public ITool? ExpectedRegistration { get; init; }
+    public ToolRegistration? ExpectedRegistration { get; init; }
 
     /// <summary>Owning session.</summary>
     public required SessionId SessionId { get; init; }

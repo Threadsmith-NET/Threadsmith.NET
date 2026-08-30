@@ -191,18 +191,21 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario L — Bounded Parallel Research, Isolated Workers, and Review
 
-1. User requests a multi-project change whose approved plan contains two provably non-overlapping implementation steps plus one shared configuration step.
-2. The host proposes bounded read-only exploration assignments with explicit roles, questions, models, tools, trust ceilings, contexts, budgets, and stopping conditions.
-3. Two explorers run concurrently as in-process .NET child tasks against the same immutable baseline and return schema-validated cited findings; the parent receives no raw child transcript.
-4. The host synthesizes findings, approves/records the parent plan, partitions the two independent steps, and serializes the shared configuration step.
-5. User approves the delegation projection. Two implementation children run concurrently in separate managed detached Git worktrees, each confined to its assignment and full governed mutation/validation path.
-6. Freeze both structured worker change sets. Run security, test, performance, and architecture reviewers concurrently against immutable diff/evidence artifacts.
-7. Resolve required review findings and ask the parent to integrate selected workers.
-8. The parent detects worker-to-worker and current-primary conflicts, restages selected changes transactionally, presents one fresh exact aggregate diff, applies only after policy authorization, and reruns aggregate affected builds/tests.
-9. Repeat with overlapping/shared paths, stale primary bytes, an out-of-scope worker edit, cancelled parent/child, slow provider, exhausted child/parent budget, reviewer disagreement, interrupted checkpoints, and worktree cleanup failure.
-10. Monitor operating-system processes while agents run.
+1. In ordinary trusted chat with a selected semantic workspace, request two independent repository investigations and have the parent model call `delegate_agents` with exact `task`, `context`, and `readOnly` or `inherit` values.
+2. Confirm the host freezes the parent's exact visible tool snapshot, rejects unknown knobs or excess children, removes mutation, process/code-execution, approval-required, workflow, and delegation tools, and narrows child trust, roots, prohibited paths, phase, sensitivity, network, and budget.
+3. Two Explorer children run concurrently as in-process .NET tasks against one immutable baseline and return schema-validated cited findings; the joined result contains delegation/assignment IDs, honest statuses, uncertainty, omissions, conservative disagreements, and usage without raw child transcripts or hidden reasoning.
+4. Inspect the latest durable state with `/agents <delegation-id>`, then cancel a child and a complete delegation in separate runs and confirm observed hierarchical cancellation. Through the shared persistence/checkpoint boundary, confirm accepted/queued/running and role-specific terminal revisions increase monotonically, joined state is durable before findings enter parent evidence, and a late lower-revision progress write neither replaces terminal state nor emits a stale lifecycle event.
+5. User requests a multi-project change whose approved plan contains two provably non-overlapping implementation steps plus one shared configuration step.
+6. The host proposes bounded read-only exploration assignments with explicit roles, questions, models, tools, trust ceilings, contexts, budgets, and stopping conditions.
+7. The host synthesizes findings, approves/records the parent plan, partitions the two independent steps, and serializes the shared configuration step.
+8. User approves the delegation projection. Two implementation children run concurrently in separate managed detached Git worktrees, each confined to its assignment and full governed mutation/validation path.
+9. Freeze both structured worker change sets. Run security, test, performance, and architecture reviewers concurrently against immutable diff/evidence artifacts.
+10. Resolve required review findings and ask the parent to integrate selected workers.
+11. The parent detects worker-to-worker and current-primary conflicts, restages selected changes transactionally, presents one fresh exact aggregate diff, applies only after policy authorization, and reruns aggregate affected builds/tests.
+12. Repeat with malformed child output, policy-denied child tools, overlapping/shared paths, stale primary bytes, an out-of-scope worker edit, cancelled parent/child, slow provider, exhausted child/parent budget, reviewer disagreement, interrupted checkpoints, and worktree cleanup failure.
+13. Monitor operating-system processes while agents run.
 
-**Verifies:** deterministic state and immutable turns, repository/baseline/worktree confinement, central tool/context/capability/model/budget policy, validation and correction, persistence/restoration, bounded in-process structured concurrency, hierarchical cancellation, non-overlap partitioning, isolated workers, typed reviewers, conflict-safe parent integration, and parent/child provenance. No process hosts a child agent; only existing tracked Git/build/test/tool infrastructure processes may appear. Unsafe partitioning falls back to serial execution, and no worker result is automatically merged.
+**Verifies:** deterministic state and immutable turns, direct model-callable bounded fork/join, repository/baseline/worktree confinement, exact parent-tool inheritance and central tool/context/capability/model/budget policy, validation and correction, persistence/restoration, bounded in-process structured concurrency, hierarchical cancellation, non-overlap partitioning, isolated workers, typed reviewers, conflict-safe parent integration, and parent/child provenance. No process hosts a child agent; only existing tracked Git/build/test/tool infrastructure processes may appear. Children never delegate or transition parent workflow, unsafe partitioning falls back to serial execution, and no worker result is automatically merged.
 
 
 ---

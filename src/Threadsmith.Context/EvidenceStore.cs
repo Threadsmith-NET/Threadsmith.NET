@@ -21,28 +21,101 @@ public sealed class EvidenceStore : IEvidenceStore
     }
 
     /// <inheritdoc />
-    public async Task AddAsync(Evidence evidence, CancellationToken cancellationToken = default)
+    public Task AddAsync(Evidence evidence, CancellationToken cancellationToken = default)
+    {
+        return AddBatchAsync([evidence], cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task AddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await TryAddBatchAsync(evidence, static () => true, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("The evidence batch commit was rejected.");
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryAddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(evidence);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidence.Content);
-        ArgumentNullException.ThrowIfNull(evidence.Provenance);
-        cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(tryCommit);
+        Evidence[] prepared = [.. evidence.Select(Prepare)];
+        if (prepared.Select(item => (item.SessionId, item.EvidenceId)).Distinct().Count()
+            != prepared.Length)
         {
-            _items[(evidence.SessionId, evidence.EvidenceId)] = evidence with
-            {
-                Content = _sanitizer.Sanitize(evidence.Content),
-                InvalidationKeys = evidence.InvalidationKeys.ToArray(),
-            };
+            throw new InvalidDataException("An evidence batch contains duplicate identities.");
         }
 
-        await _events.PublishAsync(
-            new EvidenceAdded(
-                evidence.SessionId,
-                DateTimeOffset.UtcNow,
-                evidence.EvidenceId,
-                evidence.Kind.ToString()),
+        IDomainEvent[] events = [.. prepared.Select(item => (IDomainEvent)new EvidenceAdded(
+            item.SessionId,
+            DateTimeOffset.UtcNow,
+            item.EvidenceId,
+            item.Kind.ToString()))];
+        var commitState = 0;
+        bool TryCommitBatch()
+        {
+            if (Interlocked.CompareExchange(ref commitState, 3, 0) != 0)
+            {
+                return false;
+            }
+
+            if (!tryCommit())
+            {
+                Volatile.Write(ref commitState, 2);
+                return false;
+            }
+
+            lock (_gate)
+            {
+                foreach (var item in prepared)
+                {
+                    _items[(item.SessionId, item.EvidenceId)] = item;
+                }
+            }
+
+            Volatile.Write(ref commitState, 1);
+            return true;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var publication = _events.PublishCommittedBatchAsync(
+            events,
+            TryCommitBatch,
             cancellationToken);
+        try
+        {
+            try
+            {
+                await publication.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                if (Interlocked.CompareExchange(ref commitState, 2, 0) == 0)
+                {
+                    throw;
+                }
+
+                await publication;
+            }
+        }
+        catch (CommittedDomainEventDeliveryException) when (Volatile.Read(ref commitState) == 1)
+        {
+            // Producer state is authoritative after commit; observer delivery cannot roll it back.
+        }
+
+        if (Volatile.Read(ref commitState) != 1)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <inheritdoc />
@@ -159,4 +232,16 @@ public sealed class EvidenceStore : IEvidenceStore
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
+
+    private Evidence Prepare(Evidence evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(evidence.Content);
+        ArgumentNullException.ThrowIfNull(evidence.Provenance);
+        return evidence with
+        {
+            Content = _sanitizer.Sanitize(evidence.Content),
+            InvalidationKeys = evidence.InvalidationKeys.ToArray(),
+        };
+    }
 }

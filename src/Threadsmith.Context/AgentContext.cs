@@ -17,7 +17,10 @@ public sealed record AgentContextSnapshot
     /// <summary>Explicit tasks.</summary>
     public IReadOnlyList<string> Tasks { get; init; } = [];
 
-    /// <summary>Bounded relevant governed evidence.</summary>
+    /// <summary>Frozen caller-supplied context treated as untrusted task data.</summary>
+    public string InitialContext { get; init; } = string.Empty;
+
+    /// <summary>Governed evidence selected by the assignment policy.</summary>
     public IReadOnlyList<Evidence> Evidence { get; init; } = [];
 
     /// <summary>Explicit tool definitions eligible for this child.</summary>
@@ -39,38 +42,52 @@ public sealed class AgentContextAssembler
         _evidence = evidence;
     }
 
-    /// <summary>Builds a bounded snapshot containing no raw conversation transcript.</summary>
+    /// <summary>Builds a governed snapshot containing no raw conversation transcript.</summary>
     public AgentContextSnapshot Assemble(
         DelegationPlan plan,
         AgentAssignment assignment)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(assignment);
-        if (!plan.Assignments.Any(item => item.AssignmentId == assignment.AssignmentId))
+        var frozenAssignment = plan.Assignments.SingleOrDefault(
+            item => item.AssignmentId == assignment.AssignmentId);
+        if (frozenAssignment is null
+            || frozenAssignment.ChildRunId != assignment.ChildRunId
+            || frozenAssignment.Role != assignment.Role
+            || frozenAssignment.Mode != assignment.Mode)
         {
             throw new UnauthorizedAccessException("The assignment does not belong to this delegation.");
         }
 
-        var maximumTokens = (int)Math.Min(assignment.Budget.ModelTokens, int.MaxValue);
+        assignment = frozenAssignment;
+
+        var maximumTokens = assignment.Budget.EnforceLimits
+            ? (int)Math.Min(assignment.Budget.ModelTokens, int.MaxValue)
+            : int.MaxValue;
         var used = TokenEstimator.Estimate(assignment.Objective)
+            + TokenEstimator.Estimate(assignment.InitialContext)
             + assignment.Tasks.Sum(TokenEstimator.Estimate);
         var selected = new List<Evidence>();
         foreach (var evidence in _evidence.Snapshot(plan.Provenance.SessionId)
             .Where(item => !item.IsStale)
             .Where(item => item.RunId is null || item.RunId == plan.Provenance.ParentRunId)
+            .Where(item => assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive
+                || item.Sensitivity != EvidenceSensitivity.Sensitive)
             .OrderByDescending(item => item.Relevance)
             .ThenBy(item => item.EvidenceId.Value))
         {
             var tokens = evidence.EstimatedTokens > 0
                 ? evidence.EstimatedTokens
                 : TokenEstimator.Estimate(evidence.Content);
-            if (used + tokens > maximumTokens || selected.Count >= assignment.Budget.EvidenceItems)
+            if (assignment.Budget.EnforceLimits
+                && ((long)used + tokens > maximumTokens
+                    || selected.Count >= assignment.Budget.EvidenceItems))
             {
                 continue;
             }
 
             selected.Add(evidence);
-            used += tokens;
+            used = (int)Math.Min((long)used + tokens, int.MaxValue);
         }
 
         return new AgentContextSnapshot
@@ -79,6 +96,7 @@ public sealed class AgentContextAssembler
             BaselineIdentity = plan.Provenance.BaselineIdentity,
             Objective = assignment.Objective,
             Tasks = [.. assignment.Tasks],
+            InitialContext = assignment.InitialContext,
             Evidence = selected,
             AllowedToolIds = assignment.Policy.AllowedToolIds
                 .Except(assignment.Policy.DeniedToolIds, StringComparer.OrdinalIgnoreCase)
@@ -88,6 +106,13 @@ public sealed class AgentContextAssembler
         };
     }
 }
+
+/// <summary>One validated child finding set awaiting parent-boundary admission.</summary>
+public sealed record AgentFindingAdmissionRequest(
+    AgentAssignment Assignment,
+    AgentFindingSet Findings,
+    ModelProfileId? EffectiveModelProfileId,
+    IReadOnlySet<EvidenceId> DeliveredEvidenceIds);
 
 /// <summary>Validates cited child findings and admits bounded provenance-linked parent evidence.</summary>
 public sealed class AgentFindingAdmission
@@ -102,30 +127,93 @@ public sealed class AgentFindingAdmission
         _evidence = evidence;
     }
 
-    /// <summary>Admits schema-valid findings whose citations exist in the parent evidence store.</summary>
+    /// <summary>Validates the complete finding set without changing parent evidence.</summary>
+    public static void Validate(
+        DelegationPlan plan,
+        AgentAssignment assignment,
+        AgentFindingSet findings,
+        IReadOnlySet<EvidenceId> deliveredEvidenceIds)
+    {
+        _ = Prepare(
+            plan,
+            assignment,
+            findings,
+            effectiveModelProfileId: null,
+            deliveredEvidenceIds);
+    }
+
+    /// <summary>Admits schema-valid findings whose citations were delivered to the child.</summary>
     public async Task<IReadOnlyList<EvidenceId>> AdmitAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
         AgentFindingSet findings,
+        IReadOnlySet<EvidenceId> deliveredEvidenceIds,
         CancellationToken cancellationToken = default)
+    {
+        var prepared = Prepare(
+            plan,
+            assignment,
+            findings,
+            effectiveModelProfileId: null,
+            deliveredEvidenceIds);
+        await _evidence.AddBatchAsync(prepared, cancellationToken);
+        return prepared.Select(item => item.EvidenceId).ToArray();
+    }
+
+    /// <summary>Conditionally admits all validated child finding sets at the parent join commit gate.</summary>
+    public async Task<bool> TryAdmitAsync(
+        DelegationPlan plan,
+        IReadOnlyList<AgentFindingAdmissionRequest> requests,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(requests);
+        ArgumentNullException.ThrowIfNull(tryCommit);
+        var prepared = requests.SelectMany(request =>
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            return Prepare(
+                plan,
+                request.Assignment,
+                request.Findings,
+                request.EffectiveModelProfileId,
+                request.DeliveredEvidenceIds);
+        }).ToArray();
+        return await _evidence.TryAddBatchAsync(prepared, tryCommit, cancellationToken);
+    }
+
+    private static IReadOnlyList<Evidence> Prepare(
+        DelegationPlan plan,
+        AgentAssignment assignment,
+        AgentFindingSet findings,
+        ModelProfileId? effectiveModelProfileId,
+        IReadOnlySet<EvidenceId> deliveredEvidenceIds)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(assignment);
         ArgumentNullException.ThrowIfNull(findings);
+        ArgumentNullException.ThrowIfNull(deliveredEvidenceIds);
+        var frozenAssignment = plan.Assignments.SingleOrDefault(
+            item => item.AssignmentId == assignment.AssignmentId);
+        if (frozenAssignment is null
+            || frozenAssignment.ChildRunId != assignment.ChildRunId
+            || frozenAssignment.Role != assignment.Role
+            || frozenAssignment.Mode != assignment.Mode)
+        {
+            throw new UnauthorizedAccessException("The assignment does not belong to this delegation.");
+        }
+
         if (findings.SchemaVersion != 1
-            || findings.AssignmentId != assignment.AssignmentId
-            || findings.ChildRunId != assignment.ChildRunId
+            || findings.AssignmentId != frozenAssignment.AssignmentId
+            || findings.ChildRunId != frozenAssignment.ChildRunId
             || findings.Generation != plan.Provenance.Generation
-            || assignment.Role != AgentRole.Explorer)
+            || frozenAssignment.Role != AgentRole.Explorer
+            || findings.Findings.Count == 0)
         {
             throw new InvalidDataException("Finding-set identity, generation, schema, or role is invalid.");
         }
 
-        var snapshot = new AgentContextAssembler(_evidence).Assemble(plan, assignment);
-        IReadOnlySet<EvidenceId> admitted = snapshot.Evidence
-            .Select(item => item.EvidenceId)
-            .ToHashSet();
-        var added = new List<EvidenceId>();
         foreach (var finding in findings.Findings)
         {
             if (finding.FindingId == Guid.Empty
@@ -134,44 +222,37 @@ public sealed class AgentFindingAdmission
                 || finding.Summary.Length > MaximumSummaryCharacters
                 || finding.Confidence is < 0 or > 1
                 || finding.EvidenceIds.Count == 0
-                || finding.EvidenceIds.Any(id => !admitted.Contains(id)))
+                || finding.EvidenceIds.Any(id => !deliveredEvidenceIds.Contains(id)))
             {
                 throw new InvalidDataException("A child finding is malformed or cites evidence not admitted by the parent.");
             }
-
-            var evidenceId = EvidenceId.New();
-            await _evidence.AddAsync(
-                new Evidence
-                {
-                    EvidenceId = evidenceId,
-                    SessionId = plan.Provenance.SessionId,
-                    RunId = plan.Provenance.ParentRunId,
-                    Kind = EvidenceKind.ToolResult,
-                    Content = finding.Summary,
-                    Provenance = new EvidenceProvenance
-                    {
-                        Source = $"agent:{assignment.Role}:{assignment.AssignmentId.Value:D}",
-                        SourcePath = finding.Locations.FirstOrDefault(),
-                        RepositoryRevision = plan.Provenance.BaselineIdentity,
-                        ChildRunId = assignment.ChildRunId,
-                        AgentAssignmentId = assignment.AssignmentId,
-                        ModelProfileId = assignment.Policy.ModelProfileId == default
-                            ? null
-                            : assignment.Policy.ModelProfileId,
-                        BaselineIdentity = plan.Provenance.BaselineIdentity,
-                    },
-                    CollectedAt = DateTimeOffset.UtcNow,
-                    Relevance = finding.Confidence,
-                    EstimatedTokens = TokenEstimator.Estimate(finding.Summary),
-                    Sensitivity = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive
-                        ? EvidenceSensitivity.Sensitive
-                        : EvidenceSensitivity.None,
-                    InvalidationKeys = ["repository"],
-                },
-                cancellationToken);
-            added.Add(evidenceId);
         }
 
-        return added;
+        return findings.Findings.Select(finding =>
+            new Evidence
+            {
+                EvidenceId = EvidenceId.New(),
+                SessionId = plan.Provenance.SessionId,
+                RunId = plan.Provenance.ParentRunId,
+                Kind = EvidenceKind.ToolResult,
+                Content = finding.Summary,
+                Provenance = new EvidenceProvenance
+                {
+                    Source = $"agent:{frozenAssignment.Role}:{frozenAssignment.AssignmentId.Value:D}",
+                    SourcePath = finding.Locations.FirstOrDefault(),
+                    RepositoryRevision = plan.Provenance.BaselineIdentity,
+                    ChildRunId = frozenAssignment.ChildRunId,
+                    AgentAssignmentId = frozenAssignment.AssignmentId,
+                    ModelProfileId = effectiveModelProfileId,
+                    BaselineIdentity = plan.Provenance.BaselineIdentity,
+                },
+                CollectedAt = DateTimeOffset.UtcNow,
+                Relevance = finding.Confidence,
+                EstimatedTokens = TokenEstimator.Estimate(finding.Summary),
+                Sensitivity = frozenAssignment.Policy.Sensitivity == ConversationSensitivity.Sensitive
+                    ? EvidenceSensitivity.Sensitive
+                    : EvidenceSensitivity.None,
+                InvalidationKeys = ["repository"],
+            }).ToArray();
     }
 }

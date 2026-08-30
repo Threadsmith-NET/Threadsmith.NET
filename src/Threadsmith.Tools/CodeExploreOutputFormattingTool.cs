@@ -2,10 +2,11 @@ namespace Threadsmith.Tools;
 
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Decorates code_explore with configurable model-visible output formatting.</summary>
-public sealed class CodeExploreOutputFormattingTool : ITool
+public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationToolOutputBoundary
 {
     private readonly ITool _inner;
     private readonly CodeExploreOutputOptions _options;
@@ -90,30 +91,93 @@ public sealed class CodeExploreOutputFormattingTool : ITool
         var query = input is CodeExploreInput codeExploreInput
             ? codeExploreInput.Query
             : null;
-        return execution.Value is CodeExploreResult result
-            ? execution with { ModelResultContent = CodeExploreMarkdownRenderer.Render(result, query) }
-            : execution;
+        if (execution.Value is not CodeExploreResult result)
+        {
+            return execution;
+        }
+
+        var markdown = CodeExploreMarkdownRenderer.Render(
+            result,
+            query,
+            CodeExploreModelBudget.GetMaximumResultBytes(context.Invocation),
+            out var markdownTruncated);
+        return execution with
+        {
+            IsTruncated = execution.IsTruncated || markdownTruncated,
+            ModelResultContent = markdown,
+        };
+    }
+
+    /// <inheritdoc />
+    PostSanitizationToolOutput IPostSanitizationToolOutputBoundary.BoundSanitizedOutput(
+        string resultJson,
+        string? modelResultContent,
+        ToolInvocationContext context)
+    {
+        if (CodeExploreModelBudget.GetMaximumResultBytes(context) is not { } maximumBytes)
+        {
+            return new PostSanitizationToolOutput(resultJson, modelResultContent, false);
+        }
+
+        var resultWasTruncated = Encoding.UTF8.GetByteCount(resultJson) > maximumBytes;
+        if (resultWasTruncated)
+        {
+            var result = JsonSerializer.Deserialize<CodeExploreResult>(resultJson)
+                ?? throw new InvalidOperationException("The sanitized code exploration result could not be deserialized.");
+            resultJson = JsonSerializer.Serialize(
+                CodeExploreTool.BoundResultToMaximumBytes(result, maximumBytes));
+        }
+
+        var markdownWasTruncated = modelResultContent is not null
+            && Encoding.UTF8.GetByteCount(modelResultContent) > maximumBytes;
+        if (markdownWasTruncated)
+        {
+            modelResultContent = CodeExploreMarkdownRenderer.BoundMarkdownToUtf8Bytes(
+                modelResultContent!,
+                maximumBytes);
+        }
+
+        return new PostSanitizationToolOutput(
+            resultJson,
+            modelResultContent,
+            resultWasTruncated || markdownWasTruncated);
     }
 }
 
 /// <summary>Renders a compact CodeGraph-style model-facing projection from authoritative code-explore DTOs.</summary>
 internal static class CodeExploreMarkdownRenderer
 {
-    private const int MaximumImpactItems = 32;
+    private const int MaximumImpactItems = 10;
+    private const int MaximumImpactItemsPerKind = 2;
     private const int MaximumFlowEdges = 24;
     private const int MaximumFlowBoundaries = 12;
     private const int MaximumAssociatedArtifacts = 12;
     private const int MaximumArtifactOmissions = 4;
     private const int MaximumBackReferences = 16;
-    private const int MaximumContinuations = 16;
+    private const int MaximumContinuations = 6;
+    private const int MaximumContinuationsPerKind = 2;
     private const int MaximumContinuationCursors = 3;
     private const int MaximumNextActions = 8;
     private const int MaximumOmissions = 12;
     private const int MaximumSelectedEvidenceItems = 12;
     private const int MaximumSemanticIdentities = 8;
+    private const string ModelBudgetOmission = "_Output note: additional Markdown was omitted to fit the selected model input budget._";
 
     /// <summary>Renders one concise source-first exploration result.</summary>
-    internal static string Render(CodeExploreResult result, string? query = null)
+    internal static string Render(
+        CodeExploreResult result,
+        string? query = null,
+        int? maximumUtf8Bytes = null)
+    {
+        return Render(result, query, maximumUtf8Bytes, out _);
+    }
+
+    /// <summary>Renders one concise exploration result and reports model-budget truncation.</summary>
+    internal static string Render(
+        CodeExploreResult result,
+        string? query,
+        int? maximumUtf8Bytes,
+        out bool wasTruncated)
     {
         ArgumentNullException.ThrowIfNull(result);
         var builder = new StringBuilder();
@@ -128,7 +192,107 @@ internal static class CodeExploreMarkdownRenderer
         AppendContinuations(builder, result, query);
         AppendNextActions(builder, result.Presentation?.NextActions ?? result.Availability?.RecommendedActions);
         AppendOmissions(builder, result);
-        return builder.ToString().TrimEnd() + Environment.NewLine;
+        var markdown = builder.ToString().TrimEnd() + Environment.NewLine;
+        if (maximumUtf8Bytes is not { } maximumBytes || maximumBytes <= 0)
+        {
+            wasTruncated = false;
+            return markdown;
+        }
+
+        wasTruncated = Encoding.UTF8.GetByteCount(markdown) > maximumBytes;
+        return wasTruncated ? BoundMarkdownToUtf8Bytes(markdown, maximumBytes) : markdown;
+    }
+
+    /// <summary>Bounds Markdown by complete UTF-8 lines while preserving fence balance.</summary>
+    internal static string BoundMarkdownToUtf8Bytes(string markdown, int maximumBytes)
+    {
+        if (Encoding.UTF8.GetByteCount(markdown) <= maximumBytes)
+        {
+            return markdown;
+        }
+
+        var newline = Environment.NewLine;
+        var omission = ModelBudgetOmission + newline;
+        if (Encoding.UTF8.GetByteCount(omission) > maximumBytes)
+        {
+            return BoundTextToUtf8Bytes(ModelBudgetOmission, maximumBytes);
+        }
+
+        var builder = new StringBuilder();
+        var usedBytes = 0;
+        string? openFence = null;
+        foreach (var line in markdown.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var segment = line + newline;
+            var nextOpenFence = GetOpenFenceAfterLine(line, openFence);
+            var reservedSuffix = omission;
+            if (nextOpenFence is not null)
+            {
+                reservedSuffix = nextOpenFence + newline + reservedSuffix;
+            }
+
+            var segmentBytes = Encoding.UTF8.GetByteCount(segment);
+            if (usedBytes + segmentBytes + Encoding.UTF8.GetByteCount(reservedSuffix) > maximumBytes)
+            {
+                break;
+            }
+
+            builder.Append(segment);
+            usedBytes += segmentBytes;
+            openFence = nextOpenFence;
+        }
+
+        if (openFence is not null)
+        {
+            builder.Append(openFence);
+            builder.Append(newline);
+        }
+
+        builder.Append(omission);
+        return builder.ToString();
+    }
+
+    private static string? GetOpenFenceAfterLine(string line, string? openFence)
+    {
+        var fenceLength = 0;
+        while (fenceLength < line.Length && line[fenceLength] == '`')
+        {
+            fenceLength++;
+        }
+
+        if (fenceLength < 3)
+        {
+            return openFence;
+        }
+
+        var fence = line[..fenceLength];
+        if (openFence is null)
+        {
+            return fence;
+        }
+
+        return string.Equals(line, openFence, StringComparison.Ordinal)
+            ? null
+            : openFence;
+    }
+
+    private static string BoundTextToUtf8Bytes(string text, int maximumBytes)
+    {
+        var builder = new StringBuilder();
+        var usedBytes = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var runeBytes = rune.Utf8SequenceLength;
+            if (usedBytes + runeBytes > maximumBytes)
+            {
+                break;
+            }
+
+            builder.Append(rune);
+            usedBytes += runeBytes;
+        }
+
+        return builder.ToString();
     }
 
     private static void AppendHeader(StringBuilder builder, CodeExploreResult result, string? query)
@@ -179,14 +343,20 @@ internal static class CodeExploreMarkdownRenderer
 
     private static void AppendBlastRadius(StringBuilder builder, CodeExploreBlastRadius? blastRadius)
     {
-        if (blastRadius is not { Items.Count: > 0 })
+        if (blastRadius is null)
         {
             return;
         }
 
         builder.AppendLine("**Blast radius — what depends on these**");
         builder.AppendLine();
-        foreach (var item in blastRadius.Items.Take(MaximumImpactItems))
+        builder.AppendLine(
+            $"- **Coverage:** {FormatImpactCoverage(blastRadius.ReturnedCallers, blastRadius.TotalCallers, "caller")}, "
+            + $"{FormatImpactCoverage(blastRadius.ReturnedImplementations, blastRadius.TotalImplementations, "implementation")}, "
+            + $"{FormatImpactCoverage(blastRadius.ReturnedProjects, blastRadius.TotalProjects, "project")}, and "
+            + $"{FormatImpactCoverage(blastRadius.ReturnedTests, blastRadius.TotalTests, "test")} returned by bounded analysis.");
+        var visibleItems = SelectRepresentativeImpactItems(blastRadius.Items);
+        foreach (var item in visibleItems)
         {
             var identity = item.Symbol?.DisplayName
                 ?? item.ProjectName
@@ -198,8 +368,44 @@ internal static class CodeExploreMarkdownRenderer
                 $"- **{item.Kind}:** {FormatCodeSpan(identity)}{location} — {BoundInline(item.Reason, 280)}");
         }
 
-        AppendHiddenCount(builder, blastRadius.Items.Count, MaximumImpactItems, "impact item");
+        AppendHiddenCount(builder, blastRadius.Items.Count, visibleItems.Count, "impact item");
         builder.AppendLine();
+    }
+
+    private static IReadOnlyList<CodeExploreBlastRadiusItem> SelectRepresentativeImpactItems(
+        IReadOnlyList<CodeExploreBlastRadiusItem> items)
+    {
+        return items
+            .Select((item, index) => new { Item = item, Index = index })
+            .GroupBy(entry => entry.Item.Kind)
+            .OrderBy(group => GetImpactKindPriority(group.Key))
+            .SelectMany(group => group
+                .OrderBy(entry => entry.Index)
+                .Take(MaximumImpactItemsPerKind))
+            .Take(MaximumImpactItems)
+            .Select(entry => entry.Item)
+            .ToArray();
+    }
+
+    private static int GetImpactKindPriority(ImpactKind kind)
+    {
+        return kind switch
+        {
+            ImpactKind.Caller => 0,
+            ImpactKind.Implementation => 1,
+            ImpactKind.Reference => 2,
+            ImpactKind.Diagnostic => 3,
+            ImpactKind.GeneratedDocument => 4,
+            ImpactKind.Project => 5,
+            ImpactKind.Test => 6,
+            _ => 7,
+        };
+    }
+
+    private static string FormatImpactCoverage(int returned, int total, string noun)
+    {
+        return $"{returned.ToString(CultureInfo.InvariantCulture)} of "
+            + $"{total.ToString(CultureInfo.InvariantCulture)} {noun}{(total == 1 ? string.Empty : "s")}";
     }
 
     private static void AppendSourceCode(
@@ -292,43 +498,69 @@ internal static class CodeExploreMarkdownRenderer
     private static IReadOnlyList<MarkdownEvidenceItem> CreateSelectedEvidenceItems(CodeExploreResult result)
     {
         var items = new List<MarkdownEvidenceItem>();
-        foreach (var candidate in result.CandidateSummaries?.Where(candidate => candidate.Selected) ?? [])
-        {
-            var label = candidate.Symbol?.DisplayName
-                ?? candidate.FilePath
-                ?? candidate.AmbiguityGroup
-                ?? "selected declaration";
-            items.Add(new MarkdownEvidenceItem(
-                label,
-                candidate.FilePath ?? candidate.Location?.FilePath,
-                candidate.Location?.Range,
-                candidate.Reason));
-        }
-
-        var seenFiles = new HashSet<string>(
-            items
-                .Where(item => !string.IsNullOrWhiteSpace(item.FilePath))
-                .Select(item => item.FilePath ?? string.Empty),
-            PathComparer);
+        var selectedCandidates = (result.CandidateSummaries ?? [])
+            .Where(candidate => candidate.Selected)
+            .ToArray();
+        var candidatesBySymbolId = selectedCandidates
+            .Where(candidate => candidate.Symbol is not null)
+            .GroupBy(candidate => candidate.Symbol?.Id ?? string.Empty, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var section in result.FileSections)
         {
-            if (!seenFiles.Add(section.FilePath))
+            var matchedSectionCandidate = false;
+            foreach (var symbol in section.SemanticIdentities)
+            {
+                if (!candidatesBySymbolId.TryGetValue(symbol.Id, out var candidate)
+                    || !seenKeys.Add("symbol:" + symbol.Id))
+                {
+                    continue;
+                }
+
+                matchedSectionCandidate = true;
+                items.Add(CreateMarkdownEvidenceItem(candidate));
+            }
+
+            if (!matchedSectionCandidate && seenKeys.Add($"section:{section.FilePath}:{section.Source.Range}"))
+            {
+                var label = section.SemanticIdentities.FirstOrDefault()?.DisplayName ?? section.FilePath;
+                items.Add(new MarkdownEvidenceItem(
+                    label,
+                    section.FilePath,
+                    section.Source.Range,
+                    section.SelectionReason));
+            }
+        }
+
+        foreach (var candidate in selectedCandidates)
+        {
+            var key = candidate.Symbol is { } symbol
+                ? "symbol:" + symbol.Id
+                : $"candidate:{candidate.FilePath}:{candidate.Location?.Range}:{candidate.AmbiguityGroup}";
+            if (!seenKeys.Add(key))
             {
                 continue;
             }
 
-            var label = section.SemanticIdentities.FirstOrDefault()?.DisplayName ?? section.FilePath;
-            items.Add(new MarkdownEvidenceItem(
-                label,
-                section.FilePath,
-                section.Source.Range,
-                section.SelectionReason));
+            items.Add(CreateMarkdownEvidenceItem(candidate));
         }
 
         return items
             .Where(static item => !string.IsNullOrWhiteSpace(item.Reason))
-            .DistinctBy(static item => $"{item.Label}:{item.FilePath}:{item.Range}")
             .ToArray();
+    }
+
+    private static MarkdownEvidenceItem CreateMarkdownEvidenceItem(CodeExploreCandidateSummary candidate)
+    {
+        var label = candidate.Symbol?.DisplayName
+            ?? candidate.FilePath
+            ?? candidate.AmbiguityGroup
+            ?? "selected declaration";
+        return new MarkdownEvidenceItem(
+            label,
+            candidate.FilePath ?? candidate.Location?.FilePath,
+            candidate.Location?.Range,
+            candidate.Reason);
     }
 
     private static void AppendFlow(StringBuilder builder, CodeExploreFlow? flow)
@@ -455,11 +687,26 @@ internal static class CodeExploreMarkdownRenderer
             }
         }
 
-        details.AddRange(artifact.Omissions);
+        var contentOmissions = content?.OmittedRanges ?? [];
+        details.AddRange(artifact.Omissions.Where(omission =>
+            !IsDuplicateArtifactContentOmission(omission, contentOmissions)));
         return details
             .Where(static detail => !string.IsNullOrWhiteSpace(detail))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static bool IsDuplicateArtifactContentOmission(
+        string omission,
+        IReadOnlyList<string> contentOmissions)
+    {
+        var normalized = omission.Trim();
+        return contentOmissions.Any(contentOmission =>
+            string.Equals(normalized, contentOmission.Trim(), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                normalized,
+                "omitted range: " + contentOmission.Trim(),
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AppendBackReferences(
@@ -495,14 +742,12 @@ internal static class CodeExploreMarkdownRenderer
             return;
         }
 
-        var visibleContinuations = continuations
-            .Take(MaximumContinuations)
-            .ToArray();
+        var visibleContinuations = SelectVisibleContinuations(continuations);
         var cursorSlots = SelectContinuationCursorSlots(visibleContinuations);
         var omittedCursorCount = 0;
         builder.AppendLine("**Follow-up targets**");
         builder.AppendLine();
-        for (var index = 0; index < visibleContinuations.Length; index++)
+        for (var index = 0; index < visibleContinuations.Count; index++)
         {
             var continuation = visibleContinuations[index];
             var location = string.IsNullOrWhiteSpace(continuation.FilePath)
@@ -530,8 +775,31 @@ internal static class CodeExploreMarkdownRenderer
                 $"- _{FormatCount(omittedCursorCount, "retry query cursor")} omitted to keep follow-up targets compact._");
         }
 
-        AppendHiddenCount(builder, continuations.Count, MaximumContinuations, "follow-up target");
+        AppendHiddenCount(builder, continuations.Count, visibleContinuations.Count, "follow-up target");
         builder.AppendLine();
+    }
+
+    private static IReadOnlyList<MarkdownContinuationTarget> SelectVisibleContinuations(
+        IReadOnlyList<MarkdownContinuationTarget> continuations)
+    {
+        var selected = new List<MarkdownContinuationTarget>();
+        foreach (var group in continuations.GroupBy(continuation => continuation.Kind, StringComparer.Ordinal))
+        {
+            var replayable = group
+                .Where(continuation => continuation.Cursor is not null)
+                .Take(MaximumContinuationsPerKind)
+                .ToArray();
+            if (replayable.Length > 0)
+            {
+                selected.AddRange(replayable);
+            }
+            else
+            {
+                selected.Add(group.First());
+            }
+        }
+
+        return selected.Take(MaximumContinuations).ToArray();
     }
 
     private static HashSet<int> SelectContinuationCursorSlots(

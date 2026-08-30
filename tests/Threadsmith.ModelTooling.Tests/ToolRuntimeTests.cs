@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,6 +20,8 @@ using Xunit;
 /// <summary>Verifies the plan-08 tool runtime, policy, persistence, UI, and process lifecycle.</summary>
 public static class ToolRuntimeTests
 {
+    private const string SanitizerExpansionMarker = "token=x";
+
     /// <summary>A model-requested tool produces attributable durable output and visible activity.</summary>
     [Fact]
     public static async Task ModelToolRequest_IsTypedPersistedAndVisible()
@@ -572,13 +575,241 @@ public static class ToolRuntimeTests
             Assert.Contains("**Project:** `Example.Dependent`", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Test:** `Example.Dependent.Tests`", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Source Code**", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("Artifact note: omitted range: L5-L10 omitted by artifact character bounds.", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Equal(
+                1,
+                CountOccurrences(
+                    execution.ModelResultContent,
+                    "Artifact note: omitted range: L5-L10 omitted by artifact character bounds."));
             Assert.Contains("Artifact note: Artifact could not be read safely because it exceeded host bounds.", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("Candidate summaries", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("Adaptive envelope", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("sha256", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
             AssertAppearsBefore(execution.ModelResultContent, "**Selected evidence**", "**Source Code**");
             AssertAppearsBefore(execution.ModelResultContent, "**Source Code**", "**Blast radius");
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Markdown uses the same selected-model UTF-8 ceiling as the authoritative structured result.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_ModelBudget_BoundsRenderedMarkdown()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            const int effectiveInputTokens = 400;
+            const int maximumResultBytes = effectiveInputTokens * 3;
+            var tool = new CodeExploreOutputFormattingTool(
+                new StaticCodeExploreResultTool(CreateRichCodeExploreResult()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var execution = await tool.ExecuteAsync(
+                new CodeExploreInput { Query = "inspect source" },
+                CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: effectiveInputTokens));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+
+            Assert.True(
+                Encoding.UTF8.GetByteCount(markdown) <= maximumResultBytes,
+                "The rendered Markdown exceeded the selected-model result ceiling.");
+            Assert.Contains(
+                "additional Markdown was omitted to fit the selected model input budget",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Equal(0, CountFenceLines(markdown) % 2);
+            Assert.True(execution.IsTruncated);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>The production pipeline reapplies code-explore bounds after output sanitization expands content.</summary>
+    [Fact]
+    public static async Task CodeExplorePipeline_ModelBudget_BoundsSanitizedStructuredAndMarkdownOutput()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            const int effectiveInputTokens = 1_400;
+            const int maximumResultBytes = effectiveInputTokens * 3;
+            await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var subscription = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var tool = new CodeExploreOutputFormattingTool(
+                new StaticCodeExploreResultTool(CreateSanitizerExpansionCodeExploreResult()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var input = new CodeExploreInput { Query = "inspect source" };
+            var directExecution = await tool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(
+                    repository,
+                    modelEffectiveInputBudgetTokens: effectiveInputTokens));
+            var directMarkdown = directExecution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected direct Markdown code_explore content.");
+            Assert.False(directExecution.IsTruncated);
+            Assert.True(JsonSerializer.SerializeToUtf8Bytes(directExecution.Value).Length <= maximumResultBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(directMarkdown) <= maximumResultBytes);
+
+            var pipeline = CreatePipeline(
+                events,
+                [tool],
+                sanitizer: new ExpandingCodeExploreSanitizer());
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "code_explore",
+                ArgumentsJson = "{\"query\":\"inspect source\"}",
+                Context = CreateContext(repository) with
+                {
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    WorkspaceId = WorkspaceId.New(),
+                    ModelEffectiveInputBudgetTokens = effectiveInputTokens,
+                },
+            });
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.True(result.IsTruncated);
+            Assert.NotNull(result.ResultJson);
+            Assert.NotNull(result.ModelResultContent);
+            Assert.True(Encoding.UTF8.GetByteCount(result.ResultJson) <= maximumResultBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(result.ModelResultContent) <= maximumResultBytes);
+            _ = JsonSerializer.Deserialize<CodeExploreResult>(result.ResultJson)
+                ?? throw new InvalidOperationException("Expected bounded structured code_explore output.");
+            var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
+            Assert.True(completed.IsTruncated);
+            Assert.Equal(result.ResultJson, completed.ResultJson);
+            Assert.Equal(result.ModelResultContent, completed.ModelResultContent);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>The production adapter returns a guaranteed bounded DTO and Markdown envelope at the model-budget floor.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_FloorModelBudget_BoundsLongQueryResult()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            const int maximumResultBytes = 1024;
+            var tool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new LongQueryResultCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var execution = await tool.ExecuteAsync(
+                new CodeExploreInput { Query = new string('q', 1024) },
+                CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: 1));
+            var result = Assert.IsType<CodeExploreResult>(execution.Value);
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+
+            Assert.True(
+                JsonSerializer.SerializeToUtf8Bytes(result).Length <= maximumResultBytes,
+                "The terminal structured result exceeded the model-budget floor.");
+            Assert.True(
+                Encoding.UTF8.GetByteCount(markdown) <= maximumResultBytes,
+                "The terminal Markdown result exceeded the model-budget floor.");
+            Assert.False(result.Coverage.OutputComplete);
+            Assert.True(execution.IsTruncated);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Artifact continuation origin metadata does not replace the established positional constructor/deconstructor contract.</summary>
+    [Fact]
+    public static void CodeExploreArtifactContinuationTarget_OriginMetadata_PreservesPositionalContract()
+    {
+        var target = new CodeExploreArtifactContinuationTarget(
+            "prompts/worker.md",
+            5,
+            10,
+            new string('a', 64),
+            1,
+            "Continue artifact content.")
+        {
+            OriginSymbolId = "symbol:example.worker",
+            OriginFilePath = "src/Worker.cs",
+            OriginRange = new SourceRange(3, 1, 8, 2),
+        };
+
+        var (filePath, startLine, endLine, digest, generation, reason) = target;
+
+        Assert.Equal("prompts/worker.md", filePath);
+        Assert.Equal(5, startLine);
+        Assert.Equal(10, endLine);
+        Assert.Equal(new string('a', 64), digest);
+        Assert.Equal(1, generation);
+        Assert.Equal("Continue artifact content.", reason);
+        Assert.Equal("symbol:example.worker", target.OriginSymbolId);
+    }
+
+    /// <summary>Markdown impact output reports complete host totals while showing balanced representative evidence.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_ManyImpactItems_RendersRepresentativeSummary()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var tool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new ManyImpactCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
+            var execution = await tool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+
+            Assert.Contains(
+                "6 of 12 callers, 4 of 4 implementations, 20 of 35 projects, and 20 of 40 tests",
+                markdown,
+                StringComparison.Ordinal);
+            Assert.Equal(2, CountOccurrences(markdown, "- **Caller:**"));
+            Assert.Equal(2, CountOccurrences(markdown, "- **Implementation:**"));
+            Assert.Equal(2, CountOccurrences(markdown, "- **Project:**"));
+            Assert.Equal(2, CountOccurrences(markdown, "- **Test:**"));
+            Assert.Contains("42 impact items not shown", markdown, StringComparison.Ordinal);
+            AssertAppearsBefore(markdown, "- **Caller:**", "- **Project:**");
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Impact coverage remains visible when model-budget trimming removes every detailed item.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_ZeroVisibleImpactItems_PreservesCoverage()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var tool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new ZeroItemImpactCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
+            var execution = await tool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+
+            Assert.Contains("**Blast radius — what depends on these**", markdown, StringComparison.Ordinal);
+            Assert.Contains("1 of 1 caller", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("- **Caller:**", markdown, StringComparison.Ordinal);
         }
         finally
         {
@@ -642,6 +873,42 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Long questions retain an artifact replay cursor by dropping optional embedded query text.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_LongQueryArtifactContinuation_RemainsReplayable()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var formattingTool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new LongArtifactContinuationCodeExploreService()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            var query = new string('q', 240);
+            var inputJson = JsonSerializer.Serialize(new { query });
+            var input = (CodeExploreInput)formattingTool.DeserializeInput(inputJson);
+            var execution = await formattingTool.ExecuteAsync(
+                input,
+                CreateCodeExploreExecutionContext(repository));
+            var markdown = execution.ModelResultContent
+                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+            var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
+
+            var artifactService = new CapturingCodeExploreService();
+            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+                new CodeExploreInput { Query = artifactCursor },
+                CreateCodeExploreExecutionContext(repository));
+
+            Assert.Equal(CreateLongArtifactOriginSymbolId(), artifactService.Request?.Query);
+            Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
+            Assert.Equal("prompts/worker.md", Assert.Single(
+                artifactService.Request?.AssociatedArtifactPathAnchors ?? []).Path);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Markdown keeps many follow-up targets readable by bounding embedded retry cursors.</summary>
     [Fact]
     public static async Task CodeExploreOutputFormattingTool_ManyContinuations_BoundsRetryCursorNoise()
@@ -660,9 +927,11 @@ public static class ToolRuntimeTests
                 ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
 
             Assert.Contains("**Follow-up targets**", markdown, StringComparison.Ordinal);
-            Assert.Contains("src/WorkerExtra5.cs", markdown, StringComparison.Ordinal);
+            Assert.Contains("src/WorkerExtra1.cs", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("src/WorkerExtra2.cs", markdown, StringComparison.Ordinal);
             Assert.Equal(3, CountOccurrences(markdown, "Retry query:"));
-            Assert.Contains("retry query cursors omitted", markdown, StringComparison.Ordinal);
+            Assert.Contains("1 retry query cursor omitted", markdown, StringComparison.Ordinal);
+            Assert.Contains("4 follow-up targets not shown", markdown, StringComparison.Ordinal);
 
             var sourceCursor = ExtractContinuationCursor(markdown, "Source");
             var impactCursor = ExtractContinuationCursor(markdown, "Impact");
@@ -2853,7 +3122,8 @@ public static class ToolRuntimeTests
 
     private static ToolExecutionContext CreateCodeExploreExecutionContext(
         string repository,
-        SessionId? sessionId = null)
+        SessionId? sessionId = null,
+        int? modelEffectiveInputBudgetTokens = null)
     {
         return new ToolExecutionContext(
             ToolInvocationId.New(),
@@ -2863,6 +3133,7 @@ public static class ToolRuntimeTests
             {
                 TrustLevel = RepositoryTrustLevel.TrustedBuild,
                 WorkspaceId = WorkspaceId.New(),
+                ModelEffectiveInputBudgetTokens = modelEffectiveInputBudgetTokens,
             });
     }
 
@@ -2915,6 +3186,14 @@ public static class ToolRuntimeTests
         }
 
         return count;
+    }
+
+    private static int CountFenceLines(string markdown)
+    {
+        return markdown
+            .ReplaceLineEndings("\n")
+            .Split('\n')
+            .Count(line => line.StartsWith("```", StringComparison.Ordinal));
     }
 
     private static void AssertAppearsBefore(string text, string first, string second)
@@ -3049,6 +3328,63 @@ public static class ToolRuntimeTests
         }
     }
 
+    private sealed class StaticCodeExploreResultTool : Tool<CodeExploreInput, CodeExploreResult>
+    {
+        private static readonly ToolDefinition _definition = new CodeExploreTool(
+            new NoopCodeExploreService()).Definition;
+
+        private readonly CodeExploreResult _result;
+
+        internal StaticCodeExploreResultTool(CodeExploreResult result)
+        {
+            _result = result;
+        }
+
+        public override ToolDefinition Definition => _definition;
+
+        public override Task<ToolExecution<CodeExploreResult>> ExecuteAsync(
+            CodeExploreInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ToolExecution<CodeExploreResult>(
+                _result,
+                []));
+        }
+
+        protected override void ValidateInput(CodeExploreInput input)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
+        }
+    }
+
+    private sealed class LongQueryResultCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = CreateRichCodeExploreResult() with
+            {
+                QueryInterpretation = new CodeExploreQueryInterpretation(
+                    [],
+                    [],
+                    [],
+                    [],
+                    [request.Query],
+                    [],
+                    []),
+                Omissions = [request.Query],
+            };
+            return Task.FromResult(result);
+        }
+    }
+
     private sealed class ManyContinuationCodeExploreService : ICodeExploreService
     {
         public Task<CodeExploreResult> QueryCodeExploreAsync(
@@ -3060,6 +3396,48 @@ public static class ToolRuntimeTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateManyContinuationCodeExploreResult());
+        }
+    }
+
+    private sealed class ManyImpactCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(CreateManyImpactCodeExploreResult());
+        }
+    }
+
+    private sealed class ZeroItemImpactCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(CreateZeroItemImpactCodeExploreResult());
+        }
+    }
+
+    private sealed class LongArtifactContinuationCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(CreateLongArtifactContinuationCodeExploreResult());
         }
     }
 
@@ -3228,7 +3606,7 @@ public static class ToolRuntimeTests
                     CodeExploreArtifactEvidenceLevel.CompilerProven,
                     ["Selected from Worker source evidence."],
                     artifactContent,
-                    []),
+                    ["L5-L10 omitted by artifact character bounds."]),
                 new CodeExploreAssociatedArtifact(
                     "prompts/worker.unreadable.md",
                     CodeExploreArtifactMediaKind.Markdown,
@@ -3266,6 +3644,51 @@ public static class ToolRuntimeTests
                     "Retry with this explicit associated artifact path anchor and digest to continue omitted artifact content.")]));
     }
 
+    private static CodeExploreResult CreateSanitizerExpansionCodeExploreResult()
+    {
+        var symbol = new SemanticSymbolIdentity("symbol:example.worker", "Worker", "class");
+        var location = new CodeExploreLocation(
+            "Example.Project",
+            "net10.0",
+            "src/Worker.cs",
+            new SourceRange(1, 1, 48, 1),
+            IsGenerated: false,
+            IsLinked: false);
+        var lines = Enumerable.Range(1, 48)
+            .Select(line => $"{line}: {SanitizerExpansionMarker}")
+            .ToArray();
+        return new CodeExploreResult(
+            1,
+            SemanticConfidenceLevel.FullSemantic,
+            [new CodeExploreAnchorResolution(
+                "Worker",
+                CodeExploreAnchorKind.SymbolName,
+                CodeExploreResolutionOutcome.Resolved,
+                symbol,
+                location,
+                [],
+                "Resolved exact Worker anchor.")],
+            [new CodeExploreFileSection(
+                location.FilePath,
+                location.ProjectName,
+                location.TargetFramework,
+                [symbol],
+                new CodeExploreSourceRange(
+                    location.Range,
+                    lines,
+                    "file-sha256",
+                    "range-sha256",
+                    CodeExploreSourceCompleteness.Complete,
+                    [],
+                    null),
+                IsGenerated: false,
+                IsLinked: false,
+                "Selected exact Worker declaration.")],
+            new CodeExploreCoverage(true, true, true, true, []),
+            [],
+            []);
+    }
+
     private static CodeExploreResult CreateManyContinuationCodeExploreResult()
     {
         var result = CreateRichCodeExploreResult();
@@ -3286,6 +3709,114 @@ public static class ToolRuntimeTests
         return result with { ContinuationTargets = continuations };
     }
 
+    private static CodeExploreResult CreateManyImpactCodeExploreResult()
+    {
+        var result = CreateRichCodeExploreResult();
+        var location = result.ResolvedAnchors[0].SelectedLocation
+            ?? throw new InvalidOperationException("Expected a resolved source location.");
+        var anchorSymbolId = result.ResolvedAnchors[0].SelectedSymbol?.Id
+            ?? throw new InvalidOperationException("Expected a resolved symbol.");
+        var items = new List<CodeExploreBlastRadiusItem>();
+        for (var index = 0; index < 6; index++)
+        {
+            items.Add(new CodeExploreBlastRadiusItem(
+                anchorSymbolId,
+                ImpactKind.Caller,
+                new SemanticSymbolIdentity($"symbol:caller.{index}", $"Caller{index}.Run", "method"),
+                location,
+                location.ProjectName,
+                "Compiler-resolved caller evidence."));
+        }
+
+        for (var index = 0; index < 4; index++)
+        {
+            items.Add(new CodeExploreBlastRadiusItem(
+                anchorSymbolId,
+                ImpactKind.Implementation,
+                new SemanticSymbolIdentity($"symbol:implementation.{index}", $"Worker{index}.Run", "method"),
+                location,
+                location.ProjectName,
+                "Compiler-resolved implementation evidence."));
+        }
+
+        for (var index = 0; index < 20; index++)
+        {
+            items.Add(new CodeExploreBlastRadiusItem(
+                anchorSymbolId,
+                ImpactKind.Project,
+                null,
+                null,
+                $"Example.Dependent{index}",
+                "Dependent project evidence."));
+        }
+
+        for (var index = 0; index < 20; index++)
+        {
+            items.Add(new CodeExploreBlastRadiusItem(
+                anchorSymbolId,
+                ImpactKind.Test,
+                null,
+                null,
+                $"Example.Dependent{index}.Tests",
+                "Dependent test project evidence."));
+        }
+
+        var existingBlastRadius = result.BlastRadius
+            ?? throw new InvalidOperationException("Expected blast-radius data.");
+        return result with
+        {
+            BlastRadius = new CodeExploreBlastRadius(
+                items,
+                ReturnedCallers: 6,
+                TotalCallers: 12,
+                ReturnedImplementations: 4,
+                TotalImplementations: 4,
+                ReturnedProjects: 20,
+                TotalProjects: 35,
+                ReturnedTests: 20,
+                TotalTests: 40,
+                Omissions: existingBlastRadius.Omissions,
+                ContinuationTargets: existingBlastRadius.ContinuationTargets),
+        };
+    }
+
+    private static CodeExploreResult CreateLongArtifactContinuationCodeExploreResult()
+    {
+        var result = CreateRichCodeExploreResult();
+        var artifacts = result.AssociatedArtifacts
+            ?? throw new InvalidOperationException("Expected associated artifacts.");
+        var artifactCoverage = result.ArtifactCoverage
+            ?? throw new InvalidOperationException("Expected artifact coverage.");
+        var continuation = artifactCoverage.ContinuationTargets[0] with
+        {
+            OriginSymbolId = CreateLongArtifactOriginSymbolId(),
+            OriginFilePath = "src/TargetWorker.cs",
+            OriginRange = new SourceRange(10, 1, 20, 1),
+        };
+        return result with
+        {
+            AssociatedArtifacts =
+            [
+                artifacts[0] with { OriginSymbolId = "symbol:legacy-artifact-origin" },
+                .. artifacts.Skip(1),
+            ],
+            ArtifactCoverage = artifactCoverage with { ContinuationTargets = [continuation] },
+        };
+    }
+
+    private static CodeExploreResult CreateZeroItemImpactCodeExploreResult()
+    {
+        var result = CreateRichCodeExploreResult();
+        var blastRadius = result.BlastRadius
+            ?? throw new InvalidOperationException("Expected blast-radius data.");
+        return result with { BlastRadius = blastRadius with { Items = [] } };
+    }
+
+    private static string CreateLongArtifactOriginSymbolId()
+    {
+        return "symbol:example.long-artifact-origin." + new string('x', 180);
+    }
+
     private sealed class StubCSharpScriptEngine : ICSharpScriptEngine
     {
         public Task<CSharpScriptOutput> ExecuteAsync(
@@ -3303,6 +3834,19 @@ public static class ToolRuntimeTests
         public string Sanitize(string value)
         {
             return value;
+        }
+    }
+
+    private sealed class ExpandingCodeExploreSanitizer : IOutputSanitizer
+    {
+        private static readonly string _replacement = $"[REDACTED:{new string('x', 96)}]";
+
+        public string Sanitize(string value)
+        {
+            return value.Replace(
+                SanitizerExpansionMarker,
+                _replacement,
+                StringComparison.Ordinal);
         }
     }
 

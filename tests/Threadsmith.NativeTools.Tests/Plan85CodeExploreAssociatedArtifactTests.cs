@@ -107,6 +107,147 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         Assert.False(coverage.TimeLimitReached);
     }
 
+    /// <summary>Auto artifact discovery keeps selected-source evidence without adding broad project configuration.</summary>
+    [Fact]
+    public async Task CodeExplore_AssociatedArtifactsAuto_OmitsUnrequestedProjectArtifacts()
+    {
+        await using var fixture = await CodeExploreArtifactFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "show BuildWelcomeResponse",
+                ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
+                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Auto,
+                Limits = CreateWideArtifactLimits(),
+            },
+            fixture.CreateArtifactReader(),
+            TestContext.Current.CancellationToken);
+
+        var artifacts = RequireArtifacts(result);
+        Assert.Contains(artifacts, artifact => artifact.FilePath == "src/App/Prompts/Welcome.prompt"
+            && artifact.Relationship == CodeExploreArtifactRelationshipKind.PromptReference);
+        Assert.Contains(artifacts, artifact => artifact.LogicalName == "FeatureFlags:WelcomeMode");
+        Assert.DoesNotContain(artifacts, artifact => artifact.Relationship is
+            CodeExploreArtifactRelationshipKind.AdditionalDocument
+            or CodeExploreArtifactRelationshipKind.AnalyzerConfiguration
+            or CodeExploreArtifactRelationshipKind.ProjectItem
+            or CodeExploreArtifactRelationshipKind.ProjectResource);
+    }
+
+    /// <summary>Ordinary source vocabulary does not opt Auto mode into project-wide artifact discovery.</summary>
+    [Fact]
+    public async Task CodeExplore_AssociatedArtifactsAuto_DoesNotTreatBareMediaOrProjectTermsAsArtifactFocus()
+    {
+        await using var fixture = await CodeExploreArtifactFixture.CreateAsync();
+        string[] queries =
+        [
+            "Explain JSON serialization in this project",
+            "Explain System.Text.Json serialization in this project",
+            "Explain system.text.json serialization in this project",
+            "Explain System.Xml serialization in this project",
+            "Explain system.xml serialization in this project",
+            "Explain Newtonsoft.Json converters in this project",
+            "Explain newtonsoft.json converters in this project",
+            "Explain Microsoft.Extensions.Http handlers in this project",
+            "Explain microsoft.extensions.http handlers in this project",
+            "Explain Company.Product.Schema declarations in this project",
+            "Explain Foo.Bar.Template declarations in this project",
+            "Explain Company.Product_Schema.Json declarations in this project",
+            "Explain global::Company.Product_Schema.Json declarations in this project",
+            "Explain Markdown rendering in this project",
+            "Explain XML serialization in this project",
+            "Explain txt processing in this project",
+        ];
+
+        foreach (var query in queries)
+        {
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = query,
+                    ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
+                    AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Auto,
+                    Limits = CreateWideArtifactLimits(),
+                },
+                fixture.CreateArtifactReader(),
+                TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(result.AssociatedArtifacts ?? [], artifact => artifact.Relationship is
+                CodeExploreArtifactRelationshipKind.AdditionalDocument
+                or CodeExploreArtifactRelationshipKind.AnalyzerConfiguration
+                or CodeExploreArtifactRelationshipKind.ProjectItem
+                or CodeExploreArtifactRelationshipKind.ProjectResource);
+        }
+    }
+
+    /// <summary>Explicit artifact filenames opt Auto mode into the matching project-wide evidence.</summary>
+    [Theory]
+    [InlineData(".editorconfig", "src/App/.editorconfig", CodeExploreArtifactRelationshipKind.AnalyzerConfiguration)]
+    [InlineData("App.csproj", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    [InlineData("APP.CSPROJ", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    [InlineData("Guide.md", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument)]
+    [InlineData("GUIDE.MD", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument)]
+    [InlineData("Welcome.resx", "src/App/Resources/Welcome.resx", CodeExploreArtifactRelationshipKind.ProjectResource)]
+    [InlineData("feature-flags.yaml", "src/App/Config/feature-flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    [InlineData("feature_flags.yaml", "src/App/Config/feature_flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    [InlineData("settings.jsonc", "src/App/Config/settings.jsonc", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    [InlineData("appsettings.Development.json", "src/App/appsettings.Development.json", CodeExploreArtifactRelationshipKind.ProjectItem)]
+    public async Task CodeExplore_AssociatedArtifactsAuto_RecognizesExplicitArtifactFilenameIntent(
+        string queryArtifact,
+        string expectedPath,
+        CodeExploreArtifactRelationshipKind expectedRelationship)
+    {
+        await using var fixture = await CodeExploreArtifactFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = $"show BuildWelcomeResponse and {queryArtifact}",
+                ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
+                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Auto,
+                Limits = CreateWideArtifactLimits(),
+            },
+            fixture.CreateArtifactReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(RequireArtifacts(result), artifact => artifact.FilePath == expectedPath
+            && artifact.Relationship == expectedRelationship);
+    }
+
+    /// <summary>Project artifact discovery emits one physical artifact even when several selected projects load it.</summary>
+    [Fact]
+    public async Task CodeExplore_AssociatedArtifactsEnabled_DeduplicatesSharedPhysicalArtifactsAcrossPathCasing()
+    {
+        await using var fixture = await CodeExploreArtifactFixture.CreateAsync(includeSharedAnalyzerConfigProject: true);
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "show both declarations and their project configuration artifacts",
+                ExactSymbolAnchors =
+                [
+                    "ArtifactSample.ResponseBuilder.BuildWelcomeResponse",
+                    "ArtifactSample.SharedArtifactConsumer.Describe",
+                ],
+                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
+                Limits = CreateWideArtifactLimits(),
+            },
+            fixture.CreateArtifactReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.FileSections.Count);
+        var sharedAnalyzerConfigurations = RequireArtifacts(result)
+            .Where(artifact => artifact.FilePath == "src/App/.editorconfig"
+                && artifact.Relationship == CodeExploreArtifactRelationshipKind.AnalyzerConfiguration)
+            .ToArray();
+        _ = Assert.Single(sharedAnalyzerConfigurations);
+    }
+
     /// <summary>Default artifact limits prioritize selected-source references over broad project metadata.</summary>
     [Fact]
     public async Task CodeExplore_AssociatedArtifactsDefaultLimit_PrioritizesSelectedSourceEvidence()
@@ -287,6 +428,54 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         Assert.True(continuation.EndLine >= continuation.StartLine);
         Assert.Equal(bounded.WorkspaceGeneration, continuation.WorkspaceGeneration);
         AssertSha256(continuation.ExpectedFileSha256);
+        Assert.NotNull(continuation.OriginSymbolId);
+        Assert.Equal("src/App/ResponseBuilder.cs", continuation.OriginFilePath);
+        Assert.NotNull(continuation.OriginRange);
+    }
+
+    /// <summary>An artifact omitted before projection retains enough source identity for a replayable cursor.</summary>
+    [Fact]
+    public async Task CodeExplore_OmittedAssociatedArtifactContinuation_ReplaysThroughRealService()
+    {
+        await using var fixture = await CodeExploreArtifactFixture.CreateAsync();
+        var service = new BoundedArtifactReplayService(
+            fixture.Service,
+            fixture.CreateArtifactReader());
+        var formattingTool = new CodeExploreOutputFormattingTool(
+            new CodeExploreTool(service),
+            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+        var context = CreateToolExecutionContext(fixture);
+        var firstExecution = await formattingTool.ExecuteAsync(
+            new CodeExploreInput { Query = new string('q', 240) },
+            context,
+            TestContext.Current.CancellationToken);
+        var firstResult = Assert.IsType<CodeExploreResult>(firstExecution.Value);
+        var returnedPaths = (firstResult.AssociatedArtifacts ?? [])
+            .Select(artifact => artifact.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var omittedTargets = (firstResult.ArtifactCoverage?.ContinuationTargets ?? [])
+            .Where(target => !returnedPaths.Contains(target.FilePath))
+            .ToArray();
+        Assert.NotEmpty(omittedTargets);
+        var omittedTarget = omittedTargets[0];
+        Assert.NotNull(omittedTarget.OriginSymbolId);
+        Assert.NotNull(omittedTarget.OriginFilePath);
+        var markdown = firstExecution.ModelResultContent
+            ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+        var cursor = ExtractContinuationCursor(markdown);
+
+        var replayExecution = await formattingTool.ExecuteAsync(
+            new CodeExploreInput { Query = cursor },
+            context,
+            TestContext.Current.CancellationToken);
+
+        var replayRequest = service.LastRequest
+            ?? throw new InvalidOperationException("Expected the replay request.");
+        Assert.Equal(omittedTarget.OriginSymbolId, Assert.Single(replayRequest.SymbolIds));
+        Assert.Equal(omittedTarget.FilePath, Assert.Single(replayRequest.AssociatedArtifactPathAnchors).Path);
+        var replayResult = Assert.IsType<CodeExploreResult>(replayExecution.Value);
+        Assert.Contains(replayResult.AssociatedArtifacts ?? [], artifact => artifact.FilePath == omittedTarget.FilePath
+            && artifact.Content is not null);
     }
 
     /// <summary>Exact-name lookup is bounded across many distinct missing file-name literals.</summary>
@@ -528,6 +717,36 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         _ = JsonDocument.Parse(schema);
     }
 
+    private static ToolExecutionContext CreateToolExecutionContext(CodeExploreArtifactFixture fixture)
+    {
+        return new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = fixture.RepositoryPath,
+                WorkspaceId = fixture.WorkspaceId,
+                TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                ApprovedRoots = ["."],
+                RequestedBy = "plan-85-tests",
+            });
+    }
+
+    private static string ExtractContinuationCursor(string markdown)
+    {
+        const string prefix = "code_explore:continue:";
+        var start = markdown.IndexOf(prefix, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected an artifact continuation cursor.");
+        var end = start + prefix.Length;
+        while (end < markdown.Length && (char.IsAsciiLetterOrDigit(markdown[end]) || markdown[end] is '-' or '_'))
+        {
+            end++;
+        }
+
+        return markdown[start..end];
+    }
+
     private static CodeExploreLimits CreateWideArtifactLimits(
         int maximumAssociatedArtifacts = 16,
         int maximumAssociatedArtifactCharacters = 50_000,
@@ -619,15 +838,19 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
 
         public static async Task<CodeExploreArtifactFixture> CreateAsync(
             bool includeSensitiveProjectItem = false,
-            int extraMissingExactNameLiterals = 0)
+            int extraMissingExactNameLiterals = 0,
+            bool includeSharedAnalyzerConfigProject = false)
         {
             var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan85-{Guid.NewGuid():N}");
             Directory.CreateDirectory(repositoryPath);
-            Write(repositoryPath, "Repo.slnx", """
-                <Solution>
-                  <Project Path="src/App/App.csproj" />
-                </Solution>
-                """);
+            var sharedProjectEntry = includeSharedAnalyzerConfigProject
+                ? "  <Project Path=\"src/Shared/Shared.csproj\" />\n"
+                : string.Empty;
+            Write(repositoryPath, "Repo.slnx", string.Concat(
+                "<Solution>\n",
+                "  <Project Path=\"src/App/App.csproj\" />\n",
+                sharedProjectEntry,
+                "</Solution>\n"));
             var sensitiveItem = includeSensitiveProjectItem
                 ? "    <Content Include=\"secrets/Hidden.prompt\" />\n"
                 : string.Empty;
@@ -642,7 +865,10 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                     <AdditionalFiles Include="Additional/Guide.md" />
                     <EditorConfigFiles Include=".editorconfig" />
                     <None Include="appsettings.json" />
+                    <None Include="appsettings.Development.json" />
+                    <None Include="Config/settings.jsonc" />
                     <Content Include="Config/feature-flags.yaml" />
+                    <Content Include="Config/feature_flags.yaml" />
                     <EmbeddedResource Include="Resources/Welcome.resx" />
                 """,
                 sensitiveItem,
@@ -724,8 +950,22 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                   "FeatureFlags": { "WelcomeMode": "friendly" }
                 }
                 """);
+            Write(repositoryPath, "src/App/appsettings.Development.json", """
+                {
+                  "Features": { "WelcomeEnabled": false }
+                }
+                """);
             Write(repositoryPath, "src/App/Config/feature-flags.yaml", """
                 welcomeMode: friendly
+                """);
+            Write(repositoryPath, "src/App/Config/feature_flags.yaml", """
+                welcomeMode: careful
+                """);
+            Write(repositoryPath, "src/App/Config/settings.jsonc", """
+                {
+                  // Fixture comment
+                  "welcomeMode": "friendly"
+                }
                 """);
             Write(repositoryPath, "src/App/Resources/Welcome.resx", """
                 <?xml version="1.0" encoding="utf-8"?>
@@ -734,6 +974,32 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             Write(repositoryPath, "src/App/Templates/SharedTemplate.prompt", """
                 Shared template
                 """);
+            if (includeSharedAnalyzerConfigProject)
+            {
+                var sharedEditorConfigInclude = OperatingSystem.IsWindows()
+                    ? "../APP/.EDITORCONFIG"
+                    : "../App/.editorconfig";
+                Write(repositoryPath, "src/Shared/Shared.csproj", $"""
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup>
+                        <TargetFramework>net10.0</TargetFramework>
+                        <Nullable>enable</Nullable>
+                      </PropertyGroup>
+                      <ItemGroup>
+                        <EditorConfigFiles Include="{sharedEditorConfigInclude}" />
+                      </ItemGroup>
+                    </Project>
+                    """);
+                Write(repositoryPath, "src/Shared/SharedArtifactConsumer.cs", """
+                    namespace ArtifactSample;
+
+                    public static class SharedArtifactConsumer
+                    {
+                        public static string Describe() => "shared";
+                    }
+                    """);
+            }
+
             if (includeSensitiveProjectItem)
             {
                 Write(repositoryPath, "src/App/secrets/Hidden.prompt", "do not expose");
@@ -977,7 +1243,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 return true;
             }
 
-            if (extension.Equals(".json", StringComparison.OrdinalIgnoreCase))
+            if (extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".jsonc", StringComparison.OrdinalIgnoreCase))
             {
                 mediaKind = fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)
                     ? CodeExploreArtifactMediaKind.Configuration
@@ -1038,6 +1305,46 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         private static StringComparison PathComparison => OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
+    }
+
+    private sealed class BoundedArtifactReplayService : ICodeExploreService
+    {
+        private readonly AdvancedSemanticQueryService _service;
+        private readonly TestCodeExploreArtifactReader _reader;
+
+        internal BoundedArtifactReplayService(
+            AdvancedSemanticQueryService service,
+            TestCodeExploreArtifactReader reader)
+        {
+            _service = service;
+            _reader = reader;
+        }
+
+        internal CodeExploreRequest? LastRequest { get; private set; }
+
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            var effectiveRequest = request.AssociatedArtifactPathAnchors.Count == 0
+                ? request with
+                {
+                    ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
+                    AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
+                    Limits = CreateWideArtifactLimits(maximumAssociatedArtifacts: 1),
+                }
+                : request;
+            LastRequest = effectiveRequest;
+            return _service.QueryCodeExploreAsync(
+                workspaceId,
+                effectiveRequest,
+                _reader,
+                cancellationToken,
+                visibleSourceFrontier);
+        }
     }
 
     private sealed class ArtifactReaderInspectingService : ICodeExploreService

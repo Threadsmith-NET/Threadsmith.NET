@@ -490,6 +490,22 @@ public sealed record ToolExecutionEnvelope(
     long? AuthoritativeElapsedMilliseconds = null,
     string? ModelResultContent = null);
 
+/// <summary>Applies a tool-specific model-output boundary after centralized sanitization.</summary>
+internal interface IPostSanitizationToolOutputBoundary
+{
+    /// <summary>Bounds sanitized structured and alternate model-visible content for one invocation.</summary>
+    PostSanitizationToolOutput BoundSanitizedOutput(
+        string resultJson,
+        string? modelResultContent,
+        ToolInvocationContext context);
+}
+
+/// <summary>Sanitized tool output after applying a tool-specific model boundary.</summary>
+internal sealed record PostSanitizationToolOutput(
+    string ResultJson,
+    string? ModelResultContent,
+    bool WasTruncated);
+
 /// <summary>Host-owned network authorization that can admit exact transient claims independently of repository configuration.</summary>
 internal interface IHostAuthorizedNetworkClaims
 {

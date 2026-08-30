@@ -808,7 +808,17 @@ public sealed record CodeExploreArtifactContinuationTarget(
     int? EndLine,
     string? ExpectedFileSha256,
     long? WorkspaceGeneration,
-    string Reason);
+    string Reason)
+{
+    /// <summary>Semantic source symbol that established the artifact relationship, when known.</summary>
+    public string? OriginSymbolId { get; init; }
+
+    /// <summary>Repository-relative semantic source path that established the artifact relationship, when known.</summary>
+    public string? OriginFilePath { get; init; }
+
+    /// <summary>Semantic source range that established the artifact relationship, when known.</summary>
+    public SourceRange? OriginRange { get; init; }
+}
 
 /// <summary>One non-C# artifact or logical prompt/configuration reference associated with a selected C# semantic source anchor.</summary>
 public sealed record CodeExploreAssociatedArtifact(

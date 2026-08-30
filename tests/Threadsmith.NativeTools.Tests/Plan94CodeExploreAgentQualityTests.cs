@@ -2,6 +2,7 @@ namespace Threadsmith.NativeTools.Tests;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
@@ -12,6 +13,18 @@ using Xunit;
 /// <summary>Verifies Plan-94 natural-language code-explore ranking for agent semantic tool questions.</summary>
 public sealed class Plan94CodeExploreAgentQualityTests
 {
+    private static readonly string[] _semanticToolFamilyMarkers =
+    [
+        "CallHierarchy",
+        "CodeExplore",
+        "CSharpPattern",
+        "FindImplementations",
+        "FindReferences",
+        "FindSymbol",
+        "GeneratedCode",
+        "SymbolImpact",
+    ];
+
     /// <summary>Short capability questions select the agent-facing semantic tool surface instead of one helper cluster.</summary>
     [Fact]
     public async Task CodeExplore_ShortSemanticToolQuestion_SelectsToolSurface()
@@ -23,7 +36,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             new CodeExploreRequest
             {
                 Query = "Explain how Threadsmith's semantic tools can help make agentic coding more efficient.",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
@@ -48,20 +61,20 @@ public sealed class Plan94CodeExploreAgentQualityTests
                 Query = "How do Threadsmith semantic tools improve agentic coding efficiency? "
                     + "Identify code_explore, symbol lookup, references, implementations, impact analysis, "
                     + "and compiler-aware query workflows.",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
             TestContext.Current.CancellationToken);
 
-        AssertSelectedToolType(result, "Threadsmith.Tools.CodeExploreTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindSymbolTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindReferencesTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindImplementationsTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.SymbolImpactTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.CallHierarchyTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.CSharpPatternSearchTool");
-        AssertSelectedToolDefinition(result);
+        AssertSelectedToolFamily(result, "CodeExploreTool");
+        AssertSelectedToolFamily(result, "FindSymbolTool");
+        AssertSelectedToolFamily(result, "FindReferencesTool");
+        AssertSelectedToolFamily(result, "FindImplementationsTool");
+        AssertSelectedToolFamily(result, "SymbolImpactTool");
+        AssertSelectedToolFamily(result, "CallHierarchyTool");
+        AssertSelectedToolFamily(result, "CSharpPatternSearchTool");
+        AssertSelectedToolFamily(result, "GeneratedCodeTool");
         AssertSelectedHostComposition(result);
         AssertNoNoisyHostComposition(result);
         AssertPrivateHelperClusterIsBounded(result);
@@ -83,7 +96,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             new CodeExploreRequest
             {
                 Query = "Explain semantic tools around FormatWidget",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 1, maximumFiles: 1),
             },
             fixture.CreateSourceReader(),
@@ -103,7 +116,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             new CodeExploreRequest
             {
                 Query = "Explain semantic tools around NormalizeWidget ValidateWidget RenderWidget",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 2),
             },
             fixture.CreateSourceReader(),
@@ -125,7 +138,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             new CodeExploreRequest
             {
                 Query = "find references and implementations for WidgetService",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
             },
             fixture.CreateSourceReader(),
@@ -136,7 +149,111 @@ public sealed class Plan94CodeExploreAgentQualityTests
             summary.Selected
             && summary.FilePath?.StartsWith("src/Threadsmith.Tools/", StringComparison.Ordinal) == true);
         Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
-            summary.Reason.Contains("agent-facing tool/capability", StringComparison.Ordinal));
+            IsToolCapabilitySelectionReason(summary.Reason));
+    }
+
+    /// <summary>Generic tool/workflow prose falls back to repository declarations instead of forcing semantic-tool families.</summary>
+    [Theory]
+    [InlineData("Explain how deployment tools improve workflow efficiency.")]
+    [InlineData("Explain how the deployment tool implementation works.")]
+    public async Task CodeExplore_GenericToolWorkflowQuestion_SelectsRepositoryDeclaration(string query)
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = query,
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        AssertSelectedSymbolContaining(result, "DeploymentWorkflow.CreateDeploymentPlan", "Method");
+        Assert.DoesNotContain(result.Omissions, omission =>
+            omission.Contains("No matching C# declarations", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Each advertised semantic-tool id directly activates its matching tool specialization.</summary>
+    [Theory]
+    [InlineData("code_explore", "CodeExploreTool")]
+    [InlineData("find_symbol", "FindSymbolTool")]
+    [InlineData("find_references", "FindReferencesTool")]
+    [InlineData("FIND_REFERENCES", "FindReferencesTool")]
+    [InlineData("find_implementations", "FindImplementationsTool")]
+    [InlineData("symbol_impact", "SymbolImpactTool")]
+    [InlineData("call_hierarchy", "CallHierarchyTool")]
+    [InlineData("csharp_pattern_search", "CSharpPatternSearchTool")]
+    [InlineData("generated_code_query", "GeneratedCodeTool")]
+    public async Task CodeExplore_ExactSemanticToolId_SelectsMatchingDefinition(
+        string toolId,
+        string containingTypeName)
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = toolId,
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        AssertSelectedToolFamily(result, containingTypeName);
+        AssertNoOtherSelectedSemanticToolFamily(result, containingTypeName);
+    }
+
+    /// <summary>Generic prose around one exact tool id does not reserve another semantic family.</summary>
+    [Theory]
+    [InlineData("Explain the find_references tool implementation")]
+    [InlineData("Explain the semantic find_references tool")]
+    public async Task CodeExplore_ExactSemanticToolId_IgnoresAmbiguousCapabilityContext(string query)
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = query,
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        AssertSelectedToolFamily(result, "FindReferencesTool");
+        AssertNoOtherSelectedSemanticToolFamily(result, "FindReferencesTool");
+    }
+
+    /// <summary>A known tool id retains a separately named semantic-tool family.</summary>
+    [Fact]
+    public async Task CodeExplore_ExactSemanticToolId_PreservesStrongAdditionalFamily()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Compare find_references and call hierarchy",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        AssertSelectedToolFamily(result, "FindReferencesTool");
+        AssertSelectedToolFamily(result, "CallHierarchyTool");
+        AssertNoOtherSelectedSemanticToolFamily(
+            result,
+            "FindReferencesTool",
+            "CallHierarchyTool");
     }
 
     /// <summary>Explicit flow and impact modes keep their graph profiles even when the query mentions semantic tools.</summary>
@@ -151,7 +268,9 @@ public sealed class Plan94CodeExploreAgentQualityTests
             fixture.WorkspaceId,
             new CodeExploreRequest
             {
-                Query = "Explain semantic tools and call hierarchy flow for AdvancedSemanticQueryService",
+                Query = mode == CodeExploreMode.Flow
+                    ? "trace FindSymbolAsync to FindDispatchImplementationSymbolsAsync"
+                    : "impact of changing FindSymbolAsync",
                 Mode = mode,
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
             },
@@ -159,7 +278,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
-            summary.Reason.Contains("agent-facing tool/capability", StringComparison.Ordinal));
+            IsToolCapabilitySelectionReason(summary.Reason));
         Assert.DoesNotContain(result.Omissions, omission =>
             omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
     }
@@ -185,7 +304,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
         Assert.NotEmpty(result.CandidateSummaries ?? []);
         Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
-            summary.Reason.Contains("agent-facing tool/capability", StringComparison.Ordinal));
+            IsToolCapabilitySelectionReason(summary.Reason));
         Assert.DoesNotContain(result.Omissions, omission =>
             omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
     }
@@ -201,7 +320,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             new CodeExploreRequest
             {
                 Query = "Threadsmith.DotNet.AdvancedSemanticQueryService.FindDispatchImplementationSymbolsAsync",
-                Mode = CodeExploreMode.Survey,
+                Mode = CodeExploreMode.Auto,
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
             },
             fixture.CreateSourceReader(),
@@ -217,6 +336,134 @@ public sealed class Plan94CodeExploreAgentQualityTests
             section.FilePath == "src/Threadsmith.DotNet/AdvancedSemanticQueryService.cs"
             && section.Source.NumberedLines.Any(line =>
                 line.Contains("FindDispatchImplementationSymbolsAsync", StringComparison.Ordinal)));
+    }
+
+    /// <summary>A mixed capability question uses its default source budget for exact, contract, and registration evidence.</summary>
+    [Fact]
+    public async Task CodeExplore_MixedCapabilityAndExactSymbolQuestion_ReturnsCompactQuestionSpecificEvidence()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Explain how the semantic code exploration tools work, and specifically show me "
+                    + "FindDispatchImplementationSymbolsAsync.",
+                Mode = CodeExploreMode.Auto,
+                Limits = new CodeExploreLimits { MaximumFiles = 8 },
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(result.FileSections);
+        Assert.Contains(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol?.DisplayName.Contains(
+                "FindDispatchImplementationSymbolsAsync",
+                StringComparison.Ordinal) == true
+            && summary.Reason.Contains("explicitly identifies", StringComparison.Ordinal));
+        Assert.Null(result.Flow);
+        Assert.Null(result.BlastRadius);
+        Assert.Contains(result.FileSections, section =>
+            section.FilePath == "src/Threadsmith.App/HostFoundation.cs"
+            && section.SemanticIdentities.Any(symbol =>
+                symbol.DisplayName.Contains("BuildSemanticToolCapabilities", StringComparison.Ordinal)
+                || symbol.DisplayName.Contains("RegisterAgentSemanticToolDefinitions", StringComparison.Ordinal)));
+        Assert.Contains(result.FileSections, section =>
+            section.SemanticIdentities.Any(symbol => symbol.Kind == "Field"
+                && symbol.DisplayName.Contains("CodeExploreTool.", StringComparison.Ordinal))
+            && section.Source.NumberedLines.Any(line => line.Contains("code_explore", StringComparison.Ordinal)));
+        Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol is { Kind: "NamedType" } symbol
+            && symbol.DisplayName.EndsWith("Tool", StringComparison.Ordinal));
+        Assert.All(
+            (result.CandidateSummaries ?? []).Where(summary => summary.Selected),
+            summary =>
+            {
+                Assert.DoesNotContain("tier", summary.Reason, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("DistinctiveIdentifier", summary.Reason, StringComparison.Ordinal);
+                Assert.DoesNotContain("CoLocated", summary.Reason, StringComparison.Ordinal);
+            });
+    }
+
+    /// <summary>The production adapter and Markdown decorator preserve the strongest evidence under a model budget.</summary>
+    [Fact]
+    public async Task CodeExploreTool_MixedCapabilityAndExactSymbolQuestion_RendersCompactEvidence()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        var tool = new CodeExploreOutputFormattingTool(
+            new CodeExploreTool(fixture.Service),
+            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+        var query = "Explain how the semantic code exploration tools work, and specifically show me "
+            + "FindDispatchImplementationSymbolsAsync.";
+        const int modelEffectiveInputBudgetTokens = 6_000;
+        const int maximumSerializedResultBytes = modelEffectiveInputBudgetTokens * 3;
+        var unbounded = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest { Query = query },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+        Assert.True(
+            JsonSerializer.SerializeToUtf8Bytes(unbounded).Length > maximumSerializedResultBytes,
+            "The fixture must exceed the model-derived result ceiling so this test exercises trimming.");
+
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = query, MaxFiles = 8 },
+            fixture.CreateToolExecutionContext(modelEffectiveInputBudgetTokens),
+            TestContext.Current.CancellationToken);
+
+        var result = Assert.IsType<CodeExploreResult>(execution.Value);
+        var markdown = execution.ModelResultContent
+            ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+        Assert.Null(result.Flow);
+        Assert.Null(result.BlastRadius);
+        Assert.Contains("FindDispatchImplementationSymbolsAsync", markdown, StringComparison.Ordinal);
+        var boundedResultBytes = JsonSerializer.SerializeToUtf8Bytes(result).Length;
+        var sectionSummary = string.Join(
+            Environment.NewLine,
+            result.FileSections.Select(section => string.Join(
+                ", ",
+                section.SemanticIdentities.Select(symbol => symbol.DisplayName))));
+        Assert.True(
+            markdown.Contains("BuildSemanticToolCapabilities", StringComparison.Ordinal)
+                || markdown.Contains("RegisterAgentSemanticToolDefinitions", StringComparison.Ordinal),
+            $"Expected host composition evidence in the model-visible output. Bounded bytes: {boundedResultBytes}.{Environment.NewLine}{sectionSummary}");
+        Assert.Contains("code_explore", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("public sealed class CodeExploreTool", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("DistinctiveIdentifier", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoLocated", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("**Blast radius", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("**Call flow**", markdown, StringComparison.Ordinal);
+        var selectedEvidenceHeadingIndex = markdown.IndexOf("**Selected evidence**", StringComparison.Ordinal);
+        var sourceHeadingIndex = markdown.IndexOf("**Source Code**", StringComparison.Ordinal);
+        Assert.True(selectedEvidenceHeadingIndex >= 0);
+        Assert.True(sourceHeadingIndex > selectedEvidenceHeadingIndex);
+        var selectedEvidence = markdown[selectedEvidenceHeadingIndex..sourceHeadingIndex];
+        var previousEvidenceIndex = -1;
+        foreach (var section in result.FileSections)
+        {
+            var identity = section.SemanticIdentities.FirstOrDefault();
+            if (identity is null)
+            {
+                continue;
+            }
+
+            var evidenceIndex = selectedEvidence.IndexOf(identity.DisplayName, StringComparison.Ordinal);
+            Assert.True(
+                evidenceIndex > previousEvidenceIndex,
+                $"Selected evidence did not preserve emitted source order for {identity.DisplayName}.");
+            previousEvidenceIndex = evidenceIndex;
+        }
+
+        Assert.True(
+            boundedResultBytes <= maximumSerializedResultBytes,
+            "The tool result exceeded the model-derived serialized byte ceiling.");
+        Assert.True(
+            Encoding.UTF8.GetByteCount(markdown) <= maximumSerializedResultBytes,
+            "The Markdown result exceeded the model-derived UTF-8 byte ceiling.");
+        Assert.True(markdown.Length < 30_000, markdown.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private static CodeExploreLimits CreateAgentQuestionLimits(
@@ -236,20 +483,71 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
     private static void AssertToolSurfaceSelected(CodeExploreResult result)
     {
-        AssertSelectedToolType(result, "Threadsmith.Tools.CodeExploreTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindSymbolTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindReferencesTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.FindImplementationsTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.SymbolImpactTool");
-        AssertSelectedToolType(result, "Threadsmith.Tools.CallHierarchyTool");
-        AssertSelectedToolDefinition(result);
+        AssertSelectedToolFamily(result, "CodeExploreTool");
+        AssertSelectedToolFamily(result, "FindSymbolTool");
+        AssertSelectedToolFamily(result, "FindReferencesTool");
+        AssertSelectedToolFamily(result, "FindImplementationsTool");
+        AssertSelectedToolFamily(result, "SymbolImpactTool");
+        AssertSelectedToolFamily(result, "CallHierarchyTool");
         AssertSelectedHostComposition(result);
         AssertNoNoisyHostComposition(result);
     }
 
-    private static void AssertSelectedToolType(CodeExploreResult result, string displayName)
+    private static void AssertSelectedToolFamily(CodeExploreResult result, string containingTypeName)
     {
-        AssertSelectedSymbol(result, displayName, "NamedType");
+        var selected = (result.CandidateSummaries ?? []).Any(summary =>
+            summary.Selected
+            && summary.Symbol is { Kind: "Field" } symbol
+            && symbol.DisplayName.Contains(containingTypeName + ".", StringComparison.Ordinal)
+            && IsSemanticToolDefinition(symbol));
+        Assert.True(selected, CreateCandidateDiagnostic(result));
+    }
+
+    private static void AssertNoOtherSelectedSemanticToolFamily(
+        CodeExploreResult result,
+        params string[] containingTypeNames)
+    {
+        var expectedMarkers = containingTypeNames
+            .Select(GetSemanticToolFamilyMarker)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol is { } symbol
+            && GetSemanticToolFamilyMarkerForSymbol(symbol.DisplayName) is { } marker
+            && !expectedMarkers.Contains(marker));
+    }
+
+    private static string GetSemanticToolFamilyMarker(string containingTypeName)
+    {
+        return containingTypeName switch
+        {
+            "CSharpPatternSearchTool" => "CSharpPattern",
+            _ => containingTypeName.EndsWith("Tool", StringComparison.Ordinal)
+                ? containingTypeName[..^"Tool".Length]
+                : containingTypeName,
+        };
+    }
+
+    private static string? GetSemanticToolFamilyMarkerForSymbol(string displayName)
+    {
+        return _semanticToolFamilyMarkers.FirstOrDefault(marker =>
+            displayName.Contains(marker, StringComparison.Ordinal));
+    }
+
+    private static bool IsSemanticToolDefinition(SemanticSymbolIdentity symbol)
+    {
+        return symbol.DisplayName.EndsWith("Tool._definition", StringComparison.Ordinal);
+    }
+
+    private static string CreateCandidateDiagnostic(CodeExploreResult result)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            result.QueryInterpretation,
+            result.Discovery,
+            result.CandidateSummaries,
+            result.Omissions,
+        });
     }
 
     private static void AssertSelectedSymbol(
@@ -275,13 +573,11 @@ public sealed class Plan94CodeExploreAgentQualityTests
             && string.Equals(symbol.Kind, kind, StringComparison.Ordinal));
     }
 
-    private static void AssertSelectedToolDefinition(CodeExploreResult result)
+    private static bool IsToolCapabilitySelectionReason(string reason)
     {
-        Assert.Contains(result.CandidateSummaries ?? [], summary =>
-            summary.Selected
-            && summary.Symbol is { Kind: "Field" } symbol
-            && symbol.DisplayName.EndsWith(".Definition", StringComparison.Ordinal)
-            && summary.FilePath?.StartsWith("src/Threadsmith.Tools/", StringComparison.Ordinal) == true);
+        return reason.Contains("semantic tool", StringComparison.Ordinal)
+            || reason.Contains("semantic exploration service", StringComparison.Ordinal)
+            || reason.Contains("semantic tools are composed", StringComparison.Ordinal);
     }
 
     private static void AssertSelectedHostComposition(CodeExploreResult result)
@@ -471,6 +767,23 @@ public sealed class Plan94CodeExploreAgentQualityTests
             });
         }
 
+        public ToolExecutionContext CreateToolExecutionContext(int modelEffectiveInputBudgetTokens)
+        {
+            return new ToolExecutionContext(
+                ToolInvocationId.New(),
+                SessionId.New(),
+                RunId.New(),
+                new ToolInvocationContext
+                {
+                    RepositoryPath = _repositoryPath,
+                    WorkspaceId = WorkspaceId,
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    ApprovedRoots = ["."],
+                    RequestedBy = "plan-94-tests",
+                    ModelEffectiveInputBudgetTokens = modelEffectiveInputBudgetTokens,
+                });
+        }
+
         public async ValueTask DisposeAsync()
         {
             await Registry.DisposeAsync();
@@ -553,6 +866,17 @@ public sealed class Plan94CodeExploreAgentQualityTests
                     public abstract Task<TOutput> InvokeAsync(TInput input, CancellationToken cancellationToken);
                 }
                 """);
+            Write(repositoryPath, "src/Threadsmith.Tools/DeploymentWorkflow.cs", """
+                namespace Threadsmith.Tools;
+
+                public sealed class DeploymentWorkflow
+                {
+                    public string CreateDeploymentPlan(string environment)
+                    {
+                        return "deploy:" + environment;
+                    }
+                }
+                """);
             Write(repositoryPath, "src/Threadsmith.Tools/CodeExploreTool.cs", """
                 namespace Threadsmith.Tools;
 
@@ -560,7 +884,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "code_explore",
                         "Returns current semantic source evidence for agentic coding questions.");
 
@@ -593,7 +917,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class FindSymbolTool : Tool<FindSymbolInput, FindSymbolOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "find_symbol",
                         "Finds declarations by compiler-known symbol name for efficient agents.");
 
@@ -625,7 +949,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class FindReferencesTool : Tool<FindReferencesInput, FindReferencesOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "find_references",
                         "Finds compiler references and usages for a symbol.");
 
@@ -657,7 +981,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class FindImplementationsTool : Tool<FindImplementationsInput, FindImplementationsOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "find_implementations",
                         "Finds derived and interface implementation targets for an agent.");
 
@@ -682,14 +1006,14 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed record FindImplementationsOutput(string Implementations);
                 """);
-            Write(repositoryPath, "src/Threadsmith.Tools/SymbolImpactTool.cs", """
+            Write(repositoryPath, "src/Threadsmith.Tools/AdvancedSemanticTools.cs", """
                 namespace Threadsmith.Tools;
 
                 using Threadsmith.Core;
 
                 public sealed class SymbolImpactTool : Tool<SymbolImpactInput, SymbolImpactOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "symbol_impact",
                         "Calculates downstream impact and blast radius for a change.");
 
@@ -721,7 +1045,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class CallHierarchyTool : Tool<CallHierarchyInput, CallHierarchyOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
+                    private static readonly ToolDefinition _definition = new(
                         "call_hierarchy",
                         "Builds caller and callee flow evidence for code navigation.");
 
@@ -753,8 +1077,8 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
                 public sealed class CSharpPatternSearchTool : Tool<CSharpPatternInput, CSharpPatternOutput>
                 {
-                    public static readonly ToolDefinition Definition = new(
-                        "csharp_pattern",
+                    private static readonly ToolDefinition _definition = new(
+                        "csharp_pattern_search",
                         "Runs compiler-aware semantic query workflows over C# syntax.");
 
                     private readonly ISemanticEngineResolver _resolver;
@@ -777,6 +1101,28 @@ public sealed class Plan94CodeExploreAgentQualityTests
                 public sealed record CSharpPatternInput(string Query);
 
                 public sealed record CSharpPatternOutput(string Matches);
+                """);
+            Write(repositoryPath, "src/Threadsmith.Tools/GeneratedCodeTool.cs", """
+                namespace Threadsmith.Tools;
+
+                public sealed class GeneratedCodeTool : Tool<GeneratedCodeInput, GeneratedCodeOutput>
+                {
+                    private static readonly ToolDefinition _definition = new(
+                        "generated_code_query",
+                        "Returns generated documents.");
+
+                    public override Task<GeneratedCodeOutput> InvokeAsync(
+                        GeneratedCodeInput input,
+                        CancellationToken cancellationToken)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return Task.FromResult(new GeneratedCodeOutput(input.Query));
+                    }
+                }
+
+                public sealed record GeneratedCodeInput(string Query);
+
+                public sealed record GeneratedCodeOutput(string Source);
                 """);
         }
 
@@ -815,6 +1161,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
                             new SymbolImpactTool(resolver),
                             new CallHierarchyTool(resolver),
                             new CSharpPatternSearchTool(resolver),
+                            new GeneratedCodeTool(),
                         ];
                     }
 
@@ -827,6 +1174,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
                         registry.AddTool(SymbolImpactTool.Definition);
                         registry.AddTool(CallHierarchyTool.Definition);
                         registry.AddTool(CSharpPatternSearchTool.Definition);
+                        registry.AddTool(GeneratedCodeTool.Definition);
                     }
 
                     public string BuildRepositoryStartupStatus(string semanticState)
@@ -962,7 +1310,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
                         return BuildCompilerAwareSemanticQueryAsync(query, cancellationToken);
                     }
 
-                    private Task<string> FindDispatchImplementationSymbolsAsync(
+                    private static Task<string> FindDispatchImplementationSymbolsAsync(
                         string query,
                         CancellationToken cancellationToken)
                     {

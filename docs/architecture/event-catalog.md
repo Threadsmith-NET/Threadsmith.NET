@@ -85,8 +85,8 @@ M11 execution payloads:
 
 M11.1 delegation payloads:
 
-- `DelegationCheckpointWritten`: delegation and parent-run ids, durable phase, generation, and bounded next legal action. Child prompts, transcripts, diffs, and worktree paths are not included.
-- `AgentRunLifecycleObserved`: delegation/assignment/child-run ids, frozen role, lifecycle status, generation, and sanitized terminal reason. Detailed findings, reviews, changes, and usage remain in bounded checkpoint/artifact projections.
+- `DelegationCheckpointWritten`: delegation and parent-run ids, durable phase, generation, bounded next legal action, and the applied positive checkpoint revision. A stale rejected write emits no event. Child prompts, transcripts, diffs, and worktree paths are not included; legacy payloads default revision to 1.
+- `AgentRunLifecycleObserved`: delegation/assignment/child-run ids, frozen role, lifecycle status, generation, sanitized lifecycle reason, and the revision of the applied checkpoint that produced the observation. Detailed findings, reviews, changes, and usage remain in bounded checkpoint/artifact projections; legacy payloads default revision to 1.
 
 M13 lifecycle-hook payloads:
 

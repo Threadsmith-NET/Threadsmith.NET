@@ -289,6 +289,9 @@ public enum CodeExploreSelectionReason
 
     /// <summary>The candidate remained only as peripheral follow-up evidence.</summary>
     Peripheral = 1 << 14,
+
+    /// <summary>Query concepts matched catalog-derived segments of the declaration name.</summary>
+    NameSegment = 1 << 15,
 }
 
 /// <summary>Recoverable availability state for source-bearing code exploration.</summary>
@@ -317,6 +320,9 @@ public enum CodeExploreAvailabilityStatus
 
     /// <summary>The invocation timed out after returning partial safe evidence.</summary>
     TimedOutPartial,
+
+    /// <summary>The loaded workspace is one project, so repository-wide source and usage coverage is incomplete.</summary>
+    ProjectScopedPartial,
 }
 
 /// <summary>Closed advisory action kinds emitted for model-facing code-exploration recovery.</summary>
@@ -1013,7 +1019,11 @@ public sealed record CodeExploreResult(
     CodeExploreAvailability? Availability = null,
     CodeExplorePresentation? Presentation = null,
     CodeExploreAdaptiveBudget? AdaptiveBudget = null,
-    IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null);
+    IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null)
+{
+    /// <summary>Gets source follow-up targets omitted by a downstream result envelope.</summary>
+    public int OmittedSourceContinuationCount { get; init; }
+}
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(

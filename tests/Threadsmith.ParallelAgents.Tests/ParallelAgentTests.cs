@@ -95,6 +95,7 @@ public sealed class ParallelAgentTests
 
         // Assert
         Assert.All(outcomes, item => Assert.Equal(AgentRunStatus.Cancelled, item.Status));
+        Assert.All(outcomes, item => Assert.Equal(plan.Provenance.Generation, item.Generation));
         Assert.Equal(0, runner.Active);
     }
 
@@ -138,6 +139,39 @@ public sealed class ParallelAgentTests
             && item.Status == AgentRunStatus.Failed);
         Assert.Contains(outcomes, item => item.AssignmentId == sibling.AssignmentId
             && item.Status == AgentRunStatus.Cancelled);
+        Assert.All(outcomes, item => Assert.Equal(plan.Provenance.Generation, item.Generation));
+    }
+
+    /// <summary>Verifies FailDelegation clears an already-completed sibling before the parent boundary.</summary>
+    [Fact]
+    public async Task Coordinator_FailDelegation_DiscardsCompletedSiblingFindings()
+    {
+        // Arrange
+        var completed = CreateAssignment(AgentRole.Explorer, "src/A.cs");
+        var failed = CreateAssignment(AgentRole.Explorer, "src/B.cs") with
+        {
+            FailurePolicy = AgentFailurePolicy.FailDelegation,
+        };
+        var plan = CreatePlan(completed, failed);
+        var runner = new CompletedBeforeFailureRunner(
+            completed.AssignmentId,
+            failed.AssignmentId);
+        await using var scheduler = new AgentRunScheduler();
+        await using var events = new DomainEventStream();
+        var store = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, store, events);
+
+        // Act
+        var terminal = await coordinator.StartAsync(plan, runner);
+
+        // Assert
+        Assert.Equal(DelegationCheckpointPhase.Failed, terminal.Phase);
+        Assert.All(terminal.ChildOutcomes, outcome => Assert.Null(outcome.Findings));
+        var completedSibling = Assert.Single(terminal.ChildOutcomes, outcome =>
+            outcome.AssignmentId == completed.AssignmentId);
+        Assert.Equal(AgentRunStatus.Failed, completedSibling.Status);
+        Assert.Equal(plan.Provenance.Generation, completedSibling.Generation);
+        Assert.Same(terminal, store.Latest);
     }
 
     /// <summary>Verifies static validation rejects recursive/cyclic dependency graphs.</summary>
@@ -265,7 +299,7 @@ public sealed class ParallelAgentTests
         Assert.Equal(RepositoryTrustLevel.TrustedRead, child.TrustLevel);
         Assert.Equal(["read_file", "search"], child.AllowedToolIds);
         Assert.Contains("search", child.DeniedToolIds);
-        Assert.Empty(child.AllowedExecutables);
+        Assert.Equal(["dotnet"], child.AllowedExecutables);
         Assert.Empty(child.AllowedNetworkHosts);
         Assert.Empty(child.AllowedSecretReferences);
     }
@@ -424,7 +458,7 @@ public sealed class ParallelAgentTests
             var store = new DelegationCheckpointStore(connectionString);
 
             // Act
-            await store.SaveAsync(checkpoint);
+            Assert.True(await store.SaveAsync(checkpoint));
             var restored = await store.GetAsync(plan.DelegationId);
 
             // Assert
@@ -435,6 +469,52 @@ public sealed class ParallelAgentTests
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM delegation_worktree_leases;";
             Assert.Equal(0L, (long)(await command.ExecuteScalarAsync() ?? -1L));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>Verifies a stale progress revision cannot replace a terminal SQLite checkpoint.</summary>
+    [Fact]
+    public async Task Persistence_StaleProgressRevision_DoesNotReplaceTerminalCheckpoint()
+    {
+        // Arrange
+        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-agents-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={path};Pooling=False";
+        try
+        {
+            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
+            var plan = CreatePlan(CreateAssignment(AgentRole.Explorer, "src/A.cs"));
+            var terminal = new DelegationCheckpoint
+            {
+                DelegationId = plan.DelegationId,
+                Provenance = plan.Provenance,
+                Phase = DelegationCheckpointPhase.ResearchJoined,
+                ChildOutcomes = [],
+                NextAction = "synthesize findings",
+                RecordedAt = DateTimeOffset.UtcNow,
+                Revision = 4,
+            };
+            var staleProgress = terminal with
+            {
+                Phase = DelegationCheckpointPhase.ChildrenRunning,
+                NextAction = "observe active children",
+                RecordedAt = terminal.RecordedAt.AddMilliseconds(1),
+                Revision = 3,
+            };
+            var store = new DelegationCheckpointStore(connectionString);
+
+            // Act
+            Assert.True(await store.SaveAsync(terminal));
+            Assert.False(await store.SaveAsync(staleProgress));
+            var restored = await store.GetAsync(plan.DelegationId);
+
+            // Assert
+            Assert.NotNull(restored);
+            Assert.Equal(DelegationCheckpointPhase.ResearchJoined, restored.Phase);
+            Assert.Equal(4, restored.Revision);
         }
         finally
         {
@@ -670,6 +750,32 @@ public sealed class ParallelAgentTests
         };
     }
 
+    private static AgentRunOutcome CreateUsableFindingOutcome(
+        AgentAssignment assignment,
+        int generation)
+    {
+        return CreateFindingOutcome(assignment, generation) with
+        {
+            Findings = new AgentFindingSet
+            {
+                AssignmentId = assignment.AssignmentId,
+                ChildRunId = assignment.ChildRunId,
+                Generation = generation,
+                Summary = "usable sibling finding",
+                Findings =
+                [
+                    new AgentFinding
+                    {
+                        FindingId = Guid.NewGuid(),
+                        Category = "behavior",
+                        Summary = "usable sibling finding",
+                        Confidence = 1,
+                    },
+                ],
+            },
+        };
+    }
+
     private static WorkerChangeSet CreateChangeSet(
         DelegationPlan plan,
         AgentAssignment assignment,
@@ -814,6 +920,82 @@ public sealed class ParallelAgentTests
 
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             return CreateFindingOutcome(assignment, plan.Provenance.Generation);
+        }
+    }
+
+    private sealed class CompletedBeforeFailureRunner : IAgentAssignmentRunner
+    {
+        private readonly AgentAssignmentId _completedAssignmentId;
+        private readonly TaskCompletionSource _completed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly AgentAssignmentId _failedAssignmentId;
+
+        public CompletedBeforeFailureRunner(
+            AgentAssignmentId completedAssignmentId,
+            AgentAssignmentId failedAssignmentId)
+        {
+            _completedAssignmentId = completedAssignmentId;
+            _failedAssignmentId = failedAssignmentId;
+        }
+
+        public async Task<AgentRunOutcome> RunAsync(
+            DelegationPlan plan,
+            AgentAssignment assignment,
+            CancellationToken cancellationToken = default)
+        {
+            if (assignment.AssignmentId == _completedAssignmentId)
+            {
+                var outcome = CreateUsableFindingOutcome(
+                    assignment,
+                    plan.Provenance.Generation);
+                _completed.TrySetResult();
+                return outcome;
+            }
+
+            if (assignment.AssignmentId != _failedAssignmentId)
+            {
+                throw new InvalidOperationException("The runner received an unexpected assignment.");
+            }
+
+            await _completed.Task.WaitAsync(cancellationToken);
+            return new AgentRunOutcome
+            {
+                AssignmentId = assignment.AssignmentId,
+                ChildRunId = assignment.ChildRunId,
+                Role = assignment.Role,
+                Generation = plan.Provenance.Generation,
+                Status = AgentRunStatus.Failed,
+                Usage = new AgentResourceUsage(),
+                Reason = "runner returned failure",
+            };
+        }
+    }
+
+    private sealed class RecordingCheckpointStore : IDelegationCheckpointStore
+    {
+        public DelegationCheckpoint? Latest { get; private set; }
+
+        public Task<bool> SaveAsync(
+            DelegationCheckpoint checkpoint,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Latest is not null && Latest.Revision >= checkpoint.Revision)
+            {
+                return Task.FromResult(false);
+            }
+
+            Latest = checkpoint;
+            return Task.FromResult(true);
+        }
+
+        public Task<DelegationCheckpoint?> GetAsync(
+            DelegationId delegationId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Latest?.DelegationId == delegationId ? Latest : null);
         }
     }
 }

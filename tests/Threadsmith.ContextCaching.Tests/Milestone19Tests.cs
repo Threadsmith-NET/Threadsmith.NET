@@ -393,6 +393,22 @@ public sealed class Milestone19Tests
             return Task.CompletedTask;
         }
 
+        public Task AddBatchAsync(
+            IReadOnlyList<Evidence> evidence,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> TryAddBatchAsync(
+            IReadOnlyList<Evidence> evidence,
+            Func<bool> tryCommit,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(tryCommit());
+        }
+
         public Task<int> ApplyInvalidationsAsync(
             SessionId sessionId,
             CancellationToken cancellationToken = default)
@@ -423,6 +439,16 @@ public sealed class Milestone19Tests
 
         public Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
         {
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedBatchAsync(
+            IReadOnlyList<IDomainEvent> domainEvents,
+            Func<bool> tryCommit,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = tryCommit();
             return Task.CompletedTask;
         }
 

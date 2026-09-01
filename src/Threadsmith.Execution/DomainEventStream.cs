@@ -6,10 +6,25 @@ using Threadsmith.Core;
 /// <summary>Fan-out event stream with ordered bounded buffering per subscriber.</summary>
 public sealed class DomainEventStream : IDomainEventStream
 {
+    private static readonly TimeSpan DefaultCommittedDeliveryTimeout = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _committedDeliveryTimeout;
     private readonly Lock _gate = new();
     private readonly Dictionary<long, Subscription> _subscriptions = [];
     private bool _disposed;
     private long _nextId;
+
+    /// <summary>Initializes a new instance of the <see cref="DomainEventStream"/> class.</summary>
+    public DomainEventStream(TimeSpan? committedDeliveryTimeout = null)
+    {
+        var effectiveTimeout = committedDeliveryTimeout ?? DefaultCommittedDeliveryTimeout;
+        if (effectiveTimeout < TimeSpan.FromMilliseconds(10)
+            || effectiveTimeout > TimeSpan.FromMinutes(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(committedDeliveryTimeout));
+        }
+
+        _committedDeliveryTimeout = effectiveTimeout;
+    }
 
     /// <inheritdoc />
     public IDomainEventSubscription Subscribe(
@@ -47,6 +62,69 @@ public sealed class DomainEventStream : IDomainEventStream
     }
 
     /// <inheritdoc />
+    public async Task PublishCommittedBatchAsync(
+        IReadOnlyList<IDomainEvent> domainEvents,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(domainEvents);
+        ArgumentNullException.ThrowIfNull(tryCommit);
+        if (domainEvents.Any(item => item is null))
+        {
+            throw new ArgumentException("A domain event batch cannot contain null entries.", nameof(domainEvents));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        Subscription[] subscriptions;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            subscriptions = [.. _subscriptions.Values];
+        }
+
+        var decision = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var deliveries = new List<Task>(subscriptions.Length);
+        try
+        {
+            foreach (var subscription in subscriptions)
+            {
+                deliveries.Add(await subscription.PrepareAsync(
+                    domainEvents,
+                    decision.Task,
+                    CancellationToken.None,
+                    cancellationToken,
+                    _committedDeliveryTimeout));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!tryCommit())
+            {
+                decision.TrySetResult(false);
+                await Task.WhenAll(deliveries);
+                return;
+            }
+
+            decision.TrySetResult(true);
+        }
+        catch
+        {
+            decision.TrySetResult(false);
+            await Task.WhenAll(deliveries);
+            throw;
+        }
+
+        try
+        {
+            await Task.WhenAll(deliveries);
+        }
+        catch (Exception exception)
+        {
+            throw new CommittedDomainEventDeliveryException(exception);
+        }
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         Subscription[] subscriptions;
@@ -77,9 +155,11 @@ public sealed class DomainEventStream : IDomainEventStream
     }
 
     private sealed record Delivery(
-        IDomainEvent DomainEvent,
+        IReadOnlyList<IDomainEvent> DomainEvents,
         CancellationToken CancellationToken,
-        TaskCompletionSource Completion);
+        Task<bool> CommitDecision,
+        TaskCompletionSource Completion,
+        TimeSpan? Timeout);
 
     private sealed class Subscription : IDomainEventSubscription
     {
@@ -89,6 +169,7 @@ public sealed class DomainEventStream : IDomainEventStream
         private readonly DomainEventStream _owner;
         private readonly Task _worker;
         private int _disposed;
+        private Exception? _terminalFailure;
 
         public Subscription(
             DomainEventStream owner,
@@ -112,12 +193,40 @@ public sealed class DomainEventStream : IDomainEventStream
             IDomainEvent domainEvent,
             CancellationToken cancellationToken)
         {
+            var completion = await PrepareAsync(
+                [domainEvent],
+                Task.FromResult(true),
+                cancellationToken,
+                cancellationToken,
+                timeout: null);
+            await completion;
+        }
+
+        public async Task<Task> PrepareAsync(
+            IReadOnlyList<IDomainEvent> domainEvents,
+            Task<bool> commitDecision,
+            CancellationToken deliveryCancellationToken,
+            CancellationToken enqueueCancellationToken,
+            TimeSpan? timeout)
+        {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (Volatile.Read(ref _terminalFailure) is { } terminalFailure)
+            {
+                throw new InvalidOperationException(
+                    "The domain-event subscription is no longer available.",
+                    terminalFailure);
+            }
+
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await _channel.Writer.WriteAsync(
-                new Delivery(domainEvent, cancellationToken, completion),
-                cancellationToken);
-            await completion.Task;
+                new Delivery(
+                    domainEvents,
+                    deliveryCancellationToken,
+                    commitDecision,
+                    completion,
+                    timeout),
+                enqueueCancellationToken);
+            return completion.Task;
         }
 
         public async ValueTask DisposeAsync()
@@ -143,9 +252,44 @@ public sealed class DomainEventStream : IDomainEventStream
         {
             await foreach (var delivery in _channel.Reader.ReadAllAsync())
             {
+                if (Volatile.Read(ref _terminalFailure) is { } terminalFailure)
+                {
+                    delivery.Completion.TrySetException(terminalFailure);
+                    continue;
+                }
+
                 try
                 {
-                    await _handler(delivery.DomainEvent, delivery.CancellationToken);
+#pragma warning disable VSTHRD003 // The decision task is created by the batch publisher for this delivery.
+                    if (!await delivery.CommitDecision)
+#pragma warning restore VSTHRD003
+                    {
+                        delivery.Completion.TrySetResult();
+                        continue;
+                    }
+
+                    using var timeout = delivery.Timeout is { } duration
+                        ? new CancellationTokenSource(duration)
+                        : null;
+                    var handlerCancellationToken = timeout?.Token
+                        ?? delivery.CancellationToken;
+                    foreach (var domainEvent in delivery.DomainEvents)
+                    {
+                        var handling = _handler(domainEvent, handlerCancellationToken);
+                        try
+                        {
+                            await handling.WaitAsync(handlerCancellationToken);
+                        }
+                        catch (OperationCanceledException) when (timeout?.IsCancellationRequested == true)
+                        {
+                            var exception = new TimeoutException(
+                                "A committed domain-event subscriber exceeded its delivery bound.");
+                            Poison(exception);
+                            _ = QuarantineHandlerAsync(handling);
+                            throw exception;
+                        }
+                    }
+
                     delivery.Completion.TrySetResult();
                 }
                 catch (OperationCanceledException) when (delivery.CancellationToken.IsCancellationRequested)
@@ -156,6 +300,31 @@ public sealed class DomainEventStream : IDomainEventStream
                 {
                     delivery.Completion.TrySetException(exception);
                 }
+            }
+        }
+
+        private void Poison(Exception exception)
+        {
+            if (Interlocked.CompareExchange(ref _terminalFailure, exception, null) is not null)
+            {
+                return;
+            }
+
+            _owner.Remove(_id);
+            _channel.Writer.TryComplete();
+        }
+
+        private static async Task QuarantineHandlerAsync(Task task)
+        {
+            try
+            {
+#pragma warning disable VSTHRD003 // A poisoned subscription observes its sole abandoned handler in quarantine.
+                await task;
+#pragma warning restore VSTHRD003
+            }
+            catch
+            {
+                // The delivery completion already reports the bounded subscriber failure.
             }
         }
     }

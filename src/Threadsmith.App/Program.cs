@@ -390,7 +390,7 @@ public static class Program
             ?? new HookFailureResult("malformed-capability-result", "The capability hook returned malformed output.");
     }
 
-    private static (string ToolId, ITool Registration) ResolveCapabilityHookRegistration(
+    private static (string ToolId, ToolRegistration Registration) ResolveCapabilityHookRegistration(
         IToolInvocationPipeline toolPipeline,
         HookHandlerDescriptor descriptor)
     {
@@ -407,10 +407,10 @@ public static class Program
             _ => throw new InvalidOperationException(
                 "MCP hook targets must be 'profile::server::schema-digest::tool' and extension hook targets must be 'generation::tool'."),
         };
-        var registration = concretePipeline.Registry.Get(toolId);
+        var registration = concretePipeline.Registry.GetRegistration(toolId);
         var identityMatches = descriptor.AdapterKind switch
         {
-            HookAdapterKind.Mcp when registration is McpImportedTool mcp =>
+            HookAdapterKind.Mcp when registration.Tool is McpImportedTool mcp =>
                 string.Equals(mcp.Profile.Id, target[0], StringComparison.Ordinal)
                 && string.Equals(mcp.Capability.ServerName, target[1], StringComparison.Ordinal)
                 && string.Equals(
@@ -418,7 +418,7 @@ public static class Program
                         .ToLowerInvariant(),
                     target[2],
                     StringComparison.Ordinal),
-            HookAdapterKind.Extension when registration is CapabilityProxy extension =>
+            HookAdapterKind.Extension when registration.Tool is CapabilityProxy extension =>
                 Guid.TryParse(target[0], out var generationId)
                 && extension.GenerationId == new ExtensionGenerationId(generationId),
             _ => false,

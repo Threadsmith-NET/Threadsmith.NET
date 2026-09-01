@@ -38,6 +38,14 @@ Recorded from the production dependency inventory for PrettyPrompt 6.0.4 and Spe
 
 **Decision:** ship the mandatory composer-adjacent status row through the existing serialized `IConsoleSurface` boundary. Do not ship a permanently pinned row. This retains ordinary terminal scrollback, performs no mouse capture or alternate-screen transition, emits no footer in redirected output, and reevaluates terminal width before each composer opens. Real-terminal regression results remain tracked in the maintained manual plan.
 
+## Plan 91 active-run input feasibility inventory
+
+Recorded from the current `ConversationalShell`, `PrettyPromptConsoleSurface`, ADR-15, and the Plan-26 decision. During an active conversation run, the shell waits on the execution task, review-decision channel, and serialized output drain; it does not read ordinary terminal input. PrettyPrompt owns the only normal composer read and holds the shared console gate until that read completes. This preserves append-only native scrollback and prevents Spectre output from racing the editor.
+
+The evaluated active-run key watcher cannot prove byte ownership across the transition to the next PrettyPrompt read. A background `Console.ReadKey`-style reader could consume Enter, Escape, paste, or slash-command bytes intended for the composer. A full-text arbiter would duplicate PrettyPrompt editing and paste behavior. Cursor-managed pinning, alternate-screen input, or private PrettyPrompt integration would change ADR-15 terminal ownership and repeats the Plan-26 failure mode.
+
+**Decision:** fail the current active-run input gate. Do not ship delegation steering or double-`Esc` cancellation in Plan 91. Ship the model-callable `delegate_agents` fork/join path with existing `Ctrl+C`, linked caller cancellation, and `/agents <delegation-id> cancel[-child]` controls. Reconsider steering only with a terminal architecture that exposes one public, serialized input owner and passes real-terminal selection, paste, resize, streaming, and command-routing gates.
+
 ## Open items for later plans
 
 - plan-03: real-terminal selection and paste-latency checks remain in the maintained manual plan; CI uses a terminal-neutral surface.

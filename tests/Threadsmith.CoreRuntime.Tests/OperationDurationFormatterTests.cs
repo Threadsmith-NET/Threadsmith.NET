@@ -180,6 +180,62 @@ public static class OperationDurationFormatterTests
         Assert.DoesNotContain("MCP:", enabled.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Transcript renders non-main tool requestors immediately after the tool label.</summary>
+    [Fact]
+    public static void ConversationTranscript_ToolCompletion_RendersNonMainRequestorAfterLabel()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "read_file",
+            RequestedBy: "agent:delegation:assignment")));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            Outcome: OperationActivityOutcome.Completed)));
+
+        Assert.StartsWith(
+            " TOOLS: (agent:delegation:assignment) read_file - completed",
+            transcript.Text,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>Transcript omits the requestor for the main model agent.</summary>
+    [Fact]
+    public static void ConversationTranscript_ToolCompletion_OmitsMainModelRequestor()
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+
+        Assert.False(transcript.Apply(new ToolInvocationStarted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            "read_file",
+            RequestedBy: "model")));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            sessionId,
+            occurredAt,
+            invocationId,
+            Succeeded: true,
+            Outcome: OperationActivityOutcome.Completed)));
+
+        Assert.StartsWith(
+            " TOOLS: read_file - completed",
+            transcript.Text,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Transcript renders semantic checks with the same compact duration and detail layout as tools.</summary>
     [Fact]
     public static void ConversationTranscript_SemanticCheckCompletion_RendersSemanticChecksBlock()

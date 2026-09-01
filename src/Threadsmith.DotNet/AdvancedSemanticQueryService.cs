@@ -1,5 +1,6 @@
 namespace Threadsmith.DotNet;
 
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,13 +22,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumCodeExploreCatalogEntries = 50_000;
     private const int MaximumCodeExploreCatalogs = 4;
     private const int MaximumNaturalLanguageCandidateSummaries = 64;
-    private const int MaximumNaturalLanguageGraphSeeds = 8;
-    private const int MaximumNaturalLanguageGraphEdges = 128;
+    private const int NaturalLanguageNameSegmentBaseScore = 160;
+    private const int NaturalLanguageNameSegmentConceptScore = 40;
+    private const int NaturalLanguagePrimaryNameSegmentConceptScore = 20;
+    private const int NaturalLanguageMaximumNameSegmentCoverageScore = 40;
+    private const int NaturalLanguageRareNameSegmentScore = 120;
+    private const int MaximumNaturalLanguageGraphDepth = 3;
+    private const int MaximumNaturalLanguageGraphNodes = 200;
+    private const int MaximumNaturalLanguageGraphEdges = 800;
+    private const int MaximumNaturalLanguageGraphConcurrency = 4;
+    private const int MaximumNaturalLanguageGraphReferenceLocations = 32;
     private const int NaturalLanguageDefaultCoLocationBoost = 60;
     private const int NaturalLanguageToolIntentCoLocationBoost = 10;
+    private const int NaturalLanguageCoLocationConceptBoost = 20;
     private const int NaturalLanguageDefaultGraphBoost = 260;
-    private const int NaturalLanguageSurveyGraphBoost = 35;
-    private const int ToolIntentMaximumRankedBackfill = 3;
+    private const int MaximumSourceClusterGapLines = 8;
     private const int ToolIntentMaximumSelectedPerType = 1;
     private const int ToolIntentMaximumSelectedPerFile = 3;
     private const int SurveyIntentMaximumSelectedPerType = 3;
@@ -44,10 +53,52 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int MaximumFileRelevanceSummaries = 24;
     private const int MaximumCodeExploreScaleProjects = 121;
     private const int MaximumCodeExploreScaleDocuments = 2_501;
+    private const string NaturalLanguageAnchorSourceReason = "Stable symbol id declaration source.";
+    private const string NaturalLanguageCompanionSourceReason = "Selected as relevant source context in an admitted natural-language file.";
     private const string AppSettingsArtifactStem = "appsettings";
     private const string GlobalNamespaceAlias = "global::";
+    private const string CallHierarchyToolFamily = "call_hierarchy";
+    private const string CodeExploreToolFamily = "code_explore";
+    private const string CSharpPatternSearchToolFamily = "csharp_pattern_search";
+    private const string FindImplementationsToolFamily = "find_implementations";
+    private const string FindReferencesToolFamily = "find_references";
+    private const string FindSymbolToolFamily = "find_symbol";
+    private const string GeneratedCodeQueryToolFamily = "generated_code_query";
+    private const string GeneratedCodeToolFamily = "generated_code";
+    private const string SymbolImpactToolFamily = "symbol_impact";
 
     private static readonly TimeSpan NonCooperativeCompilationBackstop = TimeSpan.FromSeconds(2);
+
+    private static readonly HashSet<string> TestPathSegments = new(
+        [
+            "__tests__",
+            "spec",
+            "specs",
+            "test",
+            "testing",
+            "testlib",
+            "tests",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly string[] TestNameSuffixes =
+    [
+        "TestCase",
+        "Tests",
+        "Tester",
+        "Test",
+        "Specs",
+        "Spec",
+    ];
+
+    private static readonly HashSet<string> TestNameTokens = new(
+        [
+            "spec",
+            "specs",
+            "test",
+            "tests",
+        ],
+        StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> ArtifactFocusTerms = new(
         [
@@ -148,42 +199,69 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ["a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could", "did", "do", "does", "for", "from", "has", "have", "how", "i", "in", "into", "is", "it", "its", "me", "of", "on", "or", "please", "show", "that", "the", "their", "this", "through", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with", "without"],
         StringComparer.OrdinalIgnoreCase);
 
+    private static readonly HashSet<string> NaturalLanguageRetrievalStopWords = new(
+        [
+            "all", "also", "answer", "called", "class", "code", "describe", "done", "each", "every",
+            "everywhere", "explain", "file", "files", "found", "function", "functions", "give", "just",
+            "list", "made", "method", "methods", "more", "question", "some", "tell", "than", "then",
+            "tool", "tools", "type", "types", "use", "used", "uses", "using", "work", "works",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
     private static readonly HashSet<string> ToolCapabilityIntentTerms = new(
         ["agentic", "capability", "capabilities", "compiler", "efficient", "efficiency", "explain", "semantic", "semantics", "tool", "tools", "workflow", "workflows"],
         StringComparer.OrdinalIgnoreCase);
 
-    private static readonly HashSet<string> ToolContractTypeNames = new(
-        ["CallHierarchyTool", "CodeExploreTool", "FindImplementationsTool", "FindReferencesTool", "FindSymbolTool", "GeneratedCodeTool", "SymbolImpactTool", "CSharpPatternSearchTool"],
-        StringComparer.Ordinal);
+    private static readonly HashSet<string> ToolLifecycleIntentTerms = new(
+        ["available", "availability", "bootstrap", "compose", "composition", "expose", "exposed", "register", "registered", "registration", "startup", "wire", "wired", "wiring"],
+        StringComparer.OrdinalIgnoreCase);
 
-    private static readonly HashSet<string> ToolServiceContractNames = new(
-        ["IAdvancedSemanticQueryService", "ICodeExploreService", "ISemanticEngineResolver"],
-        StringComparer.Ordinal);
+    private static readonly HashSet<string> ToolCompositionContextTerms = new(
+        ["agentic", "capability", "capabilities", "semantic", "semantics", "tools", "workflow", "workflows"],
+        StringComparer.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> SemanticToolIdentityTerms = new(
+        [
+            "call", "code", "csharp", "explore", "find", "generated", "hierarchy", "implementation",
+            "implementations", "impact", "pattern", "query", "reference", "references", "search", "symbol",
+        ],
+        StringComparer.OrdinalIgnoreCase);
 
     private static readonly Dictionary<string, string> SemanticToolIdFamilies = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["call_hierarchy"] = "call_hierarchy",
-        ["code_explore"] = "code_explore",
-        ["csharp_pattern_search"] = "csharp_pattern",
-        ["find_implementations"] = "implementations",
-        ["find_references"] = "references",
-        ["find_symbol"] = "symbol",
-        ["generated_code_query"] = "generated_code",
-        ["symbol_impact"] = "impact",
+        [CallHierarchyToolFamily] = CallHierarchyToolFamily,
+        [CodeExploreToolFamily] = CodeExploreToolFamily,
+        [CSharpPatternSearchToolFamily] = CSharpPatternSearchToolFamily,
+        [FindImplementationsToolFamily] = FindImplementationsToolFamily,
+        [FindReferencesToolFamily] = FindReferencesToolFamily,
+        [FindSymbolToolFamily] = FindSymbolToolFamily,
+        [GeneratedCodeQueryToolFamily] = GeneratedCodeToolFamily,
+        [SymbolImpactToolFamily] = SymbolImpactToolFamily,
     };
 
     private static readonly string[] ToolCapabilitySurveyFamilies =
     [
-        "code_explore",
-        "symbol",
-        "references",
-        "implementations",
-        "impact",
-        "call_hierarchy",
+        CodeExploreToolFamily,
+        FindSymbolToolFamily,
+        FindReferencesToolFamily,
+        FindImplementationsToolFamily,
+        SymbolImpactToolFamily,
+        CallHierarchyToolFamily,
+    ];
+
+    private static readonly string[] IndexedToolCapabilityFamilies =
+    [
+        .. ToolCapabilitySurveyFamilies,
+        CSharpPatternSearchToolFamily,
+        GeneratedCodeToolFamily,
     ];
 
     private readonly Lock _catalogGate = new();
     private readonly Dictionary<string, CodeExploreDeclarationCatalog> _codeExploreCatalogs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SharedCodeExploreBuild<CodeExploreDeclarationCatalog>> _codeExploreCatalogBuilds = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, long> _latestCodeExploreCatalogGenerations = [];
+    private readonly Dictionary<string, IReadOnlyList<string>> _naturalLanguageGraphNeighbors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SharedCodeExploreBuild<IReadOnlyList<string>>> _naturalLanguageGraphBuilds = new(StringComparer.Ordinal);
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
@@ -735,11 +813,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             ?? throw new InvalidOperationException("Code exploration requires a captured semantic solution.");
         var repositoryPath = readiness.RepositoryPath
             ?? throw new InvalidOperationException("Code exploration requires an opened repository path.");
+        var workspacePath = readiness.WorkspacePath
+            ?? throw new InvalidOperationException("Code exploration requires an opened project or solution path.");
         var snapshot = new AdvancedSemanticSnapshot(
             solution,
             readiness.CompiledProjects,
             readiness.Confidence,
             repositoryPath,
+            workspacePath,
             readiness.Generation);
         CodeExploreRepositoryScale repositoryScale;
         try
@@ -775,6 +856,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var continuations = new List<CodeExploreContinuationTarget>();
         var allocationFiles = new List<CodeExploreAllocationFileSummary>();
         var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
+        IReadOnlyList<CodeExploreRankedCandidate> naturalLanguageSourceCompanions = [];
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance =
+            new Dictionary<string, CodeExploreSelectedRelevance>(StringComparer.Ordinal);
         CodeExploreDiscoverySummary? discovery = null;
         CodeExploreNaturalLanguageIntent? naturalLanguageIntent = null;
         CodeExploreFlow? flow = null;
@@ -796,10 +880,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     queryInterpretation,
                     timeout.Token);
                 anchors.AddRange(naturalLanguage.Anchors);
-                queryInterpretation = queryInterpretation with { UnresolvedTerms = naturalLanguage.UnresolvedTerms };
+                queryInterpretation = naturalLanguage.Interpretation;
                 discovery = naturalLanguage.Discovery;
                 naturalLanguageIntent = naturalLanguage.Intent;
                 candidateSummaries = naturalLanguage.Candidates;
+                naturalLanguageSourceCompanions = naturalLanguage.SourceCompanions;
+                selectedRelevance = naturalLanguage.SelectedRelevance;
                 omissions.AddRange(naturalLanguage.Omissions);
             }
 
@@ -860,6 +946,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     timeout.Token);
                 alternativesCapped |= result.AlternativesCapped;
             }
+
+            for (var companionIndex = 0; companionIndex < naturalLanguageSourceCompanions.Count; companionIndex++)
+            {
+                await AddNaturalLanguageSourceCompanionAsync(
+                    snapshot,
+                    projection,
+                    sourceReader,
+                    naturalLanguageSourceCompanions[companionIndex],
+                    anchors.Count + companionIndex + 1,
+                    candidates,
+                    timeout.Token);
+            }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
@@ -868,6 +966,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var selectedSections = new List<CodeExploreFileSection>();
+        var selectedSourceFiles = new HashSet<string>(PathComparer);
         var selectedArtifactOrigins = new List<CodeExploreSectionCandidate>();
         CodeExploreArtifactProjection? artifactProjection = null;
         var backReferences = new List<CodeExploreBackReference>();
@@ -889,13 +988,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var remainingSourceCharacters = availableSourceCharacters;
         var remainingSourceCharactersWithoutSuppression = availableSourceCharacters;
         var outputBoundReached = false;
-        if (!timeReached && projection is not null)
-        {
-            await ProjectAvailableSourceAsync(
-                candidate => candidate.Priority <= 1,
-                "anchor source projection");
-        }
-
         if (!timeReached && projection is not null)
         {
             try
@@ -946,8 +1038,19 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (!timeReached && projection is not null)
         {
+            var omitUnrequestedTestSource = naturalLanguageIntent is not null
+                && !HasTestFocus(queryInterpretation);
+            if (omitUnrequestedTestSource
+                && candidates.Any(candidate => IsTestSourceCandidate(candidate)
+                    && !IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation)))
+            {
+                omissions.Add("Unrequested test source was omitted; compact test dependencies remain available in blast-radius evidence.");
+            }
+
             await ProjectAvailableSourceAsync(
-                _ => true,
+                candidate => !omitUnrequestedTestSource
+                    || !IsTestSourceCandidate(candidate)
+                    || IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation),
                 "source projection");
         }
 
@@ -963,19 +1066,99 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var activeProjection = projection;
             try
             {
-                foreach (var candidate in candidates
-                    .Where(predicate)
-                    .OrderBy(candidate => candidate.Priority)
+                var allOrderedCandidates = candidates
+                    .Where(candidate => !seenSections.Contains(CreateSectionKey(candidate)))
+                    .OrderByDescending(candidate => candidate.IsFlowSpine)
+                    .ThenByDescending(candidate => candidate.Importance)
+                    .ThenBy(candidate => IsExactSelectedSourceCandidate(
+                        candidate,
+                        selectedRelevance,
+                        queryInterpretation) ? 0 : 1)
+                    .ThenBy(candidate => candidate.Priority)
                     .ThenBy(candidate => candidate.AllocationRank ?? int.MaxValue)
-                    .ThenBy(candidate => IsFlowCallSiteCandidate(candidate) ? 0 : 1)
                     .ThenBy(candidate => candidate.FilePath, PathComparer)
                     .ThenBy(candidate => candidate.Location?.Range.StartLine ?? candidate.PreferredLine ?? 0)
-                    .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal))
+                    .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal)
+                    .DistinctBy(CreateSectionKey, StringComparer.Ordinal)
+                    .ToArray();
+                var eligibleCandidates = allOrderedCandidates
+                    .Where(predicate)
+                    .ToArray();
+                var broadContainerKeys = GetBroadContainerSourceCandidateKeys(
+                    eligibleCandidates,
+                    selectedRelevance,
+                    queryInterpretation,
+                    request.Limits.MaximumPerFileSourceCharacters);
+                foreach (var broadContainer in eligibleCandidates
+                    .Where(candidate => broadContainerKeys.Contains(CreateSectionKey(candidate))))
+                {
+                    _ = seenSections.Add(CreateSectionKey(broadContainer));
+                    outputBoundReached = true;
+                    AddOrMergeContinuation(
+                        continuations,
+                        CreateSkippedCandidateContinuation(
+                            snapshot,
+                            broadContainer,
+                            "The oversized container envelope was replaced by more specific selected members from the same file."));
+                    allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                        ToRepositoryRelativePath(broadContainer.FilePath, snapshot.RepositoryPath),
+                        0,
+                        0,
+                        CodeExploreSourceCompleteness.Omitted,
+                        false,
+                        "An oversized non-exact container envelope was omitted because more specific selected members carry the file's source reservation."));
+                }
+
+                var unclutteredCandidates = eligibleCandidates
+                    .Where(candidate => !broadContainerKeys.Contains(CreateSectionKey(candidate)))
+                    .ToArray();
+                var orderedCandidates = await ClusterNearbySourceCandidatesAsync(
+                    unclutteredCandidates,
+                    selectedRelevance,
+                    queryInterpretation,
+                    request.Limits.MaximumPerFileSourceCharacters,
+                    timeout.Token);
+                var sourceAllocationCandidates = CreateSourceAllocationCandidates(
+                    orderedCandidates,
+                    selectedRelevance,
+                    queryInterpretation);
+                var allocationPlan = CodeExploreSourceAllocationPlanner.Create(
+                    sourceAllocationCandidates,
+                    remainingSourceCharacters,
+                    Math.Max(0, request.Limits.MaximumFiles - selectedSourceFiles.Count),
+                    request.Limits.MaximumPerFileSourceCharacters);
+                var remainingReservations = allocationPlan.Reservations.ToDictionary(
+                    item => item.Key,
+                    item => item.Value,
+                    StringComparer.Ordinal);
+                var remainingCandidatesByAllocationKey = orderedCandidates
+                    .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+                foreach (var candidate in orderedCandidates)
                 {
                     timeout.Token.ThrowIfCancellationRequested();
                     var dedupeKey = CreateSectionKey(candidate);
+                    var allocationKey = CreateSourceAllocationKey(candidate);
                     if (!seenSections.Add(dedupeKey))
                     {
+                        continue;
+                    }
+
+                    if (!allocationPlan.Reservations.TryGetValue(allocationKey, out var reservation))
+                    {
+                        outputBoundReached = true;
+                        var continuation = CreateSkippedCandidateContinuation(
+                            snapshot,
+                            candidate,
+                            "The source allocation pass retained stronger evidence above the relevance cliff.");
+                        AddOrMergeContinuation(continuations, continuation);
+                        allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                            ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
+                            0,
+                            0,
+                            CodeExploreSourceCompleteness.Omitted,
+                            false,
+                            "Source was cliffed by relevance-aware allocation; use the continuation target if this tail evidence is needed."));
                         continue;
                     }
 
@@ -1007,46 +1190,50 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         dedupReasons.Add(disqualificationReason);
                     }
 
-                    if (selectedSections.Count >= request.Limits.MaximumFiles)
+                    var relativeCandidatePath = ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath);
+                    if (!selectedSourceFiles.Contains(relativeCandidatePath)
+                        && selectedSourceFiles.Count >= request.Limits.MaximumFiles)
                     {
                         outputBoundReached = true;
-                        AddContinuationIfWithinLimit(
+                        AddOrMergeContinuation(
                             continuations,
                             CreateSkippedCandidateContinuation(
                                 snapshot,
                                 candidate,
-                                "The maximum file-section count was reached."),
-                            request.Limits.MaximumFiles);
-                        break;
+                                "The maximum file-section count was reached."));
+                        continue;
                     }
 
                     if (remainingSourceCharacters <= 0 && selectedSections.Count > 0)
                     {
                         outputBoundReached = true;
-                        AddContinuationIfWithinLimit(
+                        AddOrMergeContinuation(
                             continuations,
                             CreateSkippedCandidateContinuation(
                                 snapshot,
                                 candidate,
-                                "The maximum total source-character count was reached."),
-                            request.Limits.MaximumFiles);
-                        break;
+                                "The maximum total source-character count was reached."));
+                        continue;
                     }
 
-                    var sourceAllowance = CalculateCodeExploreSourceAllowance(
-                        candidate,
-                        candidates,
-                        selectedSections.Count,
-                        remainingSourceCharacters,
-                        request.Limits);
-                    if (sourceAllowance <= 0 && selectedSections.Count > 0)
+                    var remainingFileReservation = remainingReservations.GetValueOrDefault(allocationKey);
+                    var remainingCandidatesInFile = remainingCandidatesByAllocationKey.GetValueOrDefault(allocationKey, 1);
+                    var fairFileShare = remainingFileReservation / Math.Max(1, remainingCandidatesInFile);
+                    var availableForCandidate = Math.Min(
+                        request.Limits.MaximumPerFileSourceCharacters,
+                        Math.Min(remainingFileReservation, Math.Max(0, remainingSourceCharacters)));
+                    var sourceAllowance = Math.Min(
+                        availableForCandidate,
+                        Math.Max(MinimumUsefulSourceCharacters, fairFileShare));
+                    if (sourceAllowance <= 0
+                        || (sourceAllowance < MinimumUsefulSourceCharacters && selectedSections.Count > 0))
                     {
                         outputBoundReached = true;
                         var continuation = CreateSkippedCandidateContinuation(
                             snapshot,
                             candidate,
                             "The source allocation pass reserved remaining budget for stronger code_explore candidates.");
-                        AddContinuationIfWithinLimit(continuations, continuation, request.Limits.MaximumFiles);
+                        AddOrMergeContinuation(continuations, continuation);
                         allocationFiles.Add(new CodeExploreAllocationFileSummary(
                             ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
                             0,
@@ -1064,6 +1251,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         candidate,
                         sourceAllowance,
                         timeout.Token);
+                    remainingReservations[allocationKey] = Math.Max(
+                        0,
+                        remainingFileReservation - projected.SourceCharacters);
+                    remainingCandidatesByAllocationKey[allocationKey] = Math.Max(
+                        0,
+                        remainingCandidatesInFile - 1);
                     remainingSourceCharacters -= projected.SourceCharacters;
                     var unreclaimedSourceCharacters = ConsumeSourceCharacters(
                         ref remainingSourceCharactersWithoutSuppression,
@@ -1077,6 +1270,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     }
 
                     selectedSections.Add(projected.Section);
+                    _ = selectedSourceFiles.Add(projected.Section.FilePath);
                     if (CanUseProjectedSectionAsArtifactOrigin(projected))
                     {
                         selectedArtifactOrigins.Add(candidate);
@@ -1108,7 +1302,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         projected.Section.Source.OmittedRanges.FirstOrDefault()));
                     foreach (var continuation in projected.ContinuationTargets)
                     {
-                        AddContinuationIfWithinLimit(continuations, continuation, request.Limits.MaximumFiles);
+                        AddOrMergeContinuation(continuations, continuation);
                     }
 
                     outputBoundReached |= projected.ContinuationTargets.Count > 0
@@ -1184,7 +1378,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var sourceComplete = !timeReached
             && !missingSourceForResolvedAnchor
             && selectedSections.All(section => section.Source.Completeness == CodeExploreSourceCompleteness.Complete)
-            && selectedSections.Count + backReferences.Count == candidates.Select(CreateSectionKey).Distinct(StringComparer.Ordinal).Count();
+            && selectedSections.Sum(section => Math.Max(1, section.SemanticIdentities.Count))
+                + backReferences.Count
+                == candidates.Select(CreateSectionKey).Distinct(StringComparer.Ordinal).Count();
         var sourceOmissions = selectedSections
             .SelectMany(section => section.Source.OmittedRanges)
             .Distinct(StringComparer.Ordinal);
@@ -1561,7 +1757,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             limits.MaximumFiles,
             limits.MaximumSourceCharacters,
             limits.MaximumPerFileSourceCharacters,
-            ResolveNaturalLanguageCandidateSummaryLimit(limits.MaximumSourceCharacters, 0),
+            ResolveNaturalLanguageCandidateSummaryLimit(limits.MaximumSourceCharacters, 0, 0),
             envelope.RecommendedFollowUpCount,
             envelope.PresentationVerbosity,
             budgetSource);
@@ -1585,11 +1781,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         return tier switch
         {
-            CodeExploreRepositoryScaleTier.Tiny => (4, 24_000, 10_000, 1, CodeExplorePresentationVerbosity.Compact),
-            CodeExploreRepositoryScaleTier.Small => (6, 36_000, 12_000, 1, CodeExplorePresentationVerbosity.Compact),
-            CodeExploreRepositoryScaleTier.Large => (8, 48_000, 14_000, 3, CodeExplorePresentationVerbosity.Guided),
-            CodeExploreRepositoryScaleTier.VeryLarge => (8, 44_000, 12_000, 4, CodeExplorePresentationVerbosity.Guided),
-            _ => (8, 50_000, 16_384, 2, CodeExplorePresentationVerbosity.Standard),
+            CodeExploreRepositoryScaleTier.Tiny => (4, 13_000, 3_800, 1, CodeExplorePresentationVerbosity.Compact),
+            CodeExploreRepositoryScaleTier.Small => (5, 18_000, 3_800, 1, CodeExplorePresentationVerbosity.Compact),
+            CodeExploreRepositoryScaleTier.Large => (8, 24_000, 6_500, 3, CodeExplorePresentationVerbosity.Guided),
+            CodeExploreRepositoryScaleTier.VeryLarge => (8, 24_000, 7_000, 4, CodeExplorePresentationVerbosity.Guided),
+            _ => (8, 24_000, 6_500, 2, CodeExplorePresentationVerbosity.Standard),
         };
     }
 
@@ -1621,97 +1817,338 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             + "; request.maximumSourceCharacters after reserved metadata, plus relevance-aware per-file allocation";
     }
 
-    private static int CalculateCodeExploreSourceAllowance(
-        CodeExploreSectionCandidate candidate,
+    private static async Task<CodeExploreSectionCandidate[]> ClusterNearbySourceCandidatesAsync(
         IReadOnlyList<CodeExploreSectionCandidate> candidates,
-        int selectedSectionCount,
-        int remainingSourceCharacters,
-        CodeExploreLimits limits)
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance,
+        CodeExploreQueryInterpretation queryInterpretation,
+        int maximumPerFileSourceCharacters,
+        CancellationToken cancellationToken)
     {
-        if (remainingSourceCharacters <= 0)
+        var clustered = new List<CodeExploreSectionCandidate>();
+        foreach (var fileGroup in candidates.GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal))
         {
-            return 0;
+            cancellationToken.ThrowIfCancellationRequested();
+            var eligible = fileGroup
+                .Where(candidate => IsClusterableSourceCandidate(candidate)
+                    && !IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation))
+                .OrderBy(candidate => candidate.Span?.Start)
+                .ToArray();
+            clustered.AddRange(fileGroup.Where(candidate => !IsClusterableSourceCandidate(candidate)
+                || IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation)));
+            if (eligible.Length == 0)
+            {
+                continue;
+            }
+
+            var document = eligible[0].Document
+                ?? throw new InvalidOperationException("Clustered source requires a loaded document.");
+            var text = await document.GetTextAsync(cancellationToken);
+            var current = eligible[0];
+            foreach (var next in eligible.Skip(1))
+            {
+                if (CanClusterSourceCandidates(current, next, text, maximumPerFileSourceCharacters))
+                {
+                    current = MergeSourceCandidates(current, next);
+                    continue;
+                }
+
+                clustered.Add(current);
+                current = next;
+            }
+
+            clustered.Add(current);
         }
 
-        var maximumPerFile = Math.Min(remainingSourceCharacters, limits.MaximumPerFileSourceCharacters);
-        if (selectedSectionCount == 0 || IsPrimaryCodeExploreSourceCandidate(candidate))
-        {
-            return maximumPerFile;
-        }
-
-        if (remainingSourceCharacters < MinimumUsefulSourceCharacters)
-        {
-            return 0;
-        }
-
-        var remainingSlots = Math.Max(1, limits.MaximumFiles - selectedSectionCount);
-        if (IsWeakTailCodeExploreSourceCandidate(candidate, limits)
-            && remainingSourceCharacters < MinimumUsefulSourceCharacters * Math.Max(2, remainingSlots))
-        {
-            return 0;
-        }
-
-        var futureUsefulReserve = MinimumUsefulSourceCharacters * Math.Max(0, remainingSlots - 1);
-        var spendableForThisFile = Math.Max(
-            MinimumUsefulSourceCharacters,
-            remainingSourceCharacters - Math.Min(futureUsefulReserve, remainingSourceCharacters - MinimumUsefulSourceCharacters));
-        var relevanceCap = CalculateCandidateSourceCap(candidate, candidates, limits.MaximumPerFileSourceCharacters);
-        return Math.Min(maximumPerFile, Math.Min(relevanceCap, spendableForThisFile));
+        return
+        [
+            .. clustered
+                .OrderByDescending(candidate => candidate.IsFlowSpine)
+                .ThenByDescending(candidate => candidate.Importance)
+                .ThenBy(candidate => IsExactSelectedSourceCandidate(
+                    candidate,
+                    selectedRelevance,
+                    queryInterpretation) ? 0 : 1)
+                .ThenBy(candidate => candidate.Priority)
+                .ThenBy(candidate => candidate.AllocationRank ?? int.MaxValue)
+                .ThenBy(candidate => candidate.FilePath, PathComparer)
+                .ThenBy(candidate => candidate.Span?.Start ?? candidate.PreferredLine ?? 0)
+                .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal),
+        ];
     }
 
-    private static bool IsPrimaryCodeExploreSourceCandidate(CodeExploreSectionCandidate candidate)
+    private static bool IsClusterableSourceCandidate(CodeExploreSectionCandidate candidate)
     {
-        return candidate.Priority <= 1
-            || candidate.AllocationRank is > 0 and <= 2
-            || candidate.SelectionReason.Contains("Pinned", StringComparison.OrdinalIgnoreCase)
-            || candidate.SelectionReason.Contains("flow", StringComparison.OrdinalIgnoreCase);
+        return candidate.Document is not null
+            && candidate.Span is not null
+            && candidate.Identity is not null
+            && candidate.SelectionMode == CodeExplorePathSelectionMode.Auto
+            && candidate.ExpectedFileSha256 is null
+            && candidate.ExpectedWorkspaceGeneration is null;
     }
 
-    private static bool IsWeakTailCodeExploreSourceCandidate(
-        CodeExploreSectionCandidate candidate,
-        CodeExploreLimits limits)
+    private static bool CanClusterSourceCandidates(
+        CodeExploreSectionCandidate current,
+        CodeExploreSectionCandidate next,
+        SourceText text,
+        int maximumPerFileSourceCharacters)
     {
-        if (IsPrimaryCodeExploreSourceCandidate(candidate))
+        if (current.Document?.Id != next.Document?.Id
+            || current.Span is not { } currentSpan
+            || next.Span is not { } nextSpan)
         {
             return false;
         }
 
-        var allocationRank = candidate.AllocationRank ?? int.MaxValue;
-        return candidate.Priority >= 4 || allocationRank > Math.Max(2, limits.MaximumFiles / 2);
+        var union = TextSpan.FromBounds(
+            Math.Min(currentSpan.Start, nextSpan.Start),
+            Math.Max(currentSpan.End, nextSpan.End));
+        if (union.Length > maximumPerFileSourceCharacters)
+        {
+            return false;
+        }
+
+        var currentEnd = Math.Max(currentSpan.End - 1, currentSpan.Start);
+        var currentEndLine = text.Lines.GetLineFromPosition(Math.Min(currentEnd, text.Length)).LineNumber;
+        var nextStartLine = text.Lines.GetLineFromPosition(Math.Min(nextSpan.Start, text.Length)).LineNumber;
+        return nextStartLine - currentEndLine - 1 <= MaximumSourceClusterGapLines;
     }
 
-    private static int CalculateCandidateSourceCap(
-        CodeExploreSectionCandidate candidate,
+    private static CodeExploreSectionCandidate MergeSourceCandidates(
+        CodeExploreSectionCandidate current,
+        CodeExploreSectionCandidate next)
+    {
+        var currentSpan = current.Span
+            ?? throw new InvalidOperationException("Clustered source requires a current source span.");
+        var nextSpan = next.Span
+            ?? throw new InvalidOperationException("Clustered source requires a next source span.");
+        var identities = CreateSectionIdentities(current)
+            .Concat(CreateSectionIdentities(next))
+            .DistinctBy(identity => identity.Id, StringComparer.Ordinal)
+            .ToArray();
+        return current with
+        {
+            Span = TextSpan.FromBounds(
+                Math.Min(currentSpan.Start, nextSpan.Start),
+                Math.Max(currentSpan.End, nextSpan.End)),
+            Identity = identities[0],
+            Location = MergeClusteredLocations(current.Location, next.Location),
+            AdditionalIdentities = identities.Skip(1).ToArray(),
+            Priority = Math.Min(current.Priority, next.Priority),
+            PreferredLine = MinNullable(current.PreferredLine, next.PreferredLine),
+            EndLine = MaxNullable(current.EndLine, next.EndLine),
+            AllocationRank = current.AllocationRank is { } currentRank
+                ? next.AllocationRank is { } nextRank
+                    ? Math.Min(currentRank, nextRank)
+                    : currentRank
+                : next.AllocationRank,
+            Importance = MaxSourceImportance(current.Importance, next.Importance),
+            IsFlowSpine = current.IsFlowSpine || next.IsFlowSpine,
+            SelectionReason = "Nearby selected declarations were clustered into one exact contiguous source range.",
+        };
+    }
+
+    private static CodeExploreSourceImportance MaxSourceImportance(
+        CodeExploreSourceImportance left,
+        CodeExploreSourceImportance right)
+    {
+        return (CodeExploreSourceImportance)Math.Max((int)left, (int)right);
+    }
+
+    private static CodeExploreLocation? MergeClusteredLocations(
+        CodeExploreLocation? current,
+        CodeExploreLocation? next)
+    {
+        if (current is null)
+        {
+            return next;
+        }
+
+        if (next is null)
+        {
+            return current;
+        }
+
+        var startColumn = current.Range.StartLine <= next.Range.StartLine
+            ? current.Range.StartColumn
+            : next.Range.StartColumn;
+        var endColumn = current.Range.EndLine >= next.Range.EndLine
+            ? current.Range.EndColumn
+            : next.Range.EndColumn;
+        return current with
+        {
+            Range = new SourceRange(
+                Math.Min(current.Range.StartLine, next.Range.StartLine),
+                startColumn,
+                Math.Max(current.Range.EndLine, next.Range.EndLine),
+                endColumn),
+        };
+    }
+
+    private static int? MinNullable(int? left, int? right)
+    {
+        return left is null ? right : right is null ? left : Math.Min(left.Value, right.Value);
+    }
+
+    private static int? MaxNullable(int? left, int? right)
+    {
+        return left is null ? right : right is null ? left : Math.Max(left.Value, right.Value);
+    }
+
+    private static IReadOnlySet<string> GetBroadContainerSourceCandidateKeys(
         IReadOnlyList<CodeExploreSectionCandidate> candidates,
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance,
+        CodeExploreQueryInterpretation queryInterpretation,
         int maximumPerFileSourceCharacters)
     {
-        var relatedCandidatesInFile = candidates.Count(other => string.Equals(other.FilePath, candidate.FilePath, PathComparison));
-        var cap = candidate.Priority switch
+        var suppressed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
         {
-            <= 1 => maximumPerFileSourceCharacters,
-            2 => maximumPerFileSourceCharacters * 3 / 4,
-            3 or 4 => maximumPerFileSourceCharacters / 2,
-            _ => maximumPerFileSourceCharacters / 3,
+            if (candidate.Span is not { } containerSpan
+                || candidate.Identity is not { } identity
+                || !IsTypeDeclarationKind(identity.Kind)
+                || IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation))
+            {
+                continue;
+            }
+
+            var moreSpecificCandidates = candidates.Where(other =>
+                !ReferenceEquals(other, candidate)
+                && PathComparer.Equals(other.FilePath, candidate.FilePath)
+                && other.Span is { } memberSpan
+                && containerSpan.Contains(memberSpan)
+                && containerSpan != memberSpan)
+                .ToArray();
+            var hasExactMember = moreSpecificCandidates.Any(other =>
+                IsExactSelectedSourceCandidate(other, selectedRelevance, queryInterpretation));
+            var isBroadCompanion = string.Equals(
+                candidate.SelectionReason,
+                NaturalLanguageCompanionSourceReason,
+                StringComparison.Ordinal);
+            var hasPrimaryMember = moreSpecificCandidates.Any(other => string.Equals(
+                other.SelectionReason,
+                NaturalLanguageAnchorSourceReason,
+                StringComparison.Ordinal));
+            if (hasExactMember
+                || (isBroadCompanion && hasPrimaryMember)
+                || (containerSpan.Length > maximumPerFileSourceCharacters
+                    && moreSpecificCandidates.Length > 0))
+            {
+                _ = suppressed.Add(CreateSectionKey(candidate));
+            }
+        }
+
+        return suppressed;
+    }
+
+    private static IReadOnlyList<CodeExploreSourceAllocationCandidate> CreateSourceAllocationCandidates(
+        IReadOnlyList<CodeExploreSectionCandidate> candidates,
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance,
+        CodeExploreQueryInterpretation queryInterpretation)
+    {
+        var files = candidates
+            .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var fileCandidates = group.ToArray();
+                var relevance = fileCandidates
+                    .Select(candidate => candidate.Identity is null
+                        ? null
+                        : selectedRelevance.GetValueOrDefault(candidate.Identity.Id))
+                    .Where(item => item is not null)
+                    .Cast<CodeExploreSelectedRelevance>()
+                    .OrderByDescending(item => item.Score)
+                    .ToArray();
+                var rawScore = relevance.Length > 0
+                    ? relevance[0].Score + Math.Min(5, relevance.Skip(1).Sum(item => item.Score) / 100.0)
+                    : fileCandidates.Max(candidate => candidate.Priority switch
+                    {
+                        <= 0 => 50,
+                        1 => 10,
+                        2 => 3,
+                        _ => 1,
+                    });
+                var allocationRank = relevance
+                    .Select(item => item.Rank)
+                    .Concat(fileCandidates
+                        .Select(candidate => candidate.AllocationRank)
+                        .Where(rank => rank.HasValue)
+                        .Select(rank => rank.GetValueOrDefault()))
+                    .DefaultIfEmpty(fileCandidates.Min(candidate => Math.Max(1, candidate.Priority + 1)))
+                    .Min();
+                var isFlowSpine = fileCandidates.Any(candidate => candidate.IsFlowSpine);
+                var isPinned = fileCandidates.Any(candidate => IsExactSelectedSourceCandidate(
+                        candidate,
+                        selectedRelevance,
+                        queryInterpretation)
+                    || candidate.Importance == CodeExploreSourceImportance.Pinned
+                    || candidate.AnchorKind == CodeExploreAnchorKind.Path
+                    || candidate.Priority == 0
+                    || candidate.SelectionMode != CodeExplorePathSelectionMode.Auto);
+                var isGenerated = fileCandidates.All(candidate =>
+                    candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath));
+                var isTest = fileCandidates.All(candidate => IsTestProjectNameOrPath(
+                    candidate.Location?.ProjectName ?? string.Empty,
+                    candidate.FilePath));
+                var sourceWorth = isPinned
+                    ? 1.0
+                    : isGenerated
+                    ? CodeExploreRelevancePolicy.GeneratedScoreMultiplier
+                    : isTest
+                        ? CodeExploreRelevancePolicy.TestScoreMultiplier
+                        : 1.0;
+                return new
+                {
+                    StableKey = group.Key,
+                    RawScore = rawScore,
+                    IsPinned = isPinned,
+                    IsFlowSpine = isFlowSpine,
+                    SourceWorth = sourceWorth,
+                    AllocationRank = allocationRank,
+                };
+            })
+            .ToArray();
+        var maximumRawScore = files
+            .Select(file => file.RawScore)
+            .DefaultIfEmpty(1)
+            .Max();
+        return files
+            .Select(file => new CodeExploreSourceAllocationCandidate(
+                file.StableKey,
+                (50 * file.RawScore / Math.Max(1, maximumRawScore)) * (file.IsFlowSpine ? 2 : 1),
+                file.SourceWorth,
+                file.IsPinned,
+                file.IsFlowSpine,
+                file.AllocationRank))
+            .ToArray();
+    }
+
+    private static bool IsExactSelectedSourceCandidate(
+        CodeExploreSectionCandidate candidate,
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance,
+        CodeExploreQueryInterpretation queryInterpretation)
+    {
+        if (CreateSectionIdentities(candidate).Any(identity =>
+            selectedRelevance.TryGetValue(identity.Id, out var relevance)
+            && HasExactCandidateReason(relevance.Reasons)))
+        {
+            return true;
+        }
+
+        return candidate.AnchorKind switch
+        {
+            CodeExploreAnchorKind.SymbolId => queryInterpretation.StableSymbolIds.Contains(
+                candidate.Anchor,
+                StringComparer.Ordinal),
+            CodeExploreAnchorKind.Path => queryInterpretation.PathLikeSpans.Any(path =>
+                PathComparer.Equals(path, candidate.Anchor)),
+            _ => false,
         };
-        if (relatedCandidatesInFile > 1)
-        {
-            cap += maximumPerFileSourceCharacters / 8;
-        }
+    }
 
-        if ((candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath))
-            && !candidate.SelectionReason.Contains("generated", StringComparison.OrdinalIgnoreCase))
-        {
-            cap -= maximumPerFileSourceCharacters / 8;
-        }
-
-        var candidatePathForTestClassification = (candidate.Location?.FilePath ?? candidate.FilePath).Replace('\\', '/');
-        if (IsTestProjectNameOrPath(candidate.Location?.ProjectName ?? string.Empty, candidatePathForTestClassification)
-            && !candidate.SelectionReason.Contains("test", StringComparison.OrdinalIgnoreCase))
-        {
-            cap -= maximumPerFileSourceCharacters / 8;
-        }
-
-        return Math.Clamp(cap, MinimumUsefulSourceCharacters, maximumPerFileSourceCharacters);
+    private static string CreateSourceAllocationKey(CodeExploreSectionCandidate candidate)
+    {
+        var normalized = candidate.FilePath.Replace('\\', '/');
+        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
     }
 
     private static CodeExploreAvailability CreateCodeExploreAvailability(
@@ -1740,6 +2177,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CreateTimeoutAvailabilityActions(continuationTargets));
         }
 
+        if (IsProjectScopedCodeExploreSnapshot(snapshot))
+        {
+            var canRefineAnchor = !hasVisibleSource
+                && resolutions.Count > 0
+                && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.NotFound);
+            return CreateProjectScopedCodeExploreAvailability(
+                snapshot,
+                hasVisibleSource,
+                canRefineAnchor);
+        }
+
         if (!hasVisibleSource
             && resolutions.Count > 0
             && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
@@ -1747,13 +2195,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.NoMatchingDeclarations,
                 "No compiler-known C# declaration or confined C# path matched the request.",
-                false,
+                true,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.RefineAnchor,
-                    "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+                    "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
         }
 
         if (!hasVisibleSource && HasPolicySourceOmission(resolutions, sections, coverage.Omissions))
@@ -1778,6 +2226,50 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             SemanticConfidenceLevel.PartialCompilation,
             !coverage.SourceComplete,
             []);
+    }
+
+    private static bool IsProjectScopedCodeExploreSnapshot(AdvancedSemanticSnapshot snapshot)
+    {
+        return Path.GetExtension(snapshot.WorkspacePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static CodeExploreAvailability CreateProjectScopedCodeExploreAvailability(
+        AdvancedSemanticSnapshot snapshot,
+        bool hasVisibleSource,
+        bool canRefineAnchor)
+    {
+        var actions = new List<CodeExploreNextActionHint>();
+        if (hasVisibleSource)
+        {
+            actions.Add(new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.UseReturnedSource,
+                "Use the returned source only for the loaded project's advertised ranges."));
+        }
+        else if (canRefineAnchor)
+        {
+            actions.Add(new CodeExploreNextActionHint(
+                CodeExploreNextActionKind.RefineAnchor,
+                "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor."));
+        }
+
+        const string granularFallback = "Keep complete returned file sections as current source evidence and do not reread those ranges. "
+            + "Search once for the most distinctive missing identifier, then read only the exact missing ranges.";
+        actions.Add(new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.UseGranularFallback,
+            granularFallback));
+        actions.Add(new CodeExploreNextActionHint(
+            CodeExploreNextActionKind.OpenWorkspace,
+            "Load the repository solution to obtain compiler-aware cross-project source and usage coverage."));
+        var reason = $"The semantic workspace was loaded from one project ({Path.GetFileName(snapshot.WorkspacePath)}); "
+            + "referenced projects may be metadata-only and upstream projects or tests are outside this result.";
+        return new CodeExploreAvailability(
+            CodeExploreAvailabilityStatus.ProjectScopedPartial,
+            reason,
+            true,
+            snapshot.Confidence,
+            SemanticConfidenceLevel.PartialCompilation,
+            true,
+            actions);
     }
 
     private static IReadOnlyList<CodeExploreNextActionHint> CreateTimeoutAvailabilityActions(
@@ -2156,7 +2648,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .GroupBy(file => file.FilePath, PathComparer)
             .ToDictionary(
                 group => group.Key,
-                group => group.Last(),
+                group => new CodeExploreAllocationFileSummary(
+                    group.Key,
+                    group.Sum(file => file.AllowedCharacters),
+                    group.Sum(file => file.SpentCharacters),
+                    group.Max(file => file.Completeness),
+                    group.Any(file => file.UsefulSection),
+                    group.Select(file => file.OmissionReason).FirstOrDefault(reason => reason is not null)),
                 PathComparer);
         var sectionSourceCharacters = sections
             .GroupBy(section => section.FilePath, PathComparer)
@@ -2269,10 +2767,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static int CountFileQueryTermCoverage(string filePath, CodeExploreQueryInterpretation interpretation)
     {
-        return interpretation.Terms
-            .Concat(interpretation.ExactIdentifiers)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count(term => filePath.Contains(term, StringComparison.OrdinalIgnoreCase));
+        var fileTerms = CreateCanonicalCodeExploreTermSet([filePath]);
+        var queryTerms = CreateCanonicalCodeExploreTermSet(
+            interpretation.Terms.Concat(interpretation.ExactIdentifiers));
+        return queryTerms.Count(fileTerms.Contains);
     }
 
     private static CodeExploreFileOutputStatus ResolveFileOutputStatus(
@@ -2346,15 +2844,78 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return consumed;
     }
 
-    private static void AddContinuationIfWithinLimit(
+    private static void AddOrMergeContinuation(
         List<CodeExploreContinuationTarget> continuations,
-        CodeExploreContinuationTarget target,
-        int maximumContinuations)
+        CodeExploreContinuationTarget target)
     {
-        if (continuations.Count < maximumContinuations)
+        if (target.Kind == CodeExploreAnchorKind.Path && target.FilePath is not null)
         {
-            continuations.Add(target);
+            var existingIndex = continuations.FindIndex(existing =>
+                existing.Kind == CodeExploreAnchorKind.Path
+                && existing.FilePath is not null
+                && PathComparer.Equals(existing.FilePath, target.FilePath));
+            if (existingIndex >= 0)
+            {
+                continuations[existingIndex] = MergeSourceContinuation(
+                    continuations[existingIndex],
+                    target);
+                return;
+            }
         }
+
+        continuations.Add(target);
+    }
+
+    private static CodeExploreContinuationTarget MergeSourceContinuation(
+        CodeExploreContinuationTarget existing,
+        CodeExploreContinuationTarget additional)
+    {
+        var selectionMode = existing.SelectionMode == CodeExplorePathSelectionMode.WholeFile
+                || additional.SelectionMode == CodeExplorePathSelectionMode.WholeFile
+                || existing.StartLine is null
+                || additional.StartLine is null
+            ? CodeExplorePathSelectionMode.WholeFile
+            : existing.SelectionMode == CodeExplorePathSelectionMode.TailWindow
+                || additional.SelectionMode == CodeExplorePathSelectionMode.TailWindow
+                || (existing.SelectionMode == CodeExplorePathSelectionMode.Auto
+                    && existing.StartAtLine)
+                || (additional.SelectionMode == CodeExplorePathSelectionMode.Auto
+                    && additional.StartAtLine)
+                ? CodeExplorePathSelectionMode.TailWindow
+                : CodeExplorePathSelectionMode.ExactLineRange;
+        var startLine = selectionMode == CodeExplorePathSelectionMode.WholeFile
+            ? null
+            : MinNullable(existing.StartLine, additional.StartLine);
+        var endLine = selectionMode == CodeExplorePathSelectionMode.ExactLineRange
+            ? MaxNullable(
+                existing.EndLine ?? existing.StartLine,
+                additional.EndLine ?? additional.StartLine)
+            : null;
+        var reason = StringComparer.Ordinal.Equals(existing.Reason, additional.Reason)
+            ? existing.Reason
+            : "Multiple omitted source ranges in this file were aggregated into one continuation target.";
+        var expectedFileSha256 = StringComparer.Ordinal.Equals(
+            existing.ExpectedFileSha256,
+            additional.ExpectedFileSha256)
+                ? existing.ExpectedFileSha256
+                : null;
+        var workspaceGeneration = existing.WorkspaceGeneration == additional.WorkspaceGeneration
+            ? existing.WorkspaceGeneration
+            : null;
+        var filePath = existing.FilePath
+            ?? additional.FilePath
+            ?? throw new InvalidOperationException("A source continuation requires a file path.");
+        return new CodeExploreContinuationTarget(
+            CodeExploreAnchorKind.Path,
+            filePath,
+            filePath,
+            startLine,
+            endLine,
+            selectionMode == CodeExplorePathSelectionMode.TailWindow,
+            selectionMode,
+            expectedFileSha256,
+            workspaceGeneration,
+            reason);
     }
 
     private static bool CanUseProjectedSectionAsArtifactOrigin(ProjectedCodeExploreSection projected)
@@ -4140,35 +4701,99 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         long? ExpectedWorkspaceGeneration,
         int? AllocationRank,
         SourceText? PreloadedText,
-        string? PreloadedFileSha256);
+        string? PreloadedFileSha256,
+        CodeExploreSourceImportance Importance = CodeExploreSourceImportance.Supporting,
+        bool IsFlowSpine = false)
+    {
+        /// <summary>Gets additional declaration identities represented by a clustered source span.</summary>
+        public IReadOnlyList<SemanticSymbolIdentity> AdditionalIdentities { get; init; } = [];
+    }
 
-    private sealed record CodeExploreDeclarationCatalog(
-        string Key,
-        long WorkspaceGeneration,
-        IReadOnlyList<CodeExploreDeclarationCatalogEntry> Entries,
-        bool IsComplete,
-        IReadOnlyList<string> Omissions);
+    private enum CodeExploreSourceImportance
+    {
+        Supporting,
+        FlowSpine,
+        Named,
+        Pinned,
+    }
 
-    private sealed record CodeExploreDeclarationCatalogEntry(
-        SemanticSymbolIdentity Identity,
-        string Name,
-        string MetadataName,
-        string DisplayName,
-        string FullyQualifiedName,
-        string? ContainingType,
-        string? ContainingNamespace,
-        string Kind,
-        Accessibility DeclaredAccessibility,
-        string ProjectName,
-        string TargetFramework,
-        string FilePath,
-        string RelativeFilePath,
-        SourceRange Range,
-        bool IsGenerated,
-        bool IsLinked,
-        bool IsTest,
-        IReadOnlyList<string> Terms,
-        IReadOnlyList<string> QualifiedNames);
+    /// <summary>Owns synchronized cancellation for one shared catalog or graph build.</summary>
+    private interface ISharedCodeExploreBuild
+    {
+        /// <summary>Cancels unfinished work without racing cancellation-source disposal.</summary>
+        void Cancel();
+    }
+
+    private sealed class SharedCodeExploreBuild<T>(
+        Guid workspaceId,
+        long generation,
+        CancellationTokenSource cancellation,
+        Task<T> task) : ISharedCodeExploreBuild
+    {
+        private readonly Lock _cancellationGate = new();
+        private bool _cancelInProgress;
+        private bool _cancellationDisposed;
+        private bool _disposeCancellationRequested;
+
+        public Guid WorkspaceId { get; } = workspaceId;
+
+        public long Generation { get; } = generation;
+
+        public Task<T> Task { get; } = task;
+
+        public int WaiterCount { get; set; }
+
+        public void Cancel()
+        {
+            lock (_cancellationGate)
+            {
+                if (_cancellationDisposed || _cancelInProgress)
+                {
+                    return;
+                }
+
+                _cancelInProgress = true;
+                try
+                {
+                    cancellation.Cancel();
+                }
+                finally
+                {
+                    _cancelInProgress = false;
+                    if (_disposeCancellationRequested)
+                    {
+                        _cancellationDisposed = true;
+                        cancellation.Dispose();
+                    }
+                }
+            }
+        }
+
+        public void DisposeCancellation()
+        {
+            lock (_cancellationGate)
+            {
+                if (_cancellationDisposed)
+                {
+                    return;
+                }
+
+                if (_cancelInProgress)
+                {
+                    _disposeCancellationRequested = true;
+                    return;
+                }
+
+                _cancellationDisposed = true;
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private sealed record CodeExploreToolCapabilityDescriptor(
+        string ToolTypeName,
+        string Family,
+        IReadOnlySet<string> RelatedContractTypeNames);
 
     private sealed record CodeExploreRankedCandidate(
         CodeExploreDeclarationCatalogEntry Entry,
@@ -4176,7 +4801,28 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CodeExploreSelectionReason Reasons,
         int Score,
         int CoveredTermCount,
-        string AmbiguityGroup);
+        string AmbiguityGroup,
+        double GraphMass = 0,
+        bool IsGraphSeed = false,
+        bool IsFocusedNameMatch = false);
+
+    private sealed record CodeExploreTermCoverage(
+        string QueryTerm,
+        string CanonicalTerm,
+        double Strength);
+
+    private sealed class DescendingGraphMassComparer(double maximumGraphMass) : IComparer<double>
+    {
+        private readonly double _tieThreshold = Math.Max(0, maximumGraphMass)
+            * CodeExploreRelevancePolicy.GraphMassTieRatio;
+
+        public int Compare(double left, double right)
+        {
+            return Math.Abs(left - right) <= _tieThreshold
+                ? 0
+                : right.CompareTo(left);
+        }
+    }
 
     private sealed record NaturalLanguageIntentAdjustment(
         int Score,
@@ -4195,8 +4841,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CodeExploreNaturalLanguageIntent Intent,
         CodeExploreDiscoverySummary Discovery,
         CodeExploreCandidateSummary[] Candidates,
+        IReadOnlyList<CodeExploreRankedCandidate> SourceCompanions,
+        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> SelectedRelevance,
         IReadOnlyList<string> UnresolvedTerms,
         IReadOnlyList<string> Omissions);
+
+    private sealed record CodeExploreSelectedRelevance(
+        int Rank,
+        int Score,
+        double GraphMass,
+        CodeExploreSelectionReason Reasons);
+
+    private sealed record LocatedSemanticDocument(Document Document, bool IsSourceGenerated);
 
     private sealed record ProjectedCodeExploreSection(
         CodeExploreFileSection Section,
@@ -5282,6 +5938,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             symbol,
             anchor,
             selectionReason,
+            CodeExploreSourceImportance.FlowSpine,
             priority,
             sourceCandidates,
             cancellationToken);
@@ -5343,7 +6000,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             null,
             null,
-            null));
+            null,
+            CodeExploreSourceImportance.FlowSpine,
+            true));
     }
 
     private static async Task<bool> IsPolicyAllowedFlowSymbolAsync(
@@ -6275,19 +6934,103 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             projection,
             cancellationToken);
         var allowedEntries = GetAllowedCodeExploreCatalogEntries(catalog, sourceReader, cancellationToken);
-        var intent = ClassifyNaturalLanguageIntent(request, interpretation);
-        var ranked = RankNaturalLanguageCandidates(
+        if (allowedEntries.Length != catalog.Entries.Count)
+        {
+            allowedEntries = [.. LinkCodeExploreToolCapabilities(allowedEntries, cancellationToken)];
+        }
+
+        var candidateIndex = allowedEntries.Length == catalog.Entries.Count
+            ? catalog.Index
+            : CreateCodeExploreCandidateIndex(allowedEntries, cancellationToken);
+        var intentInterpretation = RemoveRepositoryNameContextTerm(snapshot, interpretation);
+        var intent = ClassifyNaturalLanguageIntent(request, intentInterpretation);
+        var rankingInterpretation = ApplyNaturalLanguageRetrievalVocabularyPolicy(intentInterpretation);
+        var relationshipIntent = intent switch
+        {
+            CodeExploreNaturalLanguageIntent.Flow => CodeExploreRelationshipIntent.Flow,
+            CodeExploreNaturalLanguageIntent.Impact => CodeExploreRelationshipIntent.Impact,
+            _ => (CodeExploreRelationshipIntent?)null,
+        };
+        var relationshipAnalysis = CodeExploreQueryIntentPolicy.Analyze(request.Query, relationshipIntent);
+        var nameSegmentEvidence = NaturalLanguageNameSegmentMatcher.Create(
+            candidateIndex.NameSegments,
+            allowedEntries
+                .Select(entry => entry.Identity.Id)
+                .ToHashSet(StringComparer.Ordinal),
+            request.Query,
+            relationshipAnalysis.ConsumedTerms,
+            cancellationToken);
+        if (ShouldUseProjectScopeFallback(snapshot, allowedEntries, rankingInterpretation, nameSegmentEvidence, intent))
+        {
+            var scopeOmission = $"The requested subject was not found in the loaded project's source scope ({Path.GetFileName(snapshot.WorkspacePath)}).";
+            return new NaturalLanguageCodeExploreDiscovery(
+                [],
+                rankingInterpretation with { UnresolvedTerms = rankingInterpretation.Terms },
+                intent,
+                new CodeExploreDiscoverySummary(
+                    allowedEntries.Length,
+                    0,
+                    0,
+                    catalog.IsComplete,
+                    !catalog.IsComplete,
+                    [],
+                    "loaded project source scope"),
+                [],
+                [],
+                new Dictionary<string, CodeExploreSelectedRelevance>(StringComparer.Ordinal),
+                rankingInterpretation.Terms,
+                [.. catalog.Omissions, scopeOmission]);
+        }
+
+        var retrievalToolFamilies = GetNaturalLanguageRetrievalToolFamilies(
+                intentInterpretation,
+                intent)
+            .Concat(GetMentionedCatalogToolFamilies(
+                allowedEntries,
+                rankingInterpretation,
+                request.Query))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var retrievalEntries = GetIndexedCodeExploreCandidates(
+            candidateIndex,
             allowedEntries,
-            interpretation,
+            rankingInterpretation,
+            nameSegmentEvidence,
+            retrievalToolFamilies,
+            cancellationToken);
+        var ranked = RankNaturalLanguageCandidates(
+            retrievalEntries,
+            candidateIndex,
+            rankingInterpretation,
+            nameSegmentEvidence,
+            retrievalToolFamilies,
             intent,
             cancellationToken);
+        ranked = ApplyNaturalLanguageConceptReranking(ranked, rankingInterpretation);
         ranked = await ApplyGraphConnectivityAsync(
+            workspaceId,
             snapshot,
             ranked,
-            interpretation,
+            allowedEntries,
+            rankingInterpretation,
             intent,
             cancellationToken);
-        ranked = ApplyNaturalLanguageRelativeFloor(ranked);
+        if (!HasTestFocus(rankingInterpretation)
+            && ranked.Count(candidate => !candidate.Entry.IsTest)
+                >= CodeExploreRelevancePolicy.MinimumProductionCandidatesForTestExclusion)
+        {
+            ranked =
+            [
+                .. ranked.Where(candidate => !candidate.Entry.IsTest
+                    || HasExactCandidateReason(candidate.Reasons)),
+            ];
+        }
+
+        ranked = ApplyNaturalLanguageFileRelevanceGate(
+            ranked,
+            rankingInterpretation,
+            retrievalToolFamilies);
+        ranked = ApplyNaturalLanguageRelativeFloor(ranked, retrievalToolFamilies);
         var rankedByIdentity = ranked
             .GroupBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal)
             .Select(group => group.First())
@@ -6295,7 +7038,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var anchors = new List<CodeExploreAnchor>();
         var summaries = new List<CodeExploreCandidateSummary>();
         var selectedIdentityIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbolId in interpretation.StableSymbolIds.Take(request.Limits.MaximumAnchors))
+        foreach (var symbolId in rankingInterpretation.StableSymbolIds.Take(request.Limits.MaximumAnchors))
         {
             var allocationRank = anchors.Count + 1;
             anchors.Add(new CodeExploreAnchor(
@@ -6321,7 +7064,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 symbolId));
         }
 
-        foreach (var path in interpretation.PathLikeSpans
+        foreach (var path in rankingInterpretation.PathLikeSpans
             .Where(IsCSharpPathSpan)
             .Distinct(PathComparer)
             .Take(Math.Max(0, request.Limits.MaximumAnchors - anchors.Count)))
@@ -6349,15 +7092,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 path));
         }
 
-        var symbolSlots = Math.Max(0, request.Limits.MaximumAnchors - anchors.Count);
+        var symbolSlots = ResolveNaturalLanguageAnchorLimit(
+            Math.Max(0, request.Limits.MaximumAnchors - anchors.Count),
+            request.Limits.MaximumFiles,
+            rankedByIdentity,
+            intent);
         var omissions = new List<string>(catalog.Omissions);
         var selected = SelectNaturalLanguageCandidates(
             rankedByIdentity,
             selectedIdentityIds,
             symbolSlots,
-            interpretation,
+            request.Limits.MaximumFiles,
+            intentInterpretation,
             intent,
+            retrievalToolFamilies,
             omissions);
+        var sourceCompanions = SelectNaturalLanguageSourceCompanions(
+            rankedByIdentity,
+            selected,
+            request.Limits);
         foreach (var candidate in selected)
         {
             if (!selectedIdentityIds.Add(candidate.Entry.Identity.Id))
@@ -6381,16 +7134,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var pinnedSummaryCount = summaries.Count;
         var maximumCandidateSummaries = ResolveNaturalLanguageCandidateSummaryLimit(
             request.Limits.MaximumSourceCharacters,
-            pinnedSummaryCount);
-        summaries.AddRange(rankedByIdentity
+            pinnedSummaryCount,
+            selected.Length);
+        var rankedCandidatesWithPositions = rankedByIdentity
+            .Select((candidate, index) => new
+            {
+                Candidate = candidate,
+                Rank = pinnedSummaryCount + index + 1,
+                IsSelected = selectedIds.Contains(candidate.Entry.Identity.Id),
+            })
+            .ToArray();
+        summaries.AddRange(rankedCandidatesWithPositions
+            .Where(item => item.IsSelected)
+            .Concat(rankedCandidatesWithPositions.Where(item => !item.IsSelected))
             .Take(maximumCandidateSummaries)
-            .Select((candidate, index) => CreateCandidateSummary(
-                candidate,
-                pinnedSummaryCount + index + 1,
-                selectedIds.Contains(candidate.Entry.Identity.Id),
+            .Select(item => CreateCandidateSummary(
+                item.Candidate,
+                item.Rank,
+                item.IsSelected,
                 intent)));
         var ambiguityGroups = CreateAmbiguityGroups(rankedByIdentity, selectedIds);
-        var unresolvedTerms = interpretation.Terms
+        var unresolvedTerms = rankingInterpretation.Terms
             .Where(term => !ranked.Any(candidate => CandidateCoversTerm(candidate.Entry, term)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
@@ -6420,7 +7184,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         return new NaturalLanguageCodeExploreDiscovery(
             anchors,
-            interpretation with { UnresolvedTerms = unresolvedTerms },
+            rankingInterpretation with { UnresolvedTerms = unresolvedTerms },
             intent,
             new CodeExploreDiscoverySummary(
                 allowedEntries.Length,
@@ -6431,8 +7195,55 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 ambiguityGroups,
                 "request.maximumAnchors, request.maximumFiles, and request.maximumSourceCharacters"),
             [.. summaries],
+            sourceCompanions,
+            selected
+                .Concat(sourceCompanions)
+                .Select((candidate, index) => new
+                {
+                    candidate.Entry.Identity.Id,
+                    Relevance = new CodeExploreSelectedRelevance(
+                        index + 1,
+                        candidate.Score,
+                        candidate.GraphMass,
+                        candidate.Reasons),
+                })
+                .ToDictionary(item => item.Id, item => item.Relevance, StringComparer.Ordinal),
             unresolvedTerms,
             omissions);
+    }
+
+    private static int ResolveNaturalLanguageAnchorLimit(
+        int availableSlots,
+        int maximumFiles,
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        if (intent == CodeExploreNaturalLanguageIntent.Exact)
+        {
+            return availableSlots;
+        }
+
+        var exactCandidateCount = ranked.Count(candidate => HasExactCandidateReason(candidate.Reasons));
+        var configuredLimit = Math.Min(
+            availableSlots,
+            Math.Max(Math.Min(maximumFiles, ranked.Count), exactCandidateCount));
+        if (intent == CodeExploreNaturalLanguageIntent.Flow)
+        {
+            return Math.Min(
+                configuredLimit,
+                Math.Max(
+                    Math.Min(CodeExploreRelevancePolicy.MaximumGraphEntryPoints, ranked.Count),
+                    exactCandidateCount));
+        }
+
+        if (intent != CodeExploreNaturalLanguageIntent.Impact)
+        {
+            return configuredLimit;
+        }
+
+        return Math.Min(
+            configuredLimit,
+            Math.Max(CodeExploreRelevancePolicy.MaximumGraphEntryPoints, exactCandidateCount));
     }
 
     private async Task<CodeExploreDeclarationCatalog> GetOrBuildCodeExploreCatalogAsync(
@@ -6442,34 +7253,205 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CancellationToken cancellationToken)
     {
         var key = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        CodeExploreDeclarationCatalog? cachedCatalog = null;
+        SharedCodeExploreBuild<CodeExploreDeclarationCatalog>? build = null;
+        List<ISharedCodeExploreBuild> supersededBuilds = [];
         lock (_catalogGate)
         {
+            ThrowIfSupersededCodeExploreGeneration(workspaceId.Value, snapshot.Generation);
+            if (!_latestCodeExploreCatalogGenerations.TryGetValue(workspaceId.Value, out var latestGeneration)
+                || snapshot.Generation > latestGeneration)
+            {
+                _latestCodeExploreCatalogGenerations[workspaceId.Value] = snapshot.Generation;
+                supersededBuilds.AddRange(RemoveSupersededCodeExploreBuilds(
+                    workspaceId.Value,
+                    snapshot.Generation));
+            }
+
             if (_codeExploreCatalogs.TryGetValue(key, out var existing))
             {
-                return existing;
+                cachedCatalog = existing;
+            }
+            else
+            {
+                if (!_codeExploreCatalogBuilds.TryGetValue(key, out build))
+                {
+                    var buildCancellation = new CancellationTokenSource();
+                    var buildTask = Task.Run(
+                        () => BuildCodeExploreCatalogAsync(
+                            key,
+                            snapshot,
+                            projection,
+                            buildCancellation.Token),
+                        buildCancellation.Token);
+                    build = new SharedCodeExploreBuild<CodeExploreDeclarationCatalog>(
+                        workspaceId.Value,
+                        snapshot.Generation,
+                        buildCancellation,
+                        buildTask);
+                    _codeExploreCatalogBuilds.Add(key, build);
+                    _ = CompleteCodeExploreCatalogBuildAsync(key, build);
+                }
+
+                build.WaiterCount++;
             }
         }
 
-        var catalog = await BuildCodeExploreCatalogAsync(key, snapshot, projection, cancellationToken);
+        CancelSharedCodeExploreBuilds(supersededBuilds);
+        if (cachedCatalog is not null)
+        {
+            return cachedCatalog;
+        }
+
+        try
+        {
+            return await build!.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            ReleaseCodeExploreCatalogBuildWaiter(key, build!);
+        }
+    }
+
+    private async Task CompleteCodeExploreCatalogBuildAsync(
+        string key,
+        SharedCodeExploreBuild<CodeExploreDeclarationCatalog> build)
+    {
+        CodeExploreDeclarationCatalog catalog;
+        try
+        {
+#pragma warning disable VSTHRD003 // This service created and separately observes the shared single-flight task.
+            catalog = await build.Task;
+#pragma warning restore VSTHRD003
+        }
+        catch
+        {
+            lock (_catalogGate)
+            {
+                RemoveMatchingBuild(_codeExploreCatalogBuilds, key, build);
+            }
+
+            build.DisposeCancellation();
+            return;
+        }
+
         lock (_catalogGate)
         {
-            foreach (var staleKey in _codeExploreCatalogs.Keys
-                .Where(item => item.StartsWith(workspaceId.Value.ToString("D"), StringComparison.Ordinal)
-                    && !string.Equals(item, key, StringComparison.Ordinal))
-                .ToArray())
+            RemoveMatchingBuild(_codeExploreCatalogBuilds, key, build);
+            if (_latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
+                && latestGeneration == build.Generation)
             {
-                _codeExploreCatalogs.Remove(staleKey);
-            }
+                foreach (var staleKey in _codeExploreCatalogs.Keys
+                    .Where(item => item.StartsWith(build.WorkspaceId.ToString("D"), StringComparison.Ordinal)
+                        && !string.Equals(item, key, StringComparison.Ordinal))
+                    .ToArray())
+                {
+                    _codeExploreCatalogs.Remove(staleKey);
+                    RemoveNaturalLanguageGraphCache(staleKey);
+                }
 
-            _codeExploreCatalogs[key] = catalog;
-            while (_codeExploreCatalogs.Count > MaximumCodeExploreCatalogs)
-            {
-                var firstKey = _codeExploreCatalogs.Keys.Order(StringComparer.Ordinal).First();
-                _codeExploreCatalogs.Remove(firstKey);
+                _codeExploreCatalogs[key] = catalog;
+                while (_codeExploreCatalogs.Count > MaximumCodeExploreCatalogs)
+                {
+                    var firstKey = _codeExploreCatalogs.Keys.Order(StringComparer.Ordinal).First();
+                    _codeExploreCatalogs.Remove(firstKey);
+                    RemoveNaturalLanguageGraphCache(firstKey);
+                }
             }
         }
 
-        return catalog;
+        build.DisposeCancellation();
+    }
+
+    private IReadOnlyList<ISharedCodeExploreBuild> RemoveSupersededCodeExploreBuilds(
+        Guid workspaceId,
+        long generation)
+    {
+        var cancellations = new List<ISharedCodeExploreBuild>();
+        foreach (var item in _codeExploreCatalogBuilds
+            .Where(item => item.Value.WorkspaceId == workspaceId
+                && item.Value.Generation < generation)
+            .ToArray())
+        {
+            _codeExploreCatalogBuilds.Remove(item.Key);
+            cancellations.Add(item.Value);
+        }
+
+        foreach (var item in _naturalLanguageGraphBuilds
+            .Where(item => item.Value.WorkspaceId == workspaceId
+                && item.Value.Generation < generation)
+            .ToArray())
+        {
+            _naturalLanguageGraphBuilds.Remove(item.Key);
+            cancellations.Add(item.Value);
+        }
+
+        return cancellations;
+    }
+
+    private void ReleaseCodeExploreCatalogBuildWaiter(
+        string key,
+        SharedCodeExploreBuild<CodeExploreDeclarationCatalog> build)
+    {
+        var cancel = false;
+        lock (_catalogGate)
+        {
+            if (_codeExploreCatalogBuilds.TryGetValue(key, out var current)
+                && ReferenceEquals(current, build))
+            {
+                build.WaiterCount--;
+                if (build.WaiterCount == 0 && !build.Task.IsCompleted)
+                {
+                    _codeExploreCatalogBuilds.Remove(key);
+                    cancel = true;
+                }
+            }
+        }
+
+        if (cancel)
+        {
+            build.Cancel();
+        }
+    }
+
+    private static void CancelSharedCodeExploreBuilds(
+        IEnumerable<ISharedCodeExploreBuild> builds)
+    {
+        foreach (var build in builds.Distinct())
+        {
+            build.Cancel();
+        }
+    }
+
+    private void ThrowIfSupersededCodeExploreGeneration(Guid workspaceId, long generation)
+    {
+        if (_latestCodeExploreCatalogGenerations.TryGetValue(workspaceId, out var latestGeneration)
+            && generation < latestGeneration)
+        {
+            throw new InvalidOperationException(
+                "The semantic workspace changed while code exploration was running; stale catalog work was discarded.");
+        }
+    }
+
+    private static void RemoveMatchingBuild<T>(
+        Dictionary<string, SharedCodeExploreBuild<T>> builds,
+        string key,
+        SharedCodeExploreBuild<T> build)
+    {
+        if (builds.TryGetValue(key, out var current) && ReferenceEquals(current, build))
+        {
+            builds.Remove(key);
+        }
+    }
+
+    private void RemoveNaturalLanguageGraphCache(string catalogKey)
+    {
+        foreach (var graphKey in _naturalLanguageGraphNeighbors.Keys
+            .Where(item => item.StartsWith(catalogKey + ':', StringComparison.Ordinal))
+            .ToArray())
+        {
+            _naturalLanguageGraphNeighbors.Remove(graphKey);
+        }
     }
 
     private static async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
@@ -6483,7 +7465,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var isComplete = true;
         foreach (var project in snapshot.Solution.Projects
-            .Where(project => snapshot.CompiledProjects.Contains(project.Id))
             .OrderBy(project => project.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -6496,7 +7477,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     isComplete = false;
                     omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
-                    return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+                    return CreateCodeExploreDeclarationCatalog(
+                        key,
+                        snapshot.Generation,
+                        entries,
+                        isComplete,
+                        omissions,
+                        cancellationToken);
                 }
 
                 if (document.FilePath is not { } documentPath || !Path.IsPathRooted(documentPath))
@@ -6509,6 +7496,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     continue;
                 }
+
+                var isGeneratedDocument = projection.IsGenerated(root.SyntaxTree, isSourceGenerated);
 
                 if (!semanticModelCache.TryGetValue(document.Id, out var model))
                 {
@@ -6531,8 +7520,19 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         continue;
                     }
 
-                    var location = CreateDocumentLocation(document, declaration.SyntaxTree, declaration.Span, projection);
-                    var entry = CreateCodeExploreCatalogEntry(snapshot, symbol, location, isSourceGenerated);
+                    var location = CreateDocumentLocation(
+                        document,
+                        declaration.SyntaxTree,
+                        declaration.Span,
+                        projection,
+                        isGeneratedDocument);
+                    var entry = CreateCodeExploreCatalogEntry(
+                        snapshot,
+                        symbol,
+                        declaration,
+                        model,
+                        location,
+                        isGeneratedDocument);
                     var entryKey = $"{entry.Identity.Id}|{entry.FilePath}|{entry.Range.StartLine}|{entry.Range.StartColumn}|{entry.Range.EndLine}|{entry.Range.EndColumn}";
                     if (seen.Add(entryKey))
                     {
@@ -6541,7 +7541,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         {
                             isComplete = false;
                             omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
-                            return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+                            return CreateCodeExploreDeclarationCatalog(
+                                key,
+                                snapshot.Generation,
+                                entries,
+                                isComplete,
+                                omissions,
+                                cancellationToken);
                         }
                     }
                 }
@@ -6554,7 +7560,295 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             omissions.Add("The declaration catalog was built from partial semantic coverage.");
         }
 
-        return new CodeExploreDeclarationCatalog(key, snapshot.Generation, entries, isComplete, omissions);
+        return CreateCodeExploreDeclarationCatalog(
+            key,
+            snapshot.Generation,
+            entries,
+            isComplete,
+            omissions,
+            cancellationToken);
+    }
+
+    private static CodeExploreDeclarationCatalog CreateCodeExploreDeclarationCatalog(
+        string key,
+        long workspaceGeneration,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        bool isComplete,
+        IReadOnlyList<string> omissions,
+        CancellationToken cancellationToken)
+    {
+        var classifiedEntries = LinkCodeExploreToolCapabilities(entries, cancellationToken);
+        var index = CreateCodeExploreCandidateIndex(classifiedEntries, cancellationToken);
+        return new CodeExploreDeclarationCatalog(
+            key,
+            workspaceGeneration,
+            classifiedEntries,
+            index,
+            isComplete,
+            omissions);
+    }
+
+    private static CodeExploreCandidateIndex CreateCodeExploreCandidateIndex(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        var exactNames = CreateCodeExplorePostings(
+            entries,
+            entry =>
+            [
+                NormalizeComparableName(entry.Name),
+                NormalizeComparableName(entry.MetadataName),
+                NormalizeComparableName(StripParameters(entry.DisplayName)),
+            ],
+            StringComparer.OrdinalIgnoreCase,
+            cancellationToken);
+        var nameTerms = CreateCodeExplorePostings(
+            entries,
+            entry => entry.NameTerms,
+            StringComparer.OrdinalIgnoreCase,
+            cancellationToken);
+        var terms = CreateCodeExplorePostings(
+            entries,
+            entry => entry.Terms,
+            StringComparer.OrdinalIgnoreCase,
+            cancellationToken);
+        var index = new CodeExploreCandidateIndex(
+            CreateCodeExplorePostings(
+                entries,
+                entry => [entry.Identity.Id],
+                StringComparer.Ordinal,
+                cancellationToken),
+            exactNames,
+            nameTerms,
+            CreateCodeExplorePostings(
+                entries,
+                entry => entry.QualifiedNames,
+                StringComparer.OrdinalIgnoreCase,
+                cancellationToken),
+            terms,
+            CreateCodeExplorePostings(
+                entries,
+                entry =>
+                [
+                    NormalizeCodeExploreIndexPath(entry.RelativeFilePath),
+                    NormalizeCodeExploreIndexPath(Path.GetFileName(entry.RelativeFilePath)),
+                ],
+                StringComparer.OrdinalIgnoreCase,
+                cancellationToken),
+            CreateCodeExplorePostings(
+                entries,
+                GetCodeExploreToolFamilies,
+                StringComparer.Ordinal,
+                cancellationToken),
+            CreateSortedVocabulary(exactNames.Keys, cancellationToken),
+            CreateSortedVocabulary(nameTerms.Keys, cancellationToken),
+            CreateSortedVocabulary(terms.Keys, cancellationToken),
+            CreatePostingIdentityCounts(terms, cancellationToken),
+            CreateNameIdentityCounts(entries, cancellationToken),
+            NaturalLanguageNameSegmentMatcher.CreateIndex(
+                entries
+                    .Select(entry => new NaturalLanguageNameSegmentCandidate(entry.Identity.Id, entry.Name))
+                    .ToArray(),
+                cancellationToken));
+        return index;
+    }
+
+    private static IReadOnlyList<CodeExploreDeclarationCatalogEntry> LinkCodeExploreToolCapabilities(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        var baseEntries = entries
+            .Select(entry => entry with
+            {
+                ToolCapability = RemoveLinkedCodeExploreToolCapability(entry.ToolCapability),
+            })
+            .ToArray();
+        var descriptors = baseEntries
+            .Where(entry => entry.ToolCapability.Role is CodeExploreToolCapabilityRole.ToolType
+                or CodeExploreToolCapabilityRole.Definition)
+            .Where(entry => entry.ToolCapability.ToolTypeName is not null)
+            .GroupBy(entry => entry.ToolCapability.ToolTypeName!, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var declaredToolId = group
+                    .Select(entry => entry.ToolCapability.DeclaredToolId)
+                    .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+                var familyTerms = declaredToolId is not null
+                    ? CodeExploreToolCapabilityClassifier.CreateFamilyTerms(declaredToolId)
+                    : group.Select(entry => entry.ToolCapability.FamilyTerms)
+                        .FirstOrDefault(terms => terms.Count > 0) ?? [];
+                return new CodeExploreToolCapabilityDescriptor(
+                    group.Key,
+                    CodeExploreToolCapabilityClassifier.CreateFamilyKey(familyTerms),
+                    group.SelectMany(entry => entry.ToolCapability.RelatedContractTypeNames)
+                        .Select(NormalizeComparableName)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase));
+            })
+            .OrderBy(descriptor => descriptor.ToolTypeName, StringComparer.Ordinal)
+            .ToArray();
+
+        var linked = new List<CodeExploreDeclarationCatalogEntry>(baseEntries.Length);
+        foreach (var entry in baseEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var comparableTypeNames = new[]
+            {
+                NormalizeComparableName(entry.Name),
+                NormalizeComparableName(entry.DisplayName),
+                NormalizeComparableName(entry.FullyQualifiedName),
+            };
+            var directDescriptor = entry.ToolCapability.ToolTypeName is { } toolTypeName
+                ? descriptors.FirstOrDefault(descriptor => descriptor.ToolTypeName.Equals(
+                    toolTypeName,
+                    StringComparison.Ordinal))
+                : null;
+            var contractDescriptors = IsTypeDeclarationKind(entry.Kind)
+                ? descriptors.Where(descriptor => comparableTypeNames.Any(descriptor.RelatedContractTypeNames.Contains))
+                : [];
+            var referencedDescriptors = descriptors.Where(descriptor =>
+                entry.ReferencedTypeNames.Any(reference =>
+                    descriptor.ToolTypeName.Equals(reference, StringComparison.Ordinal)
+                    || descriptor.ToolTypeName.EndsWith('.' + reference, StringComparison.Ordinal)));
+            var matchedDescriptors = directDescriptor is null
+                ? contractDescriptors.Concat(referencedDescriptors)
+                : contractDescriptors.Concat(referencedDescriptors).Prepend(directDescriptor);
+            var families = matchedDescriptors
+                .Select(descriptor => descriptor.Family)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var role = entry.ToolCapability.Role == CodeExploreToolCapabilityRole.None
+                && contractDescriptors.Any()
+                ? CodeExploreToolCapabilityRole.DataContract
+                : entry.ToolCapability.Role;
+            linked.Add(entry with
+            {
+                ToolCapability = entry.ToolCapability with
+                {
+                    Role = role,
+                    Families = families,
+                },
+            });
+        }
+
+        return linked;
+    }
+
+    private static CodeExploreToolCapabilityEvidence RemoveLinkedCodeExploreToolCapability(
+        CodeExploreToolCapabilityEvidence evidence)
+    {
+        var role = evidence.Role == CodeExploreToolCapabilityRole.DataContract
+            ? CodeExploreToolCapabilityRole.None
+            : evidence.Role;
+        return evidence with
+        {
+            Role = role,
+            Families = [],
+        };
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<CodeExploreDeclarationCatalogEntry>> CreateCodeExplorePostings(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        Func<CodeExploreDeclarationCatalogEntry, IEnumerable<string>> keySelector,
+        StringComparer comparer,
+        CancellationToken cancellationToken)
+    {
+        var postings = new Dictionary<string, List<CodeExploreDeclarationCatalogEntry>>(comparer);
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var key in keySelector(entry)
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Distinct(comparer))
+            {
+                if (!postings.TryGetValue(key, out var values))
+                {
+                    values = [];
+                    postings.Add(key, values);
+                }
+
+                values.Add(entry);
+            }
+        }
+
+        var frozen = new Dictionary<string, IReadOnlyList<CodeExploreDeclarationCatalogEntry>>(comparer);
+        foreach (var posting in postings)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            frozen.Add(posting.Key, posting.Value);
+        }
+
+        return frozen;
+    }
+
+    private static IReadOnlyList<string> CreateSortedVocabulary(
+        IEnumerable<string> keys,
+        CancellationToken cancellationToken)
+    {
+        var vocabulary = new List<string>();
+        foreach (var key in keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            vocabulary.Add(key);
+        }
+
+        vocabulary.Sort(StringComparer.OrdinalIgnoreCase);
+        cancellationToken.ThrowIfCancellationRequested();
+        return vocabulary;
+    }
+
+    private static IReadOnlyDictionary<string, int> CreatePostingIdentityCounts(
+        IReadOnlyDictionary<string, IReadOnlyList<CodeExploreDeclarationCatalogEntry>> postings,
+        CancellationToken cancellationToken)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var posting in postings)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var identities = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in posting.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = identities.Add(entry.Identity.Id);
+            }
+
+            counts.Add(posting.Key, identities.Count);
+        }
+
+        return counts;
+    }
+
+    private static IReadOnlyDictionary<string, int> CreateNameIdentityCounts(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        var identitiesByName = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var name = NormalizeComparableName(entry.Name);
+            if (!identitiesByName.TryGetValue(name, out var identities))
+            {
+                identities = new HashSet<string>(StringComparer.Ordinal);
+                identitiesByName.Add(name, identities);
+            }
+
+            _ = identities.Add(entry.Identity.Id);
+        }
+
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in identitiesByName)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            counts.Add(entry.Key, entry.Value.Count);
+        }
+
+        return counts;
+    }
+
+    private static string NormalizeCodeExploreIndexPath(string value)
+    {
+        return value.Replace('\\', '/').Trim('/').ToLowerInvariant();
     }
 
     private static async Task<IReadOnlyList<(Document Document, bool IsSourceGenerated)>> GetCodeExploreCatalogDocumentsAsync(
@@ -6576,6 +7870,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreDeclarationCatalogEntry CreateCodeExploreCatalogEntry(
         AdvancedSemanticSnapshot snapshot,
         ISymbol symbol,
+        SyntaxNode declaration,
+        SemanticModel semanticModel,
         SemanticSourceLocation location,
         bool isSourceGenerated)
     {
@@ -6592,6 +7888,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var kindName = symbol is INamedTypeSymbol { IsRecord: true }
             ? "Record"
             : symbol is INamedTypeSymbol namedType ? namedType.TypeKind.ToString() : symbol.Kind.ToString();
+        var nameTerms = CreateCatalogNameTerms(symbol);
+        var signatureTerms = CreateCatalogSignatureTerms(
+            symbol,
+            kindName,
+            containingType,
+            containingNamespace);
+        var referencedTypeNames = CreateCatalogReferencedTypeNames(declaration);
         return new CodeExploreDeclarationCatalogEntry(
             identity,
             symbol.Name,
@@ -6610,8 +7913,22 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             location.IsGenerated || isSourceGenerated,
             location.IsLinked,
             IsTestProjectNameOrPath(location.ProjectName, relativePath),
-            CreateCatalogTerms(symbol, kindName, location.ProjectName, relativePath, containingType, containingNamespace),
-            qualifiedNames);
+            nameTerms,
+            signatureTerms,
+            nameTerms
+                .Concat(signatureTerms)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            CreateCatalogContextTerms(location.ProjectName, relativePath),
+            referencedTypeNames,
+            qualifiedNames)
+        {
+            ToolCapability = CodeExploreToolCapabilityClassifier.Classify(
+                symbol,
+                declaration,
+                semanticModel),
+        };
     }
 
     private static IEnumerable<SyntaxNode> EnumerateCodeExploreCatalogDeclarations(SyntaxNode root)
@@ -6672,22 +7989,24 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return names.Where(name => name.Length > 0).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static IReadOnlyList<string> CreateCatalogTerms(
-        ISymbol symbol,
-        string kindName,
-        string projectName,
-        string relativePath,
-        string? containingType,
-        string? containingNamespace)
+    private static IReadOnlyList<string> CreateCatalogNameTerms(ISymbol symbol)
     {
         var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         AddCodeExploreTerms(terms, symbol.Name);
         AddCodeExploreTerms(terms, symbol.MetadataName);
+        return terms.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateCatalogSignatureTerms(
+        ISymbol symbol,
+        string kindName,
+        string? containingType,
+        string? containingNamespace)
+    {
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         AddCodeExploreTerms(terms, kindName);
         AddCodeExploreTerms(terms, symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
         AddCodeExploreTerms(terms, symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
-        AddCodeExploreTerms(terms, projectName);
-        AddCodeExploreTerms(terms, relativePath);
         if (!string.IsNullOrWhiteSpace(containingType))
         {
             AddCodeExploreTerms(terms, containingType);
@@ -6699,6 +8018,50 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         return terms.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateCatalogContextTerms(
+        string projectName,
+        string relativePath)
+    {
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddCodeExploreTerms(terms, projectName);
+        AddCodeExploreTerms(terms, relativePath);
+        return terms.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateCatalogReferencedTypeNames(
+        SyntaxNode declaration)
+    {
+        IEnumerable<SyntaxNode> referenceRoots = declaration switch
+        {
+            BaseMethodDeclarationSyntax method => method.Body is not null
+                ? [method.Body]
+                : method.ExpressionBody is not null ? [method.ExpressionBody] : [],
+            PropertyDeclarationSyntax property => property.Initializer is not null
+                ? [property.Initializer]
+                : property.ExpressionBody is not null ? [property.ExpressionBody] : [],
+            VariableDeclaratorSyntax variable when variable.Initializer is not null => [variable.Initializer],
+            _ => [],
+        };
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var type in referenceRoots
+            .SelectMany(root => root.DescendantNodesAndSelf())
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Select(creation => creation.Type))
+        {
+            var name = type.DescendantNodesAndSelf()
+                .OfType<SimpleNameSyntax>()
+                .LastOrDefault()?.Identifier.ValueText;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            names.Add(name);
+        }
+
+        return names.Order(StringComparer.Ordinal).ToArray();
     }
 
     private static CodeExploreDeclarationCatalogEntry[] GetAllowedCodeExploreCatalogEntries(
@@ -6719,52 +8082,189 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return [.. entries];
     }
 
-    private static CodeExploreRankedCandidate[] RankNaturalLanguageCandidates(
-        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+    private static CodeExploreQueryInterpretation RemoveRepositoryNameContextTerm(
+        AdvancedSemanticSnapshot snapshot,
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var repositoryName = Path.GetFileName(Path.TrimEndingDirectorySeparator(snapshot.RepositoryPath));
+        var repositoryToken = NormalizeComparableName(repositoryName);
+        if (repositoryToken.Length < 5
+            || interpretation.Terms.Count <= 1
+            || !interpretation.Terms.Contains(repositoryToken, StringComparer.OrdinalIgnoreCase))
+        {
+            return interpretation;
+        }
+
+        return interpretation with
+        {
+            Terms = interpretation.Terms
+                .Where(term => !string.Equals(term, repositoryToken, StringComparison.OrdinalIgnoreCase))
+                .ToArray(),
+            IgnoredTerms = interpretation.IgnoredTerms
+                .Append(repositoryToken)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+        };
+    }
+
+    private static CodeExploreQueryInterpretation ApplyNaturalLanguageRetrievalVocabularyPolicy(
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var ignoredRetrievalTerms = interpretation.Terms
+            .Where(NaturalLanguageRetrievalStopWords.Contains)
+            .ToArray();
+        if (ignoredRetrievalTerms.Length == 0)
+        {
+            return interpretation;
+        }
+
+        return interpretation with
+        {
+            Terms = interpretation.Terms
+                .Where(term => !NaturalLanguageRetrievalStopWords.Contains(term))
+                .ToArray(),
+            IgnoredTerms = interpretation.IgnoredTerms
+                .Concat(ignoredRetrievalTerms)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+        };
+    }
+
+    private static CodeExploreRetrievedCandidate[] GetIndexedCodeExploreCandidates(
+        CodeExploreCandidateIndex index,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> allowedEntries,
         CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
+        IReadOnlyList<string> toolCapabilityFamilies,
+        CancellationToken cancellationToken)
+    {
+        var compositionEntries = new List<CodeExploreDeclarationCatalogEntry>();
+        if (toolCapabilityFamilies.Count > 0 && HasToolCompositionContextIntent(interpretation))
+        {
+            foreach (var entry in allowedEntries.Where(entry =>
+                IsRequestedToolCompositionEntry(
+                    entry,
+                    interpretation,
+                    toolCapabilityFamilies)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                compositionEntries.Add(entry);
+            }
+        }
+
+        var paths = new List<CodeExplorePathRetrievalRequest>();
+        foreach (var path in interpretation.PathLikeSpans.Where(IsCSharpPathSpan))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var matchedEntries = new List<CodeExploreDeclarationCatalogEntry>();
+            foreach (var entry in allowedEntries.Where(entry => PathSpanMatchesEntry(path, entry)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                matchedEntries.Add(entry);
+            }
+
+            paths.Add(new CodeExplorePathRetrievalRequest(
+                NormalizeCodeExploreIndexPath(path),
+                matchedEntries));
+        }
+
+        return CodeExploreCandidateRetriever.Retrieve(
+            index,
+            allowedEntries,
+            new CodeExploreCandidateRetrievalRequest(
+                interpretation.StableSymbolIds,
+                interpretation.ExactIdentifiers
+                    .Select(NormalizeComparableName)
+                    .ToArray(),
+                toolCapabilityFamilies,
+                compositionEntries,
+                interpretation.QualifiedNames,
+                interpretation.Terms,
+                nameSegmentEvidence.MatchesByIdentity.Keys.ToArray(),
+                paths,
+                interpretation.ExactIdentifiers
+                    .Concat(interpretation.QualifiedNames)
+                    .Select(NormalizeComparableName)
+                    .ToArray()),
+            cancellationToken);
+    }
+
+    private static IEnumerable<string> GetCodeExploreToolFamilies(
+        CodeExploreDeclarationCatalogEntry entry)
+    {
+        foreach (var family in entry.ToolCapability.Families)
+        {
+            yield return family;
+        }
+    }
+
+    private static CodeExploreRankedCandidate[] RankNaturalLanguageCandidates(
+        IReadOnlyList<CodeExploreRetrievedCandidate> candidateEntries,
+        CodeExploreCandidateIndex index,
+        CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
+        IReadOnlyList<string> requestedToolFamilies,
         CodeExploreNaturalLanguageIntent intent,
         CancellationToken cancellationToken)
     {
-        var termCounts = entries
-            .SelectMany(entry => entry.Terms.Distinct(StringComparer.OrdinalIgnoreCase))
-            .GroupBy(term => term, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
-        var nameCounts = entries
-            .GroupBy(entry => NormalizeComparableName(entry.Name), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
         var usesSemanticToolProfile = UsesSemanticToolCapabilityProfile(interpretation, intent);
-        var semanticToolIdFamilies = GetMentionedSemanticToolIdFamilies(interpretation);
+        var qualifiedMemberTerms = GetQualifiedMemberTerms(interpretation);
         var preliminary = new List<CodeExploreRankedCandidate>();
-        foreach (var entry in entries)
+        foreach (var retrieved in candidateEntries)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var rank = RankNaturalLanguageCandidate(
-                entry,
+                retrieved,
                 interpretation,
+                nameSegmentEvidence,
                 intent,
                 usesSemanticToolProfile,
-                semanticToolIdFamilies,
-                termCounts,
-                nameCounts,
-                entries.Count);
+                requestedToolFamilies,
+                qualifiedMemberTerms,
+                index.TermCounts,
+                index.NameCounts,
+                index.NameSegments.SegmentsByIdentity.Count);
             if (rank is not null)
             {
                 preliminary.Add(rank);
             }
         }
 
-        var fileCounts = preliminary
+        var productionCandidateCount = preliminary.Count(candidate => !candidate.Entry.IsTest);
+        if (!HasTestFocus(interpretation)
+            && productionCandidateCount >= CodeExploreRelevancePolicy.MinimumProductionCandidatesForTestExclusion)
+        {
+            preliminary = [.. preliminary
+                .Where(candidate => !candidate.Entry.IsTest
+                    || HasExactCandidateReason(candidate.Reasons))];
+        }
+
+        var fileConceptCounts = preliminary
             .GroupBy(candidate => candidate.Entry.FilePath, PathComparer)
-            .ToDictionary(group => group.Key, group => group.Count(), PathComparer);
-        var coLocationBoost = intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .SelectMany(candidate => GetCodeExploreTermCoverage(
+                        candidate.Entry.NameTerms,
+                        interpretation.Terms))
+                    .Select(coverage => coverage.CanonicalTerm)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count(),
+                PathComparer);
+        var maximumCoLocationBoost = intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
             ? NaturalLanguageToolIntentCoLocationBoost
             : NaturalLanguageDefaultCoLocationBoost;
         return OrderNaturalLanguageCandidates(preliminary
-            .Select(candidate => fileCounts.GetValueOrDefault(candidate.Entry.FilePath) > 1
+            .Select(candidate => fileConceptCounts.GetValueOrDefault(candidate.Entry.FilePath) is var conceptCount
+                && conceptCount > 1
                 ? candidate with
                 {
                     Reasons = candidate.Reasons | CodeExploreSelectionReason.CoLocated,
-                    Score = candidate.Score + coLocationBoost,
+                    Score = candidate.Score + Math.Min(
+                        maximumCoLocationBoost,
+                        (conceptCount - 1) * NaturalLanguageCoLocationConceptBoost),
                 }
                 : candidate));
     }
@@ -6775,8 +8275,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return
         [
             .. candidates
-                .OrderBy(candidate => candidate.Tier)
+                .OrderByDescending(candidate => candidate.Reasons.HasFlag(CodeExploreSelectionReason.Pinned))
+                .ThenByDescending(candidate => HasExactCandidateReason(candidate.Reasons))
                 .ThenByDescending(candidate => candidate.Score)
+                .ThenByDescending(candidate => candidate.GraphMass)
+                .ThenBy(candidate => candidate.Tier)
                 .ThenBy(candidate => KindSortRank(candidate.Entry.Kind))
                 .ThenBy(candidate => candidate.Entry.RelativeFilePath, PathComparer)
                 .ThenBy(candidate => candidate.Entry.Range.StartLine)
@@ -6784,91 +8287,606 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ];
     }
 
-    private static CodeExploreRankedCandidate[] ApplyNaturalLanguageRelativeFloor(
-        IReadOnlyList<CodeExploreRankedCandidate> ranked)
+    private static CodeExploreRankedCandidate[] ApplyNaturalLanguageConceptReranking(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CodeExploreQueryInterpretation interpretation)
     {
-        if (ranked.Count <= 12)
+        var conceptGroups = interpretation.Terms
+            .GroupBy(CanonicalCodeExploreTerm, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.ToArray())
+            .ToArray();
+        if (conceptGroups.Length < 2)
+        {
+            return [.. ranked];
+        }
+
+        return OrderNaturalLanguageCandidates(ranked.Select(candidate =>
+        {
+            var conceptStrengths = conceptGroups
+                .Select(group => group.Max(concept => Math.Max(
+                    GetCatalogTermMatchStrength(candidate.Entry.NameTerms, concept),
+                    GetDirectoryTermMatchStrength(candidate.Entry.RelativeFilePath, concept))))
+                .Where(strength => strength > 0)
+                .ToArray();
+            var strongConceptCount = conceptStrengths.Count(CodeExploreRelevancePolicy.IsStrongConceptMatch);
+            if (strongConceptCount >= 2)
+            {
+                return candidate with
+                {
+                    Tier = MinTier(candidate.Tier, CodeExploreCandidateTier.MultiTermStructural),
+                    Reasons = candidate.Reasons | CodeExploreSelectionReason.MultiTerm,
+                    Score = CodeExploreRelevancePolicy.ApplyMultiTermNameCorroboration(
+                        candidate.Score,
+                        conceptStrengths.Sum()),
+                };
+            }
+
+            var hasDistinctiveExactMatch = interpretation.ExactIdentifiers
+                .Select(NormalizeComparableName)
+                .Any(identifier => IdentifierMatchesEntry(identifier, candidate.Entry));
+            if (hasDistinctiveExactMatch)
+            {
+                return candidate;
+            }
+
+            var hasCommonExactMatch = interpretation.Terms.Any(term =>
+                string.Equals(
+                    NormalizeComparableName(candidate.Entry.Name),
+                    NormalizeComparableName(term),
+                    StringComparison.OrdinalIgnoreCase));
+            return candidate with
+            {
+                Score = CodeExploreRelevancePolicy.ApplySingleConceptDamping(
+                    candidate.Score,
+                    hasCommonExactMatch),
+            };
+        }));
+    }
+
+    private static double GetDirectoryTermMatchStrength(string relativeFilePath, string term)
+    {
+        var directory = Path.GetDirectoryName(relativeFilePath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return 0;
+        }
+
+        var directoryTerms = directory
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeComparableName)
+            .Where(segment => segment.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return GetCatalogTermMatchStrength(directoryTerms, term);
+    }
+
+    private static CodeExploreRankedCandidate[] ApplyNaturalLanguageRelativeFloor(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlyList<string> requestedToolFamilies)
+    {
+        if (ranked.Count <= CodeExploreRelevancePolicy.MinimumBackfillCandidateCount)
         {
             return [.. ranked];
         }
 
         var strongest = ranked.Max(candidate => candidate.Score);
-        var relativeFloor = Math.Max(90, Math.Min(400, strongest / 3));
-        var minimumBackfillCount = Math.Min(12, ranked.Count);
+        var relativeFloor = CodeExploreRelevancePolicy.CalculateRelativeScoreFloor(strongest);
         return
         [
             .. ranked
                 .Select((candidate, index) => new { Candidate = candidate, Index = index })
-                .Where(item => item.Index < minimumBackfillCount
-                    || item.Candidate.Score >= relativeFloor
-                    || item.Candidate.Tier <= CodeExploreCandidateTier.DistinctiveIdentifier
-                    || (item.Candidate.Reasons & (CodeExploreSelectionReason.Path | CodeExploreSelectionReason.QualifiedName)) != 0)
+                .Where(item => CodeExploreRelevancePolicy.ShouldRetainCandidate(
+                    item.Index,
+                    item.Candidate.Score,
+                    relativeFloor,
+                    IsProtectedNaturalLanguageCandidate(item.Candidate, requestedToolFamilies)))
                 .Select(item => item.Candidate),
         ];
     }
 
-    private static async Task<CodeExploreRankedCandidate[]> ApplyGraphConnectivityAsync(
+    private static bool IsProtectedNaturalLanguageCandidate(
+        CodeExploreRankedCandidate candidate,
+        IReadOnlyList<string> requestedToolFamilies)
+    {
+        return HasExactCandidateReason(candidate.Reasons)
+            || ((IsSemanticToolDefinitionEntry(candidate.Entry)
+                    || IsToolCompositionSurface(candidate.Entry))
+                && requestedToolFamilies.Any(family =>
+                    CandidateMatchesToolCapabilityFamily(candidate.Entry, family)));
+    }
+
+    private static CodeExploreRankedCandidate[] ApplyNaturalLanguageFileRelevanceGate(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyList<string> retrievalToolFamilies)
+    {
+        if (ranked.Count == 0)
+        {
+            return [];
+        }
+
+        var qualifiedMemberTerms = GetQualifiedMemberTerms(interpretation);
+        var fileGroups = ranked
+            .GroupBy(candidate => candidate.Entry.FilePath, PathComparer)
+            .Select(group => new
+            {
+                Path = group.Key,
+                Candidates = group.ToArray(),
+                Best = group.First(),
+                GraphMass = group.Sum(candidate => candidate.GraphMass),
+                TermHits = CountNaturalLanguageFileTermHits(
+                    group,
+                    interpretation,
+                    qualifiedMemberTerms),
+                IsEntry = group.Any(candidate => candidate.IsGraphSeed),
+                NamedPriority = group.Max(candidate => GetNaturalLanguageNamedPriority(
+                    candidate,
+                    interpretation,
+                    retrievalToolFamilies)),
+            })
+            .ToArray();
+        var maximumFileGraphMass = fileGroups
+            .Select(group => group.GraphMass)
+            .DefaultIfEmpty(0)
+            .Max();
+        var hasNamedFocus = fileGroups.Any(group => group.NamedPriority >= 3);
+        var centralFiles = fileGroups
+            .Where(group => group.GraphMass > 0 && group.TermHits >= 1)
+            .OrderByDescending(group => group.GraphMass)
+            .ThenByDescending(group => group.TermHits)
+            .ThenBy(group => group.Path, PathComparer)
+            .Take(CodeExploreRelevancePolicy.MaximumCentralGraphFiles)
+            .Select(group => group.Path)
+            .ToHashSet(PathComparer);
+        var gatedFiles = maximumFileGraphMass <= 0
+            ? fileGroups
+            :
+            [
+                .. fileGroups.Where(group => group.NamedPriority > 0
+                    || group.IsEntry
+                    || centralFiles.Contains(group.Path)
+                    || (!hasNamedFocus && group.TermHits >= 2)
+                    || group.GraphMass
+                        >= maximumFileGraphMass * CodeExploreRelevancePolicy.MinimumGraphMassRatio),
+            ];
+        var admittedFiles = gatedFiles.Length > 0 ? gatedFiles : [fileGroups[0]];
+        return
+        [
+            .. admittedFiles
+                .OrderByDescending(group => group.NamedPriority)
+                .ThenByDescending(group => group.TermHits >= 2
+                    && (group.IsEntry || centralFiles.Contains(group.Path)))
+                .ThenBy(
+                    group => group.GraphMass,
+                    new DescendingGraphMassComparer(maximumFileGraphMass))
+                .ThenByDescending(group => group.TermHits)
+                .ThenBy(group => group.Best.Entry.IsTest)
+                .ThenBy(group => group.Best.Entry.IsGenerated)
+                .ThenByDescending(group => group.Best.Score)
+                .ThenBy(group => group.Path, PathComparer)
+                .SelectMany(group => group.Candidates),
+        ];
+    }
+
+    private static int CountNaturalLanguageFileTermHits(
+        IEnumerable<CodeExploreRankedCandidate> candidates,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlySet<string> qualifiedMemberTerms)
+    {
+        var materialized = candidates.ToArray();
+        var matchesQualifiedFocus = interpretation.QualifiedNames.Any(qualified =>
+            materialized.Any(candidate => QualifiedNameMatchesEntry(qualified, candidate.Entry)));
+        var candidateTerms = CreateCanonicalCodeExploreTermSet(
+            materialized
+                .Select(candidate => candidate.Entry.Name)
+                .Prepend(materialized[0].Entry.RelativeFilePath));
+        var queryTerms = interpretation.Terms
+            .Where(term => matchesQualifiedFocus || !qualifiedMemberTerms.Contains(term))
+            .ToArray();
+        return CreateCanonicalCodeExploreTermSet(queryTerms).Count(candidateTerms.Contains);
+    }
+
+    private static HashSet<string> GetQualifiedMemberTerms(
+        CodeExploreQueryInterpretation interpretation)
+    {
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var identifier in interpretation.ExactIdentifiers)
+        {
+            var normalizedIdentifier = NormalizeComparableName(identifier);
+            if (!interpretation.QualifiedNames.Any(qualified => qualified.EndsWith(
+                "." + normalizedIdentifier,
+                StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            AddCodeExploreTerms(terms, identifier);
+        }
+
+        return terms;
+    }
+
+    private async Task<CodeExploreRankedCandidate[]> ApplyGraphConnectivityAsync(
+        WorkspaceId workspaceId,
         AdvancedSemanticSnapshot snapshot,
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> allowedEntries,
         CodeExploreQueryInterpretation interpretation,
         CodeExploreNaturalLanguageIntent intent,
         CancellationToken cancellationToken)
     {
-        if (ranked.Count <= 1)
+        if (ranked.Count == 0)
         {
             return [.. ranked];
         }
 
-        var rankedById = ranked
-            .GroupBy(candidate => candidate.Entry.Identity.Id, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        var seedIds = new HashSet<string>(StringComparer.Ordinal);
-        var seeds = ranked
+        var allowedById = allowedEntries
+            .GroupBy(entry => entry.Identity.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var eligibleSeeds = ranked
             .Where(candidate => candidate.Tier <= CodeExploreCandidateTier.MultiTermStructural)
-            .Take(MaximumNaturalLanguageGraphSeeds)
+            .Select((candidate, rank) => new { Candidate = candidate, Rank = rank })
+            .GroupBy(item => item.Candidate.Entry.Identity.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
             .ToArray();
-        foreach (var seed in seeds)
-        {
-            seedIds.Add(seed.Entry.Identity.Id);
-        }
-
+        var seeds = eligibleSeeds
+            .Where(item => intent != CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
+                || !IsPrivateImplementationHelper(item.Candidate.Entry)
+                || HasExactCandidateReason(item.Candidate.Reasons))
+            .OrderByDescending(item => IsNaturalLanguageGraphEntryCandidate(item.Candidate))
+            .ThenBy(item => item.Candidate.IsFocusedNameMatch
+                ? KindSortRank(item.Candidate.Entry.Kind)
+                : 0)
+            .ThenBy(item => item.Rank)
+            .Take(CodeExploreRelevancePolicy.MaximumGraphEntryPoints)
+            .Select(item => item.Candidate)
+            .ToArray();
         if (seeds.Length == 0)
         {
             return [.. ranked];
         }
 
-        var connectedIds = new HashSet<string>(StringComparer.Ordinal);
-        var edgeCount = 0;
-        foreach (var seed in seeds)
+        var seedIds = seeds
+            .Select(seed => seed.Entry.Identity.Id)
+            .ToArray();
+        var seedIdSet = seedIds.ToHashSet(StringComparer.Ordinal);
+        var adjacency = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var globallyDiscovered = seedIds.ToHashSet(StringComparer.Ordinal);
+        var perRootNodeLimit = (int)Math.Ceiling(
+            MaximumNaturalLanguageGraphNodes / (double)seedIds.Length);
+        var baseRootEdgeLimit = MaximumNaturalLanguageGraphEdges / seedIds.Length;
+        var extraRootEdges = MaximumNaturalLanguageGraphEdges % seedIds.Length;
+        var rootEdgeLimits = seedIds
+            .Select((identity, index) => new
+            {
+                Identity = identity,
+                Limit = baseRootEdgeLimit + (index < extraRootEdges ? 1 : 0),
+            })
+            .ToDictionary(item => item.Identity, item => item.Limit, StringComparer.Ordinal);
+        var rootEdgeCounts = seedIds.ToDictionary(identity => identity, _ => 0, StringComparer.Ordinal);
+        var frontiers = seedIds.ToDictionary(
+            identity => identity,
+            identity => new Queue<(string Identity, int Depth)>([(identity, 0)]),
+            StringComparer.Ordinal);
+        var discoveredByRoot = seedIds.ToDictionary(
+            identity => identity,
+            identity => new HashSet<string>(StringComparer.Ordinal) { identity },
+            StringComparer.Ordinal);
+        foreach (var seedId in seedIds)
+        {
+            adjacency.Add(seedId, new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        var remainingExpansionBudget = Math.Max(
+            seedIds.Length,
+            MaximumNaturalLanguageGraphNodes / MaximumNaturalLanguageGraphConcurrency);
+        while (remainingExpansionBudget > 0
+            && frontiers.Values.Any(frontier => frontier.Count > 0))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var groups = await ResolveSymbolGroupsInSnapshotAsync(
-                snapshot,
-                seed.Entry.Identity.Id,
-                [],
-                cancellationToken);
-            foreach (var symbol in groups.SelectMany(group => group.Symbols)
-                .Distinct(SymbolEqualityComparer.Default)
-                .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal))
-            {
-                foreach (var connected in await FindNaturalLanguageConnectedSymbolsAsync(snapshot, symbol, cancellationToken))
+            var frontierItems = seedIds
+                .Where(rootId => frontiers[rootId].Count > 0)
+                .Select(rootId => new
                 {
-                    if (edgeCount >= MaximumNaturalLanguageGraphEdges)
+                    RootId = rootId,
+                    Current = frontiers[rootId].Dequeue(),
+                })
+                .Where(item => item.Current.Depth < MaximumNaturalLanguageGraphDepth)
+                .Take(remainingExpansionBudget)
+                .ToArray();
+            remainingExpansionBudget -= frontierItems.Length;
+            foreach (var chunk in frontierItems.Chunk(MaximumNaturalLanguageGraphConcurrency))
+            {
+                var expanded = await Task.WhenAll(chunk.Select(async item => new
+                {
+                    item.RootId,
+                    item.Current,
+                    ConnectedIds = await GetNaturalLanguageConnectedSymbolIdsAsync(
+                        workspaceId,
+                        snapshot,
+                        item.Current.Identity,
+                        allowedById,
+                        cancellationToken),
+                }));
+                foreach (var item in expanded)
+                {
+                    var rootDiscovered = discoveredByRoot[item.RootId];
+                    if (rootEdgeCounts[item.RootId] >= rootEdgeLimits[item.RootId])
                     {
-                        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds, interpretation, intent);
+                        continue;
                     }
 
-                    edgeCount++;
-                    var connectedId = CreateIdentity(connected).Id;
-                    if (!seedIds.Contains(connectedId) && rankedById.ContainsKey(connectedId))
+                    foreach (var connectedId in item.ConnectedIds)
                     {
-                        connectedIds.Add(connectedId);
+                        if (!rootDiscovered.Contains(connectedId)
+                            && rootDiscovered.Count >= perRootNodeLimit)
+                        {
+                            continue;
+                        }
+
+                        if (!globallyDiscovered.Contains(connectedId)
+                            && globallyDiscovered.Count >= MaximumNaturalLanguageGraphNodes)
+                        {
+                            continue;
+                        }
+
+                        if (AddNaturalLanguageGraphEdge(adjacency, item.Current.Identity, connectedId))
+                        {
+                            rootEdgeCounts[item.RootId]++;
+                        }
+
+                        _ = globallyDiscovered.Add(connectedId);
+                        if (rootDiscovered.Add(connectedId))
+                        {
+                            frontiers[item.RootId].Enqueue((connectedId, item.Current.Depth + 1));
+                        }
+
+                        if (rootEdgeCounts[item.RootId] >= rootEdgeLimits[item.RootId])
+                        {
+                            break;
+                        }
                     }
                 }
             }
         }
 
-        return BoostGraphConnectedCandidates(ranked, connectedIds, seedIds, interpretation, intent);
+        var graphMass = CalculateNaturalLanguageGraphMass(adjacency, seeds);
+        var usageConnectedIds = adjacency
+            .Where(item => item.Value.Count > 0)
+            .Select(item => item.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        return BoostGraphConnectedCandidates(
+            ranked,
+            graphMass,
+            seedIdSet,
+            usageConnectedIds,
+            allowedById,
+            interpretation);
+    }
+
+    private async Task<IReadOnlyList<string>> GetNaturalLanguageConnectedSymbolIdsAsync(
+        WorkspaceId workspaceId,
+        AdvancedSemanticSnapshot snapshot,
+        string identity,
+        IReadOnlyDictionary<string, CodeExploreDeclarationCatalogEntry[]> allowedById,
+        CancellationToken cancellationToken)
+    {
+        var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        var cacheKey = $"{catalogKey}:{identity}";
+        IReadOnlyList<string>? cachedResult = null;
+        SharedCodeExploreBuild<IReadOnlyList<string>>? build = null;
+        lock (_catalogGate)
+        {
+            ThrowIfSupersededCodeExploreGeneration(workspaceId.Value, snapshot.Generation);
+            if (_naturalLanguageGraphNeighbors.TryGetValue(cacheKey, out var cached))
+            {
+                cachedResult = cached;
+            }
+            else
+            {
+                if (!_naturalLanguageGraphBuilds.TryGetValue(cacheKey, out build))
+                {
+                    var buildCancellation = new CancellationTokenSource();
+                    var buildTask = Task.Run(
+                        () => BuildNaturalLanguageConnectedSymbolIdsAsync(
+                            snapshot,
+                            identity,
+                            buildCancellation.Token),
+                        buildCancellation.Token);
+                    build = new SharedCodeExploreBuild<IReadOnlyList<string>>(
+                        workspaceId.Value,
+                        snapshot.Generation,
+                        buildCancellation,
+                        buildTask);
+                    _naturalLanguageGraphBuilds.Add(cacheKey, build);
+                    _ = CompleteNaturalLanguageGraphBuildAsync(catalogKey, cacheKey, build);
+                }
+
+                build.WaiterCount++;
+            }
+        }
+
+        if (cachedResult is not null)
+        {
+            return cachedResult.Where(allowedById.ContainsKey).ToArray();
+        }
+
+        IReadOnlyList<string> rawResult;
+        try
+        {
+            rawResult = await build!.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            ReleaseNaturalLanguageGraphBuildWaiter(cacheKey, build!);
+        }
+
+        return rawResult.Where(allowedById.ContainsKey).ToArray();
+    }
+
+    private async Task CompleteNaturalLanguageGraphBuildAsync(
+        string catalogKey,
+        string cacheKey,
+        SharedCodeExploreBuild<IReadOnlyList<string>> build)
+    {
+        IReadOnlyList<string> rawResult;
+        try
+        {
+#pragma warning disable VSTHRD003 // This service created and separately observes the shared single-flight task.
+            rawResult = await build.Task;
+#pragma warning restore VSTHRD003
+        }
+        catch
+        {
+            lock (_catalogGate)
+            {
+                RemoveMatchingBuild(_naturalLanguageGraphBuilds, cacheKey, build);
+            }
+
+            build.DisposeCancellation();
+            return;
+        }
+
+        lock (_catalogGate)
+        {
+            RemoveMatchingBuild(_naturalLanguageGraphBuilds, cacheKey, build);
+            if (_latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
+                && latestGeneration == build.Generation
+                && _codeExploreCatalogs.ContainsKey(catalogKey))
+            {
+                _naturalLanguageGraphNeighbors[cacheKey] = rawResult;
+            }
+        }
+
+        build.DisposeCancellation();
+    }
+
+    private void ReleaseNaturalLanguageGraphBuildWaiter(
+        string key,
+        SharedCodeExploreBuild<IReadOnlyList<string>> build)
+    {
+        var cancel = false;
+        lock (_catalogGate)
+        {
+            if (_naturalLanguageGraphBuilds.TryGetValue(key, out var current)
+                && ReferenceEquals(current, build))
+            {
+                build.WaiterCount--;
+                if (build.WaiterCount == 0 && !build.Task.IsCompleted)
+                {
+                    _naturalLanguageGraphBuilds.Remove(key);
+                    cancel = true;
+                }
+            }
+        }
+
+        if (cancel)
+        {
+            build.Cancel();
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> BuildNaturalLanguageConnectedSymbolIdsAsync(
+        AdvancedSemanticSnapshot snapshot,
+        string identity,
+        CancellationToken cancellationToken)
+    {
+        var groups = await ResolveSymbolGroupsInSnapshotAsync(
+            snapshot,
+            identity,
+            [],
+            cancellationToken);
+        var connectedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in groups.SelectMany(group => group.Symbols)
+            .Distinct(SymbolEqualityComparer.Default)
+            .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal))
+        {
+            foreach (var connected in await FindNaturalLanguageConnectedSymbolsAsync(
+                snapshot,
+                symbol,
+                cancellationToken))
+            {
+                var connectedId = CreateIdentity(connected).Id;
+                if (!string.Equals(identity, connectedId, StringComparison.Ordinal))
+                {
+                    _ = connectedIds.Add(connectedId);
+                }
+            }
+        }
+
+        var result = connectedIds.Order(StringComparer.Ordinal).ToArray();
+        return result;
+    }
+
+    private static bool AddNaturalLanguageGraphEdge(
+        Dictionary<string, HashSet<string>> adjacency,
+        string left,
+        string right)
+    {
+        if (!adjacency.TryGetValue(left, out var leftNeighbors))
+        {
+            leftNeighbors = new HashSet<string>(StringComparer.Ordinal);
+            adjacency.Add(left, leftNeighbors);
+        }
+
+        if (!adjacency.TryGetValue(right, out var rightNeighbors))
+        {
+            rightNeighbors = new HashSet<string>(StringComparer.Ordinal);
+            adjacency.Add(right, rightNeighbors);
+        }
+
+        var added = leftNeighbors.Add(right);
+        _ = rightNeighbors.Add(left);
+        return added;
+    }
+
+    private static IReadOnlyDictionary<string, double> CalculateNaturalLanguageGraphMass(
+        IReadOnlyDictionary<string, HashSet<string>> adjacency,
+        IReadOnlyList<CodeExploreRankedCandidate> seeds)
+    {
+        if (adjacency.Count == 0 || seeds.Count == 0)
+        {
+            return new Dictionary<string, double>(StringComparer.Ordinal);
+        }
+
+        var restartWeight = 1.0 / seeds.Count;
+        var restart = seeds.ToDictionary(
+            seed => seed.Entry.Identity.Id,
+            _ => restartWeight,
+            StringComparer.Ordinal);
+        var mass = adjacency.Keys.ToDictionary(
+            id => id,
+            id => restart.GetValueOrDefault(id),
+            StringComparer.Ordinal);
+        for (var iteration = 0; iteration < CodeExploreRelevancePolicy.GraphWalkIterations; iteration++)
+        {
+            var next = adjacency.Keys.ToDictionary(
+                id => id,
+                id => CodeExploreRelevancePolicy.GraphRestartProbability * restart.GetValueOrDefault(id),
+                StringComparer.Ordinal);
+            foreach ((var id, var currentMass) in mass)
+            {
+                if (!adjacency.TryGetValue(id, out var neighbors) || neighbors.Count == 0)
+                {
+                    next[id] = next.GetValueOrDefault(id)
+                        + ((1 - CodeExploreRelevancePolicy.GraphRestartProbability) * currentMass);
+
+                    continue;
+                }
+
+                var contribution = (1 - CodeExploreRelevancePolicy.GraphRestartProbability)
+                    * currentMass
+                    / neighbors.Count;
+                foreach (var neighbor in neighbors)
+                {
+                    next[neighbor] = next.GetValueOrDefault(neighbor) + contribution;
+                }
+            }
+
+            mass = next;
+        }
+
+        return mass;
     }
 
     private static async Task<IReadOnlyList<ISymbol>> FindNaturalLanguageConnectedSymbolsAsync(
@@ -6877,25 +8895,57 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CancellationToken cancellationToken)
     {
         var connected = new List<ISymbol>();
-        var outgoing = await FindOutgoingAsync(symbol, snapshot.Solution, cancellationToken);
-        connected.AddRange(outgoing.Select(edge => edge.Callee.OriginalDefinition));
-        var callers = await SymbolFinder.FindCallersAsync(
-            symbol,
-            snapshot.Solution,
-            cancellationToken);
-        connected.AddRange(callers.Select(caller => caller.CallingSymbol.OriginalDefinition));
-        var implementations = await SymbolFinder.FindImplementationsAsync(
-            symbol,
-            snapshot.Solution,
-            cancellationToken: cancellationToken);
-        connected.AddRange(implementations.Select(item => item.OriginalDefinition));
         if (symbol is IMethodSymbol method)
         {
+            var outgoing = await FindOutgoingAsync(method, snapshot.Solution, cancellationToken);
+            connected.AddRange(outgoing.Select(edge => edge.Callee.OriginalDefinition));
+            var callers = await SymbolFinder.FindCallersAsync(
+                method,
+                snapshot.Solution,
+                cancellationToken);
+            connected.AddRange(callers.Select(caller => caller.CallingSymbol.OriginalDefinition));
+            var implementations = await SymbolFinder.FindImplementationsAsync(
+                method,
+                snapshot.Solution,
+                cancellationToken: cancellationToken);
+            connected.AddRange(implementations.Select(item => item.OriginalDefinition));
             var overrides = await SymbolFinder.FindOverridesAsync(
                 method,
                 snapshot.Solution,
                 cancellationToken: cancellationToken);
             connected.AddRange(overrides.Select(item => item.OriginalDefinition));
+        }
+        else
+        {
+            if (symbol is INamedTypeSymbol)
+            {
+                var implementations = await SymbolFinder.FindImplementationsAsync(
+                    symbol,
+                    snapshot.Solution,
+                    cancellationToken: cancellationToken);
+                connected.AddRange(implementations.Select(item => item.OriginalDefinition));
+            }
+
+            var references = await SymbolFinder.FindReferencesAsync(
+                symbol,
+                snapshot.Solution,
+                cancellationToken);
+            foreach (var reference in references
+                .SelectMany(item => item.Locations)
+                .OrderBy(item => item.Document.FilePath, PathComparer)
+                .ThenBy(item => item.Location.SourceSpan.Start)
+                .Take(MaximumNaturalLanguageGraphReferenceLocations))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var semanticModel = await reference.Document.GetSemanticModelAsync(cancellationToken);
+                var referencingSymbol = semanticModel?.GetEnclosingSymbol(
+                    reference.Location.SourceSpan.Start,
+                    cancellationToken);
+                if (referencingSymbol is not null)
+                {
+                    connected.Add(referencingSymbol.OriginalDefinition);
+                }
+            }
         }
 
         return
@@ -6909,53 +8959,174 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static CodeExploreRankedCandidate[] BoostGraphConnectedCandidates(
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
-        IReadOnlySet<string> connectedIds,
+        IReadOnlyDictionary<string, double> graphMass,
         IReadOnlySet<string> seedIds,
-        CodeExploreQueryInterpretation interpretation,
-        CodeExploreNaturalLanguageIntent intent)
+        IReadOnlySet<string> usageConnectedIds,
+        IReadOnlyDictionary<string, CodeExploreDeclarationCatalogEntry[]> allowedById,
+        CodeExploreQueryInterpretation interpretation)
     {
-        if (connectedIds.Count == 0)
+        if (graphMass.Count == 0)
         {
-            return [.. ranked];
+            return
+            [
+                .. ranked.Select(candidate => candidate with
+                {
+                    Score = IsWeakLowSignalCandidate(
+                        candidate.Entry,
+                        candidate.CoveredTermCount,
+                        candidate.Reasons)
+                        ? CodeExploreRelevancePolicy.ApplyIsolatedWeakKindPenalty(candidate.Score)
+                        : candidate.Score,
+                    IsGraphSeed = seedIds.Contains(candidate.Entry.Identity.Id),
+                }),
+            ];
         }
 
-        var isSurveyLike = intent is CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
-            or CodeExploreNaturalLanguageIntent.Survey;
-        var scoreBoost = isSurveyLike
-            ? NaturalLanguageSurveyGraphBoost
-            : NaturalLanguageDefaultGraphBoost;
-        return OrderNaturalLanguageCandidates(ranked.Select(candidate =>
+        var hasTestFocus = HasTestFocus(interpretation);
+        var hasGeneratedFocus = HasGeneratedFocus(interpretation);
+        var maximumConnectedMass = graphMass
+            .Where(item => !seedIds.Contains(item.Key)
+                && allowedById.ContainsKey(item.Key))
+            .SelectMany(item => allowedById[item.Key].Select(entry =>
+                CalculateDistributedNaturalLanguageGraphMass(
+                    item.Value,
+                    entry,
+                    allowedById[item.Key],
+                    hasTestFocus,
+                    hasGeneratedFocus)))
+            .DefaultIfEmpty(0)
+            .Max();
+        var expanded = ranked.Select(candidate =>
         {
-            if (!connectedIds.Contains(candidate.Entry.Identity.Id)
-                || seedIds.Contains(candidate.Entry.Identity.Id)
-                || (isSurveyLike && !HasDirectNaturalLanguageEvidence(candidate, interpretation)))
+            var identity = candidate.Entry.Identity.Id;
+            var hasUsageEdge = usageConnectedIds.Contains(identity);
+            var candidateGraphMass = CalculateDistributedNaturalLanguageGraphMass(
+                graphMass.GetValueOrDefault(candidate.Entry.Identity.Id),
+                candidate.Entry,
+                allowedById.GetValueOrDefault(identity) ?? [candidate.Entry],
+                hasTestFocus,
+                hasGeneratedFocus);
+            if (candidateGraphMass <= 0
+                || seedIds.Contains(candidate.Entry.Identity.Id))
             {
-                return candidate;
+                return candidate with
+                {
+                    Score = !hasUsageEdge && IsWeakLowSignalCandidate(
+                        candidate.Entry,
+                        candidate.CoveredTermCount,
+                        candidate.Reasons)
+                        ? CodeExploreRelevancePolicy.ApplyIsolatedWeakKindPenalty(candidate.Score)
+                        : candidate.Score,
+                    GraphMass = candidateGraphMass,
+                    IsGraphSeed = seedIds.Contains(candidate.Entry.Identity.Id),
+                };
             }
 
             var reasons = (candidate.Reasons | CodeExploreSelectionReason.GraphConnected) & ~CodeExploreSelectionReason.Peripheral;
             return candidate with
             {
-                Tier = isSurveyLike
-                    ? candidate.Tier
-                    : MinTier(candidate.Tier, CodeExploreCandidateTier.GraphConnected),
+                Tier = MinTier(candidate.Tier, CodeExploreCandidateTier.GraphConnected),
                 Reasons = reasons,
-                Score = candidate.Score + scoreBoost,
+                Score = candidate.Score + CodeExploreRelevancePolicy.CalculateGraphBoost(
+                    candidateGraphMass,
+                    maximumConnectedMass,
+                    NaturalLanguageDefaultGraphBoost),
+                GraphMass = candidateGraphMass,
             };
-        }));
+        }).ToList();
+        var rankedIds = ranked
+            .Select(candidate => candidate.Entry.Identity.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach ((var identity, var rawMass) in graphMass
+            .Where(item => !seedIds.Contains(item.Key) && !rankedIds.Contains(item.Key))
+            .OrderByDescending(item => item.Value)
+            .ThenBy(item => item.Key, StringComparer.Ordinal))
+        {
+            if (maximumConnectedMass <= 0
+                || !allowedById.TryGetValue(identity, out var entries))
+            {
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                var mass = CalculateDistributedNaturalLanguageGraphMass(
+                    rawMass,
+                    entry,
+                    entries,
+                    hasTestFocus,
+                    hasGeneratedFocus);
+                var graphScore = CodeExploreRelevancePolicy.CalculateGraphBoost(
+                    mass,
+                    maximumConnectedMass,
+                    NaturalLanguageDefaultGraphBoost);
+                expanded.Add(new CodeExploreRankedCandidate(
+                    entry,
+                    CodeExploreCandidateTier.GraphConnected,
+                    CodeExploreSelectionReason.GraphConnected,
+                    graphScore,
+                    0,
+                    CreateAmbiguityKey(entry),
+                    mass));
+            }
+        }
+
+        return OrderNaturalLanguageCandidates(expanded);
+    }
+
+    private static double CalculateDistributedNaturalLanguageGraphMass(
+        double identityMass,
+        CodeExploreDeclarationCatalogEntry entry,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> identityEntries,
+        bool hasTestFocus,
+        bool hasGeneratedFocus)
+    {
+        if (identityMass <= 0)
+        {
+            return 0;
+        }
+
+        var entryWeight = CodeExploreRelevancePolicy.ApplyGraphClassificationMultiplier(
+            1,
+            entry.IsTest,
+            entry.IsGenerated,
+            hasTestFocus,
+            hasGeneratedFocus);
+        var totalWeight = identityEntries.Sum(candidate =>
+            CodeExploreRelevancePolicy.ApplyGraphClassificationMultiplier(
+                1,
+                candidate.IsTest,
+                candidate.IsGenerated,
+                hasTestFocus,
+                hasGeneratedFocus));
+        return totalWeight <= 0 ? 0 : identityMass * entryWeight / totalWeight;
     }
 
     private static CodeExploreRankedCandidate[] SelectNaturalLanguageCandidates(
         IReadOnlyList<CodeExploreRankedCandidate> rankedByIdentity,
         IReadOnlySet<string> alreadySelectedIds,
         int maximumCandidates,
+        int maximumFiles,
         CodeExploreQueryInterpretation interpretation,
         CodeExploreNaturalLanguageIntent intent,
+        IReadOnlyList<string> requestedToolFamilies,
         List<string> omissions)
     {
         if (maximumCandidates <= 0)
         {
             return [];
+        }
+
+        if (intent is CodeExploreNaturalLanguageIntent.Flow
+            or CodeExploreNaturalLanguageIntent.Impact)
+        {
+            return SelectRelationshipNaturalLanguageCandidates(
+                rankedByIdentity,
+                alreadySelectedIds,
+                maximumCandidates,
+                interpretation,
+                intent,
+                requestedToolFamilies);
         }
 
         if (!RequiresNaturalLanguageDiversity(intent))
@@ -6973,10 +9144,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var fileCounts = new Dictionary<string, int>(PathComparer);
         var typeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var cappedCandidates = 0;
-        var usesSemanticToolProfile = UsesSemanticToolCapabilityProfile(interpretation, intent);
-        var toolCapabilityFamilies = usesSemanticToolProfile
-            ? GetToolCapabilitySelectionFamilies(interpretation, intent)
-            : [];
+        var usesToolCapabilityProfile = UsesSemanticToolCapabilityProfile(interpretation, intent);
+        var representedFiles = new HashSet<string>(PathComparer);
 
         foreach (var candidate in rankedByIdentity.Where(candidate => HasExactCandidateReason(candidate.Reasons)))
         {
@@ -6990,24 +9159,61 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 continue;
             }
 
-            AddNaturalLanguageCandidate(selected, selectedIds, candidate);
             TrackNaturalLanguageCandidate(candidate, fileCounts, typeCounts);
+            AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+            _ = representedFiles.Add(candidate.Entry.FilePath);
         }
 
-        if (usesSemanticToolProfile
-            && selected.Count < maximumCandidates)
+        ReserveToolCapabilityContextCandidates(
+            rankedByIdentity,
+            interpretation,
+            requestedToolFamilies,
+            maximumCandidates,
+            selected,
+            selectedIds,
+            representedFiles,
+            fileCounts,
+            typeCounts);
+
+        foreach (var candidate in rankedByIdentity.Where(IsNamedNaturalLanguageCandidate))
         {
-            var compositionCandidate = rankedByIdentity.FirstOrDefault(candidate =>
-                !selectedIds.Contains(candidate.Entry.Identity.Id)
-                && IsToolCompositionEntry(candidate.Entry, interpretation)
-                && TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts));
-            if (compositionCandidate is not null)
+            if (selected.Count >= maximumCandidates)
             {
-                AddNaturalLanguageCandidate(selected, selectedIds, compositionCandidate);
+                break;
             }
+
+            if (selectedIds.Contains(candidate.Entry.Identity.Id))
+            {
+                continue;
+            }
+
+            if (usesToolCapabilityProfile
+                && !HasExactCandidateReason(candidate.Reasons)
+                && (IsPrivateImplementationHelper(candidate.Entry)
+                    || IsSemanticToolFamilySpecificEntry(candidate.Entry)
+                    || requestedToolFamilies.Any(family =>
+                        CandidateMatchesToolCapabilityFamily(candidate.Entry, family))))
+            {
+                continue;
+            }
+
+            if (!HasExactCandidateReason(candidate.Reasons)
+                && !TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts))
+            {
+                cappedCandidates++;
+                continue;
+            }
+
+            if (HasExactCandidateReason(candidate.Reasons))
+            {
+                TrackNaturalLanguageCandidate(candidate, fileCounts, typeCounts);
+            }
+
+            AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+            _ = representedFiles.Add(candidate.Entry.FilePath);
         }
 
-        foreach (var family in toolCapabilityFamilies)
+        foreach (var family in requestedToolFamilies)
         {
             if (selected.Count >= maximumCandidates)
             {
@@ -7018,7 +9224,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 rankedByIdentity,
                 selectedIds,
                 family,
-                intent,
                 fileCounts,
                 typeCounts);
             if (candidate is not null)
@@ -7032,13 +9237,33 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        var selectionLimit = usesSemanticToolProfile && selected.Count > 0
-            ? Math.Min(maximumCandidates, selected.Count + ToolIntentMaximumRankedBackfill)
-            : maximumCandidates;
+        if (intent == CodeExploreNaturalLanguageIntent.Survey
+            && selected.Count < maximumCandidates)
+        {
+            var maximumRepresentedFiles = Math.Min(maximumFiles, maximumCandidates);
+            foreach (var candidate in rankedByIdentity)
+            {
+                if (selected.Count >= maximumCandidates
+                    || representedFiles.Count >= maximumRepresentedFiles)
+                {
+                    break;
+                }
+
+                if (selectedIds.Contains(candidate.Entry.Identity.Id)
+                    || representedFiles.Contains(candidate.Entry.FilePath)
+                    || !TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts))
+                {
+                    continue;
+                }
+
+                AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+                _ = representedFiles.Add(candidate.Entry.FilePath);
+            }
+        }
 
         foreach (var candidate in rankedByIdentity)
         {
-            if (selected.Count >= selectionLimit)
+            if (selected.Count >= maximumCandidates)
             {
                 break;
             }
@@ -7048,9 +9273,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 continue;
             }
 
-            if (usesSemanticToolProfile
+            if (usesToolCapabilityProfile
                 && !HasExactCandidateReason(candidate.Reasons)
-                && ShouldSkipToolCapabilityBackfill(candidate, toolCapabilityFamilies))
+                && ShouldSkipToolCapabilityBackfill(candidate, requestedToolFamilies))
             {
                 continue;
             }
@@ -7062,6 +9287,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
 
             AddNaturalLanguageCandidate(selected, selectedIds, candidate);
+            _ = representedFiles.Add(candidate.Entry.FilePath);
         }
 
         if (selected.Count == 0)
@@ -7079,10 +9305,358 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return [.. selected];
     }
 
+    private static void ReserveToolCapabilityContextCandidates(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyList<string> requestedToolFamilies,
+        int maximumCandidates,
+        List<CodeExploreRankedCandidate> selected,
+        HashSet<string> selectedIds,
+        HashSet<string> representedFiles,
+        Dictionary<string, int> fileCounts,
+        Dictionary<string, int> typeCounts)
+    {
+        if (requestedToolFamilies.Count == 0)
+        {
+            return;
+        }
+
+        var hasLifecycleIntent = HasToolLifecycleIntent(interpretation);
+        var candidates = new[]
+        {
+            hasLifecycleIntent
+                ? ranked.FirstOrDefault(candidate =>
+                    !selectedIds.Contains(candidate.Entry.Identity.Id)
+                    && (IsSemanticToolTypeEntry(candidate.Entry)
+                        || IsSemanticToolDefinitionEntry(candidate.Entry))
+                    && requestedToolFamilies.Any(family =>
+                        CandidateMatchesToolCapabilityFamily(candidate.Entry, family)))
+                : null,
+            ranked.FirstOrDefault(candidate =>
+                !selectedIds.Contains(candidate.Entry.Identity.Id)
+                && !representedFiles.Contains(candidate.Entry.FilePath)
+                && IsRequestedToolCompositionEntry(
+                    candidate.Entry,
+                    interpretation,
+                    requestedToolFamilies)),
+        };
+        foreach (var candidate in candidates.OfType<CodeExploreRankedCandidate>())
+        {
+            if (selected.Count >= maximumCandidates || !selectedIds.Add(candidate.Entry.Identity.Id))
+            {
+                continue;
+            }
+
+            TrackNaturalLanguageCandidate(candidate, fileCounts, typeCounts);
+            selected.Add(candidate);
+            _ = representedFiles.Add(candidate.Entry.FilePath);
+        }
+    }
+
+    private static CodeExploreRankedCandidate[] SelectRelationshipNaturalLanguageCandidates(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlySet<string> alreadySelectedIds,
+        int maximumCandidates,
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent,
+        IReadOnlyList<string> requestedToolFamilies)
+    {
+        var selected = new List<CodeExploreRankedCandidate>();
+        var selectedIds = alreadySelectedIds.ToHashSet(StringComparer.Ordinal);
+        var representedFiles = new HashSet<string>(PathComparer);
+        var fileCounts = new Dictionary<string, int>(PathComparer);
+        var typeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var qualifiedMemberTerms = GetQualifiedMemberTerms(interpretation);
+        if (interpretation.QualifiedNames.Count > 0)
+        {
+            AddCandidates(
+                ranked.Where(IsNamedNaturalLanguageCandidate),
+                requireNewFile: false,
+                maximumSelected: maximumCandidates);
+            AddCandidates(
+                ranked.Where(candidate => HasCompilerRelationshipEvidence(candidate.Reasons)),
+                requireNewFile: true,
+                maximumSelected: maximumCandidates);
+            if (selected.Count == 0 && ranked.Count > 0)
+            {
+                AddCandidate(ranked[0]);
+            }
+
+            return [.. selected];
+        }
+
+        var fileGroups = ranked
+            .GroupBy(candidate => candidate.Entry.FilePath, PathComparer)
+            .Select(group => new
+            {
+                Path = group.Key,
+                Candidates = group.ToArray(),
+                Best = group.First(),
+                TermHits = CountNaturalLanguageFileTermHits(
+                    group,
+                    interpretation,
+                    qualifiedMemberTerms),
+                GraphMass = group.Sum(candidate => candidate.GraphMass),
+                IsEntry = group.Any(candidate => candidate.IsGraphSeed),
+                IsNamed = group.Any(IsNamedNaturalLanguageCandidate),
+            })
+            .ToArray();
+        var maximumFileGraphMass = fileGroups.Select(group => group.GraphMass).DefaultIfEmpty(0).Max();
+        var centralFiles = fileGroups
+            .Where(group => group.GraphMass > 0 && group.TermHits >= 1)
+            .OrderByDescending(group => group.GraphMass)
+            .ThenByDescending(group => group.TermHits)
+            .ThenBy(group => group.Path, PathComparer)
+            .Take(CodeExploreRelevancePolicy.MaximumCentralGraphFiles)
+            .Select(group => group.Path)
+            .ToHashSet(PathComparer);
+        var gatedFiles = maximumFileGraphMass <= 0
+            ? fileGroups
+            :
+            [
+                .. fileGroups
+                .Where(group => group.IsNamed
+                    || group.IsEntry
+                    || centralFiles.Contains(group.Path)
+                    || group.TermHits >= 2
+                    || group.GraphMass
+                        >= maximumFileGraphMass * CodeExploreRelevancePolicy.MinimumGraphMassRatio),
+            ];
+        var admittedFiles = gatedFiles.Length >= CodeExploreRelevancePolicy.MinimumProductionCandidatesForTestExclusion
+            ? gatedFiles
+            : fileGroups;
+        var orderedFiles = admittedFiles
+            .OrderByDescending(group => group.IsNamed)
+            .ThenByDescending(group => group.TermHits >= 2
+                && (group.IsEntry || centralFiles.Contains(group.Path)))
+            .ThenBy(
+                group => group.GraphMass,
+                new DescendingGraphMassComparer(maximumFileGraphMass))
+            .ThenByDescending(group => group.TermHits)
+            .ThenBy(group => group.Best.Entry.IsTest)
+            .ThenBy(group => group.Best.Entry.IsGenerated)
+            .ThenByDescending(group => group.Best.Score)
+            .ThenByDescending(group => group.Candidates.Length)
+            .ThenBy(group => group.Path, PathComparer)
+            .ToArray();
+
+        var fileDiversityReservation = Math.Min(
+            Math.Max(0, maximumCandidates - 1),
+            CodeExploreRelevancePolicy.MinimumBackfillCandidateCount);
+        foreach (var family in requestedToolFamilies)
+        {
+            if (selected.Count >= maximumCandidates)
+            {
+                break;
+            }
+
+            var familyCandidate = ranked.FirstOrDefault(candidate =>
+                !selectedIds.Contains(candidate.Entry.Identity.Id)
+                && IsSemanticToolDefinitionEntry(candidate.Entry)
+                && CandidateMatchesToolCapabilityFamily(candidate.Entry, family));
+            if (familyCandidate is not null)
+            {
+                TrackNaturalLanguageCandidate(familyCandidate, fileCounts, typeCounts);
+                AddCandidate(familyCandidate);
+            }
+        }
+
+        AddCandidates(
+            ranked.Where(IsNamedNaturalLanguageCandidate),
+            requireNewFile: false,
+            maximumSelected: maximumCandidates - fileDiversityReservation);
+        AddCandidates(
+            orderedFiles.Select(group => group.Best),
+            requireNewFile: true,
+            maximumSelected: maximumCandidates);
+        if (selected.Count < CodeExploreRelevancePolicy.MinimumBackfillCandidateCount)
+        {
+            AddCandidates(
+                ranked,
+                requireNewFile: true,
+                maximumSelected: Math.Min(
+                    maximumCandidates,
+                    CodeExploreRelevancePolicy.MinimumBackfillCandidateCount));
+        }
+
+        return [.. selected];
+
+        void AddCandidate(CodeExploreRankedCandidate candidate)
+        {
+            _ = selectedIds.Add(candidate.Entry.Identity.Id);
+            selected.Add(candidate);
+            _ = representedFiles.Add(candidate.Entry.FilePath);
+        }
+
+        void AddCandidates(
+            IEnumerable<CodeExploreRankedCandidate> candidates,
+            bool requireNewFile,
+            int maximumSelected)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (selected.Count >= maximumSelected)
+                {
+                    break;
+                }
+
+                if (selectedIds.Contains(candidate.Entry.Identity.Id)
+                    || (requireNewFile && representedFiles.Contains(candidate.Entry.FilePath)))
+                {
+                    continue;
+                }
+
+                if (!TryAdmitNaturalLanguageCandidate(
+                    candidate,
+                    intent,
+                    fileCounts,
+                    typeCounts))
+                {
+                    continue;
+                }
+
+                AddCandidate(candidate);
+            }
+        }
+    }
+
+    private static bool IsNamedNaturalLanguageCandidate(CodeExploreRankedCandidate candidate)
+    {
+        return HasExactCandidateReason(candidate.Reasons)
+            || candidate.IsFocusedNameMatch;
+    }
+
+    private static bool HasCompilerRelationshipEvidence(CodeExploreSelectionReason reasons)
+    {
+        const CodeExploreSelectionReason relationshipReasons = CodeExploreSelectionReason.GraphConnected
+            | CodeExploreSelectionReason.FlowSpine
+            | CodeExploreSelectionReason.Implementation
+            | CodeExploreSelectionReason.Caller;
+        return (reasons & relationshipReasons) != 0;
+    }
+
+    private static bool IsNaturalLanguageGraphEntryCandidate(CodeExploreRankedCandidate candidate)
+    {
+        return IsNamedNaturalLanguageCandidate(candidate) || candidate.IsFocusedNameMatch;
+    }
+
+    private static int GetNaturalLanguageNamedPriority(
+        CodeExploreRankedCandidate candidate,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyList<string> retrievalToolFamilies)
+    {
+        if (HasExactCandidateReason(candidate.Reasons))
+        {
+            return 4;
+        }
+
+        if (candidate.IsFocusedNameMatch)
+        {
+            return 3;
+        }
+
+        if (IsSemanticToolDefinitionEntry(candidate.Entry)
+            && retrievalToolFamilies.Any(family =>
+                CandidateMatchesToolCapabilityFamily(candidate.Entry, family)))
+        {
+            return 2;
+        }
+
+        return retrievalToolFamilies.Count > 0
+            && IsRequestedToolCompositionEntry(
+                candidate.Entry,
+                interpretation,
+                retrievalToolFamilies)
+                ? 1
+                : 0;
+    }
+
+    private static CodeExploreRankedCandidate[] SelectNaturalLanguageSourceCompanions(
+        IReadOnlyList<CodeExploreRankedCandidate> ranked,
+        IReadOnlyList<CodeExploreRankedCandidate> selected,
+        CodeExploreLimits limits)
+    {
+        if (selected.Count == 0)
+        {
+            return [];
+        }
+
+        var selectedIds = selected
+            .Select(candidate => candidate.Entry.Identity.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var selectedFiles = selected
+            .Select(candidate => candidate.Entry.FilePath)
+            .Distinct(PathComparer)
+            .ToArray();
+        var perFileCapacity = limits.MaximumPerFileSourceCharacters
+            / CodeExploreSourceAllocationPlanner.MinimumAdmittedSourceCharacters;
+        var totalCapacity = limits.MaximumSourceCharacters
+            / CodeExploreSourceAllocationPlanner.MinimumAdmittedSourceCharacters;
+        var maximumTotal = Math.Min(
+            Math.Max(0, limits.MaximumFlowNodes - selected.Count),
+            Math.Max(0, totalCapacity - selected.Count));
+        if (perFileCapacity <= 0 || maximumTotal <= 0)
+        {
+            return [];
+        }
+
+        var remainingByFile = selectedFiles.ToDictionary(
+            path => path,
+            path => Math.Max(
+                0,
+                perFileCapacity - selected.Count(candidate => PathComparer.Equals(candidate.Entry.FilePath, path))),
+            PathComparer);
+        var candidatesByFile = selectedFiles.ToDictionary(
+            path => path,
+            path => ranked
+                .Where(candidate => PathComparer.Equals(candidate.Entry.FilePath, path)
+                    && !selectedIds.Contains(candidate.Entry.Identity.Id)
+                    && IsUsefulNaturalLanguageSourceCompanion(candidate))
+                .Take(remainingByFile[path])
+                .ToArray(),
+            PathComparer);
+        var companions = new List<CodeExploreRankedCandidate>();
+        var maximumPerFile = remainingByFile.Values.DefaultIfEmpty(0).Max();
+        for (var index = 0; index < maximumPerFile && companions.Count < maximumTotal; index++)
+        {
+            foreach (var path in selectedFiles)
+            {
+                var fileCandidates = candidatesByFile[path];
+                if (index < fileCandidates.Length)
+                {
+                    companions.Add(fileCandidates[index]);
+                }
+
+                if (companions.Count >= maximumTotal)
+                {
+                    break;
+                }
+            }
+        }
+
+        return [.. companions];
+    }
+
+    private static bool IsUsefulNaturalLanguageSourceCompanion(CodeExploreRankedCandidate candidate)
+    {
+        return candidate.CoveredTermCount >= 2
+            || HasExactCandidateReason(candidate.Reasons)
+            || candidate.Reasons.HasFlag(CodeExploreSelectionReason.NameSegment)
+            || (candidate.GraphMass > 0
+                && candidate.Reasons.HasFlag(CodeExploreSelectionReason.GraphConnected));
+    }
+
     private static bool ShouldSkipToolCapabilityBackfill(
         CodeExploreRankedCandidate candidate,
         IReadOnlyList<string> requestedFamilies)
     {
+        if (IsPrivateImplementationHelper(candidate.Entry)
+            && candidate.CoveredTermCount <= 1
+            && !HasExactCandidateReason(candidate.Reasons))
+        {
+            return true;
+        }
+
         var isUnrequestedToolSurface = IsSemanticToolFamilySpecificEntry(candidate.Entry)
             && !requestedFamilies.Any(family =>
                 CandidateMatchesToolCapabilityFamily(candidate.Entry, family));
@@ -7098,24 +9672,46 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || IsSemanticToolDefinitionEntry(entry)
             || IsSemanticToolDataContractEntry(entry)
             || IsSemanticToolContainingType(entry)
-            || IsSemanticToolDataContractContainingType(entry);
+            || IsSemanticToolDataContractContainingType(entry)
+            || SemanticToolNameContainsKnownFamily(entry.Name)
+            || SemanticToolNameContainsKnownFamily(entry.DisplayName)
+            || (entry.ContainingType is { } containingType
+                && SemanticToolNameContainsKnownFamily(containingType));
     }
 
     private static CodeExploreRankedCandidate? SelectToolCapabilityFamilyCandidate(
         IReadOnlyList<CodeExploreRankedCandidate> rankedCandidates,
         IReadOnlySet<string> selectedIds,
         string family,
-        CodeExploreNaturalLanguageIntent intent,
         Dictionary<string, int> fileCounts,
         Dictionary<string, int> typeCounts)
     {
+        if (rankedCandidates.Any(candidate =>
+            selectedIds.Contains(candidate.Entry.Identity.Id)
+            && IsSemanticToolDefinitionEntry(candidate.Entry)
+            && CandidateMatchesToolCapabilityFamily(candidate.Entry, family)))
+        {
+            return null;
+        }
+
         var familyCandidates = rankedCandidates
             .Where(candidate => !selectedIds.Contains(candidate.Entry.Identity.Id)
                 && CandidateMatchesToolCapabilityFamily(candidate.Entry, family))
             .OrderBy(candidate => IsSemanticToolDefinitionEntry(candidate.Entry) ? 0 : 1)
             .ToArray();
-        return familyCandidates.FirstOrDefault(candidate =>
-            TryAdmitNaturalLanguageCandidate(candidate, intent, fileCounts, typeCounts));
+        var definitionCandidate = familyCandidates.FirstOrDefault(candidate =>
+            IsSemanticToolDefinitionEntry(candidate.Entry));
+        if (definitionCandidate is not null)
+        {
+            TrackNaturalLanguageCandidate(definitionCandidate, fileCounts, typeCounts);
+            return definitionCandidate;
+        }
+
+        return familyCandidates.FirstOrDefault(candidate => TryAdmitNaturalLanguageCandidate(
+            candidate,
+            CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation,
+            fileCounts,
+            typeCounts));
     }
 
     private static IReadOnlyList<string> GetToolCapabilitySelectionFamilies(
@@ -7139,6 +9735,141 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return families;
     }
 
+    private static IReadOnlyList<string> GetNaturalLanguageRetrievalToolFamilies(
+        CodeExploreQueryInterpretation interpretation,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        if (intent != CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation)
+        {
+            return [];
+        }
+
+        var hasSemanticContext = interpretation.Terms.Any(term => term is "semantic" or "semantics" or "compiler")
+            || MentionsKnownSemanticToolId(interpretation)
+            || interpretation.ExactIdentifiers.Any(SemanticToolNameContainsKnownFamily)
+            || HasAnyTermPair(interpretation, "code", "explore")
+            || HasAnyTermPair(interpretation, "symbol", "lookup")
+            || HasAnyTermPair(interpretation, "symbol", "declaration")
+            || HasAnyTermPair(interpretation, "reference", "usage")
+            || HasAnyTermPair(interpretation, "interface", "implementation")
+            || HasAnyTermPair(interpretation, "implementation", "override")
+            || HasAnyTermPair(interpretation, "blast", "radius")
+            || HasAnyTermPair(interpretation, "call", "hierarchy");
+        if (!hasSemanticContext)
+        {
+            return [];
+        }
+
+        var families = new List<string>(GetMentionedToolCapabilityFamilies(interpretation));
+        if (ShouldExpandSemanticToolSurvey(interpretation))
+        {
+            foreach (var family in ToolCapabilitySurveyFamilies)
+            {
+                AddMentionedToolCapabilityFamily(families, family, isMentioned: true);
+            }
+        }
+
+        return families;
+    }
+
+    private static IReadOnlyList<string> GetMentionedCatalogToolFamilies(
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CodeExploreQueryInterpretation interpretation,
+        string query)
+    {
+        var exactIdentifiers = interpretation.ExactIdentifiers
+            .Select(NormalizeComparableName)
+            .ToArray();
+        var qualifiedOwners = interpretation.QualifiedNames
+            .Select(qualified => qualified.LastIndexOf('.') is var separator && separator > 0
+                ? qualified[..separator]
+                : qualified)
+            .ToArray();
+        return entries
+            .Where(entry => entry.ToolCapability.Families.Count > 0)
+            .Where(entry => ToolCapabilityIsExplicitlyMentioned(
+                entry,
+                interpretation,
+                exactIdentifiers,
+                qualifiedOwners,
+                query))
+            .SelectMany(entry => entry.ToolCapability.Families)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool ToolCapabilityIsExplicitlyMentioned(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyList<string> exactIdentifiers,
+        IReadOnlyList<string> qualifiedOwners,
+        string query)
+    {
+        if (entry.ToolCapability.DeclaredToolId is { } declaredToolId
+            && QueryContainsIdentifier(query, declaredToolId))
+        {
+            return true;
+        }
+
+        if (exactIdentifiers.Any(identifier =>
+            !IsQualifiedNameComponent(identifier, interpretation.QualifiedNames)
+            && (IdentifierMatchesEntry(identifier, entry)
+                || ToolCapabilityIdentityMatches(entry, identifier))))
+        {
+            return true;
+        }
+
+        return qualifiedOwners.Any(owner =>
+            ToolCapabilityIdentityMatches(entry, owner));
+    }
+
+    private static bool ToolCapabilityIdentityMatches(
+        CodeExploreDeclarationCatalogEntry entry,
+        string identity)
+    {
+        var normalizedIdentity = NormalizeComparableName(identity);
+        return (entry.ToolCapability.ToolTypeName is { } toolTypeName
+                && QualifiedToolIdentityMatches(toolTypeName, normalizedIdentity))
+            || entry.ToolCapability.RelatedContractTypeNames.Any(contractTypeName =>
+                QualifiedToolIdentityMatches(contractTypeName, normalizedIdentity));
+    }
+
+    private static bool QualifiedToolIdentityMatches(string candidate, string identity)
+    {
+        var normalizedCandidate = NormalizeComparableName(candidate);
+        return normalizedCandidate.Equals(identity, StringComparison.OrdinalIgnoreCase)
+            || normalizedCandidate.EndsWith('.' + identity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool QueryContainsIdentifier(string query, string identifier)
+    {
+        for (var start = 0; start <= query.Length - identifier.Length; start++)
+        {
+            if (!query.AsSpan(start, identifier.Length).Equals(
+                identifier.AsSpan(),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var hasLeadingBoundary = start == 0 || !IsIdentifierCharacter(query[start - 1]);
+            var end = start + identifier.Length;
+            var hasTrailingBoundary = end == query.Length || !IsIdentifierCharacter(query[end]);
+            if (hasLeadingBoundary && hasTrailingBoundary)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierCharacter(char value)
+    {
+        return char.IsLetterOrDigit(value) || value == '_';
+    }
+
     private static bool UsesSemanticToolCapabilityProfile(
         CodeExploreQueryInterpretation interpretation,
         CodeExploreNaturalLanguageIntent intent)
@@ -7149,7 +9880,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 || CountMentionedToolCapabilityFamilies(interpretation) >= 2
                 || MentionsKnownSemanticToolId(interpretation)
                 || interpretation.ExactIdentifiers.Any(identifier =>
-                    ToolContractTypeNames.Contains(identifier)
+                    IsToolTypeName(identifier)
                     || SemanticToolNameContainsKnownFamily(identifier)));
     }
 
@@ -7274,14 +10005,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 score -= 170;
             }
 
-            if (IsPrivateImplementationHelper(entry) && !HasExactCandidateReason(existingReasons))
+            if (IsPrivateImplementationHelper(entry)
+                && coveredTermCount <= 1
+                && !HasExactCandidateReason(existingReasons))
             {
                 score -= 520;
             }
         }
         else if (intent == CodeExploreNaturalLanguageIntent.Survey)
         {
-            if (IsPrivateImplementationHelper(entry) && !HasExactCandidateReason(existingReasons))
+            if (IsPrivateImplementationHelper(entry)
+                && coveredTermCount <= 1
+                && !HasExactCandidateReason(existingReasons))
             {
                 score -= 180;
             }
@@ -7295,20 +10030,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new NaturalLanguageIntentAdjustment(score, reasons, tier);
     }
 
-    private static bool HasDirectNaturalLanguageEvidence(
-        CodeExploreRankedCandidate candidate,
-        CodeExploreQueryInterpretation interpretation)
-    {
-        return (candidate.Reasons & (CodeExploreSelectionReason.Path
-            | CodeExploreSelectionReason.QualifiedName
-            | CodeExploreSelectionReason.ExactIdentifier
-            | CodeExploreSelectionReason.ContainingType
-            | CodeExploreSelectionReason.MultiTerm
-            | CodeExploreSelectionReason.UserFocus)) != 0
-            || GetMentionedToolCapabilityFamilies(interpretation)
-                .Any(family => CandidateMatchesToolCapabilityFamily(candidate.Entry, family));
-    }
-
     private static bool HasExactCandidateReason(CodeExploreSelectionReason reasons)
     {
         return (reasons & (CodeExploreSelectionReason.Pinned
@@ -7319,8 +10040,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsSemanticToolTypeEntry(CodeExploreDeclarationCatalogEntry entry)
     {
-        return IsTypeDeclarationKind(entry.Kind)
-            && ToolContractTypeNames.Contains(entry.Name);
+        return entry.ToolCapability.Role == CodeExploreToolCapabilityRole.ToolType;
     }
 
     private static bool IsToolCapabilityContractCandidate(CodeExploreDeclarationCatalogEntry entry)
@@ -7333,26 +10053,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsSemanticToolDefinitionEntry(CodeExploreDeclarationCatalogEntry entry)
     {
-        return entry.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase)
-            && (entry.Name.Contains("definition", StringComparison.OrdinalIgnoreCase)
-                || entry.DisplayName.Contains("definition", StringComparison.OrdinalIgnoreCase))
-            && IsSemanticToolContainingType(entry);
+        return entry.ToolCapability.Role == CodeExploreToolCapabilityRole.Definition;
     }
 
     private static bool IsSemanticServiceContractEntry(CodeExploreDeclarationCatalogEntry entry)
     {
         return entry.Kind.Equals("Interface", StringComparison.OrdinalIgnoreCase)
-            && ToolServiceContractNames.Contains(entry.Name);
+            && IsToolServiceContractName(entry.Name);
     }
 
     private static bool IsSemanticToolDataContractEntry(CodeExploreDeclarationCatalogEntry entry)
     {
-        if (!IsTypeDeclarationKind(entry.Kind))
-        {
-            return false;
-        }
-
-        return IsSemanticToolDataContractName(entry.Name);
+        return entry.ToolCapability.Role == CodeExploreToolCapabilityRole.DataContract;
     }
 
     private static bool IsSemanticToolDataContractContainingType(CodeExploreDeclarationCatalogEntry entry)
@@ -7374,10 +10086,51 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CodeExploreDeclarationCatalogEntry entry,
         CodeExploreQueryInterpretation interpretation)
     {
-        return IsToolCompositionEntry(entry)
+        var hasDirectCompositionEvidence = IsToolCompositionEntry(entry)
             && (interpretation.Terms.Any(term => term is "semantic" or "semantics")
                 || interpretation.Terms.Any(term => !ToolCapabilityIntentTerms.Contains(term)
-                    && entry.Terms.Contains(term, StringComparer.OrdinalIgnoreCase)));
+                    && CatalogTermsCoverTerm(entry.Terms, term)));
+        if (hasDirectCompositionEvidence)
+        {
+            return true;
+        }
+
+        if (!IsToolCompositionSurface(entry)
+            || !HasToolLifecycleIntent(interpretation))
+        {
+            return false;
+        }
+
+        var matchedSubjectConcepts = interpretation.Terms
+            .Where(term => !ToolCapabilityIntentTerms.Contains(term)
+                && !ToolLifecycleIntentTerms.Contains(term)
+                && CatalogTermsCoverTerm(entry.Terms, term))
+            .Select(CanonicalCodeExploreTerm)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        return matchedSubjectConcepts >= 2;
+    }
+
+    private static bool HasToolLifecycleIntent(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.Terms.Any(ToolLifecycleIntentTerms.Contains);
+    }
+
+    private static bool HasToolCompositionContextIntent(CodeExploreQueryInterpretation interpretation)
+    {
+        return HasToolLifecycleIntent(interpretation)
+            || interpretation.Terms.Any(ToolCompositionContextTerms.Contains);
+    }
+
+    private static bool IsRequestedToolCompositionEntry(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        IReadOnlyList<string> requestedToolFamilies)
+    {
+        return IsToolCompositionSurface(entry)
+            && HasToolCompositionContextIntent(interpretation)
+            && requestedToolFamilies.Any(family =>
+                entry.ToolCapability.Families.Contains(family, StringComparer.Ordinal));
     }
 
     private static bool IsToolCompositionEntry(CodeExploreDeclarationCatalogEntry entry)
@@ -7388,12 +10141,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return false;
         }
 
-        var path = entry.RelativeFilePath.Replace('\\', '/');
-        var inCompositionFile = path.EndsWith("HostFoundation.cs", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("ApplicationComposition.cs", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("Composition", StringComparison.OrdinalIgnoreCase)
-            || entry.ContainingType?.Contains("Composition", StringComparison.OrdinalIgnoreCase) == true
-            || entry.ContainingType?.Contains("HostFoundation", StringComparison.OrdinalIgnoreCase) == true;
         var declaration = NormalizeComparableName(string.Join(
             ' ',
             entry.Name,
@@ -7404,7 +10151,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || declaration.Contains("capability", StringComparison.Ordinal)
             || declaration.Contains("createtools", StringComparison.Ordinal)
             || declaration.Contains("semantictool", StringComparison.Ordinal);
-        return inCompositionFile && hasRegistrationName;
+        return IsToolCompositionSurface(entry) && hasRegistrationName;
+    }
+
+    private static bool IsToolCompositionSurface(CodeExploreDeclarationCatalogEntry entry)
+    {
+        var compositionSurface = NormalizeComparableName(string.Join(
+            ' ',
+            entry.RelativeFilePath,
+            entry.ContainingType ?? string.Empty));
+        return compositionSurface.Contains("composition", StringComparison.Ordinal)
+            || compositionSurface.Contains("registration", StringComparison.Ordinal)
+            || compositionSurface.Contains("bootstrap", StringComparison.Ordinal)
+            || compositionSurface.Contains("startup", StringComparison.Ordinal)
+            || compositionSurface.Contains("host", StringComparison.Ordinal);
     }
 
     private static bool IsToolConstructorEntry(CodeExploreDeclarationCatalogEntry entry)
@@ -7429,8 +10189,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsSemanticToolContainingType(CodeExploreDeclarationCatalogEntry entry)
     {
-        return entry.ContainingType is { } containingType
-            && ToolContractTypeNames.Any(typeName => containingType.EndsWith(typeName, StringComparison.Ordinal));
+        return entry.ToolCapability.ToolTypeName is not null;
     }
 
     private static bool IsTypeDeclarationKind(string kind)
@@ -7446,128 +10205,256 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool SemanticToolNameContainsKnownFamily(string name)
     {
-        return name.Contains("CodeExplore", StringComparison.Ordinal)
-            || name.Contains("CallHierarchy", StringComparison.Ordinal)
-            || name.Contains("SymbolImpact", StringComparison.Ordinal)
-            || name.Contains("FindSymbol", StringComparison.Ordinal)
-            || name.Contains("FindReferences", StringComparison.Ordinal)
-            || name.Contains("FindImplementations", StringComparison.Ordinal)
-            || name.Contains("CSharpPattern", StringComparison.Ordinal)
-            || name.Contains("GeneratedCode", StringComparison.Ordinal);
+        return IndexedToolCapabilityFamilies.Any(family => ToolFamilyMatchesName(name, family));
     }
 
     private static bool CandidateMatchesToolCapabilityFamily(
         CodeExploreDeclarationCatalogEntry entry,
         string family)
     {
-        var comparable = NormalizeComparableName(string.Join(
-            ' ',
-            entry.Name,
-            entry.DisplayName,
-            entry.ContainingType ?? string.Empty));
-        return family switch
+        return entry.ToolCapability.Families.Contains(family, StringComparer.Ordinal);
+    }
+
+    private static bool HasRequestedToolContractRoleTerm(
+        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreQueryInterpretation interpretation,
+        string family)
+    {
+        var familyConcepts = GetToolFamilyIdentityTerms(family)
+            .Select(CanonicalCodeExploreTerm)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return GetCodeExploreTermCoverage(entry.NameTerms, interpretation.Terms)
+            .Any(coverage => !familyConcepts.Contains(coverage.CanonicalTerm));
+    }
+
+    private static bool ToolFamilyMatchesName(string name, string family)
+    {
+        var terminalName = name
+            .Split(['.', '+'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault() ?? name;
+        var comparableName = NormalizeComparableName(terminalName);
+        var comparableFamily = NormalizeComparableName(string.Join('_', GetToolFamilyIdentityTerms(family)));
+        return comparableFamily.Length > 0
+            && (comparableName.Equals(comparableFamily, StringComparison.Ordinal)
+                || comparableName.Equals(comparableFamily + "tool", StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<string> GetToolFamilyIdentityTerms(string family)
+    {
+        return family
+            .Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(term => term is not ("query" or "search"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsToolTypeName(string name)
+    {
+        var simpleName = name.Split(['.', '+'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[^1];
+        var genericArity = simpleName.IndexOf('`', StringComparison.Ordinal);
+        if (genericArity >= 0)
         {
-            "code_explore" => comparable.Contains("codeexplore", StringComparison.Ordinal)
-                || comparable.Contains("codeexploretool", StringComparison.Ordinal),
-            "symbol" => comparable.Contains("findsymbol", StringComparison.Ordinal),
-            "references" => comparable.Contains("findreferences", StringComparison.Ordinal),
-            "implementations" => comparable.Contains("findimplementations", StringComparison.Ordinal),
-            "impact" => comparable.Contains("symbolimpact", StringComparison.Ordinal),
-            "call_hierarchy" => comparable.Contains("callhierarchy", StringComparison.Ordinal)
-                || (comparable.Contains("call", StringComparison.Ordinal)
-                    && comparable.Contains("hierarchy", StringComparison.Ordinal)),
-            "csharp_pattern" => comparable.Contains("csharppattern", StringComparison.Ordinal),
-            "generated_code" => comparable.Contains("generatedcode", StringComparison.Ordinal),
-            "compiler" => comparable.Contains("csharppattern", StringComparison.Ordinal)
-                || comparable.Contains("generatedcode", StringComparison.Ordinal),
-            _ => false,
-        };
+            simpleName = simpleName[..genericArity];
+        }
+
+        return simpleName.EndsWith("Tool", StringComparison.Ordinal);
+    }
+
+    private static bool IsToolServiceContractName(string name)
+    {
+        var comparable = NormalizeComparableName(name);
+        var hasServiceShape = comparable.EndsWith("service", StringComparison.Ordinal)
+            || comparable.EndsWith("resolver", StringComparison.Ordinal)
+            || comparable.EndsWith("registry", StringComparison.Ordinal)
+            || comparable.EndsWith("engine", StringComparison.Ordinal);
+        return hasServiceShape
+            && (comparable.Contains("semantic", StringComparison.Ordinal)
+                || comparable.Contains("codeexplore", StringComparison.Ordinal)
+                || comparable.Contains("tool", StringComparison.Ordinal)
+                || comparable.Contains("capability", StringComparison.Ordinal));
     }
 
     private static CodeExploreRankedCandidate? RankNaturalLanguageCandidate(
-        CodeExploreDeclarationCatalogEntry entry,
+        CodeExploreRetrievedCandidate retrieved,
         CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
         CodeExploreNaturalLanguageIntent intent,
         bool usesSemanticToolProfile,
-        IReadOnlyList<string> semanticToolIdFamilies,
+        IReadOnlyList<string> requestedToolFamilies,
+        IReadOnlySet<string> qualifiedMemberTerms,
         IReadOnlyDictionary<string, int> termCounts,
         IReadOnlyDictionary<string, int> nameCounts,
         int catalogEntryCount)
     {
-        var reasons = CodeExploreSelectionReason.None;
-        var tier = CodeExploreCandidateTier.Peripheral;
-        var score = 0;
+        var entry = retrieved.Entry;
+        var reasons = retrieved.Reasons;
+        var tier = retrieved.Tier;
+        var score = retrieved.Score;
         foreach (var path in interpretation.PathLikeSpans.Where(IsCSharpPathSpan))
         {
             if (PathSpanMatchesEntry(path, entry))
             {
                 reasons |= CodeExploreSelectionReason.Path;
                 tier = MinTier(tier, CodeExploreCandidateTier.ExactQualified);
-                score += 900;
+                score = Math.Max(score, 900);
             }
         }
 
         foreach (var qualified in interpretation.QualifiedNames)
         {
-            if (entry.QualifiedNames.Any(name => string.Equals(name, qualified, StringComparison.OrdinalIgnoreCase)))
+            if (QualifiedNameMatchesEntry(qualified, entry))
             {
                 reasons |= CodeExploreSelectionReason.QualifiedName;
                 tier = MinTier(tier, CodeExploreCandidateTier.ExactQualified);
-                score += 850;
+                score = Math.Max(score, 850);
             }
         }
 
         foreach (var identifier in interpretation.ExactIdentifiers.Select(NormalizeComparableName).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!IdentifierMatchesEntry(identifier, entry))
+            if (IsQualifiedNameComponent(identifier, interpretation.QualifiedNames)
+                && !interpretation.QualifiedNames.Any(qualified => QualifiedNameMatchesEntry(qualified, entry)))
             {
                 continue;
             }
 
-            reasons |= CodeExploreSelectionReason.ExactIdentifier;
-            var count = nameCounts.GetValueOrDefault(identifier);
-            if (count is > 0 and <= 5)
+            if (IdentifierMatchesEntry(identifier, entry))
             {
-                tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
-                score += 700;
+                reasons |= CodeExploreSelectionReason.ExactIdentifier;
+                var count = nameCounts.GetValueOrDefault(identifier);
+                if (count is > 0 and <= 5)
+                {
+                    tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+                    score = Math.Max(score, 700);
+                }
+                else
+                {
+                    score = Math.Max(score, 220);
+                }
             }
-            else
+            else if (CalculateDistinctiveIdentifierPrefixScore(identifier, entry.Name) is var prefixScore
+                && prefixScore > 0)
             {
-                score += 220;
+                reasons |= CodeExploreSelectionReason.UserFocus;
+                var prefixTier = prefixScore >= 500
+                    ? CodeExploreCandidateTier.DistinctiveIdentifier
+                    : CodeExploreCandidateTier.Peripheral;
+                tier = MinTier(tier, prefixTier);
+                score = Math.Max(score, prefixScore);
             }
         }
 
-        var matchesKnownToolId = (IsSemanticToolTypeEntry(entry)
+        nameSegmentEvidence.MatchesByIdentity.TryGetValue(entry.Identity.Id, out var nameSegmentMatch);
+        var matchesQualifiedFocus = interpretation.QualifiedNames.Any(qualified =>
+            QualifiedNameMatchesEntry(qualified, entry));
+        var hasScopedMemberCollision = !matchesQualifiedFocus
+            && nameSegmentMatch?.MatchedConcepts.Any(qualifiedMemberTerms.Contains) == true;
+        var isCompoundNameMatch = nameSegmentMatch is not null
+            && nameSegmentMatch.MatchedConcepts.Count >= 2;
+        var coversDeclarationName = nameSegmentMatch?.MatchedConcepts.Count
+            == nameSegmentMatch?.DeclarationSegmentCount;
+        var coversQuerySubject = nameSegmentMatch is not null
+            && (nameSegmentMatch.MatchedConcepts.Count == nameSegmentEvidence.ConceptCount
+                || (nameSegmentEvidence.PrimaryConceptCount >= 2
+                    && nameSegmentMatch.MatchedPrimaryConceptCount
+                        == nameSegmentEvidence.PrimaryConceptCount));
+        var isFocusedNameMatch = isCompoundNameMatch
+            && !hasScopedMemberCollision
+            && coversDeclarationName
+            && coversQuerySubject;
+        if (nameSegmentMatch?.IsStrong == true)
+        {
+            reasons |= CodeExploreSelectionReason.NameSegment | CodeExploreSelectionReason.MultiTerm;
+            var nameSegmentTier = isFocusedNameMatch
+                ? CodeExploreCandidateTier.DistinctiveIdentifier
+                : CodeExploreCandidateTier.MultiTermStructural;
+            tier = MinTier(tier, nameSegmentTier);
+            var queryCoverageBaseScore = NaturalLanguageNameSegmentBaseScore
+                * nameSegmentMatch.MatchedConcepts.Count
+                / Math.Max(1, nameSegmentEvidence.ConceptCount);
+            var matchedConceptScore = nameSegmentMatch.MatchedConcepts.Count
+                * NaturalLanguageMaximumNameSegmentCoverageScore;
+            var declarationCoverage = Math.Min(
+                NaturalLanguageMaximumNameSegmentCoverageScore,
+                matchedConceptScore / Math.Max(1, nameSegmentMatch.DeclarationSegmentCount));
+            var nameSegmentScore = queryCoverageBaseScore
+                + (nameSegmentMatch.MatchedConcepts.Count * NaturalLanguageNameSegmentConceptScore)
+                + (nameSegmentMatch.MatchedPrimaryConceptCount * NaturalLanguagePrimaryNameSegmentConceptScore)
+                + declarationCoverage;
+            score = Math.Max(score, nameSegmentScore);
+        }
+        else if (nameSegmentMatch?.IsRareSingleTerm == true)
+        {
+            reasons |= CodeExploreSelectionReason.NameSegment;
+            score = Math.Max(score, NaturalLanguageRareNameSegmentScore);
+        }
+
+        var matchesRequestedTool = (IsSemanticToolTypeEntry(entry)
                 || IsSemanticToolDefinitionEntry(entry))
-            && semanticToolIdFamilies.Any(family =>
+            && requestedToolFamilies.Any(family =>
                 CandidateMatchesToolCapabilityFamily(entry, family));
-        if (matchesKnownToolId)
+        if (matchesRequestedTool)
         {
             reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
             tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
-            score += 650;
+            var toolFamilyScore = 650;
             if (IsSemanticToolDefinitionEntry(entry))
             {
-                reasons |= CodeExploreSelectionReason.ExactIdentifier;
-                score += 350;
+                toolFamilyScore += 350;
             }
+
+            score = Math.Max(score, toolFamilyScore);
         }
 
-        var coveredTerms = interpretation.Terms
-            .Where(term => CandidateCoversTerm(entry, term))
-            .Select(CanonicalCodeExploreTerm)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var matchesRequestedToolContractRole = IsSemanticToolDataContractEntry(entry)
+            && requestedToolFamilies.Any(family =>
+                CandidateMatchesToolCapabilityFamily(entry, family)
+                && HasRequestedToolContractRoleTerm(entry, interpretation, family));
+        if (matchesRequestedToolContractRole)
+        {
+            reasons |= CodeExploreSelectionReason.UserFocus | CodeExploreSelectionReason.MultiTerm;
+            tier = MinTier(tier, CodeExploreCandidateTier.DistinctiveIdentifier);
+            score = Math.Max(score, 600);
+        }
+
+        var coveredTerms = GetCodeExploreTermCoverage(entry.Terms, interpretation.Terms);
+        var coveredNameTerms = GetCodeExploreTermCoverage(entry.NameTerms, interpretation.Terms);
+        var coveredNameConcepts = coveredNameTerms
+            .Select(coverage => coverage.CanonicalTerm)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var coveredSignatureTerms = GetCodeExploreTermCoverage(entry.SignatureTerms, interpretation.Terms)
+            .Where(coverage => !coveredNameConcepts.Contains(coverage.CanonicalTerm))
             .ToArray();
-        var uncommonTermCount = coveredTerms.Count(term => !IsCommonCodeExploreTerm(term, termCounts, catalogEntryCount));
+        var uncommonTermCount = coveredTerms.Count(coverage =>
+            !IsCommonCodeExploreTerm(coverage.QueryTerm, termCounts, catalogEntryCount));
+        var textChannelScore = (int)Math.Round(
+            (coveredNameTerms.Sum(coverage => coverage.Strength) * 60)
+            + (coveredSignatureTerms.Sum(coverage => coverage.Strength) * 10),
+            MidpointRounding.AwayFromZero);
         if (coveredTerms.Length >= 2 && uncommonTermCount > 0)
         {
             reasons |= CodeExploreSelectionReason.MultiTerm;
-            tier = MinTier(tier, CodeExploreCandidateTier.MultiTermStructural);
-            score += 360 + (coveredTerms.Length * 70) + (uncommonTermCount * 50);
+            var averageCoverageStrength = coveredTerms.Average(coverage => coverage.Strength);
+            textChannelScore += (int)Math.Round(
+                (360 + (coveredTerms.Length * 70) + (uncommonTermCount * 50))
+                * averageCoverageStrength,
+                MidpointRounding.AwayFromZero);
         }
         else if (coveredTerms.Length == 1 && uncommonTermCount == 1)
         {
-            score += 120;
+            textChannelScore += (int)Math.Round(
+                120 * coveredTerms[0].Strength,
+                MidpointRounding.AwayFromZero);
+        }
+
+        score = Math.Max(score, textChannelScore);
+        if (coveredTerms.Length > 0)
+        {
+            var contextTermStrength = GetCodeExploreTermCoverage(entry.ContextTerms, interpretation.Terms)
+                .Sum(coverage => coverage.Strength);
+            score += Math.Min(
+                45,
+                (int)Math.Round(contextTermStrength * 15, MidpointRounding.AwayFromZero));
         }
 
         if (HasContainingTypeCorroboration(entry, interpretation))
@@ -7585,10 +10472,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 reasons |= CodeExploreSelectionReason.UserFocus;
                 score += 140;
             }
-            else
-            {
-                score -= 120;
-            }
         }
 
         if (entry.IsGenerated)
@@ -7598,10 +10481,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             {
                 reasons |= CodeExploreSelectionReason.UserFocus;
                 score += 140;
-            }
-            else
-            {
-                score -= 120;
             }
         }
 
@@ -7622,10 +10501,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         score += intentAdjustment.Score;
         reasons |= intentAdjustment.Reasons;
         tier = MinTier(tier, intentAdjustment.Tier);
-        if (IsWeakLowSignalCandidate(entry, coveredTerms.Length, reasons))
-        {
-            score -= 100;
-        }
+        score = CodeExploreRelevancePolicy.ApplyClassificationMultiplier(
+            score,
+            entry.IsTest,
+            entry.IsGenerated,
+            HasTestFocus(interpretation),
+            HasGeneratedFocus(interpretation));
 
         if (reasons == CodeExploreSelectionReason.None || score <= 0)
         {
@@ -7643,7 +10524,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             reasons,
             score,
             coveredTerms.Length,
-            CreateAmbiguityKey(entry));
+            CreateAmbiguityKey(entry),
+            IsFocusedNameMatch: isFocusedNameMatch || matchesRequestedToolContractRole);
     }
 
     private static CodeExploreCandidateSummary CreateCandidateSummary(
@@ -7679,7 +10561,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyList<CodeExploreCandidateSummary> candidateSummaries,
         CodeExploreAdaptiveBudget adaptiveBudget)
     {
-        var reason = "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
+        var projectScoped = IsProjectScopedCodeExploreSnapshot(snapshot);
+        var reason = projectScoped
+            ? "Natural-language discovery did not find the requested declaration in the loaded project's source scope."
+            : "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
         var resolution = new CodeExploreAnchorResolution(
             request.Query,
             CodeExploreAnchorKind.Query,
@@ -7690,20 +10575,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             reason);
         var coverage = new CodeExploreCoverage(
             false,
-            snapshot.Confidence == SemanticConfidenceLevel.FullSemantic,
+            !projectScoped && snapshot.Confidence == SemanticConfidenceLevel.FullSemantic,
             false,
             true,
             [reason]);
-        var availability = new CodeExploreAvailability(
-            CodeExploreAvailabilityStatus.NoMatchingDeclarations,
-            "No compiler-known C# declaration or confined C# path matched the request.",
-            false,
-            snapshot.Confidence,
-            SemanticConfidenceLevel.PartialCompilation,
-            true,
-            [new CodeExploreNextActionHint(
-                CodeExploreNextActionKind.RefineAnchor,
-                "Retry with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+        var availability = projectScoped
+            ? CreateProjectScopedCodeExploreAvailability(
+                snapshot,
+                hasVisibleSource: false,
+                canRefineAnchor: true)
+            : new CodeExploreAvailability(
+                CodeExploreAvailabilityStatus.NoMatchingDeclarations,
+                "No compiler-known C# declaration or confined C# path matched the request.",
+                true,
+                snapshot.Confidence,
+                SemanticConfidenceLevel.PartialCompilation,
+                true,
+                [new CodeExploreNextActionHint(
+                    CodeExploreNextActionKind.RefineAnchor,
+                    "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
         var allocation = new CodeExploreAllocationSummary(
             request.Limits.MaximumSourceCharacters,
             0,
@@ -7801,6 +10691,36 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || interpretation.Terms.Count > 0;
     }
 
+    private static bool ShouldUseProjectScopeFallback(
+        AdvancedSemanticSnapshot snapshot,
+        IReadOnlyList<CodeExploreDeclarationCatalogEntry> entries,
+        CodeExploreQueryInterpretation interpretation,
+        NaturalLanguageNameSegmentEvidence nameSegmentEvidence,
+        CodeExploreNaturalLanguageIntent intent)
+    {
+        if (!IsProjectScopedCodeExploreSnapshot(snapshot)
+            || intent is not (CodeExploreNaturalLanguageIntent.Impact or CodeExploreNaturalLanguageIntent.Flow))
+        {
+            return false;
+        }
+
+        var exactIdentifierMatch = interpretation.ExactIdentifiers
+            .Select(NormalizeComparableName)
+            .Any(identifier => entries.Any(entry => IdentifierMatchesEntry(identifier, entry)));
+        if (exactIdentifierMatch)
+        {
+            return false;
+        }
+
+        if (nameSegmentEvidence.PrimaryConceptCount > 0)
+        {
+            return !nameSegmentEvidence.HasPrimaryEvidence;
+        }
+
+        return nameSegmentEvidence.CanEvaluateStrongQueryEvidence
+            && !nameSegmentEvidence.HasStrongCoOccurrence;
+    }
+
     private static CodeExploreNaturalLanguageIntent ClassifyNaturalLanguageIntent(
         CodeExploreRequest request,
         CodeExploreQueryInterpretation interpretation)
@@ -7815,11 +10735,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return CodeExploreNaturalLanguageIntent.Flow;
         }
 
-        if (interpretation.PathLikeSpans.Count > 0
-            || interpretation.StableSymbolIds.Count > 0
-            || interpretation.QualifiedNames.Count > 0)
+        var relationshipQuery = RemoveKnownSemanticToolIds(request.Query);
+        var relationshipAnalysis = CodeExploreQueryIntentPolicy.Analyze(relationshipQuery);
+        if (relationshipAnalysis.Intent == CodeExploreRelationshipIntent.Flow)
         {
-            return CodeExploreNaturalLanguageIntent.Exact;
+            return CodeExploreNaturalLanguageIntent.Flow;
+        }
+
+        if (relationshipAnalysis.Intent == CodeExploreRelationshipIntent.Impact)
+        {
+            return CodeExploreNaturalLanguageIntent.Impact;
         }
 
         if (HasToolCapabilityExplanationFocus(interpretation))
@@ -7827,17 +10752,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation;
         }
 
-        if (HasImpactFocus(interpretation))
+        if (interpretation.PathLikeSpans.Count > 0
+            || interpretation.StableSymbolIds.Count > 0
+            || interpretation.QualifiedNames.Count > 0)
         {
-            return CodeExploreNaturalLanguageIntent.Impact;
-        }
-
-        if (HasFlowFocus(interpretation))
-        {
-            return CodeExploreNaturalLanguageIntent.Flow;
+            return CodeExploreNaturalLanguageIntent.Exact;
         }
 
         return CodeExploreNaturalLanguageIntent.Survey;
+    }
+
+    private static string RemoveKnownSemanticToolIds(string query)
+    {
+        var result = query;
+        foreach (var toolId in SemanticToolIdFamilies.Keys)
+        {
+            result = result.Replace(toolId, " ", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return result;
     }
 
     private static bool HasToolCapabilityExplanationFocus(CodeExploreQueryInterpretation interpretation)
@@ -7864,33 +10797,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || termSet.Contains("agentic")
             || termSet.Contains("workflow")
             || termSet.Contains("workflows")
-            || exactSet.Any(identifier => identifier.Contains("Tool", StringComparison.Ordinal))
-            || hasKnownToolId;
-        var hasToolContext = hasExplicitToolCapabilityContext
-            || termSet.Contains("semantic")
-            || termSet.Contains("semantics");
-        if ((HasImpactFocus(interpretation) || HasFlowFocus(interpretation))
-            && !hasExplicitToolCapabilityContext)
-        {
-            return false;
-        }
-
-        return hasKnownToolId
+            || exactSet.Any(identifier => identifier.Contains("Tool", StringComparison.Ordinal));
+        var isDirectKnownToolLookup = hasKnownToolId
+            && exactSet.Count > 0
+            && termSet.All(SemanticToolIdentityTerms.Contains);
+        return isDirectKnownToolLookup
+            || (hasKnownToolId && familyCount >= 2)
+            || (hasKnownToolId && hasExplanationVerb)
             || (hasExplicitToolCapabilityContext && familyCount >= 2)
-            || (hasToolContext && hasExplanationVerb)
-            || (hasToolContext && capabilityTermCount >= 2);
-    }
-
-    private static bool HasImpactFocus(CodeExploreQueryInterpretation interpretation)
-    {
-        return interpretation.Terms.Any(term => term is "impact" or "affected" or "caller" or "callers"
-            or "dependent" or "dependents" or "downstream" or "usage" or "usages" or "uses");
-    }
-
-    private static bool HasFlowFocus(CodeExploreQueryInterpretation interpretation)
-    {
-        return interpretation.Terms.Any(term => term is "flow" or "call" or "chain" or "path"
-            or "dispatch" or "through" or "sequence");
+            || (hasExplicitToolCapabilityContext && hasExplanationVerb)
+            || (hasExplicitToolCapabilityContext && capabilityTermCount >= 2);
     }
 
     private static int CountMentionedToolCapabilityFamilies(CodeExploreQueryInterpretation interpretation)
@@ -7913,23 +10829,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             AddStronglyMentionedToolCapabilityFamilies(families, interpretation);
             var hasExplicitCompilerToolFocus = interpretation.Terms.Any(term =>
                 term is "compiler" or "diagnostic" or "diagnostics");
-            AddMentionedToolCapabilityFamily(families, "csharp_pattern", hasExplicitCompilerToolFocus);
-            AddMentionedToolCapabilityFamily(families, "generated_code", hasExplicitCompilerToolFocus);
+            AddMentionedToolCapabilityFamily(families, CSharpPatternSearchToolFamily, hasExplicitCompilerToolFocus);
+            AddMentionedToolCapabilityFamily(families, GeneratedCodeToolFamily, hasExplicitCompilerToolFocus);
             return families;
         }
 
         var hasCodeExploreFamily = HasAnyTermPair(interpretation, "code", "explore")
             || interpretation.ExactIdentifiers.Any(identifier => identifier.Contains("code_explore", StringComparison.OrdinalIgnoreCase)
                 || identifier.Contains("CodeExplore", StringComparison.Ordinal));
-        AddMentionedToolCapabilityFamily(families, "code_explore", hasCodeExploreFamily);
-        AddMentionedToolCapabilityFamily(families, "symbol", interpretation.Terms.Any(term => term is "symbol" or "symbols" or "lookup" or "declaration" or "declarations"));
-        AddMentionedToolCapabilityFamily(families, "references", interpretation.Terms.Any(term => term is "reference" or "references" or "usage" or "usages"));
-        AddMentionedToolCapabilityFamily(families, "implementations", interpretation.Terms.Any(term => term is "implementation" or "implementations" or "override" or "overrides" or "derived"));
-        AddMentionedToolCapabilityFamily(families, "impact", interpretation.Terms.Any(term => term is "impact" or "blast" or "radius" or "affected" or "dependent" or "dependents"));
-        AddMentionedToolCapabilityFamily(families, "call_hierarchy", interpretation.Terms.Any(term => term is "call" or "calls" or "caller" or "callers" or "hierarchy" or "flow"));
+        AddMentionedToolCapabilityFamily(families, CodeExploreToolFamily, hasCodeExploreFamily);
+        AddMentionedToolCapabilityFamily(families, FindSymbolToolFamily, interpretation.Terms.Any(term => term is "symbol" or "symbols" or "lookup" or "declaration" or "declarations"));
+        AddMentionedToolCapabilityFamily(families, FindReferencesToolFamily, interpretation.Terms.Any(term => term is "reference" or "references" or "usage" or "usages"));
+        AddMentionedToolCapabilityFamily(families, FindImplementationsToolFamily, interpretation.Terms.Any(term => term is "implementation" or "implementations" or "override" or "overrides" or "derived"));
+        AddMentionedToolCapabilityFamily(families, SymbolImpactToolFamily, interpretation.Terms.Any(term => term is "impact" or "blast" or "radius" or "affected" or "dependent" or "dependents"));
+        AddMentionedToolCapabilityFamily(families, CallHierarchyToolFamily, interpretation.Terms.Any(term => term is "call" or "calls" or "caller" or "callers" or "hierarchy" or "flow"));
         var hasCompilerToolFocus = interpretation.Terms.Any(term => term is "compiler" or "diagnostic" or "diagnostics");
-        AddMentionedToolCapabilityFamily(families, "csharp_pattern", hasCompilerToolFocus);
-        AddMentionedToolCapabilityFamily(families, "generated_code", hasCompilerToolFocus);
+        AddMentionedToolCapabilityFamily(families, CSharpPatternSearchToolFamily, hasCompilerToolFocus);
+        AddMentionedToolCapabilityFamily(families, GeneratedCodeToolFamily, hasCompilerToolFocus);
         return families;
     }
 
@@ -7946,27 +10862,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || HasAnyTermPair(interpretation, "blast", "radius");
         AddMentionedToolCapabilityFamily(
             families,
-            "code_explore",
+            CodeExploreToolFamily,
             HasAnyTermPair(interpretation, "code", "explore"));
         AddMentionedToolCapabilityFamily(
             families,
-            "symbol",
+            FindSymbolToolFamily,
             hasSymbolFamily);
         AddMentionedToolCapabilityFamily(
             families,
-            "references",
+            FindReferencesToolFamily,
             HasAnyTermPair(interpretation, "reference", "usage"));
         AddMentionedToolCapabilityFamily(
             families,
-            "implementations",
+            FindImplementationsToolFamily,
             hasImplementationFamily);
         AddMentionedToolCapabilityFamily(
             families,
-            "impact",
+            SymbolImpactToolFamily,
             hasImpactFamily);
         AddMentionedToolCapabilityFamily(
             families,
-            "call_hierarchy",
+            CallHierarchyToolFamily,
             HasAnyTermPair(interpretation, "call", "hierarchy"));
     }
 
@@ -7974,8 +10890,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         var hasSemanticFocus = interpretation.Terms.Any(term => term is "semantic" or "semantics");
         return hasSemanticFocus
+            && !HasDistinctiveExactSymbolFocus(interpretation)
             && (!MentionsKnownSemanticToolId(interpretation)
                 || interpretation.Terms.Contains("tools", StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static bool HasDistinctiveExactSymbolFocus(CodeExploreQueryInterpretation interpretation)
+    {
+        return interpretation.ExactIdentifiers.Any(identifier =>
+            !ToolCapabilityIntentTerms.Contains(identifier)
+            && !SemanticToolIdFamilies.ContainsKey(identifier)
+            && !SemanticToolNameContainsKnownFamily(identifier));
     }
 
     private static bool MentionsKnownSemanticToolId(CodeExploreQueryInterpretation interpretation)
@@ -8012,8 +10937,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         string first,
         string second)
     {
-        return interpretation.Terms.Contains(first, StringComparer.OrdinalIgnoreCase)
-            && interpretation.Terms.Contains(second, StringComparer.OrdinalIgnoreCase);
+        return HasCodeExploreTermConcept(interpretation, first)
+            && HasCodeExploreTermConcept(interpretation, second);
+    }
+
+    private static bool HasCodeExploreTermConcept(
+        CodeExploreQueryInterpretation interpretation,
+        string expected)
+    {
+        var expectedVariants = CreateCodeExploreTermVariants(expected);
+        return interpretation.Terms.Any(term => CreateCodeExploreTermVariants(term)
+            .Any(variant => expectedVariants.Contains(variant, StringComparer.OrdinalIgnoreCase)));
     }
 
     private static IEnumerable<string> ExtractCodeExploreTokens(string query)
@@ -8058,7 +10992,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         return value.Length > 1
             && SyntaxFacts.IsValidIdentifier(value)
-            && (value.Any(char.IsUpper)
+            && (value[1..].Any(char.IsUpper)
                 || value.Any(char.IsDigit)
                 || value.Contains('_', StringComparison.Ordinal));
     }
@@ -8092,6 +11026,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         AddCodeExploreTerms(terms, ignored, value);
     }
 
+    private static HashSet<string> CreateCanonicalCodeExploreTermSet(IEnumerable<string> values)
+    {
+        var literalTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values)
+        {
+            AddCodeExploreTerms(literalTerms, value);
+        }
+
+        return literalTerms
+            .Select(CanonicalCodeExploreTerm)
+            .Where(term => term.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     private static void AddCodeExploreTerms(
         HashSet<string> terms,
         HashSet<string> ignored,
@@ -8102,7 +11050,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             foreach (var segment in SplitIdentifierSegments(part))
             {
                 var term = segment.ToLowerInvariant();
-                if (term.Length < 2)
+                if (term.Length < CodeExploreTermNormalizer.MinimumTermLength)
                 {
                     continue;
                 }
@@ -8120,40 +11068,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static void AddNormalizedCodeExploreTerm(HashSet<string> terms, string term)
     {
-        foreach (var variant in CreateCodeExploreTermVariants(term))
-        {
-            terms.Add(variant);
-        }
+        terms.Add(term);
     }
 
     private static IReadOnlyList<string> CreateCodeExploreTermVariants(string term)
     {
-        var variants = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { term };
-        if (term.Length > 4 && term.EndsWith('s') && !term.EndsWith("ss", StringComparison.Ordinal) && !term.EndsWith("is", StringComparison.Ordinal))
-        {
-            variants.Add(term[..^1]);
-        }
-
-        if (term.Length > 5 && term.EndsWith("ing", StringComparison.Ordinal))
-        {
-            var stem = term[..^3];
-            variants.Add(stem);
-            variants.Add(stem + "e");
-        }
-
-        if (term.Length > 4 && term.EndsWith("ed", StringComparison.Ordinal))
-        {
-            var stem = term[..^2];
-            variants.Add(stem);
-            variants.Add(stem + "e");
-        }
-
-        if (term.Length > 6 && term.EndsWith("ment", StringComparison.Ordinal))
-        {
-            variants.Add(term[..^4]);
-        }
-
-        return variants.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        return CodeExploreTermNormalizer.CreateVariants(term);
     }
 
     private static IEnumerable<string> SplitCodeExploreWords(string value)
@@ -8186,6 +11106,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             if (part.Length == 0)
             {
+                continue;
+            }
+
+            if (part.Length > CodeExploreTermNormalizer.MinimumTermLength
+                && part.EndsWith('s')
+                && part[..^1].All(char.IsUpper))
+            {
+                yield return part;
                 continue;
             }
 
@@ -8267,16 +11195,78 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool CandidateCoversTerm(CodeExploreDeclarationCatalogEntry entry, string term)
     {
-        var variants = CreateCodeExploreTermVariants(term);
-        return entry.Terms.Any(candidate => variants.Any(variant => string.Equals(candidate, variant, StringComparison.OrdinalIgnoreCase)));
+        return CatalogTermsCoverTerm(entry.Terms, term);
+    }
+
+    private static CodeExploreTermCoverage[] GetCodeExploreTermCoverage(
+        IReadOnlyList<string> catalogTerms,
+        IReadOnlyList<string> queryTerms)
+    {
+        return
+        [
+            .. queryTerms
+                .Select(term => new CodeExploreTermCoverage(
+                    term,
+                    CanonicalCodeExploreTerm(term),
+                    GetCatalogTermMatchStrength(catalogTerms, term)))
+                .Where(coverage => coverage.Strength > 0)
+                .GroupBy(coverage => coverage.CanonicalTerm, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(coverage => coverage.Strength)
+                    .ThenBy(coverage => coverage.QueryTerm, StringComparer.OrdinalIgnoreCase)
+                    .First()),
+        ];
+    }
+
+    private static bool CatalogTermsCoverTerm(IReadOnlyList<string> catalogTerms, string term)
+    {
+        return GetCatalogTermMatchStrength(catalogTerms, term) > 0;
+    }
+
+    private static double GetCatalogTermMatchStrength(
+        IReadOnlyList<string> catalogTerms,
+        string term)
+    {
+        return CodeExploreTermNormalizer.CreateWeightedVariants(term)
+            .Select(variant => GetCatalogVariantMatchStrength(catalogTerms, variant))
+            .DefaultIfEmpty(0)
+            .Max();
+    }
+
+    private static double GetCatalogVariantMatchStrength(
+        IReadOnlyList<string> catalogTerms,
+        CodeExploreTermVariant variant)
+    {
+        var baseStrength = variant.Kind switch
+        {
+            CodeExploreTermVariantKind.Literal => 1.0,
+            CodeExploreTermVariantKind.Stem => CodeExploreRelevancePolicy.StemMatchMultiplier,
+            CodeExploreTermVariantKind.Alias => CodeExploreRelevancePolicy.AliasMatchMultiplier,
+            _ => 0,
+        };
+        if (baseStrength == 0)
+        {
+            return 0;
+        }
+
+        if (catalogTerms.Contains(variant.Value, StringComparer.OrdinalIgnoreCase))
+        {
+            return baseStrength;
+        }
+
+        return variant.Value.Length >= CodeExploreCandidateRetriever.MinimumPrefixTermLength
+            && catalogTerms.Any(catalogTerm => catalogTerm.StartsWith(
+                variant.Value,
+                StringComparison.OrdinalIgnoreCase))
+                    ? baseStrength * CodeExploreRelevancePolicy.PrefixCoverageMultiplier
+                    : 0;
     }
 
     private static string CanonicalCodeExploreTerm(string term)
     {
-        return CreateCodeExploreTermVariants(term)
-            .OrderBy(variant => variant.Length)
-            .ThenBy(variant => variant, StringComparer.OrdinalIgnoreCase)
-            .First();
+        return CodeExploreTermNormalizer.TryCreateCanonicalTerm(term, out var canonicalTerm)
+            ? canonicalTerm
+            : term;
     }
 
     private static bool PathSpanMatchesEntry(string path, CodeExploreDeclarationCatalogEntry entry)
@@ -8293,6 +11283,48 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return string.Equals(NormalizeComparableName(entry.Name), identifier, StringComparison.OrdinalIgnoreCase)
             || string.Equals(NormalizeComparableName(entry.MetadataName), identifier, StringComparison.OrdinalIgnoreCase)
             || string.Equals(NormalizeComparableName(StripParameters(entry.DisplayName)), identifier, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int CalculateDistinctiveIdentifierPrefixScore(string identifier, string declarationName)
+    {
+        var identifierKey = CreateIdentifierSearchKey(identifier);
+        var declarationKey = CreateIdentifierSearchKey(declarationName);
+        if (identifierKey.Length < CodeExploreCandidateRetriever.MinimumFuzzyNameLength
+            || declarationKey.Length <= identifierKey.Length
+            || !declarationKey.StartsWith(identifierKey, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        return identifier.Contains('_', StringComparison.Ordinal)
+            && declarationKey.Equals(identifierKey + "tool", StringComparison.Ordinal)
+            ? 800
+            : 150;
+    }
+
+    private static bool QualifiedNameMatchesEntry(
+        string qualifiedName,
+        CodeExploreDeclarationCatalogEntry entry)
+    {
+        return entry.QualifiedNames.Any(name =>
+            string.Equals(name, qualifiedName, StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith('.' + qualifiedName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsQualifiedNameComponent(
+        string identifier,
+        IReadOnlyList<string> qualifiedNames)
+    {
+        return qualifiedNames.Any(qualifiedName => qualifiedName
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Any(component => string.Equals(component, identifier, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string CreateIdentifierSearchKey(string value)
+    {
+        return string.Concat(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant));
     }
 
     private static bool IsCommonCodeExploreTerm(
@@ -8320,9 +11352,17 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             AddCodeExploreTerms(containerTerms, entry.ContainingNamespace);
         }
 
-        return containerTerms.Count > 0
-            && interpretation.Terms.Any(containerTerms.Contains)
-            && interpretation.Terms.Any(term => CandidateCoversTerm(entry, term));
+        var directConcepts = interpretation.Terms
+            .Where(term => CatalogTermsCoverTerm(entry.NameTerms, term))
+            .Select(CanonicalCodeExploreTerm)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var containerTermArray = containerTerms.ToArray();
+        var containerConcepts = interpretation.Terms
+            .Where(term => CatalogTermsCoverTerm(containerTermArray, term))
+            .Select(CanonicalCodeExploreTerm)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return directConcepts.Count > 0
+            && containerConcepts.Except(directConcepts, StringComparer.OrdinalIgnoreCase).Any();
     }
 
     private static bool HasTestFocus(CodeExploreQueryInterpretation interpretation)
@@ -8386,7 +11426,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int coveredTermCount,
         CodeExploreSelectionReason reasons)
     {
-        if ((reasons & (CodeExploreSelectionReason.Pinned | CodeExploreSelectionReason.QualifiedName | CodeExploreSelectionReason.MultiTerm | CodeExploreSelectionReason.CoLocated | CodeExploreSelectionReason.GraphConnected)) != 0)
+        if ((reasons & (CodeExploreSelectionReason.Pinned
+            | CodeExploreSelectionReason.ExactIdentifier
+            | CodeExploreSelectionReason.QualifiedName
+            | CodeExploreSelectionReason.MultiTerm
+            | CodeExploreSelectionReason.CoLocated
+            | CodeExploreSelectionReason.GraphConnected)) != 0)
         {
             return false;
         }
@@ -8483,7 +11528,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static string FormatSelectionReasons(CodeExploreSelectionReason reasons)
     {
         var descriptions = new List<string>();
-        if (reasons.HasFlag(CodeExploreSelectionReason.MultiTerm))
+        if (reasons.HasFlag(CodeExploreSelectionReason.NameSegment))
+        {
+            descriptions.Add(reasons.HasFlag(CodeExploreSelectionReason.MultiTerm)
+                ? "matches multiple query concepts in its declaration name"
+                : "matches a catalog-verified declaration-name segment");
+        }
+        else if (reasons.HasFlag(CodeExploreSelectionReason.MultiTerm))
         {
             descriptions.Add("matches multiple query terms");
         }
@@ -8510,12 +11561,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static int ResolveNaturalLanguageCandidateSummaryLimit(
         int maximumSourceCharacters,
-        int pinnedSummaryCount)
+        int pinnedSummaryCount,
+        int selectedSummaryCount)
     {
         var budgetedSummaries = Math.Max(1, maximumSourceCharacters / 512);
-        return Math.Max(
+        var budgetedNonPinnedSummaries = Math.Max(
             0,
             Math.Min(MaximumNaturalLanguageCandidateSummaries, budgetedSummaries) - pinnedSummaryCount);
+        return Math.Max(selectedSummaryCount, budgetedNonPinnedSummaries);
     }
 
     private static int EstimateReservedCodeExploreCharacters(
@@ -8542,10 +11595,61 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsTestProjectNameOrPath(string projectName, string relativePath)
     {
-        return projectName.Contains("Test", StringComparison.OrdinalIgnoreCase)
-            || relativePath.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
-            || relativePath.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
-            || Path.GetFileName(relativePath).Contains("Test", StringComparison.OrdinalIgnoreCase);
+        var normalizedPath = relativePath.Replace('\\', '/');
+        var pathSegments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (pathSegments.Take(Math.Max(0, pathSegments.Length - 1)).Any(IsTestPathSegment))
+        {
+            return true;
+        }
+
+        var fileStem = Path.GetFileNameWithoutExtension(normalizedPath);
+        return IsTestName(projectName) || IsTestFileStem(fileStem);
+    }
+
+    private static bool IsTestPathSegment(string segment)
+    {
+        return TestPathSegments.Contains(segment) || HasPascalCaseTestSuffix(segment);
+    }
+
+    private static bool IsTestFileStem(string fileStem)
+    {
+        if (fileStem.StartsWith("test_", StringComparison.OrdinalIgnoreCase)
+            || fileStem.StartsWith("test.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return HasDelimitedTestToken(fileStem) || HasPascalCaseTestSuffix(fileStem);
+    }
+
+    private static bool IsTestName(string name)
+    {
+        return name
+                .Split(['.', '-', '_'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(TestNameTokens.Contains)
+            || HasPascalCaseTestSuffix(name);
+    }
+
+    private static bool HasDelimitedTestToken(string name)
+    {
+        return TestNameTokens.Any(token =>
+            name.EndsWith('.' + token, StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith('-' + token, StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith('_' + token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasPascalCaseTestSuffix(string name)
+    {
+        return TestNameSuffixes.Any(suffix =>
+            name.Length > suffix.Length
+            && name.EndsWith(suffix, StringComparison.Ordinal));
+    }
+
+    private static bool IsTestSourceCandidate(CodeExploreSectionCandidate candidate)
+    {
+        return IsTestProjectNameOrPath(
+            candidate.Location?.ProjectName ?? string.Empty,
+            candidate.FilePath);
     }
 
     private static async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolIdAsync(
@@ -8611,6 +11715,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             resolved.Location,
             [],
             "Stable symbol id resolved exactly."));
+        var sourceImportance = ResolveAnchorSourceImportance(anchor);
         foreach (var symbol in resolved.Group.Symbols)
         {
             await AddSymbolSourceCandidatesAsync(
@@ -8619,7 +11724,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 sourceReader,
                 symbol,
                 anchor,
-                "Stable symbol id declaration source.",
+                NaturalLanguageAnchorSourceReason,
+                sourceImportance,
                 1,
                 candidates,
                 cancellationToken);
@@ -8690,6 +11796,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selected.Location,
             alternatives,
             reason));
+        var sourceImportance = ResolveAnchorSourceImportance(anchor);
         if (!hasStableIdentityCollision || locatedGroups.Count == 1)
         {
             foreach (var group in locatedGroups.Take(request.Limits.MaximumAlternatives))
@@ -8703,6 +11810,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         symbol,
                         anchor,
                         "Exact symbol declaration source.",
+                        sourceImportance,
                         1,
                         candidates,
                         cancellationToken);
@@ -8857,7 +11965,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 anchor.ExpectedWorkspaceGeneration,
                 anchor.AllocationRank,
                 SourceText.From(sourceText.Text, Encoding.UTF8),
-                sourceText.FileSha256));
+                sourceText.FileSha256,
+                CodeExploreSourceImportance.Pinned));
             return new(false);
         }
 
@@ -9139,6 +12248,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ISymbol symbol,
         CodeExploreAnchor anchor,
         string selectionReason,
+        CodeExploreSourceImportance importance,
         int priority,
         List<CodeExploreSectionCandidate> candidates,
         CancellationToken cancellationToken)
@@ -9158,17 +12268,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
 
             var declaration = await reference.GetSyntaxAsync(cancellationToken);
-            var document = await FindDocumentForSyntaxTreeAsync(
+            var locatedDocument = await FindDocumentForSyntaxTreeAsync(
                 snapshot,
                 declaration.SyntaxTree,
                 cancellationToken);
-            if (document is null)
+            if (locatedDocument is null)
             {
                 continue;
             }
 
+            var document = locatedDocument.Document;
             var location = ToCodeExploreLocation(
-                CreateDocumentLocation(document, declaration.SyntaxTree, declaration.Span, projection),
+                CreateDocumentLocation(
+                    document,
+                    declaration.SyntaxTree,
+                    declaration.Span,
+                    projection,
+                    locatedDocument.IsSourceGenerated),
                 snapshot.RepositoryPath);
             candidates.Add(new CodeExploreSectionCandidate(
                 document,
@@ -9188,7 +12304,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 anchor.AllocationRank,
                 null,
-                null));
+                null,
+                importance,
+                importance == CodeExploreSourceImportance.FlowSpine));
         }
 
         if (symbol.DeclaringSyntaxReferences.Length > 0)
@@ -9212,12 +12330,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 continue;
             }
 
-            var document = await FindDocumentForSyntaxTreeAsync(
+            var locatedDocument = await FindDocumentForSyntaxTreeAsync(
                 snapshot,
                 location.SourceTree,
                 cancellationToken);
             candidates.Add(new CodeExploreSectionCandidate(
-                document,
+                locatedDocument?.Document,
                 sourceLocation.FilePath,
                 location.SourceSpan,
                 identity,
@@ -9234,7 +12352,60 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 anchor.AllocationRank,
                 null,
-                null));
+                null,
+                importance,
+                importance == CodeExploreSourceImportance.FlowSpine));
+        }
+    }
+
+    private static CodeExploreSourceImportance ResolveAnchorSourceImportance(CodeExploreAnchor anchor)
+    {
+        return anchor.AllocationRank.HasValue
+            ? CodeExploreSourceImportance.Named
+            : CodeExploreSourceImportance.Pinned;
+    }
+
+    private static async Task AddNaturalLanguageSourceCompanionAsync(
+        AdvancedSemanticSnapshot snapshot,
+        SemanticSourceProjection projection,
+        ICodeExploreSourceReader sourceReader,
+        CodeExploreRankedCandidate companion,
+        int allocationRank,
+        List<CodeExploreSectionCandidate> candidates,
+        CancellationToken cancellationToken)
+    {
+        var groups = await ResolveSymbolGroupsInSnapshotAsync(
+            snapshot,
+            companion.Entry.Identity.Id,
+            [],
+            cancellationToken);
+        var anchor = new CodeExploreAnchor(
+            CodeExploreAnchorKind.SymbolId,
+            companion.Entry.Identity.Id,
+            null,
+            null,
+            false,
+            CodeExplorePathSelectionMode.Auto,
+            null,
+            null,
+            allocationRank);
+        foreach (var symbol in groups
+            .SelectMany(group => group.Symbols)
+            .Where(HasSourceEvidence)
+            .Distinct(SymbolEqualityComparer.Default)
+            .OrderBy(symbol => CreateIdentity(symbol).Id, StringComparer.Ordinal))
+        {
+            await AddSymbolSourceCandidatesAsync(
+                snapshot,
+                projection,
+                sourceReader,
+                symbol,
+                anchor,
+                NaturalLanguageCompanionSourceReason,
+                CodeExploreSourceImportance.Supporting,
+                1,
+                candidates,
+                cancellationToken);
         }
     }
 
@@ -9327,7 +12498,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             anchor.ExpectedWorkspaceGeneration,
             anchor.AllocationRank,
             null,
-            null);
+            null,
+            CodeExploreSourceImportance.Pinned);
     }
 
     private static async Task<CodeExplorePriorCoverage> TryCreateCodeExploreBackReferenceAsync(
@@ -9885,7 +13057,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static IReadOnlyList<SemanticSymbolIdentity> CreateSectionIdentities(CodeExploreSectionCandidate candidate)
     {
-        return candidate.Identity is null ? [] : [candidate.Identity];
+        return candidate.Identity is null
+            ? candidate.AdditionalIdentities
+            : candidate.AdditionalIdentities
+                .Prepend(candidate.Identity)
+                .DistinctBy(identity => identity.Id, StringComparer.Ordinal)
+                .ToArray();
     }
 
     private static IReadOnlyList<CodeExploreSymbolGroup> GroupSymbolsByIdentity(IEnumerable<ISymbol> symbols)
@@ -10256,24 +13433,24 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return parameters < 0 ? value : value[..parameters];
     }
 
-    private static bool IsFlowCallSiteCandidate(CodeExploreSectionCandidate candidate)
-    {
-        return string.Equals(candidate.SelectionReason, "Compiler-proven flow call-site source.", StringComparison.Ordinal);
-    }
-
     private static string CreateSectionKey(CodeExploreSectionCandidate candidate)
     {
         var range = candidate.Location?.Range;
+        var start = candidate.Span?.Start.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? range?.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? candidate.PreferredLine?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? string.Empty;
+        var end = candidate.Span?.End.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? range?.EndLine.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? candidate.EndLine?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? string.Empty;
         return string.Join(
             '|',
-            candidate.FilePath,
+            CreateSourceAllocationKey(candidate),
             candidate.Location?.ProjectName ?? string.Empty,
             candidate.Location?.TargetFramework ?? string.Empty,
-            range?.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            range?.StartColumn.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            range?.EndLine.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            range?.EndColumn.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            candidate.Identity?.Id ?? string.Empty);
+            start,
+            end);
     }
 
     private static bool IsOutputBoundOmission(string omission)
@@ -10570,16 +13747,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return null;
         }
 
-        var document = await FindDocumentForSyntaxTreeAsync(
+        var locatedDocument = await FindDocumentForSyntaxTreeAsync(
             snapshot,
             location.SourceTree,
             cancellationToken);
-        return document is null
+        return locatedDocument is null
             ? null
-            : CreateDocumentLocation(document, location.SourceTree, location.SourceSpan, projection);
+            : CreateDocumentLocation(
+                locatedDocument.Document,
+                location.SourceTree,
+                location.SourceSpan,
+                projection,
+                locatedDocument.IsSourceGenerated);
     }
 
-    private static async Task<Document?> FindDocumentForSyntaxTreeAsync(
+    private static async Task<LocatedSemanticDocument?> FindDocumentForSyntaxTreeAsync(
         AdvancedSemanticSnapshot snapshot,
         SyntaxTree syntaxTree,
         CancellationToken cancellationToken)
@@ -10587,7 +13769,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var document = snapshot.Solution.GetDocument(syntaxTree);
         if (document is not null)
         {
-            return document;
+            return new LocatedSemanticDocument(document, false);
         }
 
         foreach (var project in snapshot.Solution.Projects
@@ -10608,7 +13790,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (ReferenceEquals(root.SyntaxTree, syntaxTree)
                     || string.Equals(root.SyntaxTree.FilePath, syntaxTree.FilePath, PathComparison))
                 {
-                    return generatedDocument;
+                    return new LocatedSemanticDocument(generatedDocument, true);
                 }
             }
         }
@@ -10639,7 +13821,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         Document document,
         SyntaxTree syntaxTree,
         TextSpan span,
-        SemanticSourceProjection projection)
+        SemanticSourceProjection projection,
+        bool? isSourceGenerated = null)
     {
         var lineSpan = syntaxTree.GetLineSpan(span);
         var filePath = document.FilePath ?? document.Name;
@@ -10648,12 +13831,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             lineSpan.StartLinePosition.Character + 1,
             lineSpan.EndLinePosition.Line + 1,
             lineSpan.EndLinePosition.Character + 1);
+        var isGenerated = projection.IsGenerated(syntaxTree, isSourceGenerated == true);
         return new(
             document.Project.Name,
             projection.GetTargetFramework(document.Project.Id),
             filePath,
             range,
-            IsGeneratedPath(filePath),
+            isGenerated,
             projection.IsLinked(filePath));
     }
 
@@ -10829,9 +14013,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static bool IsGeneratedPath(string path)
     {
-        return path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase)
-            || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+        return CodeExploreGeneratedSourceClassifier.IsGeneratedPath(path);
     }
 
     private static string BoundText(string value, int maximum)
@@ -10886,6 +14068,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 /// <summary>Caches stable source-projection metadata for one semantic query.</summary>
 internal sealed class SemanticSourceProjection
 {
+    private readonly ConcurrentDictionary<SyntaxTree, bool> _generatedDocuments = new();
     private readonly IReadOnlyDictionary<ProjectId, string> _targetFrameworks;
     private readonly IReadOnlyDictionary<string, int> _documentPathCounts;
 
@@ -10923,6 +14106,20 @@ internal sealed class SemanticSourceProjection
         return _documentPathCounts.GetValueOrDefault(filePath) > 1;
     }
 
+    /// <summary>Classifies one document once for this immutable query projection.</summary>
+    internal bool IsGenerated(SyntaxTree syntaxTree, bool isSourceGenerated)
+    {
+        if (isSourceGenerated)
+        {
+            return true;
+        }
+
+        return _generatedDocuments.GetOrAdd(
+            syntaxTree,
+            tree => CodeExploreGeneratedSourceClassifier.IsGeneratedPath(tree.FilePath)
+                || CodeExploreGeneratedSourceClassifier.HasGeneratedHeader(tree.GetRoot()));
+    }
+
     private static string ReadTargetFramework(string? projectFilePath)
     {
         if (projectFilePath is null || !File.Exists(projectFilePath))
@@ -10951,6 +14148,7 @@ internal sealed record CodeExploreReadinessSnapshot(
     IReadOnlySet<ProjectId> CompiledProjects,
     SemanticConfidenceLevel Confidence,
     string? RepositoryPath,
+    string? WorkspacePath,
     long Generation);
 
 /// <summary>Immutable compiler-aware state captured for one advanced query.</summary>
@@ -10959,4 +14157,5 @@ internal sealed record AdvancedSemanticSnapshot(
     IReadOnlySet<ProjectId> CompiledProjects,
     SemanticConfidenceLevel Confidence,
     string RepositoryPath,
+    string WorkspacePath,
     long Generation);

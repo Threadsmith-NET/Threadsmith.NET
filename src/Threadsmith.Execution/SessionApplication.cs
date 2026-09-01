@@ -73,6 +73,7 @@ public sealed partial class SessionApplication :
     private readonly IConversationCompactor? _conversationCompactor;
     private readonly IConversationMemoryGovernor? _conversationGovernor;
     private readonly IConversationStore? _conversationStore;
+    private readonly IConversationToolSnapshotStore? _conversationToolSnapshots;
     private readonly ConversationContextMode _defaultConversationMode;
     private readonly ModelProfileId? _defaultModelProfileId;
     private readonly IEvidenceStore? _evidenceStore;
@@ -168,7 +169,8 @@ public sealed partial class SessionApplication :
         IActiveTurnCompactor? activeTurnCompactor = null,
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
         ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
-        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null)
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null,
+        IConversationToolSnapshotStore? conversationToolSnapshots = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -219,6 +221,7 @@ public sealed partial class SessionApplication :
         _conversationStore = conversationStore;
         _conversationGovernor = conversationGovernor;
         _conversationCompactor = conversationCompactor;
+        _conversationToolSnapshots = conversationToolSnapshots;
         if (!Enum.IsDefined(defaultConversationMode))
         {
             throw new ArgumentOutOfRangeException(nameof(defaultConversationMode));
@@ -1360,42 +1363,6 @@ public sealed partial class SessionApplication :
         return normalized.Length <= maximumCharacters
             ? normalized
             : normalized[..maximumCharacters];
-    }
-
-    /// <summary>Determines whether a conversational tool may be advertised under effective policy.
-    /// Explicit denial and non-empty tool allowlists remain authoritative. Read-only capabilities that
-    /// require approval are withheld because the ordinary invocation pipeline cannot prompt interactively.
-    /// </summary>
-    private static bool IsAdvertisedToModel(ToolDefinition definition, ToolInvocationContext? context)
-    {
-        if (context is null)
-        {
-            return true;
-        }
-
-        if (context.TrustLevel < definition.RequiredTrust)
-        {
-            return false;
-        }
-
-        if (context.DeniedToolIds.Count > 0 && context.DeniedToolIds.Contains(definition.Id))
-        {
-            return false;
-        }
-
-        if (context.DenyAllTools
-            || (context.AllowedToolIds.Count > 0 && !context.AllowedToolIds.Contains(definition.Id)))
-        {
-            return false;
-        }
-
-        if (context.RequireApprovalToolIds.Count > 0
-            && context.RequireApprovalToolIds.Contains(definition.Id))
-        {
-            return false;
-        }
-
-        return true;
     }
 
     private static ReasoningLevel ResolveRequestReasoning(

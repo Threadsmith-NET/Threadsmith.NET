@@ -295,7 +295,9 @@
     // are treated as untrusted prompt data when selected.
     "repositoryMemory": {
       "maximumItems": 12,
-      "maximumTokens": 2000
+      "maximumTokens": 2000,
+      "minimumRelevanceScore": 0.2,
+      "automaticMemoryMaximumAge": "2.00:00:00"
     },
     // Phase-specific evidence inclusion toggles (plan-09 §14).
     "phases": {

@@ -1100,6 +1100,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 _compiledProjects.ToHashSet(),
                 _confidence,
                 _lastRequest?.RepositoryPath,
+                _lastRequest?.SolutionPath,
                 _generation);
         }
     }
@@ -1122,6 +1123,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 _compiledProjects.ToHashSet(),
                 _confidence,
                 _lastRequest.RepositoryPath,
+                _lastRequest.SolutionPath,
                 _generation);
         }
     }

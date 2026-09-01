@@ -8,6 +8,7 @@ using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Threadsmith.Hooks;
 using Threadsmith.Mcp;
+using Threadsmith.Models;
 using Threadsmith.Persistence;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
@@ -40,6 +41,11 @@ internal static class ApplicationComposition
             .GetSection("context:conversation")
             .Get<ConversationContextPolicy>() ?? new ConversationContextPolicy();
         var conversationRetriever = new ConversationMemoryRetriever(persistence.ConversationStore);
+        var promptAppendFiles = host.Configuration
+            .GetSection("prompt append files")
+            .Get<string[]>() ?? [];
+        var repositoryInstructionResolver = new RepositoryInstructionResolver(host.Sanitizer);
+        var conversationToolSnapshots = new ConversationToolSnapshotStore();
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
             new TokenEstimator(),
@@ -49,9 +55,7 @@ internal static class ApplicationComposition
             host.Events,
             new ContextAssemblerOptions
             {
-                PromptAppendFiles = host.Configuration
-                    .GetSection("prompt append files")
-                    .Get<string[]>() ?? [],
+                PromptAppendFiles = promptAppendFiles,
                 Conversation = conversationPolicy,
                 RepositoryMemory = host.Configuration.GetSection("context:repositoryMemory")
                     .Get<RepositoryMemoryContextPolicy>() ?? new RepositoryMemoryContextPolicy(),
@@ -59,7 +63,7 @@ internal static class ApplicationComposition
             modelResolver,
             persistence.ConversationStore,
             conversationRetriever,
-            new RepositoryInstructionResolver(host.Sanitizer),
+            repositoryInstructionResolver,
             persistence.RepositoryMemoryStore);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
@@ -260,7 +264,8 @@ internal static class ApplicationComposition
             activeTurnCompactor: activeTurnCompactor,
             activeTurnCompactionPolicy: activeTurnCompactionPolicy,
             activeTurnCompactionProfile: activeTurnCompactionProfile,
-            selectActiveModel: selectResolvedFallback);
+            selectActiveModel: selectResolvedFallback,
+            conversationToolSnapshots: conversationToolSnapshots);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -276,6 +281,7 @@ internal static class ApplicationComposition
             mutationApprovalPolicy: approvalPolicy,
             hooks: tools.HookCoordinator);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
+        DelegateAgentsTool? delegateAgentsTool = null;
         try
         {
             var mutationProposals = new MutationProposalApplication(
@@ -345,6 +351,52 @@ internal static class ApplicationComposition
                 agentScheduler,
                 persistence.DelegationCheckpoints,
                 host.Events);
+            if (integration.Models.Catalog.Profiles.Count > 0)
+            {
+                var delegateAgentsOptions = host.TrustedConfiguration
+                    .GetSection("agents:delegation")
+                    .Get<DelegateAgentsOptions>() ?? new DelegateAgentsOptions();
+                delegateAgentsOptions.Validate();
+                var childModelSelection = new AgentModelSelector(
+                    integration.Models.Catalog,
+                    new DefaultModelSelectionPolicy(integration.Models.Catalog));
+                if (childModelSelection.CanSelectExplorer(
+                    delegateAgentsOptions.ChildBudget,
+                    ConversationSensitivity.None))
+                {
+                    var childInstructions = new ChildAgentInstructionProvider(
+                        repositoryInstructionResolver,
+                        host.PromptAppendLoader,
+                        promptAppendFiles);
+                    var explorerRunners = new ModelExplorerAssignmentRunnerFactory(
+                        new AgentContextAssembler(persistence.EvidenceStore),
+                        new AgentFindingAdmission(persistence.EvidenceStore),
+                        childModelSelection,
+                        integration.Models.Provider,
+                        tools.ToolPipeline,
+                        persistence.EvidenceStore,
+                        childInstructions,
+                        conversationToolSnapshots,
+                        host.Sanitizer,
+                        delegateAgentsOptions,
+                        usage);
+                    delegateAgentsTool = new DelegateAgentsTool(
+                        new DelegateAgentsPlanFactory(
+                            mutationCoordinator,
+                            preferences,
+                            conversationToolSnapshots,
+                            delegateAgentsOptions),
+                        explorerRunners,
+                        delegationCoordinator,
+                        delegateAgentsOptions);
+                    tools.ToolRegistry.RegisterOrReplace(
+                        delegateAgentsTool,
+                        new ToolActivitySource(
+                            ToolActivitySourceKind.BuiltIn,
+                            "delegate-agents"));
+                }
+            }
+
             var delegatingExecutionOrchestrator = new ApprovedPlanDelegatingOrchestrator(
                 executionOrchestrator,
                 delegationCoordinator,
@@ -568,6 +620,7 @@ internal static class ApplicationComposition
                 skillWorkflow,
                 tools.ToolRegistry,
                 invokeSkillTool,
+                delegateAgentsTool,
                 approvalPolicy,
                 planApprovalPolicy,
                 preferences,
@@ -583,6 +636,11 @@ internal static class ApplicationComposition
             if (sessionCheckpointSubscription is not null)
             {
                 await sessionCheckpointSubscription.DisposeAsync();
+            }
+
+            if (delegateAgentsTool is not null)
+            {
+                tools.ToolRegistry.Remove(delegateAgentsTool.Definition.Id, delegateAgentsTool);
             }
 
             await mutationCoordinator.DisposeAsync();
@@ -1058,6 +1116,7 @@ internal sealed class RepositoryScopedBindingCoordinator
 internal sealed class ApplicationServices : IAsyncDisposable
 {
     private readonly AgentRunScheduler _agentScheduler;
+    private readonly DelegateAgentsTool? _delegateAgentsTool;
     private readonly InvokeSkillTool _invokeSkillTool;
     private readonly TransactionalWorkspaceCoordinator _mutationCoordinator;
     private readonly SkillWorkflowOrchestrator _skillWorkflow;
@@ -1072,6 +1131,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         SkillWorkflowOrchestrator skillWorkflow,
         ToolRegistry toolRegistry,
         InvokeSkillTool invokeSkillTool,
+        DelegateAgentsTool? delegateAgentsTool,
         MutationApprovalPolicyService mutationApprovalPolicy,
         PlanApprovalPolicyService planApprovalPolicy,
         SessionModelPreferences sessionModelPreferences,
@@ -1091,6 +1151,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         _skillWorkflow = skillWorkflow;
         _toolRegistry = toolRegistry;
         _invokeSkillTool = invokeSkillTool;
+        _delegateAgentsTool = delegateAgentsTool;
         MutationApprovalPolicy = mutationApprovalPolicy;
         PlanApprovalPolicy = planApprovalPolicy;
         SessionModelPreferences = sessionModelPreferences;
@@ -1133,6 +1194,11 @@ internal sealed class ApplicationServices : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _sessionCheckpointSubscription.DisposeAsync();
+        if (_delegateAgentsTool is not null)
+        {
+            _toolRegistry.Remove(_delegateAgentsTool.Definition.Id, _delegateAgentsTool);
+        }
+
         _toolRegistry.Remove(_invokeSkillTool.Definition.Id, _invokeSkillTool);
         await _skillWorkflow.DisposeAsync();
         await _agentScheduler.DisposeAsync();

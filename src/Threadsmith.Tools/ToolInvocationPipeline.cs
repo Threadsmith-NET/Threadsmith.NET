@@ -230,7 +230,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ? planned.Request.Invocation
                     : planned.Request.Invocation with
                     {
-                        ExpectedRegistration = planned.Registration?.Tool,
+                        ExpectedRegistration = planned.Registration,
                     };
                 var result = await InvokeCoreAsync(
                     invocation,
@@ -304,6 +304,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         var source = registration?.Source
+            ?? request.ExpectedRegistration?.Source
             ?? new ToolActivitySource(ToolActivitySourceKind.Unknown);
 
         using var activity = _activitySource.StartActivity("tool.invoke");
@@ -326,14 +327,17 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         object input;
         try
         {
-            tool = registration?.Tool ?? request.ExpectedRegistration ?? _registry.Get(request.ToolId);
-            if (request.ExpectedRegistration is not null
-                && !ReferenceEquals(tool, request.ExpectedRegistration))
+            if (registration is not null
+                && request.ExpectedRegistration is not null
+                && !ToolRegistrationIdentity.Matches(registration, request.ExpectedRegistration))
             {
                 throw new ToolArgumentValidationException(
                     $"Tool '{request.ToolId}' no longer matches the approved capability identity.");
             }
 
+            tool = registration?.Tool
+                ?? request.ExpectedRegistration?.Tool
+                ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
@@ -718,11 +722,22 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         catch (Exception exception)
         {
             var sanitizedError = _sanitizer.Sanitize(exception.Message);
+#if DEBUG
+            var sanitizedDiagnostic = _sanitizer.Sanitize(exception.ToString());
+            _logger.LogError(
+                "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}{NewLine}{Diagnostic}",
+                tool.Definition.Id,
+                invocationId.Value,
+                sanitizedError,
+                Environment.NewLine,
+                sanitizedDiagnostic);
+#else
             _logger.LogError(
                 "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}",
                 tool.Definition.Id,
                 invocationId.Value,
                 sanitizedError);
+#endif
             return await CompleteFailureAsync(
                 request,
                 invocationId,

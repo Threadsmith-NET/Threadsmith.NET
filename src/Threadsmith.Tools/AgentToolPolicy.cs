@@ -5,7 +5,7 @@ using Threadsmith.Core;
 /// <summary>Creates assignment-scoped tool contexts that can only narrow parent authority.</summary>
 public static class AgentToolPolicy
 {
-    /// <summary>Applies child tool, trust, network, process, root, and requester ceilings.</summary>
+    /// <summary>Applies child tool, trust, network, root, and requester ceilings.</summary>
     public static ToolInvocationContext Scope(
         ToolInvocationContext parent,
         DelegationPlan plan,
@@ -53,6 +53,10 @@ public static class AgentToolPolicy
                 "The assignment scope does not intersect the parent approved roots.");
         }
 
+        var pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
         return parent with
         {
             RepositoryPath = Path.GetFullPath(repositoryPath),
@@ -61,11 +65,20 @@ public static class AgentToolPolicy
             AllowedToolIds = parentAllowed,
             DenyAllTools = denyAllTools,
             DeniedToolIds = denied,
-            AllowedExecutables = frozenAssignment.Policy.AllowProcesses ? parent.AllowedExecutables : [],
+            ProhibitedPaths = parent.ProhibitedPaths
+                .Concat(frozenAssignment.Policy.ProhibitedPaths)
+                .Distinct(pathComparer)
+                .ToArray(),
+            AllowedExecutables = parent.AllowedExecutables,
             AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? parent.AllowedNetworkHosts : [],
             AllowedSecretReferences = frozenAssignment.Policy.AllowNetwork
                 ? parent.AllowedSecretReferences
                 : [],
+            ModelVisibleToolSnapshotId = null,
+            ModelContextWindowTokens = null,
+            ModelRequestOutputReserveTokens = null,
+            ModelEffectiveInputBudgetTokens = null,
+            VisibleSourceFrontier = null,
             RequestedBy = $"agent:{plan.DelegationId.Value:D}:{frozenAssignment.AssignmentId.Value:D}",
         };
     }
@@ -79,7 +92,10 @@ public static class AgentToolPolicy
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        string[] normalizedParents = [.. parentRoots.Select(root => NormalizeRoot(root, repositoryRoot))];
+        string[] normalizedParents =
+        [
+            .. parentRoots.DefaultIfEmpty(".").Select(root => NormalizeRoot(root, repositoryRoot)),
+        ];
         string[] normalizedChildren =
         [
             .. childRoots.DefaultIfEmpty(".").Select(root => NormalizeRoot(root, repositoryRoot)),
@@ -184,17 +200,18 @@ public sealed class AgentBudgetLedger
                 Corrections = checked(_usage.Corrections + delta.Corrections),
                 WallTime = _usage.WallTime + delta.WallTime,
             };
-            if (next.ModelTokens > _budget.ModelTokens
-                || next.ToolCalls > _budget.ToolCalls
-                || next.EvidenceItems > _budget.EvidenceItems
-                || next.Files > _budget.Files
-                || next.Bytes > _budget.Bytes
-                || next.Mutations > _budget.Mutations
-                || next.Processes > _budget.Processes
-                || next.Builds > _budget.Builds
-                || next.Tests > _budget.Tests
-                || next.Corrections > _budget.Corrections
-                || next.WallTime > _budget.WallTime)
+            if (_budget.EnforceLimits
+                && (next.ModelTokens > _budget.ModelTokens
+                    || next.ToolCalls > _budget.ToolCalls
+                    || next.EvidenceItems > _budget.EvidenceItems
+                    || next.Files > _budget.Files
+                    || next.Bytes > _budget.Bytes
+                    || next.Mutations > _budget.Mutations
+                    || next.Processes > _budget.Processes
+                    || next.Builds > _budget.Builds
+                    || next.Tests > _budget.Tests
+                    || next.Corrections > _budget.Corrections
+                    || next.WallTime > _budget.WallTime))
             {
                 throw new InvalidOperationException("The child resource budget is exhausted.");
             }

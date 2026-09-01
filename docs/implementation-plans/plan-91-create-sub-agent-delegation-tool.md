@@ -1,6 +1,6 @@
 # Implementation Plan 91: Create Sub-Agent Delegation Tool
 
-**Status:** Planned  
+**Status:** Implementation complete. The model-callable fork/join tool, model-backed Explorer runner, tool-policy narrowing, durable inspection/cancellation, and focused coverage are implemented. The active-run input feasibility gate failed under the current PrettyPrompt/native-scrollback ownership contract, so steering and double-`Esc` remain explicitly deferred.
 **Delivery track:** Maintenance — Plan 38 usable delegation surface and interactive control follow-up  
 **Prerequisites:** Plan 38, Plan 39, Plan 57, Plan 88, the current tool-policy pipeline, and the current interactive conversation loop. The Plan 38 scheduler/coordinator/checkpoint contracts remain the infrastructure authority; this plan adds a direct user/model-facing entry point and does not reopen completed milestone capability contracts.  
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially host-owned control flow, bounded context, typed tool contracts, one-level child delegation, cancellation, auditability, and model/tool policy boundaries  
@@ -14,7 +14,7 @@ Make Threadsmith sub-agents directly usable from ordinary model tool use.
 
 The current product has real delegation infrastructure: `AgentRunScheduler`, `DelegationCoordinator`, durable delegation checkpoints, `/agents <delegation-id>` inspection/cancellation, approved-plan preflight delegation, and skill host-action proposal plumbing. Ordinary chat cannot currently say “delegate two agents” and cause real child model runs because no model-callable delegation tool is advertised. This plan adds that missing entry point.
 
-Add a bounded `delegate_agents` tool with a simple model-facing schema. The calling model supplies each child’s task, the context it believes the child needs, and a tool-access mode. The host validates the request, creates one Plan-38 delegation, runs child agents concurrently through the existing scheduler, waits for them to join, and returns one compact result to the parent model. The main model is paused at the tool-call boundary while children run, but the TUI remains responsive for activity, `/agents` inspection, and cancellation.
+Add a bounded `delegate_agents` tool with a simple model-facing schema. The calling model supplies each child’s task, the context it believes the child needs, and a tool-access mode. The host validates the request, creates one Plan-38 delegation, runs child agents concurrently through the existing scheduler, waits for them to join, and returns one compact result to the parent model. The main model is paused at the tool-call boundary while children run, and the TUI continues rendering activity. Because the current TUI has no active-run input owner, slash-command inspection/cancellation resumes when the composer is available; headless host commands remain callable independently, and `Ctrl+C` owns active interactive cancellation.
 
 This plan also evaluates two interactive controls that depend on the TUI's active-run input capabilities:
 
@@ -66,7 +66,7 @@ Rules:
 - `context` is required bounded text. It is model-supplied context, not authority; it cannot override host, system, AGENTS, trust, approval, tool, or path policy.
 - `toolAccess` is required and uses a string enum:
   - `readOnly` — the child receives only currently available read-only tools after parent/session/repository policy narrowing.
-  - `inherit` — the child receives the calling model’s currently available ordinary tool surface after host narrowing, still subject to the child’s own trust, approval, phase, budget, and path-policy checks.
+  - `inherit` — the child starts from the calling model’s currently available ordinary tool surface, then the host removes mutation, process/code-execution, approval-required, workflow, and delegation tools and reapplies child trust, network, phase, budget, and path-policy checks.
 - `delegate_agents` is never inherited by children. Delegation depth remains exactly one.
 - The v1 tool does not expose model, reasoning, timeout, budget, priority, output-schema, approval, trust, path-root, or concurrency knobs. Those are host-owned.
 
@@ -113,7 +113,7 @@ Child result requirements:
 `inherit` mode:
 
 - Start from the exact tool IDs the calling model could use in the current request.
-- Remove `delegate_agents` to enforce one-level delegation.
+- Remove mutation, process/code-execution, approval-required, workflow-transition, and `delegate_agents` tools; v1 Explorer inheritance never includes command execution or host mutation authority.
 - Re-evaluate every child tool call through the central `IToolInvocationPipeline` with the child’s frozen context, trust ceiling, approved roots, prohibited paths, allow/deny sets, budget, and phase.
 - Do not treat inheritance as trust elevation. A child cannot obtain a tool, root, secret, network host, process, approval, model, or mutation authority the parent did not have.
 - Host-workflow transition tools require special care. In v1, child-created plan/mutation/skill/delegation host actions are not allowed to transition the parent workflow automatically. They are either withheld from child tools or captured as child evidence for the parent to consider, depending on the existing synthetic-tool architecture at implementation time. This decision must be explicit in tests.
@@ -155,6 +155,7 @@ Minimum result fields:
     "delivered": 0,
     "undelivered": 0
   },
+  "disagreements": [],
   "omissions": []
 }
 ```
@@ -201,7 +202,7 @@ Rules:
 - Any ordinary character input, Enter submission, or timeout clears the armed state.
 - When no run is active, preserve existing `Esc` behavior where possible, such as clearing/dismissing input state.
 - Cancellation links into the same source used by the conversation loop, active tool invocations, model streams, `delegate_agents`, child runs, and tracked process tools. Started children and tools must receive terminal cancelled outcomes; queued children must not start after cancellation.
-- The final conversation state should return to a usable prompt with an honest cancelled/partial outcome and no stale child result becoming authoritative later.
+- The final conversation state should return to a usable prompt with aggregate `Cancelled` status, retained per-child terminal status for diagnosis, and no stale child result becoming authoritative later.
 
 ### 3.8 Inspection and observability
 
@@ -395,6 +396,14 @@ Implement double-`Esc` only if active-run key capture passes the same terminal s
 5. Late child/model/tool results from cancelled generations are discarded.
 
 If active-run `Esc` capture cannot be made safe, retain the existing cancellation mechanisms and do not document double-`Esc` as shipped. The shortcut should be covered by deterministic input tests using a fake time provider or equivalent key-event harness when implemented.
+
+### 6.10 Implementation result
+
+- `delegate_agents` is a strict, workspace-required, `TrustedRead`, session-exclusive workflow tool. It accepts only bounded `agents[].task`, `agents[].context`, and `agents[].toolAccess` values and runs one to three Explorer assignments by default.
+- Each invocation freezes the exact model-visible parent tool-registration snapshot. `readOnly` retains only non-network, approval-free read tools; `inherit` may additionally retain eligible network-backed read tools. Both modes remove mutation, process/code-execution, approval-required, workflow, and delegation tools while retaining the caller's executable allowlist for declared dependencies of the remaining tools, then re-run every child call through the central invocation pipeline with child identity, trust, roots, prohibited paths, phase, cancellation, and budget.
+- Model-backed children receive host and repository instructions plus the complete policy-eligible assignment/evidence context, never parent or sibling transcripts. Every resolved `AGENTS.md` and configured prompt append source is included. Cumulative model and tool usage is observed but not capped; each complete provider-wire request must fit the selected model's actual context and output limits, streamed tool payloads remain independently bounded, and the child deadline remains authoritative. Output and citations are corrected within one bounded correction allowance. Validated findings cross into parent evidence only after the joined checkpoint is durable, in one complete-set-validated batch with the effective selected-model provenance. Pre-commit publication preparation failure or cancellation leaves the batch uncommitted; after the commit gate, the complete batch exists before subscriber observation and later subscriber failure neither rolls it back nor revokes the joined result.
+- The joined result contains delegation and assignment IDs, honest terminal statuses, summaries/findings/omissions/uncertainty, conservative disagreements, usage totals, and zero steering counts. Finding count has no separate cap; complete findings are retained when they fit the structured tool envelope, with fair cross-child retention only when that real envelope is full. Empty ordinary Explorer findings fail, usable siblings join as `Partial`, and caller cancellation remains aggregate `Cancelled` even when one sibling already completed. The compact projection always retains every child status. Durable Accepted, Queued, Running, and role-specific terminal (`ResearchJoined`, `WorkersFrozen`, `ReviewsJoined`, `Failed`, or `Cancelled`) checkpoints make the same delegation inspectable and cancellable through `/agents <delegation-id>`. Checkpoint revisions increase monotonically; persistence rejects stale late progress writes and the coordinator emits no lifecycle events for those rejected revisions.
+- The active-input gate failed. During an ordinary active run, `ConversationalShell` waits on execution, decision, and output-drain tasks and does not own a terminal reader. `PrettyPromptConsoleSurface.ReadAsync` is the only normal input owner and holds the shared console gate for the complete composer read. A second `Console.ReadKey`-style watcher would race the next PrettyPrompt read and could consume paste or command bytes; a full-time input arbiter would duplicate PrettyPrompt editing; pinned or alternate-screen control would contradict ADR-15 and the Plan-26 result. Plan 91 therefore ships no steering prompt and no double-`Esc` shortcut. Existing `Ctrl+C` and caller cancellation remain authoritative during an active interactive turn; `/agents ... cancel` is available once the composer owns input, and the equivalent headless host command remains available to an independent caller.
 
 ---
 

@@ -2759,15 +2759,39 @@ public sealed class ConversationalShell
         var detail = string.IsNullOrWhiteSpace(started.ActivityDetail)
             ? string.Empty
             : $" ({started.ActivityDetail})";
+        var requestor = FormatToolRequestorPrefix(started.RequestedBy);
         if (started.Source?.Kind == ToolActivitySourceKind.Mcp)
         {
             var identity = string.IsNullOrWhiteSpace(started.Source.DisplayName)
                 ? started.ToolName
                 : $"{started.Source.DisplayName}/{started.ToolName}";
-            return $"MCP: {identity}{detail}";
+            return $"MCP: {requestor}{identity}{detail}";
         }
 
-        return $"TOOLS: {started.ToolName}{detail}";
+        return $"TOOLS: {requestor}{started.ToolName}{detail}";
+    }
+
+    private static string FormatToolRequestorPrefix(string? requestedBy)
+    {
+        if (string.IsNullOrWhiteSpace(requestedBy)
+            || string.Equals(requestedBy, "model", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(requestedBy, "host", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return $"({CollapseToolLabelControls(requestedBy)}) ";
+    }
+
+    private static string CollapseToolLabelControls(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            builder.Append(char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private readonly record struct SemanticActivityKey(RunId RunId, SemanticCheckId SemanticCheckId);

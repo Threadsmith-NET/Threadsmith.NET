@@ -199,6 +199,11 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
     {
         var chain = new List<string> { root };
         var relative = Path.GetRelativePath(root, scope);
+        if (relative == ".")
+        {
+            return chain;
+        }
+
         var current = root;
         foreach (var segment in relative.Split(
             [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],

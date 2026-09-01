@@ -254,6 +254,24 @@ internal sealed class RecordingEventStream : IDomainEventStream
     }
 
     /// <inheritdoc />
+    public async Task PublishCommittedBatchAsync(
+        IReadOnlyList<IDomainEvent> domainEvents,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!tryCommit())
+        {
+            return;
+        }
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await PublishAsync(domainEvent, CancellationToken.None);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);

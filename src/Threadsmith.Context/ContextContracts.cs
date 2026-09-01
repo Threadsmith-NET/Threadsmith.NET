@@ -124,6 +124,24 @@ public interface IEvidenceStore
     /// <summary>Adds or replaces one evidence item.</summary>
     Task AddAsync(Evidence evidence, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Prepares every admission event, then adds or replaces the complete batch at one commit gate before
+    /// subscribers observe it. Pre-commit failure or cancellation leaves the store unchanged; cancellation
+    /// after commit does not roll producer state back.
+    /// </summary>
+    Task AddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Adds a complete batch only when the caller's synchronous commit arbiter succeeds at the same commit gate.
+    /// </summary>
+    /// <returns>Whether both the caller disposition and evidence batch committed.</returns>
+    Task<bool> TryAddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Gets a detached session evidence snapshot.</summary>
     IReadOnlyList<Evidence> Snapshot(SessionId sessionId);
 

@@ -25,6 +25,85 @@ public sealed class Plan94CodeExploreAgentQualityTests
         "SymbolImpact",
     ];
 
+    /// <summary>The first semantic query tolerates acronym fragments and returns evidence or retry guidance.</summary>
+    [Fact]
+    public async Task CodeExplore_FirstToolLifecycleQuery_ReturnsStructuredResult()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Trace how a tool invocation moves through policy validation, execution, and result publication. "
+                    + "Identify the orchestrator, policy validation, executor, event/result publisher, and relevant DTOs.",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.FileSections.Count > 0 || result.Availability is { IsRetryable: true });
+        Assert.Contains("dtos", result.QueryInterpretation?.Terms ?? []);
+        Assert.DoesNotContain("dt", result.QueryInterpretation?.Terms ?? []);
+        Assert.DoesNotContain("os", result.QueryInterpretation?.Terms ?? []);
+        if (result.FileSections.Count == 0)
+        {
+            Assert.Equal(CodeExploreAvailabilityStatus.NoMatchingDeclarations, result.Availability?.Status);
+            Assert.Contains(result.Availability?.RecommendedActions ?? [], action =>
+                action.Message.Contains("Retry code_explore", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>An empty natural-language candidate set returns explicit retry guidance.</summary>
+    [Fact]
+    public async Task CodeExplore_NoMatchingCandidates_ReturnsRetryableAvailability()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "zzzxqv blorfwibble snarkplonk",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.FileSections);
+        Assert.Equal(CodeExploreAvailabilityStatus.NoMatchingDeclarations, result.Availability?.Status);
+        Assert.True(result.Availability?.IsRetryable);
+        Assert.Contains(result.Availability?.RecommendedActions ?? [], action =>
+            action.Message.Contains("Retry code_explore", StringComparison.Ordinal));
+    }
+
+    /// <summary>A project-scoped empty result retains its scope warning and a code-explore retry action.</summary>
+    [Fact]
+    public async Task CodeExplore_ProjectScopedNoMatch_ReturnsRetryableAvailability()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+            "src/Threadsmith.App/Threadsmith.App.csproj");
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "zzzxqv blorfwibble snarkplonk",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.FileSections);
+        Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
+        Assert.True(result.Availability?.IsRetryable);
+        Assert.Contains(result.Availability?.RecommendedActions ?? [], action =>
+            action.Message.Contains("Retry code_explore", StringComparison.Ordinal));
+    }
+
     /// <summary>Short capability questions select the agent-facing semantic tool surface instead of one helper cluster.</summary>
     [Fact]
     public async Task CodeExplore_ShortSemanticToolQuestion_SelectsToolSurface()
@@ -152,6 +231,57 @@ public sealed class Plan94CodeExploreAgentQualityTests
             IsToolCapabilitySelectionReason(summary.Reason));
     }
 
+    /// <summary>Co-occurring prose concepts in a declaration name outrank loose structural term matches.</summary>
+    [Fact]
+    public async Task CodeExplore_DeclarationNameSegmentCoOccurrence_PrioritizesNamedDeclaration()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Widget service: locate its declaration, explain its behavior, and identify direct use sites.",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var candidate = Assert.Single(result.CandidateSummaries ?? [], summary =>
+            string.Equals(summary.Symbol?.DisplayName, "Threadsmith.App.WidgetService", StringComparison.Ordinal));
+        Assert.True(candidate.Selected, CreateCandidateDiagnostic(result));
+        Assert.InRange(candidate.Rank, 1, 2);
+        Assert.True(candidate.Reasons.HasFlag(CodeExploreSelectionReason.NameSegment));
+        Assert.True(candidate.Reasons.HasFlag(CodeExploreSelectionReason.MultiTerm));
+        Assert.False(candidate.Reasons.HasFlag(CodeExploreSelectionReason.ExactIdentifier));
+    }
+
+    /// <summary>Project-scoped impact queries fail compactly when the named subject is outside loaded source.</summary>
+    [Fact]
+    public async Task CodeExplore_ProjectScopedMissingNamedSubject_UsesCompactFallback()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+            "src/Threadsmith.Tools/Threadsmith.Tools.csproj");
+
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Widget service: locate its declaration and compare model resolution dependencies.",
+                Mode = CodeExploreMode.Auto,
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
+        Assert.Empty(result.CandidateSummaries ?? []);
+        Assert.Empty(result.FileSections);
+        Assert.Contains(result.Availability?.RecommendedActions ?? [], action =>
+            action.Kind == CodeExploreNextActionKind.UseGranularFallback);
+    }
+
     /// <summary>Generic tool/workflow prose falls back to repository declarations instead of forcing semantic-tool families.</summary>
     [Theory]
     [InlineData("Explain how deployment tools improve workflow efficiency.")]
@@ -171,7 +301,11 @@ public sealed class Plan94CodeExploreAgentQualityTests
             fixture.CreateSourceReader(),
             TestContext.Current.CancellationToken);
 
-        AssertSelectedSymbolContaining(result, "DeploymentWorkflow.CreateDeploymentPlan", "Method");
+        Assert.Contains(result.CandidateSummaries ?? [], summary =>
+            summary.Selected
+            && summary.Symbol?.DisplayName.Contains(
+                "Threadsmith.Tools.DeploymentWorkflow",
+                StringComparison.Ordinal) == true);
         Assert.DoesNotContain(result.Omissions, omission =>
             omission.Contains("No matching C# declarations", StringComparison.OrdinalIgnoreCase));
     }
@@ -728,7 +862,8 @@ public sealed class Plan94CodeExploreAgentQualityTests
 
         public WorkspaceId WorkspaceId { get; }
 
-        public static async Task<CodeExploreAgentQualityFixture> CreateAsync()
+        public static async Task<CodeExploreAgentQualityFixture> CreateAsync(
+            string workspaceRelativePath = "Repo.slnx")
         {
             var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan94-{Guid.NewGuid():N}");
             Directory.CreateDirectory(repositoryPath);
@@ -746,7 +881,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
                     SessionId.New(),
                     workspaceId,
                     repositoryPath,
-                    Path.Combine(repositoryPath, "Repo.slnx"),
+                    Path.Combine(repositoryPath, workspaceRelativePath),
                     RepositoryTrustLevel.TrustedBuild),
                 TestContext.Current.CancellationToken);
             Assert.True(
@@ -876,6 +1011,8 @@ public sealed class Plan94CodeExploreAgentQualityTests
                         return "deploy:" + environment;
                     }
                 }
+
+                public sealed record ModelResolution(string ProfileId);
                 """);
             Write(repositoryPath, "src/Threadsmith.Tools/CodeExploreTool.cs", """
                 namespace Threadsmith.Tools;

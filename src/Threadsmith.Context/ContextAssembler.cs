@@ -134,11 +134,28 @@ public sealed record RepositoryMemoryContextPolicy
     /// <summary>Maximum estimated tokens used by repository memory.</summary>
     public int MaximumTokens { get; init; } = 2_000;
 
+    /// <summary>Minimum lexical relevance required for automatic repository memory.</summary>
+    public double MinimumRelevanceScore { get; init; } = 0.2d;
+
+    /// <summary>Maximum prompt age for memory that was not explicitly authored by the user.</summary>
+    public TimeSpan AutomaticMemoryMaximumAge { get; init; } = TimeSpan.FromDays(2);
+
     /// <summary>Validates hard bounds before request assembly.</summary>
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumItems);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTokens);
+        if (double.IsNaN(MinimumRelevanceScore)
+            || MinimumRelevanceScore < 0
+            || MinimumRelevanceScore > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinimumRelevanceScore));
+        }
+
+        if (AutomaticMemoryMaximumAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(AutomaticMemoryMaximumAge));
+        }
     }
 }
 
@@ -208,7 +225,13 @@ public sealed record ContextAssemblerOptions
         + "or coding guardrails. Tool selection is mandatory: MUST use an advertised semantic tool whenever "
         + "it covers the repository question. Text search is allowed only when no applicable semantic tool is "
         + "advertised or after the applicable semantic tool fails or explicitly reports incomplete or degraded "
-        + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Tool descriptions are capability "
+        + "evidence. When code_explore explicitly reports incomplete or degraded scope and recommends a granular fallback, "
+        + "use that fallback directly. Keep complete returned source ranges as evidence and do not reread them. Treat decomposed questions "
+        + "about the same unresolved subject as the same target, and do not retry "
+        + "semantic discovery for it until the workspace changes. Search once for the most distinctive identifier before trying variants; "
+        + "do not batch synonymous fallback searches. If that search identifies a file outside semantic scope, read only the exact required "
+        + "ranges instead of retrying code_explore; do not repeat equivalent searches after sufficient semantic evidence. "
+        + "Tool descriptions are capability "
         + "hints, not implementation evidence; do not describe repository implementation, tool availability, or source state "
         + "from tool descriptions or prior assumptions. Inspect the repository and cite returned files/declarations before answering such questions. Use code_explore first for ordinary C# architecture, behavior, source, flow, "
         + "or compact-impact survey questions, including natural-language queries when exact anchors are not known. Prefer semantic/source inspection over raw line slices when it can answer "
@@ -243,6 +266,14 @@ public sealed class ContextAssembler : IContextAssembler
     private static readonly Counter<long> _reductions = _meter.CreateCounter<long>(
         "threadsmith.context.reductions");
 
+    private static readonly HashSet<string> RepositoryMemoryStopTerms = new(
+        [
+            "AND", "ARE", "COMPLETED", "EXPLAIN", "FOR", "FROM", "HOW", "INTO", "REQUEST",
+            "THAT", "THE", "THIS", "THROUGH", "USE", "USED", "USING", "WHAT", "WHEN", "WHERE",
+            "WHICH", "WHO", "WHY", "WITH",
+        ],
+        StringComparer.Ordinal);
+
     private readonly IConversationMemoryRetriever? _conversationRetriever;
     private readonly IConversationStore? _conversationStore;
     private readonly IEvidenceStore _evidence;
@@ -258,6 +289,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly ContextPolicy _policy;
     private readonly IPromptAppendLoader _promptAppendLoader;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly TimeProvider _timeProvider;
     private readonly TokenEstimator _tokenEstimator;
 
     /// <summary>Initializes a new instance of the <see cref="ContextAssembler"/> class.</summary>
@@ -273,7 +305,8 @@ public sealed class ContextAssembler : IContextAssembler
         IConversationStore? conversationStore = null,
         IConversationMemoryRetriever? conversationRetriever = null,
         IRepositoryInstructionResolver? instructionResolver = null,
-        IRepositoryMemoryStore? repositoryMemoryStore = null)
+        IRepositoryMemoryStore? repositoryMemoryStore = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -306,6 +339,7 @@ public sealed class ContextAssembler : IContextAssembler
         _conversationRetriever = conversationRetriever;
         _instructionResolver = instructionResolver;
         _repositoryMemoryStore = repositoryMemoryStore;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -1109,10 +1143,24 @@ public sealed class ContextAssembler : IContextAssembler
         }
 
         var taskTerms = CreateTaskTerms(task);
-        foreach (var scored in snapshot.Items
+        var now = _timeProvider.GetUtcNow();
+        var relevant = snapshot.Items
             .Where(item => item.Validity == RepositoryMemoryValidity.Active)
-            .Select(item => (Item: item, Score: ScoreRepositoryMemory(item, taskTerms)))
-            .OrderByDescending(item => item.Score)
+            .Select(item => EvaluateRepositoryMemory(item, taskTerms, now))
+            .ToArray();
+        foreach (var excluded in relevant.Where(item => item.ExclusionReason is not null))
+        {
+            assembly.AddExcluded(
+                excluded.Item,
+                excluded.ExclusionReason ?? string.Empty,
+                TokenEstimator.Estimate(excluded.Item.Content),
+                excluded.Score);
+        }
+
+        foreach (var scored in relevant
+            .Where(item => item.ExclusionReason is null)
+            .OrderBy(item => item.Item.Authority == RepositoryMemoryAuthority.UserAuthored ? 0 : 1)
+            .ThenByDescending(item => item.Score)
             .ThenBy(item => RepositoryMemoryPreservationOrder(item.Item.Authority, item.Item.Kind))
             .ThenByDescending(item => item.Item.UpdatedAt)
             .ThenBy(item => item.Item.Id.Value))
@@ -1257,11 +1305,7 @@ public sealed class ContextAssembler : IContextAssembler
                 string.Join(' ', task.AcceptanceCriteria.Select(item => item.Description)),
                 string.Join(' ', task.UserConstraints ?? []),
             });
-        return content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Select(term => term.Trim('.', ',', ':', ';', '"', '\'', '(', ')', '[', ']'))
-            .Where(term => term.Length >= 3)
-            .Select(term => term.ToUpperInvariant())
-            .ToHashSet(StringComparer.Ordinal);
+        return CreateRepositoryMemoryTerms(content);
     }
 
     private static int RepositoryMemoryPreservationOrder(
@@ -1291,20 +1335,82 @@ public sealed class ContextAssembler : IContextAssembler
         return (authorityOrder * 16) + kindOrder;
     }
 
-    private static double ScoreRepositoryMemory(RepositoryMemoryItem item, IReadOnlySet<string> taskTerms)
+    private RepositoryMemoryRelevance EvaluateRepositoryMemory(
+        RepositoryMemoryItem item,
+        IReadOnlySet<string> taskTerms,
+        DateTimeOffset now)
     {
-        var score = 1.0d;
-        score += (8 - Math.Min(8, RepositoryMemoryPreservationOrder(item.Authority, item.Kind))) * 0.05d;
-        var searchable = string.Join(
+        var score = ScoreRepositoryMemory(item, taskTerms);
+        if (item.Authority == RepositoryMemoryAuthority.UserAuthored)
+        {
+            return new RepositoryMemoryRelevance(item, score, null);
+        }
+
+        if (now - item.CreatedAt > _options.RepositoryMemory.AutomaticMemoryMaximumAge)
+        {
+            return new RepositoryMemoryRelevance(
+                item,
+                score,
+                "Automatic repository memory exceeded its maximum prompt age.");
+        }
+
+        return score < _options.RepositoryMemory.MinimumRelevanceScore
+            ? new RepositoryMemoryRelevance(
+                item,
+                score,
+                "Repository memory relevance score was below the configured minimum.")
+            : new RepositoryMemoryRelevance(item, score, null);
+    }
+
+    private static double ScoreRepositoryMemory(
+        RepositoryMemoryItem item,
+        IReadOnlySet<string> taskTerms)
+    {
+        var searchableTerms = CreateRepositoryMemoryTerms(string.Join(
             ' ',
             [
                 item.Content,
                 .. item.Scope.Paths,
                 .. item.Scope.Symbols,
                 .. item.Scope.Projects,
-            ]).ToUpperInvariant();
-        var hits = taskTerms.Count(term => searchable.Contains(term, StringComparison.Ordinal));
-        return score + Math.Min(1.0d, hits * 0.1d);
+            ]));
+        var hits = taskTerms.Count(searchableTerms.Contains);
+        return taskTerms.Count == 0
+            ? 0
+            : (double)hits / taskTerms.Count;
+    }
+
+    private static IReadOnlySet<string> CreateRepositoryMemoryTerms(string content)
+    {
+        var terms = new HashSet<string>(StringComparer.Ordinal);
+        var term = new StringBuilder();
+        foreach (var character in content)
+        {
+            if (char.IsLetterOrDigit(character) || character == '_')
+            {
+                _ = term.Append(char.ToUpperInvariant(character));
+                continue;
+            }
+
+            AddTerm();
+        }
+
+        AddTerm();
+        return terms;
+
+        void AddTerm()
+        {
+            if (term.Length >= 3)
+            {
+                var value = term.ToString();
+                if (!RepositoryMemoryStopTerms.Contains(value))
+                {
+                    _ = terms.Add(value);
+                }
+            }
+
+            _ = term.Clear();
+        }
     }
 
     private static PromptAssetReference CreateAssetReference(
@@ -1316,6 +1422,11 @@ public sealed class ContextAssembler : IContextAssembler
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
         return new PromptAssetReference(id, $"sha256:{hash}", source, position, content.Length);
     }
+
+    private sealed record RepositoryMemoryRelevance(
+        RepositoryMemoryItem Item,
+        double Score,
+        string? ExclusionReason);
 
     private static string BuildEvidenceContent(IReadOnlyList<Evidence> selected)
     {

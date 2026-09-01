@@ -8,7 +8,7 @@ Configure how Threadsmith.NET behaves when operating on this repository. Config 
 
 ## Ownership
 
-- `config.example` — reference configuration showing every supported key, including default-on operation-duration display, default-on semantic Markdown answers, bounded cross-turn conversation mode, category budgets, artifact threshold, pressure, compaction limits, trusted NuGet advisory sources, and web-fetch narrowing bounds (strategy §21.2; ADR-31).
+- `config.example` — reference configuration showing every supported key, including default-on operation-duration display, default-on semantic Markdown answers, bounded cross-turn conversation mode, repository-memory relevance/recency admission, category budgets, artifact threshold, pressure, compaction limits, trusted NuGet advisory sources, and web-fetch narrowing bounds (strategy §21.2; ADR-31).
 - `extensions.example.json` — reference for the repo-level extension selection file (`extensions.json`), which selects which discovered extensions auto-load at startup.
 - `providers.example.json` — secret-free reference for dedicated user/repository provider catalogs and OpenAI-compatible endpoint/header settings.
 - `prompts/` — repo-provided prompt-append files (§21.2). Untrusted input.
@@ -76,7 +76,7 @@ Configure how Threadsmith.NET behaves when operating on this repository. Config 
 
 - Never edit `config.example` to add undocumented keys — only keys defined in the strategy.
 - Prompt-append files are untrusted input. Do not put secrets, credentials, or executable code in them.
-- When adding a new config key, update `RepoConfigTests.RequiredKeys`.
+- When adding a new top-level config key, update `RepoConfigTests.RequiredKeys`; for nested keys, add dedicated typed-binding coverage.
 - When adding a prompt-append file, reference it in `config.example` `"prompt append files"`.
 
 ## Verification

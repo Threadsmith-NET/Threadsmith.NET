@@ -73,7 +73,7 @@ internal static class TuiPresentationFormatter
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
                 "TOOLS",
-                GetToolIdentity(started.ToolName, source),
+                GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
                 GetOutcomeText(completed),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 TuiTextRole.ToolSuccess,
@@ -628,6 +628,18 @@ internal static class TuiPresentationFormatter
         }
 
         return TruncateForDisplay(toolName);
+    }
+
+    private static string GetToolRequestorPrefix(string? requestedBy)
+    {
+        if (string.IsNullOrWhiteSpace(requestedBy)
+            || string.Equals(requestedBy, "model", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(requestedBy, "host", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return $"({TruncateForDisplay(requestedBy)}) ";
     }
 
     private static string GetOutcomeText(ToolInvocationCompleted completed)

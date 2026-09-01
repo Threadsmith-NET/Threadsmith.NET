@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Context;
 using Threadsmith.Execution;
 using Xunit;
 
@@ -85,6 +86,18 @@ public static class RepoConfigTests
     {
         var config = LoadConfigExample();
         Assert.Equal("src/Threadsmith.sln", config["solution:path"]);
+    }
+
+    /// <summary>Repository-memory relevance and recency settings bind from the reference configuration.</summary>
+    [Fact]
+    public static void RepositoryMemoryAdmissionSettingsBind()
+    {
+        var config = LoadConfigExample();
+        var policy = config.GetSection("context:repositoryMemory").Get<RepositoryMemoryContextPolicy>();
+
+        Assert.NotNull(policy);
+        Assert.Equal(0.2d, policy.MinimumRelevanceScore);
+        Assert.Equal(TimeSpan.FromDays(2), policy.AutomaticMemoryMaximumAge);
     }
 
     /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>

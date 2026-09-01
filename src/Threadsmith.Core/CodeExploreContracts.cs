@@ -1019,7 +1019,11 @@ public sealed record CodeExploreResult(
     CodeExploreAvailability? Availability = null,
     CodeExplorePresentation? Presentation = null,
     CodeExploreAdaptiveBudget? AdaptiveBudget = null,
-    IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null);
+    IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null)
+{
+    /// <summary>Gets source follow-up targets omitted by a downstream result envelope.</summary>
+    public int OmittedSourceContinuationCount { get; init; }
+}
 
 /// <summary>Bounded current source text read through the host tool policy boundary.</summary>
 public sealed record CodeExploreSourceText(

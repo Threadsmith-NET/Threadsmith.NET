@@ -203,6 +203,8 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/open [path]` | Open or switch repositories. |
 | `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
 | `/tools` | Browse and toggle non-essential repository tools. |
+| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
 | `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
 | `/policy [name|current]` | Select or report the mutation approval policy for exact staged diffs. |
 | `/extensions` | Browse, load, and unload discovered extensions. |
@@ -621,6 +623,8 @@ Every Plan 42 result is labeled `Exploratory`. These tools cannot replace, overw
 #### `code_explore`: task-sufficient C# exploration
 
 Use `code_explore` when a question is primarily about **how loaded C# code is structured or behaves** and the answer needs current source, semantic identity, flow, impact, or nearby prompt/configuration context. It is the high-level semantic exploration tool: it often replaces a manual sequence of `find_symbol` → `find_references`/`call_hierarchy` → `read_file` → `search` for ordinary code-understanding turns.
+
+For the host-side declaration catalog, retrieval, ranking, graph, source-allocation, continuation, and output-fitting design, see [`docs/architecture/code-explore-tool.md`](architecture/code-explore-tool.md).
 
 Good fits include:
 

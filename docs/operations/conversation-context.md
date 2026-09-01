@@ -58,7 +58,9 @@ Headless integrations use the same host-owned contracts:
 - `ForgetRepositoryMemoryCommand`
 - `ValidateRepositoryMemoryCommand`
 
-Explicit commands sanitize and bound text, attach user-command provenance, preserve inactive audit rows, and publish metadata-only events. Context assembly retrieves only active items for the current repository identity, applies authority/relevance ranking plus item/token budgets, treats content as untrusted prompt data, propagates sensitivity, and reports every included and omitted repository-memory item in inspection. Repository-dependent items with path, symbol, project, or revision support become stale after matching host-observed repository mutations and remain omitted until corrected or explicitly validated.
+Explicit commands sanitize and bound text, attach user-command provenance, preserve inactive audit rows, and publish metadata-only events. Context assembly retrieves only active items for the current repository identity, applies authority/relevance ranking plus item/token budgets, treats content as untrusted prompt data, propagates sensitivity, and reports every included and omitted repository-memory item in inspection. Automatic memory must meet the configured minimum exact-token relevance score and maximum age. Age is measured from original storage; duplicate automatic observations do not extend eligibility without new durable provenance. Explicit user-authored memory is exempt from those two admission gates. Repository-dependent items with path, symbol, project, or revision support become stale after matching host-observed repository mutations and remain omitted until corrected or explicitly validated.
+
+The active repository-memory set is deliberately bounded and ranked in memory. SQLite FTS5 is not used for this policy: relevance, authority, and recency remain separate host-owned decisions, and the current active-item ceiling does not justify a search-index migration. FTS-backed candidate retrieval can be added later if measured snapshot-load or ranking cost warrants a dedicated store query API.
 
 Model-proposed repository-memory candidates are disabled in this implementation. Assistant prose, repository files, prompt appends, skills, hooks, and repository configuration cannot create or authorize durable repository memory.
 
@@ -148,6 +150,8 @@ Compiled defaults:
 | `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
 | `context:repositoryMemory:maximumItems` | 12 |
 | `context:repositoryMemory:maximumTokens` | 2,000 |
+| `context:repositoryMemory:minimumRelevanceScore` | 0.2 |
+| `context:repositoryMemory:automaticMemoryMaximumAge` | 2 days |
 
 Invalid enum values, non-positive budgets, pressure outside 1–100%, retries exceeding the provider-call cap, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
 

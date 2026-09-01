@@ -722,11 +722,22 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         catch (Exception exception)
         {
             var sanitizedError = _sanitizer.Sanitize(exception.Message);
+#if DEBUG
+            var sanitizedDiagnostic = _sanitizer.Sanitize(exception.ToString());
+            _logger.LogError(
+                "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}{NewLine}{Diagnostic}",
+                tool.Definition.Id,
+                invocationId.Value,
+                sanitizedError,
+                Environment.NewLine,
+                sanitizedDiagnostic);
+#else
             _logger.LogError(
                 "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}",
                 tool.Definition.Id,
                 invocationId.Value,
                 sanitizedError);
+#endif
             return await CompleteFailureAsync(
                 request,
                 invocationId,

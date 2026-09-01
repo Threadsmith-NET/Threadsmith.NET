@@ -362,6 +362,137 @@ public static class Plan78RepositoryMemoryTests
         Assert.Contains("stale", omitted.Rationale, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Automatic repository memory must be relevant and recent while explicit user memory remains eligible.</summary>
+    [Fact]
+    public static async Task Context_assembly_filters_automatic_memory_by_relevance_and_age()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var store = new SqliteRepositoryMemoryStore(fixture.ConnectionString, new SecretOutputSanitizer());
+        const string repositoryIdentity = "repo-memory-admission";
+        var now = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        var relevant = await store.UpsertAsync(CreateMemory(repositoryIdentity) with
+        {
+            Authority = RepositoryMemoryAuthority.HostObserved,
+            Content = "Completed request: Build and test Threadsmith solution.",
+            CreatedAt = now.AddHours(-1),
+            UpdatedAt = now.AddHours(-1),
+        });
+        var unrelated = await store.UpsertAsync(CreateMemory(repositoryIdentity) with
+        {
+            Authority = RepositoryMemoryAuthority.HostObserved,
+            Content = "Completed request: Explain terminal color preferences.",
+            CreatedAt = now.AddHours(-1),
+            UpdatedAt = now.AddHours(-1),
+        });
+        var oldAutomatic = await store.UpsertAsync(CreateMemory(repositoryIdentity) with
+        {
+            Authority = RepositoryMemoryAuthority.HostObserved,
+            Kind = RepositoryMemoryKind.ArchitectureDecision,
+            Content = "Completed request: Build and test Threadsmith solution.",
+            CreatedAt = now.AddDays(-3),
+            UpdatedAt = now.AddDays(-3),
+        });
+        var explicitMemory = await store.UpsertAsync(CreateMemory(repositoryIdentity) with
+        {
+            Content = "Keep release notes concise.",
+            CreatedAt = now.AddDays(-30),
+            UpdatedAt = now.AddDays(-30),
+        });
+        var assembler = CreateAssembler(
+            fixture,
+            events,
+            store,
+            timeProvider: new FixedTimeProvider(now));
+
+        var result = await assembler.AssembleAsync(CreateRequest(fixture, repositoryIdentity));
+
+        Assert.Contains(result.Inspection.RepositoryMemoryItems, item => item.Id == relevant.Id && item.Included);
+        Assert.Contains(result.Inspection.RepositoryMemoryItems, item => item.Id == explicitMemory.Id && item.Included);
+        Assert.Contains(result.Inspection.RepositoryMemoryItems, item =>
+            item.Id == unrelated.Id
+            && !item.Included
+            && item.Rationale.Contains("relevance score", StringComparison.Ordinal));
+        Assert.Contains(result.Inspection.RepositoryMemoryItems, item =>
+            item.Id == oldAutomatic.Id
+            && !item.Included
+            && item.Rationale.Contains("maximum prompt age", StringComparison.Ordinal));
+    }
+
+    /// <summary>A single meaningful query term can fully match fresh automatic memory.</summary>
+    [Fact]
+    public static async Task Context_assembly_includes_exact_single_term_automatic_memory()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var store = new SqliteRepositoryMemoryStore(fixture.ConnectionString, new SecretOutputSanitizer());
+        const string repositoryIdentity = "repo-memory-single-term";
+        var now = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        var memory = await store.UpsertAsync(CreateMemory(repositoryIdentity) with
+        {
+            Authority = RepositoryMemoryAuthority.HostObserved,
+            Content = "OAuth authentication workflow.",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        var assembler = CreateAssembler(
+            fixture,
+            events,
+            store,
+            timeProvider: new FixedTimeProvider(now));
+        var request = CreateRequest(fixture, repositoryIdentity) with
+        {
+            Task = new TaskSpecification("OAuth", []),
+        };
+
+        var result = await assembler.AssembleAsync(request);
+
+        var included = Assert.Single(result.Inspection.RepositoryMemoryItems, item => item.Included);
+        Assert.Equal(memory.Id, included.Id);
+        Assert.Equal(1.0d, included.Score);
+    }
+
+    /// <summary>A duplicate automatic observation does not extend recency without new durable provenance.</summary>
+    [Fact]
+    public static async Task Repository_memory_duplicate_observation_does_not_refresh_recency()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var firstObservedAt = new DateTimeOffset(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new AdjustableTimeProvider(firstObservedAt);
+        var store = new SqliteRepositoryMemoryStore(
+            fixture.ConnectionString,
+            new SecretOutputSanitizer(),
+            timeProvider);
+        const string repositoryIdentity = "repo-memory-refresh";
+        var candidate = CreateMemory(repositoryIdentity) with
+        {
+            Authority = RepositoryMemoryAuthority.HostObserved,
+            CreatedAt = default,
+            UpdatedAt = default,
+        };
+        var first = await store.InsertBoundedAsync(candidate, 12);
+        var refreshedAt = firstObservedAt.AddDays(3);
+        timeProvider.UtcNow = refreshedAt;
+
+        var duplicate = await store.InsertBoundedAsync(candidate with { Id = RepositoryMemoryId.New() }, 12);
+
+        Assert.True(first.WasInserted);
+        Assert.False(duplicate.WasInserted);
+        Assert.Equal(first.Item.Id, duplicate.Item.Id);
+        Assert.Equal(firstObservedAt, duplicate.Item.CreatedAt);
+        Assert.Equal(firstObservedAt, duplicate.Item.UpdatedAt);
+    }
+
+    /// <summary>Repository-memory relevance and age settings reject unsafe values.</summary>
+    [Fact]
+    public static void Repository_memory_context_policy_validates_admission_settings()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new RepositoryMemoryContextPolicy { MinimumRelevanceScore = double.NaN }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new RepositoryMemoryContextPolicy { AutomaticMemoryMaximumAge = TimeSpan.Zero }.Validate());
+    }
+
     /// <summary>Repository-memory retrieval remains bounded and reports pressure omissions.</summary>
     [Fact]
     public static async Task Context_assembly_omits_repository_memory_beyond_configured_budget()
@@ -637,7 +768,8 @@ public static class Plan78RepositoryMemoryTests
         ConversationFixture fixture,
         IDomainEventStream events,
         IRepositoryMemoryStore repositoryMemoryStore,
-        RepositoryMemoryContextPolicy? repositoryMemoryPolicy = null)
+        RepositoryMemoryContextPolicy? repositoryMemoryPolicy = null,
+        TimeProvider? timeProvider = null)
     {
         var sanitizer = new SecretOutputSanitizer();
         return new ContextAssembler(
@@ -652,7 +784,26 @@ public static class Plan78RepositoryMemoryTests
                 RepositoryMemory = repositoryMemoryPolicy ?? new RepositoryMemoryContextPolicy(),
             },
             conversationStore: fixture.Store,
-            repositoryMemoryStore: repositoryMemoryStore);
+            repositoryMemoryStore: repositoryMemoryStore,
+            timeProvider: timeProvider);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()
+        {
+            return utcNow;
+        }
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return UtcNow;
+        }
     }
 
     private static ContextAssemblyRequest CreateRequest(

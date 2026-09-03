@@ -174,6 +174,7 @@ internal sealed class CodeExploreMarkdownRenderer
     private const int MaximumRenderedMarkdownBytes = 25_000;
     private const double AdaptiveRenderedMarkdownMultiplier = 1.5;
     private readonly string _explorationPrefix;
+    private readonly string _explorationSuffix;
     private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="CodeExploreMarkdownRenderer"/> class.</summary>
@@ -181,7 +182,7 @@ internal sealed class CodeExploreMarkdownRenderer
     {
         ArgumentNullException.ThrowIfNull(prompts);
         _prompts = prompts;
-        _explorationPrefix = GetExplorationPrefix(prompts);
+        (_explorationPrefix, _explorationSuffix) = GetExplorationFrame(prompts);
     }
 
     /// <summary>Renders one concise source-first exploration result.</summary>
@@ -1538,35 +1539,42 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private string? ExtractExplorationQuery(string markdown)
     {
-        var lineEnd = markdown.IndexOfAny(['\r', '\n']);
-        var firstLine = lineEnd < 0 ? markdown : markdown[..lineEnd];
-        if (!firstLine.StartsWith(_explorationPrefix, StringComparison.Ordinal))
+        var prefixIndex = markdown.IndexOf(_explorationPrefix, StringComparison.Ordinal);
+        if (prefixIndex < 0)
         {
             return null;
         }
 
-        var codeSpan = firstLine[_explorationPrefix.Length..];
+        var codeSpanStart = prefixIndex + _explorationPrefix.Length;
         var delimiterLength = 0;
-        while (delimiterLength < codeSpan.Length && codeSpan[delimiterLength] == '`')
+        while (codeSpanStart + delimiterLength < markdown.Length
+            && markdown[codeSpanStart + delimiterLength] == '`')
         {
             delimiterLength++;
         }
 
-        if (delimiterLength == 0 || codeSpan.Length <= delimiterLength * 2)
+        if (delimiterLength == 0)
         {
             return null;
         }
 
-        var closingDelimiter = codeSpan[^delimiterLength..];
-        if (closingDelimiter.Any(character => character != '`'))
+        var delimiter = new string('`', delimiterLength);
+        var closingIndex = markdown.IndexOf(delimiter, codeSpanStart + delimiterLength, StringComparison.Ordinal);
+        while (closingIndex >= 0)
         {
-            return null;
+            var suffixIndex = closingIndex + delimiterLength;
+            if (markdown.AsSpan(suffixIndex).StartsWith(_explorationSuffix, StringComparison.Ordinal))
+            {
+                var query = markdown[(codeSpanStart + delimiterLength)..closingIndex];
+                return query.Length >= 2 && query[0] == ' ' && query[^1] == ' '
+                    ? query[1..^1]
+                    : query;
+            }
+
+            closingIndex = markdown.IndexOf(delimiter, closingIndex + 1, StringComparison.Ordinal);
         }
 
-        var query = codeSpan[delimiterLength..^delimiterLength];
-        return query.Length >= 2 && query[0] == ' ' && query[^1] == ' '
-            ? query[1..^1]
-            : query;
+        return null;
     }
 
     private void AppendHiddenCount(
@@ -1591,14 +1599,20 @@ internal sealed class CodeExploreMarkdownRenderer
         return RenderPrompt(PromptFileNames.ToolCodeExploreModelBudgetOmission);
     }
 
-    private static string GetExplorationPrefix(IPromptLoader prompts)
+    private static (string Prefix, string Suffix) GetExplorationFrame(IPromptLoader prompts)
     {
         const string displayQueryToken = "{{DisplayQuery}}";
-        var template = prompts.Get(PromptFileNames.ToolCodeExploreResultHeader);
+        var template = prompts.Get(PromptFileNames.ToolCodeExploreResultHeader)
+            .ReplaceLineEndings(Environment.NewLine);
         var tokenIndex = template.IndexOf(displayQueryToken, StringComparison.Ordinal);
-        return tokenIndex > 0
-            ? template[..tokenIndex].ReplaceLineEndings(Environment.NewLine)
-            : throw new InvalidOperationException("The code exploration result header is missing its display-query token.");
+        if (tokenIndex < 0)
+        {
+            throw new InvalidOperationException("The code exploration result header is missing its display-query token.");
+        }
+
+        return (
+            template[..tokenIndex],
+            template[(tokenIndex + displayQueryToken.Length)..]);
     }
 
     private void AppendPromptBlock(

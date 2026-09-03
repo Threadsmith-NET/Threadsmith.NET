@@ -93,9 +93,10 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 },
             ];
             var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
+            var canonicalModelTools = ModelToolCanonicalizer.Canonicalize(modelTools);
             var wireEstimate = ModelWireEstimator.Estimate(
                 messages,
-                modelTools,
+                canonicalModelTools,
                 ToolTransportMode.Native,
                 stablePrefixMessageCount: 0,
                 outputReserveTokens,
@@ -127,7 +128,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     },
                     ResolvedProfileId = profileId,
                     MaximumOutputTokens = profile?.EffectiveRequestOutputTokenReserve,
-                    Tools = modelTools,
+                    Tools = canonicalModelTools,
                     AllowMultipleToolCalls = false,
                     Messages = messages,
                     WireEstimate = wireEstimate,

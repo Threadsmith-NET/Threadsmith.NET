@@ -429,7 +429,8 @@ public sealed class DeployedPromptLoader : IPromptLoader
         if (markers.Any(marker =>
                 !definition.RequiredTokens.Contains(marker)
                 && !definition.OptionalTokens.Contains(marker))
-            || definition.RequiredTokens.Any(required => !markers.Contains(required)))
+            || definition.RequiredTokens.Any(required => !markers.Contains(required))
+            || definition.OptionalTokens.Any(optional => !markers.Contains(optional)))
         {
             throw CreateInitializationException(definition.FileName, "token-contract");
         }

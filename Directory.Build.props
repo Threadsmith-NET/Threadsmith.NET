@@ -57,10 +57,6 @@
     <NoWarn>$(NoWarn);SA1118;SA1515;SA1600;SA1601</NoWarn>
   </PropertyGroup>
 
-  <ItemGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
-    <Compile Include="$(MSBuildThisFileDirectory)tests\TestSupport\TestPromptLoader.cs"
-             Link="TestSupport\TestPromptLoader.cs" />
-  </ItemGroup>
 
   <PropertyGroup Condition="'$(IsPackable)' == ''">
     <IsPackable>false</IsPackable>

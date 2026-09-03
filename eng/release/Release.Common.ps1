@@ -45,15 +45,94 @@ function Get-DirectoryDigest {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
+
+function Get-CodeDeclaredPromptNames {
+    param([Parameter(Mandatory)][string] $SourceRoot)
+    $contractPath = Join-Path $SourceRoot 'src/Threadsmith.Core/PromptContracts.cs'
+    if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
+        throw 'The code-owned prompt catalog contract is missing.'
+    }
+
+    $contract = Get-Content -LiteralPath $contractPath -Raw
+    $constants = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    foreach ($match in [Text.RegularExpressions.Regex]::Matches(
+        $contract,
+        'public const string (?<name>[A-Za-z0-9_]+) = "(?<file>[A-Za-z0-9_-]+\.md)";')) {
+        $constants.Add($match.Groups['name'].Value, $match.Groups['file'].Value)
+    }
+
+    $allMatch = [Text.RegularExpressions.Regex]::Match(
+        $contract,
+        'public static IReadOnlyList<string> All \{ get; \} = Array\.AsReadOnly\(\s*\[(?<items>.*?)\]\);',
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $allMatch.Success) { throw 'The code-owned prompt filename catalog could not be read.' }
+
+    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($match in [Text.RegularExpressions.Regex]::Matches($allMatch.Groups['items'].Value, '\b[A-Za-z][A-Za-z0-9_]*\b')) {
+        $symbol = $match.Value
+        if (-not $constants.ContainsKey($symbol)) {
+            throw "The code-owned prompt catalog references an unknown filename symbol: $symbol"
+        }
+        if (-not $names.Add($constants[$symbol])) {
+            throw "The code-owned prompt catalog declares a duplicate filename: $($constants[$symbol])"
+        }
+    }
+    if ($names.Count -eq 0) { throw 'The code-owned prompt filename catalog is empty.' }
+    return ,$names
+}
+
+function Assert-CodeDeclaredPromptTokenContracts {
+    param(
+        [Parameter(Mandatory)][string] $SourceRoot,
+        [Parameter(Mandatory)][Collections.Generic.Dictionary[string, IO.FileInfo]] $SourceFiles
+    )
+    $contract = Get-Content -LiteralPath (Join-Path $SourceRoot 'src/Threadsmith.Core/PromptContracts.cs') -Raw
+    $constants = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    foreach ($match in [Text.RegularExpressions.Regex]::Matches(
+        $contract,
+        'public const string (?<name>[A-Za-z0-9_]+) = "(?<file>[A-Za-z0-9_-]+\.md)";')) {
+        $constants.Add($match.Groups['name'].Value, $match.Groups['file'].Value)
+    }
+    $declaredTokens = [Collections.Generic.Dictionary[string, Collections.Generic.HashSet[string]]]::new([StringComparer]::Ordinal)
+    foreach ($match in [Text.RegularExpressions.Regex]::Matches(
+        $contract,
+        '\[PromptFileNames\.(?<name>[A-Za-z0-9_]+)\] = Set\((?<tokens>.*?)\),',
+        [Text.RegularExpressions.RegexOptions]::Singleline)) {
+        $fileName = $constants[$match.Groups['name'].Value]
+        if (-not $declaredTokens.ContainsKey($fileName)) {
+            $declaredTokens.Add($fileName, [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal))
+        }
+        foreach ($tokenMatch in [Text.RegularExpressions.Regex]::Matches($match.Groups['tokens'].Value, '"(?<token>[A-Za-z][A-Za-z0-9]*)"')) {
+            $declaredTokens[$fileName].Add($tokenMatch.Groups['token'].Value) | Out-Null
+        }
+    }
+
+    foreach ($fileName in $SourceFiles.Keys) {
+        $markers = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $content = Get-Content -LiteralPath $SourceFiles[$fileName].FullName -Raw
+        foreach ($marker in [Text.RegularExpressions.Regex]::Matches($content, '\{\{(?<token>[A-Za-z][A-Za-z0-9]*)\}\}')) {
+            $markers.Add($marker.Groups['token'].Value) | Out-Null
+        }
+        $tokens = if ($declaredTokens.ContainsKey($fileName)) { $declaredTokens[$fileName] } else { [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+        if ($markers.Count -ne $tokens.Count -or @($markers | Where-Object { -not $tokens.Contains($_) }).Count -ne 0) {
+            throw "Prompt source does not match its code-owned token contract: $fileName"
+        }
+    }
+}
+
 function Assert-ReleasePromptPayload {
     param(
         [Parameter(Mandatory)][string] $PayloadDirectory,
         [Parameter(Mandatory)][string] $RuntimeIdentifier,
-        [string] $SourceRoot = (Get-RepositoryRoot)
+        [string] $SourceRoot = (Get-RepositoryRoot),
+        [Collections.Generic.HashSet[string]] $ExpectedPromptNames
     )
 
     Assert-ReleaseRid $RuntimeIdentifier
     $source = (Resolve-Path -LiteralPath $SourceRoot).Path
+    if ($null -eq $ExpectedPromptNames) {
+        $ExpectedPromptNames = Get-CodeDeclaredPromptNames -SourceRoot $source
+    }
     $payload = (Resolve-Path -LiteralPath $PayloadDirectory).Path
     $ownerDirectories = @(
         'src/Threadsmith.Context/Prompts',
@@ -94,6 +173,22 @@ function Assert-ReleasePromptPayload {
         if ($ownerFiles.Count -eq 0) {
             throw "Prompt source owner directory is empty: $relativeDirectory"
         }
+    }
+    foreach ($name in $ExpectedPromptNames) {
+        if (-not $expected.ContainsKey($name)) {
+            throw "The code-owned prompt catalog is missing its source asset: $name"
+        }
+    }
+    foreach ($name in $expected.Keys) {
+        if (-not $ExpectedPromptNames.Contains($name)) {
+            throw "Prompt source is not declared by the code-owned catalog: $name"
+        }
+    }
+    if ($expected.Count -ne $ExpectedPromptNames.Count) {
+        throw 'Prompt sources do not match the code-owned catalog.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $source 'src/Threadsmith.Core/PromptContracts.cs') -PathType Leaf) {
+        Assert-CodeDeclaredPromptTokenContracts -SourceRoot $source -SourceFiles $expected
     }
 
     $promptDirectory = Join-Path $payload 'prompts'

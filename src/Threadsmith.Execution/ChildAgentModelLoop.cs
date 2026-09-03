@@ -78,7 +78,8 @@ internal sealed class ChildAgentModelLoop
         CancellationToken cancellationToken)
     {
         var registrations = ResolveRegistrations(assignment);
-        var toolDefinitions = ChildAgentPrompt.CreateToolDefinitions(registrations);
+        var toolDefinitions = ModelToolCanonicalizer.Canonicalize(
+            ChildAgentPrompt.CreateToolDefinitions(registrations));
         var toolWireEstimate = ModelWireEstimator.EstimateTools(
             toolDefinitions,
             ToolTransportMode.Native);

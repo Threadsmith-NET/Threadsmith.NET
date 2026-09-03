@@ -326,7 +326,8 @@ public sealed class ContextAssembler : IContextAssembler
                 request.ProhibitedPaths,
                 request.TrustGeneration,
                 cancellationToken);
-        var phaseInstructions = GetPhaseInstructions(request.Phase);
+        var phasePromptFileName = GetPhasePromptFileName(request.Phase);
+        var phaseInstructions = _prompts.Get(phasePromptFileName);
         var sanitizedTask = request.Task with
         {
             Intent = _sanitizer.Sanitize(request.Task.Intent),
@@ -662,7 +663,7 @@ public sealed class ContextAssembler : IContextAssembler
             source.Content.Length)));
         promptAssets.Add(CreateAssetReference(
             $"host:phase:{request.Phase}",
-            "embedded",
+            phasePromptFileName,
             promptAssets.Count,
             phaseInstructions));
         var messages = BuildStructuredMessages(
@@ -1515,9 +1516,9 @@ public sealed class ContextAssembler : IContextAssembler
         return segments;
     }
 
-    private string GetPhaseInstructions(RunPhase phase)
+    private static string GetPhasePromptFileName(RunPhase phase)
     {
-        var name = phase switch
+        return phase switch
         {
             RunPhase.EvidenceCollection => PromptFileNames.SystemPhaseEvidenceCollection,
             RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval => PromptFileNames.SystemPhaseChangePlanning,
@@ -1529,7 +1530,6 @@ public sealed class ContextAssembler : IContextAssembler
             RunPhase.Testing or RunPhase.Verification => PromptFileNames.SystemPhaseValidation,
             _ => PromptFileNames.SystemPhaseDefault,
         };
-        return _prompts.Get(name);
     }
 
     private string GetRequiredOutput(RunPhase phase)

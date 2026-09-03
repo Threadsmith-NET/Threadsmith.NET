@@ -18,7 +18,8 @@ public static class McpAdapterLifecycleTests
             _ => new TimeoutTransport(),
             new EmptySecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = CreateProfile() with { StartupTimeout = TimeSpan.FromMilliseconds(20) };
 
         var result = await adapter.ConnectAsync(profile, CancellationToken.None);
@@ -42,7 +43,8 @@ public static class McpAdapterLifecycleTests
             },
             new BlockingSecretResolver(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = CreateProfile() with
         {
             SecretScope = ["secrets:tests:slow"],
@@ -70,6 +72,7 @@ public static class McpAdapterLifecycleTests
             new EmptySecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
             registry);
         var profile = CreateProfile();
 
@@ -95,6 +98,7 @@ public static class McpAdapterLifecycleTests
             new EmptySecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
             registry);
         var profile = CreateProfile() with
         {
@@ -123,6 +127,7 @@ public static class McpAdapterLifecycleTests
             new EmptySecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
             registry,
             timeProvider);
         var connection = await adapter.ConnectAsync(CreateProfile());

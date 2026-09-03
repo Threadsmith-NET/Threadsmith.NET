@@ -1,0 +1,1 @@
+- {{FilePath}}:{{SourceRange}} from tool call {{ToolCallId}} — {{Reason}}

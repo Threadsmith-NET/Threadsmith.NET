@@ -1,0 +1,1 @@
+Executes a {{ShellLanguage}} command in the repository root and returns bounded stdout and stderr.

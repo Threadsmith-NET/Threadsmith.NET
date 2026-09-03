@@ -351,7 +351,7 @@ public sealed class ParallelAgentTests
             assignment,
             Environment.CurrentDirectory);
         var decision = new DefaultPolicyEngine().Evaluate(
-            new ReadFileTool(),
+            new ReadFileTool(TestPromptLoader.Instance),
             new ReadFileInput { Path = "src/A.cs" },
             child);
 

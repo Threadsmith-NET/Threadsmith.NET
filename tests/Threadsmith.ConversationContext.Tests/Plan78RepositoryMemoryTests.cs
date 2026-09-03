@@ -779,6 +779,7 @@ public static class Plan78RepositoryMemoryTests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions
             {
                 RepositoryMemory = repositoryMemoryPolicy ?? new RepositoryMemoryContextPolicy(),

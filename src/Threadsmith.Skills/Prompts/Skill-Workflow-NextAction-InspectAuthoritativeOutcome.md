@@ -1,0 +1,1 @@
+inspect authoritative skill outcome

@@ -1,0 +1,1 @@
+The semantic workspace is below the minimum readiness required for compiler-known C# source exploration.

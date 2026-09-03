@@ -1,0 +1,1 @@
+Authorizes an explicit MCP resource or prompt read.

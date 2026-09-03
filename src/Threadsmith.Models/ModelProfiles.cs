@@ -407,6 +407,14 @@ public sealed class ConfiguredModelProvider : IModelProvider
         }
 
         var profile = _catalog.Get(selection.ProfileId);
+        if (request.WireEstimate is { } wireEstimate
+            && wireEstimate.TotalCapacityTokens > profile.ContextWindow)
+        {
+            throw new ModelProviderException(
+                $"The complete model request requires {wireEstimate.TotalCapacityTokens} tokens but profile "
+                + $"'{profile.Name}' permits {profile.ContextWindow}.");
+        }
+
         var resolvedSecret = profile.SecretKeyReference is { } secretReference
             ? await _resolveSecretAsync(secretReference, cancellationToken)
             : null;

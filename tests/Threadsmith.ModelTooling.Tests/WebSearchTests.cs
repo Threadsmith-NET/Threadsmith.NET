@@ -139,7 +139,11 @@ public sealed class WebSearchTests
                 client,
                 new WebSearchOptions(),
                 new SecretOutputSanitizer(),
+                TestPromptLoader.Instance,
                 authority);
+            Assert.Equal(
+                TestPromptLoader.Instance.Get(PromptFileNames.ToolWebSearchDescription),
+                tool.Definition.Description);
             var context = new ToolExecutionContext(
                 ToolInvocationId.New(),
                 SessionId.New(),
@@ -183,7 +187,8 @@ public sealed class WebSearchTests
         var client = new BraveWebSearchClient(
             new HttpClient(handler),
             new StubSecretStore(),
-            options);
+            options,
+            TestPromptLoader.Instance);
 
         var response = await client.SearchAsync(new WebSearchRequest { Query = "threadsmith", MaximumResults = 1 });
 
@@ -205,7 +210,8 @@ public sealed class WebSearchTests
         var client = new BraveWebSearchClient(
             new HttpClient(handler),
             resolver,
-            new WebSearchOptions { MinimumRequestInterval = TimeSpan.Zero });
+            new WebSearchOptions { MinimumRequestInterval = TimeSpan.Zero },
+            TestPromptLoader.Instance);
 
         await client.SearchAsync(new WebSearchRequest { Query = "threadsmith" });
 
@@ -222,7 +228,11 @@ public sealed class WebSearchTests
 
     private static WebSearchTool CreateTool(IWebSearchClient client)
     {
-        return new(client, new WebSearchOptions(), new SecretOutputSanitizer());
+        return new(
+            client,
+            new WebSearchOptions(),
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
     }
 
     private sealed class StubWebSearchClient : IWebSearchClient
@@ -240,6 +250,7 @@ public sealed class WebSearchTests
                 ProviderId = "stub",
                 RetrievedAt = DateTimeOffset.UnixEpoch,
                 Results = Results,
+                TrustBoundary = TestPromptLoader.Instance.Get(PromptFileNames.ToolWebSearchTrustBoundary),
             });
         }
     }

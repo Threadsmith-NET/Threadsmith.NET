@@ -1,0 +1,1 @@
+Wait for semantic workspace loading, then retry code_explore for C# source-bearing evidence.

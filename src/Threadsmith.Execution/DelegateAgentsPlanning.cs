@@ -11,6 +11,7 @@ public sealed class DelegateAgentsPlanFactory
     private const string ReadOnlyToolPolicyVersion = "delegate-agents-read-only/1";
     private readonly DelegateAgentsOptions _options;
     private readonly SessionModelPreferences _preferences;
+    private readonly IPromptLoader _prompts;
     private readonly IConversationToolSnapshotStore _toolSnapshots;
     private readonly ITransactionalWorkspaceResolver _workspaces;
 
@@ -19,15 +20,18 @@ public sealed class DelegateAgentsPlanFactory
         ITransactionalWorkspaceResolver workspaces,
         SessionModelPreferences preferences,
         IConversationToolSnapshotStore toolSnapshots,
+        IPromptLoader prompts,
         DelegateAgentsOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(preferences);
         ArgumentNullException.ThrowIfNull(toolSnapshots);
+        ArgumentNullException.ThrowIfNull(prompts);
         _options = options ?? new DelegateAgentsOptions();
         _options.Validate();
         _workspaces = workspaces;
         _preferences = preferences;
+        _prompts = prompts;
         _toolSnapshots = toolSnapshots;
     }
 
@@ -88,7 +92,7 @@ public sealed class DelegateAgentsPlanFactory
             Role = AgentRole.Explorer,
             Mode = AgentRunMode.ReadOnlyBaseline,
             Objective = request.Task.Trim(),
-            Tasks = ["Return cited structured findings, explicit omissions, uncertainty, and coverage notes."],
+            Tasks = [_prompts.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask)],
             InitialContext = request.Context.Trim(),
             OutputSchema = DelegateAgentsContract.FindingSchema,
             StoppingCondition = "Stop after the assigned question is answered or the bounded evidence surface is exhausted.",

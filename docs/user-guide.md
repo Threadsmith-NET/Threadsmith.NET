@@ -8,6 +8,7 @@ This guide documents the currently implemented user-facing behavior. Features de
 
 1. [Requirements and installation](#requirements-and-installation)
 2. [Starting Threadsmith](#starting-threadsmith)
+   - [Customizing deployed prompts](#customizing-deployed-prompts)
 3. [Opening and initializing a repository](#opening-and-initializing-a-repository)
 4. [Trust levels](#trust-levels)
 5. [Using the interactive terminal](#using-the-interactive-terminal)
@@ -107,6 +108,12 @@ dotnet build src\Threadsmith.sln
 dotnet src\Threadsmith.App\bin\Debug\net10.0\Threadsmith.App.dll --tui
 dotnet src\Threadsmith.App\bin\Debug\net10.0\Threadsmith.App.dll "inspect this repository"
 ```
+
+### Customizing deployed prompts
+
+Every built or installed application includes a flat `prompts/` directory beside the executable. It contains the Threadsmith-authored system, phase, correction, tool, delegation, skill, provider, and model-visible result prose used by that build. Threadsmith loads the complete declared catalog once at startup; edits affect only a newly started process, and a missing, corrupt, oversized, linked, colliding, or incomplete catalog fails startup before model or tool activity.
+
+Prompt files control wording only. They cannot add or enable tools, change schemas, approve mutations, widen repository or delegated-child authority, alter trust, select models, grant network or secret access, or bypass validation. Prompt content can be sent to the selected provider and is present in explicitly enabled privileged raw-model logs, so never add secrets. Installed upgrades replace the shipped defaults instead of merging local edits; back up experiments before upgrading. See the [prompt file reference](prompt-file-reference.md) for the categorized file-by-file catalog and complete placeholder glossary, and [deployed prompt assets](operations/prompts.md) for source ownership, deployment paths, capacity, logging, and upgrade behavior.
 
 ### Startup arguments
 
@@ -1601,6 +1608,10 @@ This is expected when it has never been enabled or when the server capability/sc
 
 Verify the endpoint is the complete chat-completions URL, the profile advertises the capabilities required by the interactive flow, and the logical secret reference resolves. Credentials are intentionally absent from logs.
 
+### Startup reports a prompt catalog error
+
+Restore the complete `prompts/` directory from the same Threadsmith build or reinstall that build. Do not mix files from different versions. The startup diagnostic identifies safe filename/category metadata but deliberately omits prompt bodies and rendered token values.
+
 ### Terminal output has no colors or status row
 
 Styling is suppressed under `NO_COLOR`, redirected output, or limited-terminal detection. The status row is also absent when `tui:footer:enabled` is false.
@@ -1621,6 +1632,8 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 - [Tool runtime operations](operations/tools.md)
 - [MCP connections and lifecycle](operations/mcp-connections.md)
 - [Model providers](operations/model-providers.md)
+- [Prompt file reference](prompt-file-reference.md)
+- [Deployed prompt assets](operations/prompts.md)
 - [TUI themes](operations/tui-themes.md)
 - [Project prompt append](operations/project-prompt-append.md)
 - [Cache-optimized context](operations/cache-optimized-context.md)

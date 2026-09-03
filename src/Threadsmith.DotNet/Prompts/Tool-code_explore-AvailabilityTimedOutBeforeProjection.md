@@ -1,0 +1,1 @@
+The code exploration time limit was reached while inspecting workspace scale before source could be projected.

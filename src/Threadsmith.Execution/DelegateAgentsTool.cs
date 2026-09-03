@@ -76,6 +76,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
     private readonly DelegateAgentsOptions _options;
     private readonly DelegateAgentsPlanFactory _plans;
     private readonly DelegateAgentsResultProjector _projector;
+    private readonly DelegateAgentsResultRenderer _renderer;
     private readonly IExplorerAssignmentRunnerFactory _runners;
     private readonly RunSteeringCoordinator? _steering;
 
@@ -85,12 +86,14 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         IExplorerAssignmentRunnerFactory runners,
         IDelegationCoordinator coordinator,
         DelegateAgentsOptions options,
+        IPromptLoader prompts,
         RunSteeringCoordinator? steering = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
         ArgumentNullException.ThrowIfNull(runners);
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(prompts);
         options.Validate();
         _plans = plans;
         _runners = runners;
@@ -98,7 +101,8 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         _options = options;
         _steering = steering;
         _projector = new DelegateAgentsResultProjector(options);
-        _definition = CreateDefinition(options);
+        _renderer = new DelegateAgentsResultRenderer(prompts);
+        _definition = CreateDefinition(options, prompts);
     }
 
     /// <inheritdoc />
@@ -139,7 +143,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                         context.RunId,
                         plan.DelegationId),
                 };
-            var modelContent = DelegateAgentsResultRenderer.Render(result, out var modelTruncated);
+            var modelContent = _renderer.Render(result, out var modelTruncated);
             return new ToolExecution<DelegateAgentsResult>(
                 result,
                 [new ToolProvenanceSource("delegation", result.DelegationId)],
@@ -175,7 +179,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         return [context.RepositoryPath];
     }
 
-    private static ToolDefinition CreateDefinition(DelegateAgentsOptions options)
+    private static ToolDefinition CreateDefinition(DelegateAgentsOptions options, IPromptLoader prompts)
     {
         var inputSchema = $$"""
             {
@@ -218,10 +222,12 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             Source = "Built-in",
             EnabledByDefault = true,
             Version = "1.0.0",
-            Description = $"Runs 1-{options.MaximumAgents} bounded Explorer children concurrently and joins cited findings. "
-                + "Give each child a narrow, non-overlapping objective and include all known relevant files, symbols, evidence, and constraints in context. "
-                + "Use readOnly for non-network inspection tools or inherit for eligible network-backed read tools; "
-                + "children cannot delegate or transition the parent workflow.",
+            Description = prompts.Render(
+                PromptFileNames.ToolDelegateAgentsDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["MaximumAgents"] = options.MaximumAgents.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }),
             Category = ToolCategory.Workflow,
             InputSchema = new ToolSchema(nameof(DelegateAgentsInput), 1, inputSchema),
             OutputSchema = new ToolSchema(nameof(DelegateAgentsResult), 1, OutputSchemaJson),

@@ -1,0 +1,1 @@
+Ask the user whether the workspace scope or approved roots should be adjusted before retrying.

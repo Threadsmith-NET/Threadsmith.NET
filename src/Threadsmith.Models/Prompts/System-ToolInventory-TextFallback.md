@@ -1,0 +1,1 @@
+<tool id="{{ToolId}}"><description>{{Description}}</description><schema>{{Schema}}</schema></tool>

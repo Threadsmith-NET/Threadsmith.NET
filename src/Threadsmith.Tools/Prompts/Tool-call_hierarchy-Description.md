@@ -1,0 +1,1 @@
+Primary compiler-aware tool for incoming/outgoing C# call relationships. Arguments use the flat shape {symbolId,direction?,depth?}. depth is the only model-visible traversal hint; host owns node/edge counts and time bounds. MUST use before search and fall back only if this tool fails or reports incomplete evidence.

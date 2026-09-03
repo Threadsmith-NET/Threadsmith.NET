@@ -29,7 +29,9 @@ internal sealed class ChildAgentModelLoop
     private readonly IModelProvider _models;
     private readonly DelegateAgentsOptions _options;
     private readonly IReadOnlyList<ToolRegistration> _parentRegistrations;
+    private readonly ChildAgentPrompt _prompt;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly IPromptLoader _prompts;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
@@ -42,6 +44,7 @@ internal sealed class ChildAgentModelLoop
         IOutputSanitizer sanitizer,
         DelegateAgentsOptions options,
         IReadOnlyList<ToolRegistration> parentRegistrations,
+        IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null)
     {
@@ -51,12 +54,15 @@ internal sealed class ChildAgentModelLoop
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(parentRegistrations);
+        ArgumentNullException.ThrowIfNull(prompts);
         _models = models;
         _tools = tools;
         _evidence = evidence;
         _sanitizer = sanitizer;
+        _prompts = prompts;
         _options = options;
         _parentRegistrations = parentRegistrations.ToArray();
+        _prompt = new ChildAgentPrompt(prompts);
         _sessionUsage = sessionUsage;
         _steering = steering;
     }
@@ -72,7 +78,8 @@ internal sealed class ChildAgentModelLoop
         CancellationToken cancellationToken)
     {
         var registrations = ResolveRegistrations(assignment);
-        var toolDefinitions = ChildAgentPrompt.CreateToolDefinitions(registrations);
+        var toolDefinitions = ModelToolCanonicalizer.Canonicalize(
+            ChildAgentPrompt.CreateToolDefinitions(registrations));
         var toolWireEstimate = ModelWireEstimator.EstimateTools(
             toolDefinitions,
             ToolTransportMode.Native);
@@ -85,7 +92,8 @@ internal sealed class ChildAgentModelLoop
             instructions,
             toolWireEstimate,
             model,
-            desiredOutputTokens);
+            desiredOutputTokens,
+            _prompt);
         var messages = initialRequest.Messages;
         var deliveredEvidenceIds = initialRequest.DeliveredEvidenceIds.ToHashSet();
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
@@ -111,7 +119,7 @@ internal sealed class ChildAgentModelLoop
                         cancellationToken);
                     if (steering.Count > 0)
                     {
-                        messages.AddRange(steering.Select(ChildAgentPrompt.CreateSteeringMessage));
+                        messages.AddRange(steering.Select(_prompt.CreateSteeringMessage));
                         initialWireEstimate = null;
                     }
                 }
@@ -121,7 +129,8 @@ internal sealed class ChildAgentModelLoop
                         messages,
                         toolWireEstimate,
                         stablePrefixMessageCount: 0,
-                        outputReserveTokens: 0)
+                        outputReserveTokens: 0,
+                        model.ProviderInstructions)
                     : initialWireEstimate with { OutputReserveTokens = 0 };
                 initialWireEstimate = null;
                 var availableOutputTokens = model.ContextWindowTokens
@@ -161,7 +170,7 @@ internal sealed class ChildAgentModelLoop
                             cancellationToken);
                         if (steering.Count > 0)
                         {
-                            messages.AddRange(steering.Select(ChildAgentPrompt.CreateSteeringMessage));
+                            messages.AddRange(steering.Select(_prompt.CreateSteeringMessage));
                             continue;
                         }
                     }
@@ -179,7 +188,7 @@ internal sealed class ChildAgentModelLoop
                             round,
                             cancellationToken);
                         messages.AddRange(continuation.Messages);
-                        messages.Add(ChildAgentPrompt.CreateEvidenceProgressMessage(continuation.Progress));
+                        messages.Add(_prompt.CreateEvidenceProgressMessage(continuation.Progress));
                         deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
                     }
                     catch (Exception exception) when (exception is InvalidDataException
@@ -316,6 +325,7 @@ internal sealed class ChildAgentModelLoop
                     AllowMultipleToolCalls = true,
                     Messages = messages,
                     WireEstimate = wireEstimate,
+                    ProviderInstructions = model.ProviderInstructions,
                 },
                 cancellationToken))
             {
@@ -519,7 +529,7 @@ internal sealed class ChildAgentModelLoop
             result.ModelResultContent
                 ?? result.ResultJson
                 ?? result.Error
-                ?? "Tool completed without model-visible content.");
+                ?? _prompts.Get(PromptFileNames.ToolChildAgentToolInvocationCompleted));
         var bytes = Encoding.UTF8.GetByteCount(content);
         evidenceProgress.Observe(result, content);
         var files = result.Sources
@@ -617,7 +627,7 @@ internal sealed class ChildAgentModelLoop
             _sanitizer.Sanitize(reason),
             MaximumCorrectionReasonCharacters,
             out _);
-        messages.Add(ChildAgentPrompt.CreateCorrectionMessage(sanitized));
+        messages.Add(_prompt.CreateCorrectionMessage(sanitized));
     }
 
     private static string CreateToolCallId(

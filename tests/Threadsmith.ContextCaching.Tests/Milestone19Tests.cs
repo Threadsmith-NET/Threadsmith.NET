@@ -147,6 +147,44 @@ public sealed class Milestone19Tests
         Assert.Equal((long)estimate.WireInputTokens + 512, estimate.TotalCapacityTokens);
     }
 
+    /// <summary>Provider instructions contribute exact content, framing, stable-prefix, and long capacity totals.</summary>
+    [Fact]
+    public void WireEstimate_ProviderInstructionsAreCountedExactlyOnce()
+    {
+        IReadOnlyList<ModelMessage> messages =
+        [
+            TextMessage(ModelMessageRole.System, "host-policy", "stable"),
+            TextMessage(ModelMessageRole.User, "current-user", "question"),
+        ];
+        var instructions = new ModelProviderInstructions
+        {
+            SectionId = "provider-openai-codex-instructions",
+            Content = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
+        };
+        var withoutInstructions = ModelWireEstimator.Estimate(
+            messages,
+            [],
+            ToolTransportMode.Native,
+            stablePrefixMessageCount: 1,
+            outputReserveTokens: int.MaxValue);
+
+        var estimate = ModelWireEstimator.Estimate(
+            messages,
+            [],
+            ToolTransportMode.Native,
+            stablePrefixMessageCount: 1,
+            outputReserveTokens: int.MaxValue,
+            instructions);
+
+        Assert.Equal(89, instructions.Content.Length);
+        Assert.Equal(23, estimate.ProviderInstructionTokens);
+        Assert.Equal(23, estimate.SectionTokens[instructions.SectionId]);
+        Assert.Equal(26, estimate.WireInputTokens - withoutInstructions.WireInputTokens);
+        Assert.Equal(26, estimate.StablePrefixTokens - withoutInstructions.StablePrefixTokens);
+        Assert.Equal(3, estimate.FramingTokens - withoutInstructions.FramingTokens);
+        Assert.True(estimate.TotalCapacityTokens > int.MaxValue);
+    }
+
     /// <summary>Applicable AGENTS.md files resolve parent-to-child and revalidate without watcher delivery.</summary>
     [Fact]
     public async Task InstructionResolver_ResolvesHierarchyAndRevalidatesEveryBoundary()
@@ -214,6 +252,7 @@ public sealed class Milestone19Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             instructionResolver: new RepositoryInstructionResolver(sanitizer));
 
         try

@@ -26,6 +26,7 @@ public sealed class McpImportedTool : ITool
         McpConnectionProfile profile,
         McpImportedCapability capability,
         IOutputSanitizer sanitizer,
+        IPromptLoader prompts,
         TimeProvider? timeProvider = null,
         Func<IDisposable>? acquireInvocation = null)
     {
@@ -33,13 +34,14 @@ public sealed class McpImportedTool : ITool
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(capability);
         ArgumentNullException.ThrowIfNull(sanitizer);
+        ArgumentNullException.ThrowIfNull(prompts);
         _transport = transport;
         _profile = profile;
         _capability = capability;
         _sanitizer = sanitizer;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _acquireInvocation = acquireInvocation;
-        Definition = BuildDefinition(profile, capability);
+        Definition = BuildDefinition(profile, capability, prompts);
     }
 
     /// <inheritdoc />
@@ -162,7 +164,10 @@ public sealed class McpImportedTool : ITool
         return elapsed < TimeSpan.Zero ? null : elapsed.Ticks / TimeSpan.TicksPerMillisecond;
     }
 
-    private static ToolDefinition BuildDefinition(McpConnectionProfile profile, McpImportedCapability capability)
+    private static ToolDefinition BuildDefinition(
+        McpConnectionProfile profile,
+        McpImportedCapability capability,
+        IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(capability);
@@ -173,7 +178,14 @@ public sealed class McpImportedTool : ITool
             Source = $"MCP:{profile.Id}",
             EnabledByDefault = false,
             Version = $"mcp-1-{capability.Digest}",
-            Description = capability.Description.Length > 0 ? capability.Description : $"MCP tool {capability.ServerName}",
+            Description = capability.Description.Length > 0
+                ? capability.Description
+                : prompts.Render(
+                    PromptFileNames.AdapterMcpImportedToolFallbackDescription,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ServerName"] = capability.ServerName,
+                    }),
 
             // MCP tool implementations are opaque remote behavior. Server-provided annotations and
             // profile labels cannot prove that an invocation is read-only, so the host must place

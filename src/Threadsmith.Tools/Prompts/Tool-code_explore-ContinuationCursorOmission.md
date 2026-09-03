@@ -1,0 +1,1 @@
+- _{{Count}} retry query cursor{{PluralSuffix}} omitted to keep follow-up targets compact._

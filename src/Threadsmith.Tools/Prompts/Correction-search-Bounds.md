@@ -1,0 +1,1 @@
+query is limited to 500 characters; use a concise literal or regex, not pasted source/tool output. maximumMatches is limited to 0..{{MaximumMatches}} (0 uses the host default).

@@ -83,6 +83,7 @@ internal static class IntegrationComposition
         IToolInvocationPipeline toolPipeline,
         string repositoryRoot,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,6 +95,7 @@ internal static class IntegrationComposition
         ArgumentNullException.ThrowIfNull(toolPipeline);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(prompts);
 
         IBrowserLauncher browserLauncher = useInteractiveTerminal
             ? new SystemBrowserLauncher()
@@ -125,6 +127,7 @@ internal static class IntegrationComposition
             secretResolver,
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
+            prompts,
             toolRegistry);
         var identityManager = new McpIdentityManager(tokenStore, secretResolver);
         var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
@@ -147,7 +150,7 @@ internal static class IntegrationComposition
             connectedCallback: connectedCallback,
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
-                var policyTool = new McpExplicitReadPolicyTool(profile, capability);
+                var policyTool = new McpExplicitReadPolicyTool(profile, capability, prompts);
                 var decision = await toolPipeline.InvokeAsync(
                     new ToolInvocationRequest
                     {
@@ -200,6 +203,7 @@ internal static class IntegrationComposition
         SecretOutputSanitizer sanitizer,
         ToolRegistry toolRegistry,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -210,6 +214,7 @@ internal static class IntegrationComposition
                 sanitizer,
                 toolRegistry,
                 loggerFactory,
+                prompts,
                 hookCoordinator,
                 cancellationToken);
     }
@@ -222,6 +227,7 @@ internal static class IntegrationComposition
         SecretOutputSanitizer sanitizer,
         ToolRegistry toolRegistry,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -254,6 +260,7 @@ internal static class IntegrationComposition
             secretResolver,
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
+            prompts,
             toolRegistry);
         var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
         var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");

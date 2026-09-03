@@ -1,0 +1,1 @@
+RenameSymbol already edits '{{RelativePath}}'; do not combine it with another text mutation for the same file.

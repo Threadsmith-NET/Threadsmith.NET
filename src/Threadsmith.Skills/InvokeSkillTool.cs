@@ -40,39 +40,16 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private static readonly ToolDefinition _definition = new()
-    {
-        Id = "invoke_skill",
-        DisplayName = "Invoke skill",
-        Source = "Built-in",
-        EnabledByDefault = true,
-        Version = "1.0.0",
-        Description = "Invokes one explicit enabled verified declarative skill with schema-validated JSON input.",
-        Category = ToolCategory.Workflow,
-        InputSchema = new ToolSchema(
-            nameof(InvokeSkillInput),
-            1,
-            "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}}}"),
-        OutputSchema = new ToolSchema(
-            nameof(InvokeSkillOutput),
-            1,
-            "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"invocationId\",\"skillId\",\"version\",\"digest\",\"status\",\"reason\",\"nextAction\",\"hostActions\"],\"properties\":{\"invocationId\":{\"type\":\"string\",\"format\":\"uuid\"},\"skillId\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"digest\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"Accepted\",\"Running\",\"AwaitingHost\",\"Completed\",\"Failed\",\"Cancelled\"]},\"reason\":{\"type\":\"string\"},\"nextAction\":{\"type\":\"string\"},\"hostActions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"stepId\",\"payloadJson\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"ProposePlan\",\"ExecuteApprovedPlan\",\"ProposeDelegation\",\"Validate\",\"AskUserInput\"]},\"stepId\":{\"type\":\"string\"},\"payloadJson\":{\"type\":\"string\"}}}}}"),
-        RequiredTrust = RepositoryTrustLevel.TrustedRead,
-        RequiredApproval = ApprovalLevel.None,
-        SideEffect = ToolSideEffect.ReadOnly,
-        Idempotency = ToolIdempotency.NonIdempotent,
-        SupportsCancellation = true,
-        Timeout = TimeSpan.FromMinutes(20),
-        MaximumOutputBytes = 64 * 1024,
-    };
-
+    private readonly ToolDefinition _definition;
     private readonly ISkillWorkflowOrchestrator _workflows;
 
     /// <summary>Initializes a new instance of the <see cref="InvokeSkillTool"/> class.</summary>
-    public InvokeSkillTool(ISkillWorkflowOrchestrator workflows)
+    public InvokeSkillTool(ISkillWorkflowOrchestrator workflows, IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(workflows);
+        ArgumentNullException.ThrowIfNull(prompts);
         _workflows = workflows;
+        _definition = CreateDefinition(prompts);
     }
 
     /// <inheritdoc />
@@ -144,6 +121,35 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         {
             throw new ToolArgumentValidationException("Skill selector or input exceeds its bound.");
         }
+    }
+
+    private static ToolDefinition CreateDefinition(IPromptLoader prompts)
+    {
+        return new ToolDefinition
+        {
+            Id = "invoke_skill",
+            DisplayName = "Invoke skill",
+            Source = "Built-in",
+            EnabledByDefault = true,
+            Version = "1.0.0",
+            Description = prompts.Get(PromptFileNames.ToolInvokeSkillDescription),
+            Category = ToolCategory.Workflow,
+            InputSchema = new ToolSchema(
+                nameof(InvokeSkillInput),
+                1,
+                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}}}"),
+            OutputSchema = new ToolSchema(
+                nameof(InvokeSkillOutput),
+                1,
+                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"invocationId\",\"skillId\",\"version\",\"digest\",\"status\",\"reason\",\"nextAction\",\"hostActions\"],\"properties\":{\"invocationId\":{\"type\":\"string\",\"format\":\"uuid\"},\"skillId\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"digest\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"Accepted\",\"Running\",\"AwaitingHost\",\"Completed\",\"Failed\",\"Cancelled\"]},\"reason\":{\"type\":\"string\"},\"nextAction\":{\"type\":\"string\"},\"hostActions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"stepId\",\"payloadJson\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"ProposePlan\",\"ExecuteApprovedPlan\",\"ProposeDelegation\",\"Validate\",\"AskUserInput\"]},\"stepId\":{\"type\":\"string\"},\"payloadJson\":{\"type\":\"string\"}}}}}"),
+            RequiredTrust = RepositoryTrustLevel.TrustedRead,
+            RequiredApproval = ApprovalLevel.None,
+            SideEffect = ToolSideEffect.ReadOnly,
+            Idempotency = ToolIdempotency.NonIdempotent,
+            SupportsCancellation = true,
+            Timeout = TimeSpan.FromMinutes(20),
+            MaximumOutputBytes = 64 * 1024,
+        };
     }
 
     private static JsonElement ParsePayload(string payloadJson)

@@ -57,6 +57,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        ValidateCapacity(request, canonicalTools, request.MaximumOutputTokens ?? profileOutputLimit);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_profile.Timeout);
@@ -162,7 +163,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
-            ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
+            ["instructions"] = request.ProviderInstructions?.Content
+                ?? throw new InvalidOperationException(
+                    "Native Codex requests require request-owned provider instructions."),
             ["input"] = CreateInput(request, toolNameMap),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
             ["reasoning"] = new JsonObject
@@ -217,6 +220,67 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         return message;
+    }
+
+    private void ValidateCapacity(
+        ModelStreamRequest request,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        int outputReserveTokens)
+    {
+        var providerInstructions = request.ProviderInstructions
+            ?? throw new ModelProviderException(
+                "Native Codex requests require request-owned provider instructions.");
+        var suppliedEstimate = request.WireEstimate
+            ?? throw new ModelProviderException(
+                "Native Codex requests require a complete provider-wire capacity estimate.");
+        IReadOnlyList<ModelMessage> messages = request.Messages.Count == 0
+            ?
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.User,
+                    SectionId = "legacy-input",
+                    Content = [new ModelContentPart { Content = request.Input }],
+                },
+            ]
+            : request.Messages;
+        var stablePrefixMessageCount = request.Layout?.StablePrefixMessageCount ?? 0;
+        if (stablePrefixMessageCount > messages.Count)
+        {
+            throw new ModelProviderException(
+                "The Codex request layout exceeds the provider-visible message count.");
+        }
+
+        var expectedEstimate = ModelWireEstimator.Estimate(
+            messages,
+            canonicalTools,
+            request.ToolTransportMode,
+            stablePrefixMessageCount,
+            outputReserveTokens,
+            providerInstructions);
+        if (suppliedEstimate.LogicalTokens != expectedEstimate.LogicalTokens
+            || suppliedEstimate.WireInputTokens != expectedEstimate.WireInputTokens
+            || suppliedEstimate.StablePrefixTokens != expectedEstimate.StablePrefixTokens
+            || suppliedEstimate.NativeToolTokens != expectedEstimate.NativeToolTokens
+            || suppliedEstimate.TextToolTokens != expectedEstimate.TextToolTokens
+            || suppliedEstimate.FramingTokens != expectedEstimate.FramingTokens
+            || suppliedEstimate.ProviderInstructionTokens != expectedEstimate.ProviderInstructionTokens
+            || suppliedEstimate.OutputReserveTokens != expectedEstimate.OutputReserveTokens
+            || suppliedEstimate.SectionTokens.Count != expectedEstimate.SectionTokens.Count
+            || expectedEstimate.SectionTokens.Any(expected =>
+                !suppliedEstimate.SectionTokens.TryGetValue(expected.Key, out var supplied)
+                || supplied != expected.Value))
+        {
+            throw new ModelProviderException(
+                "The Codex request provider-wire capacity estimate does not match its provider-visible content.");
+        }
+
+        if (expectedEstimate.TotalCapacityTokens > _profile.ContextWindow)
+        {
+            throw new ModelProviderException(
+                $"The complete Codex request requires {expectedEstimate.TotalCapacityTokens} tokens but profile "
+                + $"'{_profile.Name}' permits {_profile.ContextWindow}.");
+        }
     }
 
     private static JsonArray CreateInput(

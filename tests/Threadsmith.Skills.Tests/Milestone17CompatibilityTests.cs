@@ -231,6 +231,7 @@ public sealed class Milestone17CompatibilityTests
                 new SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
             runner,
+            TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(new SkillInvocationHostContext
             {

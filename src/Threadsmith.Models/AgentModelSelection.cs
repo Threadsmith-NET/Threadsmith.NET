@@ -16,23 +16,29 @@ public sealed record AgentModelSelection(
 
     /// <summary>Selected profile hard output limit.</summary>
     public required int MaximumOutputTokens { get; init; }
+
+    /// <summary>Gets the exact provider-owned instruction contribution for the selected profile.</summary>
+    public ModelProviderInstructions? ProviderInstructions { get; init; }
 }
 
 /// <summary>Selects a configured model for one frozen child role and workload.</summary>
 public sealed class AgentModelSelector
 {
     private readonly ConfiguredModelCatalog _catalog;
+    private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
     private readonly IModelSelectionPolicy _selection;
 
     /// <summary>Initializes a new instance of the <see cref="AgentModelSelector"/> class.</summary>
     public AgentModelSelector(
         ConfiguredModelCatalog catalog,
-        IModelSelectionPolicy selection)
+        IModelSelectionPolicy selection,
+        IModelProviderInstructionResolver? providerInstructionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(selection);
         _catalog = catalog;
         _selection = selection;
+        _providerInstructionResolver = providerInstructionResolver;
     }
 
     /// <summary>Selects a compatible configured model without allowing the child to switch it.</summary>
@@ -70,6 +76,7 @@ public sealed class AgentModelSelector
             ContextWindowTokens = profile.ContextWindow,
             OutputReserveTokens = profile.EffectiveRequestOutputTokenReserve,
             MaximumOutputTokens = profile.MaximumOutputTokens,
+            ProviderInstructions = _providerInstructionResolver?.Resolve(profile.Id),
         };
     }
 

@@ -153,20 +153,9 @@ public sealed class MutationProposalApplication :
         JsonOptions.Converters.Add(new JsonStringEnumConverter());
     }
 
-    private static readonly ModelToolDefinition ProposeMutationsTool =
-        ModelToolCanonicalizer.Canonicalize(
-        [
-            new ModelToolDefinition
-            {
-                Name = ProposeMutationsToolName,
-                Description = "Submit one plan-scoped mutation proposal. The host already owns the approved plan revision and step identities; provide only mutationSet plus optional expected outcomes. mutationSet requires rationale and mutations. Each mutation uses one operation-specific shape selected by type, so include only fields advertised for that operation. Use canonical names such as relativePath and, when advertised, baselineSha256; never use plan file-intent or legacy names kind, path, baselineHash, or per-item prose fields. For C# symbol renames, prefer RenameSymbol with relatedSymbolId and replacementText set to the new identifier; optional MoveFile may rename the declaration file. ReplaceText requires exact expectedText; the host may correct an inaccurate offset only when that text has one match. The host validates the proposal and this call never writes files.",
-                ArgumentsJsonSchema = ProposeMutationsArgumentsSchema,
-                PreferStrictArguments = true,
-            },
-        ])[0];
-
     private readonly Func<IBudget> _budgetFactory;
     private readonly IContextAssembler _contextAssembler;
+    private readonly CorrectiveMessageFactory _correctiveMessages;
     private readonly ModelProfileId? _defaultModelProfileId;
     private readonly ExecutionLimits _limits;
     private readonly IDomainEventStream _events;
@@ -174,6 +163,8 @@ public sealed class MutationProposalApplication :
     private readonly IPreMutationAnalyzer? _preMutationAnalyzer;
     private readonly ISemanticMutationEngine? _semanticMutations;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly IPromptLoader _prompts;
+    private readonly ModelToolDefinition _proposeMutationsTool;
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly ITransactionalWorkspaceResolver _workspaces;
@@ -192,7 +183,9 @@ public sealed class MutationProposalApplication :
         SessionUsageProjection? sessionUsage = null,
         Func<IBudget>? budgetFactory = null,
         ISemanticMutationEngine? semanticMutations = null,
-        IPreMutationAnalyzer? preMutationAnalyzer = null)
+        IPreMutationAnalyzer? preMutationAnalyzer = null,
+        CorrectiveMessageFactory? correctiveMessages = null,
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(contextAssembler);
@@ -200,6 +193,8 @@ public sealed class MutationProposalApplication :
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(correctiveMessages);
+        ArgumentNullException.ThrowIfNull(prompts);
         _model = model;
         _semanticMutations = semanticMutations;
         _preMutationAnalyzer = preMutationAnalyzer;
@@ -212,6 +207,9 @@ public sealed class MutationProposalApplication :
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
         _events = events;
+        _correctiveMessages = correctiveMessages;
+        _prompts = prompts;
+        _proposeMutationsTool = CreateProposeMutationsTool(RequirePrompts());
     }
 
     /// <inheritdoc />
@@ -296,13 +294,13 @@ public sealed class MutationProposalApplication :
                 correctiveTurns.MaximumTurns,
                 safeReason),
             cancellationToken);
-        correctiveMessages.Add(CorrectiveMessageFactory.CreateMutationProposalDeveloperMessage(
+        correctiveMessages.Add(RequireCorrectiveMessages().CreateMutationProposalDeveloperMessage(
             diagnostic with { SafeMessage = safeReason },
             correctionAttempt,
             correctiveTurns.MaximumTurns));
     }
 
-    private static IReadOnlyList<ModelMessage> CreateRequestLocalCorrectionMessages(
+    private IReadOnlyList<ModelMessage> CreateRequestLocalCorrectionMessages(
         MutationCorrectionContext? correction,
         IReadOnlyList<ModelMessage> correctiveMessages)
     {
@@ -311,7 +309,7 @@ public sealed class MutationProposalApplication :
             ? [.. correctiveMessages]
             :
             [
-                CorrectiveMessageFactory.CreateMutationCorrectionDeveloperMessage(correction),
+                RequireCorrectiveMessages().CreateMutationCorrectionDeveloperMessage(correction),
                 .. correctiveMessages,
             ];
     }
@@ -378,10 +376,10 @@ public sealed class MutationProposalApplication :
                 ToolSchemas =
                 [
                     new ContextToolSchema(
-                        ProposeMutationsTool.Name,
-                        ProposeMutationsTool.Description,
-                        ProposeMutationsTool.ArgumentsJsonSchema,
-                        ProposeMutationsTool.PreferStrictArguments),
+                        _proposeMutationsTool.Name,
+                        _proposeMutationsTool.Description,
+                        _proposeMutationsTool.ArgumentsJsonSchema,
+                        _proposeMutationsTool.PreferStrictArguments),
                 ],
                 AdditionalMessages = additionalMessages,
             },
@@ -392,7 +390,7 @@ public sealed class MutationProposalApplication :
             requestMessages.AddRange(context.Messages);
         }
 
-        IReadOnlyList<ModelToolDefinition> modelTools = [ProposeMutationsTool];
+        IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
         var wireEstimate = EstimateAndValidateCompleteRequest(context, requestMessages, modelTools);
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
@@ -427,6 +425,7 @@ public sealed class MutationProposalApplication :
                 Layout = context.Layout,
                 ToolTransportMode = ToolTransportMode.Native,
                 WireEstimate = wireEstimate,
+                ProviderInstructions = context.ProviderInstructions,
             },
             cancellationToken))
             {
@@ -585,7 +584,7 @@ public sealed class MutationProposalApplication :
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.MissingToolName,
-                "Implementation and correction must call propose_mutations exactly once.");
+                _prompts.Get(PromptFileNames.CorrectionMutationImplementationRequiresTool));
         }
 
         if (structured is null)
@@ -676,6 +675,30 @@ public sealed class MutationProposalApplication :
 
         var staged = await _workspaces.StageAsync(proposed, cancellationToken);
         return staged with { PlanStepIds = planStepIds };
+    }
+
+    private CorrectiveMessageFactory RequireCorrectiveMessages()
+    {
+        return _correctiveMessages;
+    }
+
+    private IPromptLoader RequirePrompts()
+    {
+        return _prompts;
+    }
+
+    private static ModelToolDefinition CreateProposeMutationsTool(IPromptLoader prompts)
+    {
+        return ModelToolCanonicalizer.Canonicalize(
+        [
+            new ModelToolDefinition
+            {
+                Name = ProposeMutationsToolName,
+                Description = prompts.Get(PromptFileNames.ToolProposeMutationsDescription),
+                ArgumentsJsonSchema = ProposeMutationsArgumentsSchema,
+                PreferStrictArguments = true,
+            },
+        ])[0];
     }
 
     private static void ValidateMutationsWithinPlan(
@@ -810,7 +833,8 @@ public sealed class MutationProposalApplication :
             modelTools,
             ToolTransportMode.Native,
             stablePrefixMessageCount,
-            outputReserveTokens);
+            outputReserveTokens,
+            context.ProviderInstructions);
         if (wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
         {
             throw new InvalidOperationException(
@@ -937,7 +961,7 @@ public sealed class MutationProposalApplication :
         return path.Replace('\\', '/').EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task<IReadOnlyList<PreMutationOverlayFile>> BuildPreMutationOverlayAsync(
+    private async Task<IReadOnlyList<PreMutationOverlayFile>> BuildPreMutationOverlayAsync(
         ITransactionalWorkspace workspace,
         MutationSet proposed,
         CancellationToken cancellationToken)
@@ -1055,7 +1079,7 @@ public sealed class MutationProposalApplication :
             || !Directory.Exists(Path.Combine(parent, toggledName));
     }
 
-    private static string ApplyReplacement(
+    private string ApplyReplacement(
         string relativePath,
         string? current,
         Mutation mutation)
@@ -1108,7 +1132,12 @@ public sealed class MutationProposalApplication :
                 throw CreateRepairableMutationFailure(
                     ModelCorrectionCategory.MutationProposal,
                     MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    $"ReplaceText expectedText is ambiguous in '{relativePath}'; provide the exact offset.");
+                    _prompts.Render(
+                        PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["RelativePath"] = relativePath,
+                        }));
             }
 
             startOffset = firstMatch;
@@ -1130,52 +1159,66 @@ public sealed class MutationProposalApplication :
     private string FormatPreMutationCorrection(PreMutationAnalysisResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        var builder = new StringBuilder();
-        builder.Append("Pre-mutation Roslyn analysis found blocking diagnostics before staging or approval. ");
-        builder.Append("Revise the proposed mutation set against the same baseline; no repository files were changed.");
+        var diagnosticItems = new StringBuilder();
         foreach (var diagnostic in result.Diagnostics
             .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Take(8))
         {
-            builder.AppendLine();
-            builder.Append("- ");
-            builder.Append(SanitizeAndBound(diagnostic.File ?? "<no file>"));
-            if (diagnostic.Range is { } range)
-            {
-                builder.Append(':');
-                builder.Append(range.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                builder.Append(':');
-                builder.Append(range.StartColumn.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            }
-
-            builder.Append(' ');
-            builder.Append(SanitizeAndBound(diagnostic.Code));
-            builder.Append(" (");
-            builder.Append(diagnostic.Source);
-            builder.Append("): ");
-            builder.Append(SanitizeAndBound(diagnostic.Message));
-            if (!string.IsNullOrWhiteSpace(diagnostic.ContainingSymbol))
-            {
-                builder.Append(" [containing ");
-                builder.Append(SanitizeAndBound(diagnostic.ContainingSymbol));
-                builder.Append(']');
-            }
-
-            if (!string.IsNullOrWhiteSpace(diagnostic.ChangedHunk))
-            {
-                builder.Append(" Hunk: ");
-                builder.Append(SanitizeAndBound(diagnostic.ChangedHunk));
-            }
+            var file = SanitizeAndBound(
+                diagnostic.File
+                    ?? _prompts.Get(PromptFileNames.CorrectionPreMutationDiagnosticFileFallback));
+            var range = diagnostic.Range is { } sourceRange
+                ? ":"
+                    + sourceRange.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ":"
+                    + sourceRange.StartColumn.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : string.Empty;
+            var containingSymbol = !string.IsNullOrWhiteSpace(diagnostic.ContainingSymbol)
+                ? _prompts.Render(
+                    PromptFileNames.CorrectionPreMutationContainingSymbolBlock,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ContainingSymbol"] = SanitizeAndBound(diagnostic.ContainingSymbol),
+                    })
+                : string.Empty;
+            var changedHunk = !string.IsNullOrWhiteSpace(diagnostic.ChangedHunk)
+                ? _prompts.Render(
+                    PromptFileNames.CorrectionPreMutationChangedHunkBlock,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ChangedHunk"] = SanitizeAndBound(diagnostic.ChangedHunk),
+                    })
+                : string.Empty;
+            diagnosticItems.Append(PromptAssetRenderer.RenderWithPlatformLineEndings(
+                _prompts,
+                PromptFileNames.CorrectionPreMutationDiagnosticItem,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["File"] = file,
+                    ["Range"] = range,
+                    ["Code"] = SanitizeAndBound(diagnostic.Code),
+                    ["Source"] = diagnostic.Source.ToString(),
+                    ["Message"] = SanitizeAndBound(diagnostic.Message),
+                    ["ContainingSymbolBlock"] = containingSymbol,
+                    ["ChangedHunkBlock"] = changedHunk,
+                }));
         }
 
+        var omissionItems = new StringBuilder();
         foreach (var omission in result.Omissions.Take(4))
         {
-            builder.AppendLine();
-            builder.Append("Omission: ");
-            builder.Append(SanitizeAndBound(omission));
+            omissionItems.Append(PromptAssetRenderer.RenderWithPlatformLineEndings(
+                _prompts,
+                PromptFileNames.CorrectionPreMutationOmissionItem,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Omission"] = SanitizeAndBound(omission),
+                }));
         }
 
-        return builder.ToString();
+        return RequireCorrectiveMessages().CreatePreMutationBlockingDiagnostics(
+            diagnosticItems.ToString(),
+            omissionItems.ToString());
     }
 
     private string SanitizeAndBound(string value)
@@ -1207,7 +1250,7 @@ public sealed class MutationProposalApplication :
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                "RenameSymbol requires an available semantic mutation engine; use exact ReplaceText only when semantic rename is unavailable.");
+                _prompts.Get(PromptFileNames.CorrectionMutationRenameSymbolSemanticUnavailable));
         }
 
         if (semanticRenameRequests.Length > 1)
@@ -1296,7 +1339,12 @@ public sealed class MutationProposalApplication :
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                $"RenameSymbol already edits '{overlappingTextMutation}'; do not combine it with another text mutation for the same file.");
+                _prompts.Render(
+                    PromptFileNames.CorrectionMutationRenameSymbolOverlap,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["RelativePath"] = overlappingTextMutation,
+                    }));
         }
 
         string[] affectedProjects =
@@ -1358,7 +1406,7 @@ public sealed class MutationProposalApplication :
         }
     }
 
-    private static async Task<MutationSet> ResolveModelReplaceTextRangesAsync(
+    private async Task<MutationSet> ResolveModelReplaceTextRangesAsync(
         MutationSet proposal,
         ITransactionalWorkspace workspace,
         CancellationToken cancellationToken)
@@ -1426,7 +1474,12 @@ public sealed class MutationProposalApplication :
                     throw CreateRepairableMutationFailure(
                         ModelCorrectionCategory.MutationProposal,
                         MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                        $"ReplaceText expectedText is ambiguous in '{path}'; provide the exact offset.");
+                        _prompts.Render(
+                            PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["RelativePath"] = path,
+                            }));
                 }
 
                 resolvedMutation = mutation with

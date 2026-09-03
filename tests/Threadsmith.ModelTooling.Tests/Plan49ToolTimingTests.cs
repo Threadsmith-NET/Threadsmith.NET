@@ -134,18 +134,24 @@ public static class Plan49ToolTimingTests
     [Fact]
     public static void BuiltInTools_ValidatedInput_ProvidesActivityDetail()
     {
-        ITool readTool = new ReadFileTool();
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
         var readInput = readTool.DeserializeInput("{\"path\":\"src/Program.cs\"}");
-        ITool processTool = new RunProcessTool(new UnusedProcessManager());
+        ITool processTool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance);
         var processInput = processTool.DeserializeInput("{\"command\":\"dotnet test src/Threadsmith.sln\"}");
-        ITool searchTool = new SearchTextTool();
+        ITool searchTool = new SearchTextTool(TestPromptLoader.Instance);
         var searchInput = searchTool.DeserializeInput(
             "{\"query\":\"resultScope\",\"path\":\"container/source/AI.Inference.Fusion\"}");
-        ITool symbolTool = new FindSymbolTool(new UnusedSemanticEngineResolver());
+        ITool symbolTool = new FindSymbolTool(
+            new UnusedSemanticEngineResolver(),
+            TestPromptLoader.Instance);
         var symbolInput = symbolTool.DeserializeInput("{\"query\":\"SectorEntityStandardizer\"}");
-        ITool referencesTool = new FindReferencesTool(new UnusedSemanticEngineResolver());
+        ITool referencesTool = new FindReferencesTool(
+            new UnusedSemanticEngineResolver(),
+            TestPromptLoader.Instance);
         var referencesInput = referencesTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
-        ITool implementationsTool = new FindImplementationsTool(new UnusedSemanticEngineResolver());
+        ITool implementationsTool = new FindImplementationsTool(
+            new UnusedSemanticEngineResolver(),
+            TestPromptLoader.Instance);
         var implementationsInput = implementationsTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
 
         Assert.Equal("lines 1-2000, src/Program.cs", readTool.GetActivityDetail(readInput));
@@ -167,7 +173,7 @@ public static class Plan49ToolTimingTests
         int maximumLines,
         string expected)
     {
-        ITool readTool = new ReadFileTool();
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
         var input = readTool.DeserializeInput(JsonSerializer.Serialize(new ReadFileInput
         {
             Path = "docs/implementation-plans/milestones.md",
@@ -183,7 +189,7 @@ public static class Plan49ToolTimingTests
     public static async Task ReadFileTool_LongPath_PublishesLineRangeBeforeTruncatedPath()
     {
         var timeProvider = new ManualTimeProvider();
-        ITool readTool = new ReadFileTool();
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
         await using var events = new DomainEventStream();
         ToolInvocationStarted? started = null;
         await using var subscription = events.Subscribe((item, _) =>
@@ -220,7 +226,7 @@ public static class Plan49ToolTimingTests
         string command,
         string expected)
     {
-        ITool processTool = new RunProcessTool(new UnusedProcessManager());
+        ITool processTool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance);
         var input = processTool.DeserializeInput(JsonSerializer.Serialize(new { command }));
 
         Assert.Equal(expected, processTool.GetActivityDetail(input));

@@ -1,0 +1,1 @@
+Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor.

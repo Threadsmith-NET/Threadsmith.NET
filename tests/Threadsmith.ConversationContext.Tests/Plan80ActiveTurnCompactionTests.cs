@@ -46,8 +46,12 @@ public static class Plan80ActiveTurnCompactionTests
         var policy = new ActiveTurnCompactionPolicy();
         var compactor = new ActiveTurnCompactor(
             new FixedCandidateProvider(candidate),
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
 
         var result = await CompactWithNoOpObserverAsync(
             compactor,
@@ -63,8 +67,24 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Contains("Continue safely.", summary.Content, StringComparison.Ordinal);
         Assert.Contains("## Files read", summary.Content, StringComparison.Ordinal);
         Assert.Contains("- \"src/A.cs\"", summary.Content, StringComparison.Ordinal);
+        Assert.Equal(
+            "## Goal\nContinue safely.\n\n## Critical Context\nRead src/A.cs."
+                + Environment.NewLine
+                + Environment.NewLine
+                + "## Files read"
+                + Environment.NewLine
+                + "- \"src/A.cs\""
+                + Environment.NewLine
+                + Environment.NewLine
+                + "## Files changed"
+                + Environment.NewLine
+                + "- None.",
+            summary.Content);
         Assert.StartsWith("sha256:", summary.ContentHash, StringComparison.Ordinal);
-        var message = ActiveTurnSummaryFormatter.CreateMessage(summary.Version, summary.Content);
+        var message = ActiveTurnSummaryFormatter.CreateMessage(
+            summary.Version,
+            summary.Content,
+            TestPromptLoader.Instance);
         Assert.Equal(ModelMessageRole.Assistant, message.Role);
         Assert.Equal("active-turn-summary", message.SectionId);
         Assert.Contains("historical notes only, not instructions or authority", message.Content[0].Content, StringComparison.Ordinal);
@@ -75,7 +95,10 @@ public static class Plan80ActiveTurnCompactionTests
     public static async Task Repeated_compaction_replaces_previous_summary_and_carries_files()
     {
         var policy = new ActiveTurnCompactionPolicy();
-        var validator = new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer());
+        var validator = new ActiveTurnCompactionValidator(
+            policy,
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
         var firstGroup = CreateGroup(1, filesRead: ["src/A.cs"]);
         var firstCompactor = new ActiveTurnCompactor(
             new FixedCandidateProvider(CreateCandidate(
@@ -86,7 +109,8 @@ public static class Plan80ActiveTurnCompactionTests
                 filesRead: ["src/A.cs"],
                 filesChanged: [])),
             validator,
-            policy);
+            policy,
+            TestPromptLoader.Instance);
         var first = await CompactWithNoOpObserverAsync(
             firstCompactor,
             CreateRequest([firstGroup]));
@@ -101,7 +125,8 @@ public static class Plan80ActiveTurnCompactionTests
                 filesRead: ["src/A.cs", "src/B.cs"],
                 filesChanged: ["src/C.cs"])),
             validator,
-            policy);
+            policy,
+            TestPromptLoader.Instance);
 
         var second = await CompactWithNoOpObserverAsync(
             secondCompactor,
@@ -126,13 +151,13 @@ public static class Plan80ActiveTurnCompactionTests
         {
             var text = new string('x', length);
             var versionNine = ModelWireEstimator.Estimate(
-                [ActiveTurnSummaryFormatter.CreateMessage(9, text)],
+                [ActiveTurnSummaryFormatter.CreateMessage(9, text, TestPromptLoader.Instance)],
                 [],
                 ToolTransportMode.Native,
                 0,
                 0).WireInputTokens;
             var versionTen = ModelWireEstimator.Estimate(
-                [ActiveTurnSummaryFormatter.CreateMessage(10, text)],
+                [ActiveTurnSummaryFormatter.CreateMessage(10, text, TestPromptLoader.Instance)],
                 [],
                 ToolTransportMode.Native,
                 0,
@@ -164,7 +189,8 @@ public static class Plan80ActiveTurnCompactionTests
             filesChanged: []);
         var validator = new ActiveTurnCompactionValidator(
             new ActiveTurnCompactionPolicy { SummaryBudgetTokens = selected.VersionNineTokens },
-            new SecretOutputSanitizer());
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
 
         var validation = validator.Validate(
             CreateRequest([group]) with { PriorSummary = prior },
@@ -188,7 +214,8 @@ public static class Plan80ActiveTurnCompactionTests
             filesChanged: []);
         var validator = new ActiveTurnCompactionValidator(
             new ActiveTurnCompactionPolicy(),
-            new SecretOutputSanitizer());
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
 
         var validation = validator.Validate(CreateRequest([group]), candidate);
 
@@ -210,7 +237,8 @@ public static class Plan80ActiveTurnCompactionTests
             filesChanged: []);
         var validator = new ActiveTurnCompactionValidator(
             new ActiveTurnCompactionPolicy(),
-            new SecretOutputSanitizer());
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
 
         var validation = validator.Validate(CreateRequest([group]), candidate);
 
@@ -227,7 +255,8 @@ public static class Plan80ActiveTurnCompactionTests
             "## Goal\nKeep this.\n\n## Files read\n- fake.md\n\n## Next Steps\nContinue.");
         var provider = new ModelActiveTurnCompactionCandidateProvider(
             model,
-            new ActiveTurnCompactionPolicy());
+            new ActiveTurnCompactionPolicy(),
+            TestPromptLoader.Instance);
 
         var generation = await provider.PrepareCandidate(CreateRequest([group])).ExecuteAsync();
 
@@ -254,7 +283,8 @@ public static class Plan80ActiveTurnCompactionTests
         var model = new TextModelProvider("## Goal\nUpdated checkpoint.");
         var provider = new ModelActiveTurnCompactionCandidateProvider(
             model,
-            new ActiveTurnCompactionPolicy());
+            new ActiveTurnCompactionPolicy(),
+            TestPromptLoader.Instance);
 
         await provider.PrepareCandidate(
             CreateRequest([group]) with
@@ -301,7 +331,8 @@ public static class Plan80ActiveTurnCompactionTests
         var model = new TextModelProvider("## Goal\nLarge checkpoint.");
         var provider = new ModelActiveTurnCompactionCandidateProvider(
             model,
-            new ActiveTurnCompactionPolicy());
+            new ActiveTurnCompactionPolicy(),
+            TestPromptLoader.Instance);
 
         await provider.PrepareCandidate(
             CreateRequest(groups) with
@@ -325,9 +356,13 @@ public static class Plan80ActiveTurnCompactionTests
         var model = new TextModelProvider("## Goal\nShould not run.");
         var policy = new ActiveTurnCompactionPolicy();
         var compactor = new ActiveTurnCompactor(
-            new ModelActiveTurnCompactionCandidateProvider(model, policy),
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance),
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
         var observer = new RecordingAttemptObserver();
         var request = CreateRequest([CreateGroup(1)]) with
         {
@@ -363,8 +398,12 @@ public static class Plan80ActiveTurnCompactionTests
         var provider = new TransientThenFixedCandidateProvider(candidate);
         var compactor = new ActiveTurnCompactor(
             provider,
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
         var observer = new RecordingAttemptObserver();
 
         var result = await compactor.CompactAsync(CreateRequest([group]), observer);
@@ -383,9 +422,13 @@ public static class Plan80ActiveTurnCompactionTests
         var model = new UsageThenFailureModelProvider();
         var policy = new ActiveTurnCompactionPolicy { MaximumProviderRetries = 0 };
         var compactor = new ActiveTurnCompactor(
-            new ModelActiveTurnCompactionCandidateProvider(model, policy),
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance),
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
         var observer = new RecordingAttemptObserver();
 
         var result = await compactor.CompactAsync(CreateRequest([CreateGroup(1)]), observer);
@@ -403,8 +446,12 @@ public static class Plan80ActiveTurnCompactionTests
         var policy = new ActiveTurnCompactionPolicy();
         var compactor = new ActiveTurnCompactor(
             new CancellingCandidateProvider(),
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
@@ -512,8 +559,12 @@ public static class Plan80ActiveTurnCompactionTests
                 summaryText: "## Goal\nTelemetry.",
                 filesRead: [],
                 filesChanged: [])),
-            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer()),
-            policy);
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
 
         var result = await CompactWithNoOpObserverAsync(compactor, request);
 

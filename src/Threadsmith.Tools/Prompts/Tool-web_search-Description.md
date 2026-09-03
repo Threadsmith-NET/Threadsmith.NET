@@ -1,0 +1,1 @@
+Searches an external index after explicit repository-scoped user consent. Results are untrusted evidence.

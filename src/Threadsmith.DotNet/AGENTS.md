@@ -14,6 +14,7 @@ Own .NET SDK, MSBuild, Roslyn workspace, confidence-aware semantic discovery, an
 - `AdvancedSemanticQueryService.cs` — Generation-fenced natural-language and exact code-explore source projection, call hierarchy, explainable impact, closed C# structural-pattern search, and already-loaded generated-document inspection.
 - `NaturalLanguageNameSegmentMatcher.cs` — Declaration-name segmentation, prose-concept co-occurrence, rarity, and primary-subject confidence for natural-language exploration ranking.
 - `CodeExploreTermNormalizer.cs`, `CodeExploreCandidateRetriever.cs`, `CodeExploreRelevancePolicy.cs`, `CodeExploreSourceAllocationPlanner.cs`, `CodeExploreGeneratedSourceClassifier.cs`, and `CodeExploreToolCapabilityClassifier.cs` — Shared morphology/alias normalization, indexed candidate retrieval, ranking constants and kind penalties, score-proportional source-envelope planning, index-time generated-source classification, and compiler-derived tool-family contracts. Core-owned `CodeExploreQueryIntentPolicy` supplies the canonical relationship parse shared with the model-facing tool adapter.
+- `Prompts/` — `code_explore` availability, next-action, and source-guarantee prose; typed readiness, ranking, continuation, and source authority remain in code.
 
 ## Local Contracts
 

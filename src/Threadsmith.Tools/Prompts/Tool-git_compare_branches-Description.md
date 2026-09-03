@@ -1,0 +1,1 @@
+Compares local revisions using merge base, ahead/behind counts, and changed paths.

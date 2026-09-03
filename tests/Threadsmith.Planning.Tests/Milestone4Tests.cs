@@ -98,7 +98,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("conversation"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
@@ -164,7 +166,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 });
+            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
@@ -193,7 +197,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 });
+            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded reasoning"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
@@ -218,7 +224,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 });
+            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded tool output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
@@ -241,7 +249,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 });
+            limits: ExecutionLimits.Default with { MaxStructuredOutputCharacters = 8 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("invalid plan"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
@@ -412,7 +422,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default);
+            limits: ExecutionLimits.Default,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded tool count"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "hello"));
@@ -453,7 +465,9 @@ public static class Milestone4Tests
             new ChunkSequenceModelProvider(chunks),
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance);
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("exclusive plan output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
@@ -479,7 +493,9 @@ public static class Milestone4Tests
             ]),
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance);
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("duplicate plan output"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
@@ -505,7 +521,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 });
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("malformed plan then tool"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
@@ -530,7 +548,9 @@ public static class Milestone4Tests
             prototype,
             sanitizer,
             NullLogger<SessionApplication>.Instance,
-            budgetFactory: static () => UnboundedBudget.Instance);
+            budgetFactory: static () => UnboundedBudget.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("scoped budget"));
 
@@ -560,7 +580,9 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("provider correction"));
         var runId = await dispatcher.DispatchAsync(
@@ -601,7 +623,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning tool"));
         var runId = await dispatcher.DispatchAsync(
@@ -661,7 +685,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning repair"));
         var runId = await dispatcher.DispatchAsync(
@@ -723,7 +749,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning schema repair"));
         var runId = await dispatcher.DispatchAsync(
@@ -782,7 +810,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning tool"));
         var runId = await dispatcher.DispatchAsync(
@@ -816,7 +846,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_MissingExistingFile_IsRepairableBlocking()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Missing file plan", 1) with
@@ -844,7 +874,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_AddLoggingToExistingFile_IsOrdinaryEdit()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Add logging", 1) with
@@ -873,7 +903,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_ProhibitedGlob_BlocksMatchingPath()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Protected plan", 1) with
@@ -894,7 +924,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_StructuredRisks_AreHighRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Risky contract", 1) with
@@ -915,7 +945,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_MultipleFiles_AreModerateRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Broad plan", 1) with
@@ -941,7 +971,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_UppercaseBinaryExtension_IsHighRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Asset plan", 1) with
@@ -961,7 +991,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_BlockingIssueBeyondDisplayCap_DoesNotPass()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         string[] binaryFiles = [.. Enumerable.Range(0, 32).Select(index => $"assets/image-{index}.png")];
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
@@ -989,7 +1019,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_EmptyBaseline_DetectsMissingExistingFile()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Empty baseline edit", 1) with
@@ -1009,7 +1039,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_RootLevelCreateWithoutBasenameMatch_IsNotAmbiguous()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Root create", 1) with
@@ -1038,7 +1068,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_MixedCreateAndEdit_DoesNotTreatExistingEditAsCreate()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Mixed lifecycle", 1) with
@@ -1073,7 +1103,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_CreateFile_IsModerateLifecycleRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Create file", 1) with
@@ -1102,7 +1132,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_MoveIntent_IncludesBothPathsAndIsHighRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Move file", 1) with
@@ -1145,7 +1175,7 @@ public static class Milestone4Tests
         {
             Directory.CreateDirectory(Path.Combine(root, "src"));
             await File.WriteAllTextAsync(Path.Combine(root, "src", "Name.cs"), "class Name { }");
-            var checker = new PlanSanityChecker();
+            var checker = new PlanSanityChecker(TestPromptLoader.Instance);
             var result = await checker.CheckAsync(new PlanSanityCheckRequest
             {
                 Plan = CreatePlan("Case-only move", 1) with
@@ -1191,7 +1221,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_MoveIntent_DestinationExistsIsRepairable()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Move file", 1) with
@@ -1229,7 +1259,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_DuplicateDeclaredFiles_ExceedScopeLimit()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Duplicated scope", 1) with
@@ -1258,7 +1288,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_ThreadsmithAndGlobalConfiguration_AreHighRisk()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Configuration plan", 1) with
@@ -1294,7 +1324,7 @@ public static class Milestone4Tests
             await File.WriteAllTextAsync(Path.Combine(root, "README.md"), "docs");
             await File.WriteAllBytesAsync(Path.Combine(root, "assets", "image.png"), [0x01]);
             var baseline = new WorkspaceBaseline(WorkspaceId.New(), root, DateTimeOffset.UtcNow, []);
-            var checker = new PlanSanityChecker();
+            var checker = new PlanSanityChecker(TestPromptLoader.Instance);
 
             var result = await checker.CheckAsync(new PlanSanityCheckRequest
             {
@@ -1330,7 +1360,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_GenericEditWording_DoesNotImplyLifecycle()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Content edits", 1) with
@@ -1361,7 +1391,7 @@ public static class Milestone4Tests
     public static async Task PlanSanityChecker_SupportedProjectAndSolutionFormats_AreHighRisk()
     {
         string[] paths = ["src/App.fsproj", "src/App.vbproj", "src/App.slnx"];
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Project formats", 1) with
@@ -1386,7 +1416,7 @@ public static class Milestone4Tests
     [InlineData("bin/Foo.cs")]
     public static async Task PlanSanityChecker_RootGeneratedDirectories_AreHighRisk(string relativePath)
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Generated file", 1) with
@@ -1414,7 +1444,7 @@ public static class Milestone4Tests
             Directory.CreateDirectory(root);
             Directory.CreateDirectory(external);
             await CreateDirectoryLinkAsync(link, external);
-            var checker = new PlanSanityChecker();
+            var checker = new PlanSanityChecker(TestPromptLoader.Instance);
             var result = await checker.CheckAsync(new PlanSanityCheckRequest
             {
                 Plan = CreatePlan("Linked create", 1) with
@@ -1459,7 +1489,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_UniqueBareName_RequiresCanonicalPathRepair()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Bare path", 1) with
@@ -1474,7 +1504,9 @@ public static class Milestone4Tests
         var issue = Assert.Single(
             result.Issues,
             item => item.Kind == PlanSanityIssueKind.AmbiguousPath && item.IsRepairable);
-        Assert.Contains("src/Foo.cs", issue.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "Bare file-intent path 'Foo.cs' resolves to 'src/Foo.cs'; publish that exact repository-relative path.",
+            issue.Message);
         Assert.False(result.Passed);
         Assert.Empty(result.NormalizedAffectedPaths);
     }
@@ -1483,7 +1515,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_DotSegmentPath_RequiresCanonicalPathRepair()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Dot path", 1) with
@@ -1496,9 +1528,12 @@ public static class Milestone4Tests
         });
 
         Assert.False(result.Passed);
-        Assert.Contains(result.Issues, item => item.Kind == PlanSanityIssueKind.AmbiguousPath
-            && item.IsRepairable
-            && item.Message.Contains("src/Foo.cs", StringComparison.Ordinal));
+        var issue = Assert.Single(
+            result.Issues,
+            item => item.Kind == PlanSanityIssueKind.AmbiguousPath && item.IsRepairable);
+        Assert.Equal(
+            "File-intent path './src/Foo.cs' normalizes to 'src/Foo.cs'; publish the exact normalized repository-relative path.",
+            issue.Message);
         Assert.Empty(result.NormalizedAffectedPaths);
     }
 
@@ -1506,7 +1541,7 @@ public static class Milestone4Tests
     [Fact]
     public static async Task PlanSanityChecker_DotSegmentProtectedPath_RemainsBlocked()
     {
-        var checker = new PlanSanityChecker();
+        var checker = new PlanSanityChecker(TestPromptLoader.Instance);
         var result = await checker.CheckAsync(new PlanSanityCheckRequest
         {
             Plan = CreatePlan("Protected dot path", 1) with
@@ -1533,7 +1568,7 @@ public static class Milestone4Tests
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "src"));
-            var checker = new PlanSanityChecker();
+            var checker = new PlanSanityChecker(TestPromptLoader.Instance);
             var result = await checker.CheckAsync(new PlanSanityCheckRequest
             {
                 Plan = CreatePlan("Directory scope", 1) with
@@ -1546,9 +1581,14 @@ public static class Milestone4Tests
             });
 
             Assert.False(result.Passed);
-            Assert.Contains(result.Issues, item => item.Kind == PlanSanityIssueKind.AmbiguousPath
-                && item.IsBlocking
-                && item.IsRepairable);
+            var issue = Assert.Single(
+                result.Issues,
+                item => item.Kind == PlanSanityIssueKind.AmbiguousPath
+                    && item.IsBlocking
+                    && item.IsRepairable);
+            Assert.Equal(
+                "File-intent path 'src' is a directory; declare concrete repository-relative files.",
+                issue.Message);
             Assert.Empty(result.NormalizedAffectedPaths);
         }
         finally
@@ -1575,7 +1615,7 @@ public static class Milestone4Tests
             return Task.CompletedTask;
         });
         var plan = CreatePlan("No sanity", 1);
-        IPlanSanityChecker? checker = compositionMode == 0 ? null : new PlanSanityChecker();
+        IPlanSanityChecker? checker = compositionMode == 0 ? null : new PlanSanityChecker(TestPromptLoader.Instance);
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>? requestFactory =
             compositionMode switch
             {
@@ -1595,7 +1635,9 @@ public static class Milestone4Tests
             NullLogger<SessionApplication>.Instance,
             planSanityChecker: checker,
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewRisky),
-            planSanityRequestFactory: requestFactory);
+            planSanityRequestFactory: requestFactory,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("missing sanity"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -1648,7 +1690,7 @@ public static class Milestone4Tests
             contextAssembler: CreateAssembler(events, evidence),
             evidenceStore: evidence,
             limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -1656,7 +1698,9 @@ public static class Milestone4Tests
                 RepositoryRoot = Environment.CurrentDirectory,
                 Baseline = CreateBaseline(["src/existing.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan sanity"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -1716,7 +1760,7 @@ public static class Milestone4Tests
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -1724,7 +1768,9 @@ public static class Milestone4Tests
                 RepositoryRoot = Environment.CurrentDirectory,
                 Baseline = CreateBaseline(["src/existing.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan sanity exhaustion"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -1757,7 +1803,7 @@ public static class Milestone4Tests
                 100000,
                 100,
                 TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -1794,7 +1840,7 @@ public static class Milestone4Tests
                 evidence,
                 registry,
                 limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
-                planSanityChecker: new PlanSanityChecker(),
+                planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
                 planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
                 planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
                 {
@@ -1802,7 +1848,9 @@ public static class Milestone4Tests
                     RepositoryRoot = Environment.CurrentDirectory,
                     Baseline = CreateBaseline(["src/existing.cs"]),
                     TrustLevel = RepositoryTrustLevel.TrustedMutation,
-                }));
+                }),
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("tool evidence repair"));
             var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Inspect then plan"));
@@ -1867,7 +1915,7 @@ public static class Milestone4Tests
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -1876,7 +1924,9 @@ public static class Milestone4Tests
                 Baseline = CreateBaseline(["src/existing.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
                 ProhibitedPaths = ["secrets/**"],
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("hard sanity"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -1923,7 +1973,7 @@ public static class Milestone4Tests
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewRisky),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -1931,7 +1981,9 @@ public static class Milestone4Tests
                 RepositoryRoot = Environment.CurrentDirectory,
                 Baseline = CreateBaseline(["src/example.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("structured risk plan"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -1987,7 +2039,7 @@ public static class Milestone4Tests
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             limits: ExecutionLimits.Default,
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewRisky),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -1995,7 +2047,9 @@ public static class Milestone4Tests
                 RepositoryRoot = Environment.CurrentDirectory,
                 Baseline = CreateBaseline(["src/example.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("auto plan"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -2246,7 +2300,7 @@ public static class Milestone4Tests
                 100000,
                 100,
                 TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2271,7 +2325,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("tool evidence"));
             var runId = await dispatcher.DispatchAsync(
@@ -2323,7 +2379,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2348,7 +2404,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("parallel tools"));
             var runId = await dispatcher.DispatchAsync(
@@ -2414,7 +2472,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("batch correction"));
             var runId = await dispatcher.DispatchAsync(
@@ -2497,7 +2557,9 @@ public static class Milestone4Tests
                 CreateAssembler(events, evidence),
                 evidence,
                 registry,
-                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("correction reset"));
             var runId = await dispatcher.DispatchAsync(
@@ -2567,7 +2629,9 @@ public static class Milestone4Tests
                 CreateAssembler(events, evidence),
                 evidence,
                 registry,
-                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+                limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("empty correction"));
             var runId = await dispatcher.DispatchAsync(
@@ -2617,7 +2681,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2644,7 +2708,9 @@ public static class Milestone4Tests
                 }),
                 assembler,
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded continuation"));
             var runId = await dispatcher.DispatchAsync(
@@ -2681,7 +2747,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2706,7 +2772,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("dedup"));
             var runId = await dispatcher.DispatchAsync(
@@ -2758,7 +2826,7 @@ public static class Milestone4Tests
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
             var service = new UnexpectedCodeExploreService();
-            var registry = new ToolRegistry([new CodeExploreTool(service)]);
+            var registry = new ToolRegistry([new CodeExploreTool(service, TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2783,7 +2851,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore availability"));
             var runId = await dispatcher.DispatchAsync(
@@ -2828,7 +2898,7 @@ public static class Milestone4Tests
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
             var service = new UnexpectedCodeExploreService();
-            var registry = new ToolRegistry([new CodeExploreTool(service)]);
+            var registry = new ToolRegistry([new CodeExploreTool(service, TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2853,7 +2923,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("code-explore internal control correction"));
             var runId = await dispatcher.DispatchAsync(
@@ -2897,8 +2969,8 @@ public static class Milestone4Tests
             var semanticResolver = new FixedSemanticResolver(workspaceId);
             var registry = new ToolRegistry(
             [
-                new SearchTextTool(),
-                new FindSymbolTool(semanticResolver),
+                new SearchTextTool(TestPromptLoader.Instance),
+                new FindSymbolTool(semanticResolver, TestPromptLoader.Instance),
             ]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -2925,7 +2997,9 @@ public static class Milestone4Tests
                 }),
                 CreateAssembler(events, evidence),
                 evidence,
-                registry);
+                registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("semantic-first"));
             var runId = await dispatcher.DispatchAsync(
@@ -2982,10 +3056,11 @@ public static class Milestone4Tests
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
             var registry = new ToolRegistry(
             [
-                new ListFilesTool(),
-                new ReadFileTool(),
+                new ListFilesTool(TestPromptLoader.Instance),
+                new ReadFileTool(TestPromptLoader.Instance),
                 new RunProcessTool(
                     new NonExecutingProcessManager(),
+                    TestPromptLoader.Instance,
                     allowedExecutables: ["bash"],
                     requireApproval: false,
                     shellExecutable: "bash"),
@@ -3017,7 +3092,9 @@ public static class Milestone4Tests
                 CreateAssembler(events, evidence),
                 evidence,
                 registry,
-                repositoryMemoryGovernor: repositoryMemoryGovernor);
+                repositoryMemoryGovernor: repositoryMemoryGovernor,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("deny check"));
             var runId = await dispatcher.DispatchAsync(
@@ -3067,7 +3144,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -3097,7 +3174,9 @@ public static class Milestone4Tests
                 {
                     MaxModelRounds = 8,
                     MaxPlanningToolRounds = 2,
-                });
+                },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("planning convergence"));
             var runId = await dispatcher.DispatchAsync(
@@ -3149,7 +3228,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -3180,7 +3259,9 @@ public static class Milestone4Tests
                 limits: new ExecutionLimits
                 {
                     MaxModelRounds = 20,
-                });
+                },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("extended planning tools"));
             var runId = await dispatcher.DispatchAsync(
@@ -3234,7 +3315,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -3263,7 +3344,9 @@ public static class Milestone4Tests
                 {
                     MaxModelRounds = 4,
                     MaxStructuredOutputCharacters = 60,
-                });
+                },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("cumulative output"));
             _ = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Keep calling tools"));
@@ -3305,7 +3388,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -3331,7 +3414,9 @@ public static class Milestone4Tests
                 CreateAssembler(events, evidence),
                 evidence,
                 registry,
-                limits: new ExecutionLimits { MaxModelRounds = 2 });
+                limits: new ExecutionLimits { MaxModelRounds = 2 },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("round limit"));
             var runId = await dispatcher.DispatchAsync(
@@ -3423,9 +3508,9 @@ public static class Milestone4Tests
                 loader,
                 new ReplacingSanitizer(),
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions
                 {
-                    StableSystemPolicy = "HOST_POLICY",
                     PromptAppendFiles = ["first.md", "second.md"],
                 });
             var assembled = await assembler.AssembleAsync(new ContextAssemblyRequest
@@ -3446,7 +3531,10 @@ public static class Milestone4Tests
                 "<phase_instructions>",
                 StringComparison.Ordinal);
             Assert.True(policyPosition < appendPosition && appendPosition < phasePosition);
-            Assert.Contains("<system_policy>HOST_POLICY</system_policy>", assembled.ModelInput);
+            Assert.Contains(
+                $"<system_policy>{TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)}</system_policy>",
+                assembled.ModelInput,
+                StringComparison.Ordinal);
             Assert.Equal(2, assembled.ModelInput.Split("<project_context ").Length - 1);
             Assert.Contains(
                 "&lt;/project_context&gt;",
@@ -3579,7 +3667,9 @@ public static class Milestone4Tests
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: assembler,
-            evidenceStore: evidence);
+            evidenceStore: evidence,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("resolution"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
@@ -3683,7 +3773,9 @@ public static class Milestone4Tests
                     ReasoningPreserved = true,
                     Persisted = true,
                 });
-            });
+            },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("fallback selection"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
@@ -3742,7 +3834,9 @@ public static class Milestone4Tests
                 RequestedBy = "model",
             }),
             toolRegistry: registry,
-            hooks: hooks);
+            hooks: hooks,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan hooks"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
@@ -3919,7 +4013,7 @@ public static class Milestone4Tests
             contextAssembler: CreateAssembler(events, evidence),
             evidenceStore: evidence,
             limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new TestPlanApprovalPolicy(PlanApprovalPolicy.ReviewAll),
             planSanityRequestFactory: static (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
             {
@@ -3927,7 +4021,9 @@ public static class Milestone4Tests
                 RepositoryRoot = Environment.CurrentDirectory,
                 Baseline = CreateBaseline(["src/example.cs", "src/existing.cs"]),
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            }));
+            }),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("revision repair"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change repo"));
@@ -3976,7 +4072,7 @@ public static class Milestone4Tests
     [Fact]
     public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
     {
-        var policy = new ContextAssemblerOptions().StableSystemPolicy;
+        var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt);
 
         Assert.Contains(
             "MUST use an advertised semantic tool",
@@ -4041,6 +4137,7 @@ public static class Milestone4Tests
             new PromptAppendLoader(sanitizer ?? new SecretOutputSanitizer()),
             sanitizer ?? new SecretOutputSanitizer(),
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions { MaximumTokens = maximumTokens },
             modelResolver);
     }
@@ -5408,7 +5505,9 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 contextAssembler: assembler,
-                evidenceStore: evidence);
+                evidenceStore: evidence,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(
                 new CreateSessionCommand("M4 tests"));

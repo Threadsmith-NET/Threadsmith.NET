@@ -13,6 +13,55 @@ Test-Contract 'semantic versions' {
     Assert-ReleaseVersion '1.2.3'; Assert-ReleaseVersion '1.2.3-rc.1'
     try { Assert-ReleaseVersion 'v1.2.3'; throw 'Invalid version was accepted.' } catch { if ($_.Exception.Message -eq 'Invalid version was accepted.') { throw } }
 }
+Test-Contract 'prompt payload is complete, collision-free, byte-exact, and validated for every RID' {
+    $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-prompts-contract-$([Guid]::NewGuid().ToString('N'))"
+    $source = Join-Path $temp 'source'
+    $payload = Join-Path $temp 'payload'
+    $promptDirectory = Join-Path $payload 'prompts'
+    $ownerDirectories = @(
+        'src/Threadsmith.Context/Prompts',
+        'src/Threadsmith.Execution/Prompts',
+        'src/Threadsmith.Tools/Prompts',
+        'src/Threadsmith.DotNet/Prompts',
+        'src/Threadsmith.Skills/Prompts',
+        'src/Threadsmith.Models/Prompts',
+        'src/Threadsmith.Models.OpenAiCodex/Prompts',
+        'src/Threadsmith.Mcp/Prompts'
+    )
+    try {
+        $expectedPromptNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        New-Item -ItemType Directory -Path $promptDirectory -Force | Out-Null
+        for ($index = 0; $index -lt $ownerDirectories.Count; $index++) {
+            $owner = Join-Path $source $ownerDirectories[$index]
+            New-Item -ItemType Directory -Path $owner -Force | Out-Null
+            $name = "Contract-Prompt-$index.md"
+            $expectedPromptNames.Add($name) | Out-Null
+            [IO.File]::WriteAllText((Join-Path $owner $name), "prompt-$index`n", [Text.UTF8Encoding]::new($false))
+            Copy-Item -LiteralPath (Join-Path $owner $name) -Destination (Join-Path $promptDirectory $name)
+        }
+        foreach ($rid in @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')) {
+            Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier $rid -SourceRoot $source -ExpectedPromptNames $expectedPromptNames
+        }
+
+        $first = Join-Path $promptDirectory 'Contract-Prompt-0.md'
+        Remove-Item -LiteralPath $first
+        try { Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier linux-x64 -SourceRoot $source -ExpectedPromptNames $expectedPromptNames; throw 'Missing prompt asset was accepted.' } catch { if ($_.Exception.Message -eq 'Missing prompt asset was accepted.') { throw } }
+        Copy-Item -LiteralPath (Join-Path $source "$($ownerDirectories[0])/Contract-Prompt-0.md") -Destination $first
+
+        $unexpected = Join-Path $promptDirectory 'Contract-Prompt-Unexpected.md'
+        [IO.File]::WriteAllText($unexpected, 'unexpected', [Text.UTF8Encoding]::new($false))
+        try { Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier linux-x64 -SourceRoot $source -ExpectedPromptNames $expectedPromptNames; throw 'Undeclared prompt asset was accepted.' } catch { if ($_.Exception.Message -eq 'Undeclared prompt asset was accepted.') { throw } }
+        Remove-Item -LiteralPath $unexpected
+
+        [IO.File]::WriteAllText($first, 'changed', [Text.UTF8Encoding]::new($false))
+        try { Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier linux-x64 -SourceRoot $source -ExpectedPromptNames $expectedPromptNames; throw 'Changed prompt asset was accepted.' } catch { if ($_.Exception.Message -eq 'Changed prompt asset was accepted.') { throw } }
+        Copy-Item -LiteralPath (Join-Path $source "$($ownerDirectories[0])/Contract-Prompt-0.md") -Destination $first -Force
+
+        $collision = Join-Path $source "$($ownerDirectories[1])/contract-prompt-0.md"
+        [IO.File]::WriteAllText($collision, 'collision', [Text.UTF8Encoding]::new($false))
+        try { Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier linux-x64 -SourceRoot $source -ExpectedPromptNames $expectedPromptNames; throw 'Case-insensitive prompt collision was accepted.' } catch { if ($_.Exception.Message -eq 'Case-insensitive prompt collision was accepted.') { throw } }
+    } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+}
 Test-Contract 'workflow scripts are tracked' {
     $root = Get-RepositoryRoot
     foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-StagedPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {

@@ -1194,23 +1194,27 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
     private readonly WebFetchAuthorizationAuthority _authorization;
     private readonly IWebContentFetcher _fetcher;
     private readonly IDirectFetchApprovalPrompt _approvalPrompt;
+    private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="WebFetchTool"/> class.</summary>
     public WebFetchTool(
         IWebContentFetcher fetcher,
         WebFetchAuthorizationAuthority authorization,
         WebFetchOptions options,
+        IPromptLoader promptLoader,
         IDirectFetchApprovalPrompt? approvalPrompt = null)
     {
         ArgumentNullException.ThrowIfNull(fetcher);
         ArgumentNullException.ThrowIfNull(authorization);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(promptLoader);
         _fetcher = fetcher;
         _authorization = authorization;
         _approvalPrompt = approvalPrompt ?? new UnavailableDirectFetchApprovalPrompt();
+        _prompts = promptLoader;
         Definition = ToolDefinitionFactory.Create<WebFetchRequest, WebFetchResponse>(
             "web_fetch",
-            "Retrieves one authorized public HTTPS textual document. Pass the host-issued search or current-user URL reference, or an explicitly granted or separately approved direct URL, in reference.",
+            promptLoader.Get(PromptFileNames.ToolWebFetchDescription),
             ToolCategory.ExternalSearch,
             RepositoryTrustLevel.UntrustedInspection,
             ApprovalLevel.None,
@@ -1246,7 +1250,7 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                 || !_authorization.HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
             {
                 throw new ToolExecutionException(
-                    "DirectAuthorizationRequired: web_fetch is not progressively active for this run; use explicit exact-URL pre-authorization.",
+                    _prompts.Get(PromptFileNames.ToolWebFetchDirectAuthorizationInactive),
                     ToolErrorClassification.DirectAuthorizationRequired);
             }
 
@@ -1260,9 +1264,14 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                 var path = string.IsNullOrEmpty(approvalRequest.Path)
                     ? "/"
                     : approvalRequest.Path;
-                var transientError = "DirectAuthorizationRequired: explicit exact-URL authority is required for "
-                    + $"origin {approvalRequest.Origin}; path {path}; exact digest {approvalRequest.UrlDigest}. "
-                    + "Use /fetch-authorize or the headless authorization input and retry.";
+                var transientError = _prompts.Render(
+                    PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["Origin"] = approvalRequest.Origin,
+                        ["Path"] = path,
+                        ["UrlDigest"] = approvalRequest.UrlDigest,
+                    });
                 throw new ToolExecutionException(
                     "DirectAuthorizationRequired: explicit exact-URL authority is required.",
                     ToolErrorClassification.DirectAuthorizationRequired,

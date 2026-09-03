@@ -26,7 +26,8 @@ public sealed partial class SessionApplication
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
-            _activeTurnCompactionPolicy.MaximumSourcesPerGroup);
+            _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
+            RequirePrompts());
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
@@ -188,7 +189,7 @@ public sealed partial class SessionApplication
         }
     }
 
-    private static ModelMessage CreateRunSteeringMessage(RunSteeringMessage message)
+    private ModelMessage CreateRunSteeringMessage(RunSteeringMessage message)
     {
         return new ModelMessage
         {
@@ -198,8 +199,14 @@ public sealed partial class SessionApplication
             [
                 new ModelContentPart
                 {
-                    Content = $"User steering #{message.Sequence} submitted at "
-                        + $"{message.SubmittedAt:O}:\n{message.Text}",
+                    Content = RequirePrompts().Render(
+                        PromptFileNames.ContextActiveRunSteering,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["Sequence"] = $"{message.Sequence}",
+                            ["SubmittedAt"] = $"{message.SubmittedAt:O}",
+                            ["Text"] = message.Text,
+                        }),
                 },
             ],
         };
@@ -466,7 +473,7 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         loopState.BeginCurrentGroup();
-        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
+        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters, _prompts);
         var modelHookBoundary = new ModelRequestHookBoundary(
             round.Registration.SessionId,
             round.RunId,
@@ -804,7 +811,7 @@ public sealed partial class SessionApplication
                 MalformedInvocationFailureKind.PhaseInvalidTool,
                 failedOrdinal: 0,
                 failedToolId: ProposePlanToolName,
-                "The model requested propose_plan outside the initial conversational turn.",
+                RequireCorrectiveMessages().GetPlanWrongPhaseReason(),
                 toolCallCount: 1);
             throw new MalformedInvocationException(diagnostic);
         }
@@ -843,7 +850,7 @@ public sealed partial class SessionApplication
         }
         catch (MalformedInvocationException exception)
         {
-            var failureSummary = CorrectiveMessageFactory.CreatePlanSchemaFailureSummary(
+            var failureSummary = RequireCorrectiveMessages().CreatePlanSchemaFailureSummary(
                 exception.Diagnostic);
             if (!TryAppendSingleToolCorrection(
                 tool,
@@ -922,7 +929,7 @@ public sealed partial class SessionApplication
                 MalformedInvocationFailureKind.UnavailableTool,
                 streamState.PendingToolCalls[0].Ordinal,
                 streamState.PendingToolCalls[0].ToolName,
-                "No tool invocation pipeline is available in this model round.",
+                RequireCorrectiveMessages().GetToolPipelineUnavailableReason(),
                 streamState.PendingToolCalls.Count);
             return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
@@ -956,7 +963,7 @@ public sealed partial class SessionApplication
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
                 preflight.FailedOrdinal,
                 preflight.FailedToolId,
-                preflight.SafeReason ?? "The tool batch failed preflight.",
+                preflight.SafeReason ?? RequireCorrectiveMessages().GetToolBatchPreflightFailedReason(),
                 streamState.PendingToolCalls.Count);
             return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
@@ -975,7 +982,7 @@ public sealed partial class SessionApplication
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
                 failedOrdinal: 0,
                 failedToolId: streamState.PendingToolCalls[0].ToolName,
-                "The tool batch preflight did not return a prepared invocation snapshot.",
+                RequireCorrectiveMessages().GetToolBatchPreparationMissingReason(),
                 streamState.PendingToolCalls.Count);
             return await AppendToolBatchCorrectionOrThrowAsync(
                 round,
@@ -1001,7 +1008,10 @@ public sealed partial class SessionApplication
         {
             var result = batchResult.Result;
             var structuredContent = result.ResultJson;
-            var content = result.ModelResultContent ?? structuredContent ?? result.Error ?? "Tool completed.";
+            var content = result.ModelResultContent
+                ?? structuredContent
+                ?? result.Error
+                ?? _prompts.Get(PromptFileNames.ToolToolInvocationCompleted);
             loopState.AddCurrentSource(
                 batchResult.CorrelationId,
                 ActiveTurnSourceKind.ToolInvocation,
@@ -1071,7 +1081,7 @@ public sealed partial class SessionApplication
         return true;
     }
 
-    private static bool TryCreateConversationPreflightFailure(
+    private bool TryCreateConversationPreflightFailure(
         ConversationRound round,
         ConversationLoopState loopState,
         IReadOnlyList<PendingModelToolCall> pendingCalls,
@@ -1091,7 +1101,7 @@ public sealed partial class SessionApplication
                     MalformedInvocationFailureKind.UnavailableTool,
                     call.Ordinal,
                     call.ToolName,
-                    $"Tool '{call.ToolName}' is not available in this model round.",
+                    RequireCorrectiveMessages().CreateToolUnavailableReason(call.ToolName),
                     pendingCalls.Count);
                 return true;
             }
@@ -1119,7 +1129,7 @@ public sealed partial class SessionApplication
                     MalformedInvocationFailureKind.PhaseInvalidTool,
                     call.Ordinal,
                     call.ToolName,
-                    $"Tool '{call.ToolName}' was already called with these arguments.",
+                    RequireCorrectiveMessages().CreateDuplicateToolInvocationReason(call.ToolName),
                     pendingCalls.Count);
                 return true;
             }
@@ -1147,14 +1157,14 @@ public sealed partial class SessionApplication
             throw new MalformedInvocationException(diagnostic);
         }
 
-        var failureSummary = CorrectiveMessageFactory.CreateToolBatchFailureSummary(
+        var failureSummary = RequireCorrectiveMessages().CreateToolBatchFailureSummary(
             diagnostic.ToolOrdinal,
             diagnostic.ToolName,
             diagnostic.SafeMessage);
         foreach (var call in streamState.PendingToolCalls.OrderBy(item => item.Ordinal))
         {
             var isFailingCall = diagnostic.ToolOrdinal is null || diagnostic.ToolOrdinal == call.Ordinal;
-            loopState.AddCurrentToolResult(CorrectiveMessageFactory.CreateRejectedToolResultMessage(
+            loopState.AddCurrentToolResult(RequireCorrectiveMessages().CreateRejectedToolResultMessage(
                 call.ToolCallId,
                 call.ToolName,
                 attemptNumber,
@@ -1193,7 +1203,7 @@ public sealed partial class SessionApplication
         streamState.MarkCorrectiveTurnRequested();
         loopState.CommitStandaloneMessage(
             round.ModelRound,
-            CorrectiveMessageFactory.CreateEmptyResponseDeveloperMessage(
+            RequireCorrectiveMessages().CreateEmptyResponseDeveloperMessage(
                 safeReason,
                 attemptNumber,
                 correctiveTurns.MaximumTurns),
@@ -1232,7 +1242,7 @@ public sealed partial class SessionApplication
             cancellationToken);
     }
 
-    private static bool TryAppendSingleToolCorrection(
+    private bool TryAppendSingleToolCorrection(
         ToolRequestModelOutput tool,
         ConversationRound round,
         ConversationLoopState loopState,
@@ -1252,7 +1262,7 @@ public sealed partial class SessionApplication
             toolCallId,
             tool.ToolName,
             tool.ArgumentsJson));
-        loopState.AddCurrentToolResult(CorrectiveMessageFactory.CreateRejectedToolResultMessage(
+        loopState.AddCurrentToolResult(RequireCorrectiveMessages().CreateRejectedToolResultMessage(
             toolCallId,
             tool.ToolName,
             attemptNumber,
@@ -1263,7 +1273,7 @@ public sealed partial class SessionApplication
         return true;
     }
 
-    private static bool TryAppendDeveloperCorrection(
+    private bool TryAppendDeveloperCorrection(
         ConversationRound round,
         ConversationLoopState loopState,
         ModelRoundStreamState streamState,
@@ -1281,7 +1291,7 @@ public sealed partial class SessionApplication
         streamState.MarkCorrectiveTurnRequested();
         loopState.CommitStandaloneMessage(
             round.ModelRound,
-            CorrectiveMessageFactory.CreateDeveloperMessage(
+            RequireCorrectiveMessages().CreateDeveloperMessage(
                 diagnostic,
                 attemptNumber,
                 correctiveTurns.MaximumTurns),
@@ -1460,7 +1470,7 @@ public sealed partial class SessionApplication
             cancellationToken: CancellationToken.None);
     }
 
-    private static List<ModelToolDefinition> CreateModelTools(
+    private List<ModelToolDefinition> CreateModelTools(
         IReadOnlyList<ToolDefinition> conversationDefinitions,
         bool workspaceAvailable,
         RunPhase phase)
@@ -1480,7 +1490,7 @@ public sealed partial class SessionApplication
             modelTools.Add(new ModelToolDefinition
             {
                 Name = ProposePlanToolName,
-                Description = "Propose a governed implementation plan only when the user requests actual repository changes. Do not call for read-only exploration, audits, explanations, or diagnostics. Calling this tool never mutates files.",
+                Description = RequirePrompts().Get(PromptFileNames.ToolProposePlanDescription),
                 ArgumentsJsonSchema = ProposePlanArgumentsSchema,
                 PreferStrictArguments = true,
             });
@@ -1718,6 +1728,7 @@ public sealed partial class SessionApplication
             RunId = runId,
             ProfileId = profileId,
             CandidateProfile = _activeTurnCompactionProfile,
+            ProviderInstructions = context.ProviderInstructions,
             ToolContinuationRound = modelRound - 1,
             FrozenContextIdentity = string.Join(
                 '|',
@@ -1920,7 +1931,8 @@ public sealed partial class SessionApplication
             modelTools,
             ToolTransportMode.Native,
             layout.StablePrefixMessageCount,
-            outputReserveTokens);
+            outputReserveTokens,
+            context.ProviderInstructions);
     }
 
     private static RequestEnvelope CreateRequestEnvelope(
@@ -1955,7 +1967,8 @@ public sealed partial class SessionApplication
                 modelTools,
                 ToolTransportMode.Native,
                 requestLayout.StablePrefixMessageCount,
-                context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
+                context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
+                context.ProviderInstructions);
         }
 
         return new RequestEnvelope(
@@ -2044,6 +2057,7 @@ public sealed partial class SessionApplication
             Layout = context?.Layout,
             ToolTransportMode = ToolTransportMode.Native,
             WireEstimate = requestEnvelope.WireEstimate,
+            ProviderInstructions = context?.ProviderInstructions,
         };
     }
 
@@ -2162,7 +2176,7 @@ public sealed partial class SessionApplication
 
             loopState.CommitStandaloneMessage(
                 modelRound,
-                CorrectiveMessageFactory.CreatePlanSanityDeveloperMessage(
+                RequireCorrectiveMessages().CreatePlanSanityDeveloperMessage(
                     safeReason,
                     attemptNumber,
                     correctiveTurns.MaximumTurns,
@@ -2207,12 +2221,13 @@ public sealed partial class SessionApplication
                     ? $"{issue.Kind}: {issue.Message}"
                     : $"{issue.Kind} ({issue.RelativePath}): {issue.Message}"),
         ];
+        const string fallbackReason = "Plan sanity found repairable blocking issues.";
         var reason = issueSummaries.Length == 0
-            ? "Plan sanity found repairable blocking issues."
+            ? fallbackReason
             : "Plan sanity found repairable blocking issues: " + string.Join("; ", issueSummaries);
         var sanitized = _sanitizer.Sanitize(reason);
         return string.IsNullOrWhiteSpace(sanitized)
-            ? "Plan sanity found repairable blocking issues."
+            ? fallbackReason
             : BoundPlanCorrectionReason(sanitized);
     }
 
@@ -2407,6 +2422,7 @@ public sealed partial class SessionApplication
 
         private readonly List<ActiveTurnContinuationGroup> _groups = [];
         private readonly int _maximumSourcesPerGroup;
+        private readonly IPromptLoader _prompts;
         private readonly List<string> _pendingFilesRead = [];
         private readonly HashSet<long> _purgeableGroupSequences = [];
         private readonly List<PendingActiveTurnSource> _pendingSources = [];
@@ -2416,11 +2432,14 @@ public sealed partial class SessionApplication
 
         public ConversationLoopState(
             int maximumOutputCharacters,
-            int maximumSourcesPerGroup)
+            int maximumSourcesPerGroup,
+            IPromptLoader prompts)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSourcesPerGroup);
+            ArgumentNullException.ThrowIfNull(prompts);
             MaximumOutputCharacters = maximumOutputCharacters;
             _maximumSourcesPerGroup = maximumSourcesPerGroup;
+            _prompts = prompts;
         }
 
         public int AssessmentSequence { get; private set; }
@@ -2722,7 +2741,8 @@ public sealed partial class SessionApplication
             {
                 messages.Add(ActiveTurnSummaryFormatter.CreateMessage(
                     summary.Version,
-                    summary.Content));
+                    summary.Content,
+                    _prompts));
             }
 
             int? firstNeverDeliveredMessageIndex = null;
@@ -2749,7 +2769,8 @@ public sealed partial class SessionApplication
             {
                 ActiveTurnSummaryFormatter.CreateMessage(
                     summary.Version,
-                    summary.Content),
+                    summary.Content,
+                    _prompts),
             };
             int? firstNeverDeliveredMessageIndex = null;
             foreach (var group in _groups.Skip(compactedGroupCount))
@@ -2828,9 +2849,13 @@ public sealed partial class SessionApplication
 
     private sealed class ModelRoundStreamState
     {
-        public ModelRoundStreamState(int maximumOutputCharacters)
+        private readonly IPromptLoader _prompts;
+
+        public ModelRoundStreamState(int maximumOutputCharacters, IPromptLoader prompts)
         {
+            ArgumentNullException.ThrowIfNull(prompts);
             TextOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
+            _prompts = prompts;
         }
 
         public bool CorrectiveTurnRequested { get; private set; }
@@ -2899,12 +2924,12 @@ public sealed partial class SessionApplication
             return false;
         }
 
-        private static MalformedInvocationException CreateMultipleToolProducingOutputsException()
+        private MalformedInvocationException CreateMultipleToolProducingOutputsException()
         {
             return new MalformedInvocationException(new MalformedInvocationDiagnostic
             {
                 Kind = MalformedInvocationFailureKind.MultipleToolProducingOutputs,
-                SafeMessage = "A plan proposal must be the only tool-producing output in a model response.",
+                SafeMessage = _prompts.Get(PromptFileNames.CorrectionPlanProposalExclusiveToolOutput),
             });
         }
     }

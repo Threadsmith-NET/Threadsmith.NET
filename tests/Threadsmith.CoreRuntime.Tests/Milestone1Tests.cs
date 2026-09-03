@@ -5414,7 +5414,9 @@ public static class Milestone1Tests
                 executionBudget,
                 new SecretOutputSanitizer(),
                 NullLogger<SessionApplication>.Instance,
-                sessionUsage: usage);
+                sessionUsage: usage,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var handlers = new List<object> { application };
             if (additionalHandlers is not null)
             {

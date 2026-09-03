@@ -246,7 +246,8 @@ public sealed record ContextAssemblyResult(
     ModelRequestLayout? Layout = null,
     ModelWireEstimate? WireEstimate = null,
     string? ToolInventoryDigest = null,
-    string? InstructionBundleDigest = null);
+    string? InstructionBundleDigest = null,
+    ModelProviderInstructions? ProviderInstructions = null);
 
 /// <summary>Assembles model input from explicit state rather than transcript replay.</summary>
 public interface IContextAssembler

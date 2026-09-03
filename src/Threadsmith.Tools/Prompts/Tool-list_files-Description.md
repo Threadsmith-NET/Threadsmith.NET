@@ -1,0 +1,1 @@
+Fast repository file inventory under a bounded approved root. Use for directory/file discovery before reading files, and batch with other independent read-only inspections when possible.

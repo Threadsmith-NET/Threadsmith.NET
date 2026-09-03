@@ -415,6 +415,9 @@ public sealed record ContextInspectionProjection
     /// <summary>Estimated provider framing tokens.</summary>
     public int FramingTokens { get; init; }
 
+    /// <summary>Estimated exact request-owned provider-instruction tokens.</summary>
+    public int ProviderInstructionTokens { get; init; }
+
     /// <summary>Whether native or textual tool transport is used.</summary>
     public string ToolTransportMode { get; init; } = "unknown";
 }

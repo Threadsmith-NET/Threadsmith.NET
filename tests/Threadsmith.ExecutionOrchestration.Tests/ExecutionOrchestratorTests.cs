@@ -608,7 +608,9 @@ public sealed class ExecutionOrchestratorTests
                     ApprovedPlan = plan,
                     ValidationRequest = validationRequest,
                 });
-            });
+            },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("startup failure"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change example"));
@@ -652,9 +654,11 @@ public sealed class ExecutionOrchestratorTests
             NullLogger<SessionApplication>.Instance,
             executionOrchestrator: orchestrator,
             executionRequestFactory: CreateStartRequestFactory(fixture),
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new AlwaysAutoPlanApprovalPolicy(),
-            planSanityRequestFactory: CreateSanityRequestFactory(fixture));
+            planSanityRequestFactory: CreateSanityRequestFactory(fixture),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("auto startup"));
 
@@ -697,9 +701,11 @@ public sealed class ExecutionOrchestratorTests
             NullLogger<SessionApplication>.Instance,
             executionOrchestrator: new FailingStartOrchestrator(),
             executionRequestFactory: CreateStartRequestFactory(fixture),
-            planSanityChecker: new PlanSanityChecker(),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
             planApprovalPolicy: new AlwaysAutoPlanApprovalPolicy(),
-            planSanityRequestFactory: CreateSanityRequestFactory(fixture));
+            planSanityRequestFactory: CreateSanityRequestFactory(fixture),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("auto startup failure"));
 
@@ -961,7 +967,8 @@ public sealed class ExecutionOrchestratorTests
             artifacts,
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ExecutionOrchestrator>.Instance);
+            NullLogger<ExecutionOrchestrator>.Instance,
+            new CorrectiveMessageFactory(TestPromptLoader.Instance));
         var start = new ExecutionStartRequest
         {
             SessionId = sessionId,

@@ -1,0 +1,1 @@
+Return cited structured findings, explicit omissions, uncertainty, and coverage notes.

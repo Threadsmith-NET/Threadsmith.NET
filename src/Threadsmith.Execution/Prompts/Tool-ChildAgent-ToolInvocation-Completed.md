@@ -1,0 +1,1 @@
+Tool completed without model-visible content.

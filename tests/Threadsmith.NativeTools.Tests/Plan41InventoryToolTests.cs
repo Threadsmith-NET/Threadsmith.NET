@@ -52,7 +52,7 @@ public sealed class Plan41InventoryToolTests
         Assert.Equal(0, comparison.Behind);
         Assert.Contains(comparison.ChangedPaths, entry => entry.Path == "tracked.txt");
 
-        var logExecution = await new GitLogTool(service).ExecuteAsync(
+        var logExecution = await new GitLogTool(service, TestPromptLoader.Instance).ExecuteAsync(
             new GitLogRequest { Revision = "feature", MaximumCommits = int.MaxValue },
             CreateExecutionContext(repository.Path));
         Assert.NotNull(logExecution.ModelResultContent);
@@ -129,7 +129,7 @@ public sealed class Plan41InventoryToolTests
     public async Task GitBlameTool_NullRevision_ReportsHeadProvenance()
     {
         await using var repository = await TestRepository.CreateAsync();
-        var tool = new GitBlameTool(new GitQueryService());
+        var tool = new GitBlameTool(new GitQueryService(), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
             new GitBlameRequest { Path = "tracked.txt", Revision = null },
@@ -147,7 +147,7 @@ public sealed class Plan41InventoryToolTests
     [Fact]
     public void GitDiffTool_MissingModeRevision_IsActionableValidationFailure()
     {
-        ITool tool = new GitDiffTool(new UnusedGitQueryService());
+        ITool tool = new GitDiffTool(new UnusedGitQueryService(), TestPromptLoader.Instance);
 
         var exception = Assert.Throws<ToolArgumentValidationException>(() =>
             tool.DeserializeInput("{\"mode\":\"Commit\",\"baseRevision\":null}"));
@@ -162,7 +162,7 @@ public sealed class Plan41InventoryToolTests
     [Fact]
     public void GitLogTool_DefaultsAndUnsafeRevision_AreActionableValidationResults()
     {
-        ITool tool = new GitLogTool(new UnusedGitQueryService());
+        ITool tool = new GitLogTool(new UnusedGitQueryService(), TestPromptLoader.Instance);
 
         var input = Assert.IsType<GitLogRequest>(tool.DeserializeInput(
             "{\"revision\":null,\"maximumCommits\":null}"));
@@ -315,7 +315,7 @@ public sealed class Plan41InventoryToolTests
         var context = CreateExecutionContext(
             repository.Path,
             prohibitedPaths: ["secret/**"]);
-        var tool = new GitDiffTool(new GitQueryService());
+        var tool = new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
             new GitDiffRequest(),
@@ -351,11 +351,12 @@ public sealed class Plan41InventoryToolTests
             repository.Path,
             prohibitedPaths: ["secret/**"]);
 
-        var show = await new GitShowTool(new GitQueryService()).ExecuteAsync(
+        var show = await new GitShowTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
             new GitShowRequest { Revision = "feature" },
             context);
         var comparison = await new GitBranchComparisonTool(
-            new GitQueryService()).ExecuteAsync(
+            new GitQueryService(),
+            TestPromptLoader.Instance).ExecuteAsync(
                 new GitBranchComparisonRequest { BaseRevision = "main", TargetRevision = "feature" },
                 context);
 
@@ -410,7 +411,10 @@ public sealed class Plan41InventoryToolTests
         Assert.Contains(resources, path => path.EndsWith("Inventory.Tests.csproj", StringComparison.Ordinal));
         Assert.Contains(resources, path => path.EndsWith("Directory.Packages.props", StringComparison.Ordinal));
 
-        var inventoryTool = new DotNetInventoryTool(service);
+        var inventoryTool = new DotNetInventoryTool(service, TestPromptLoader.Instance);
+        Assert.Equal(
+            TestPromptLoader.Instance.Get(PromptFileNames.ToolDotnetInventoryDescription),
+            inventoryTool.Definition.Description);
         var execution = await inventoryTool.ExecuteAsync(
             new DotNetInventoryInput(),
             CreateExecutionContext(repository.Path, workspaceId: workspaceId));
@@ -447,14 +451,27 @@ public sealed class Plan41InventoryToolTests
         var git = new GitQueryService();
         ITool[] tools =
         [
-            new GitDiffTool(git),
-            new GitLogTool(git),
-            new GitShowTool(git),
-            new GitBlameTool(git),
-            new GitBranchComparisonTool(git),
+            new GitDiffTool(git, TestPromptLoader.Instance),
+            new GitLogTool(git, TestPromptLoader.Instance),
+            new GitShowTool(git, TestPromptLoader.Instance),
+            new GitBlameTool(git, TestPromptLoader.Instance),
+            new GitBranchComparisonTool(git, TestPromptLoader.Instance),
         ];
 
         Assert.Equal(5, tools.Select(tool => tool.Definition.Id).Distinct().Count());
+        string[] descriptionAssets =
+        [
+            PromptFileNames.ToolGitDiffDescription,
+            PromptFileNames.ToolGitLogDescription,
+            PromptFileNames.ToolGitShowDescription,
+            PromptFileNames.ToolGitBlameDescription,
+            PromptFileNames.ToolGitCompareBranchesDescription,
+        ];
+        Assert.All(
+            tools.Select((tool, index) => (Tool: tool, Asset: descriptionAssets[index])),
+            item => Assert.Equal(
+                TestPromptLoader.Instance.Get(item.Asset),
+                item.Tool.Definition.Description));
         Assert.All(tools, tool => Assert.Equal(ToolSideEffect.ReadOnly, tool.Definition.SideEffect));
         Assert.All(tools, tool => Assert.InRange(tool.Definition.MaximumOutputBytes, 1, 512 * 1024));
         Assert.DoesNotContain("maximumEntries", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);

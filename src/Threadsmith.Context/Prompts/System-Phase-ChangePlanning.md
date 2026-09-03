@@ -1,0 +1,1 @@
+Produce exactly one schema-versioned implementation plan. Do not propose or perform mutations.

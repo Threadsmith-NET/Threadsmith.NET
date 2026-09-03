@@ -1,0 +1,1 @@
+Tool arguments do not match the declared input schema. $.kind expected string enum Declaration|TypeDeclaration|MethodDeclaration|PropertyDeclaration|FieldDeclaration|Attribute|Invocation|ObjectCreation|MemberAccess; use MethodDeclaration for methods, not Method.

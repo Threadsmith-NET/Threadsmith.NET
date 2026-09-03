@@ -42,7 +42,7 @@ public static class ToolRuntimeTests
                 domainEvent is EvidenceAdded
                     ? Task.FromException(new InvalidOperationException("evidence observer failed"))
                     : Task.CompletedTask);
-            var pipeline = CreatePipeline(events, [new ListFilesTool()]);
+            var pipeline = CreatePipeline(events, [new ListFilesTool(TestPromptLoader.Instance)]);
             var sanitizer = new TestSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var model = new FakeModelProvider(new ScriptedSession
@@ -65,7 +65,9 @@ public static class ToolRuntimeTests
                 pipeline,
                 (_, _) => Task.FromResult(CreateContext(repository)),
                 evidenceStore: evidence,
-                toolRegistry: pipeline.Registry);
+                toolRegistry: pipeline.Registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
             var runId = await application.HandleAsync(
@@ -118,10 +120,10 @@ public static class ToolRuntimeTests
             ITool[] tools =
             [
                 countingTool,
-                new ReadFileTool(),
-                new ListFilesTool(),
-                new SearchTextTool(),
-                new RunProcessTool(processManager),
+                new ReadFileTool(TestPromptLoader.Instance),
+                new ListFilesTool(TestPromptLoader.Instance),
+                new SearchTextTool(TestPromptLoader.Instance),
+                new RunProcessTool(processManager, TestPromptLoader.Instance),
             ];
             var pipeline = CreatePipeline(events, tools);
             var invalid = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -228,8 +230,9 @@ public static class ToolRuntimeTests
                 false,
                 TimeSpan.Zero));
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(service, processManager),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Structured));
+                new CodeExploreTool(service, TestPromptLoader.Instance, processManager),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Structured),
+                TestPromptLoader.Instance);
             var pipeline = CreatePipeline(events, [tool]);
             var context = CreateContext(repository) with
             {
@@ -272,7 +275,7 @@ public static class ToolRuntimeTests
     [Fact]
     public static void CodeExplore_Definition_UsesMinimalModelFacingSchema()
     {
-        var tool = new CodeExploreTool(new NoopCodeExploreService());
+        var tool = new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance);
 
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         var properties = schema.RootElement.GetProperty("properties")
@@ -308,7 +311,7 @@ public static class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var service = new CapturingCodeExploreService();
-            var tool = new CodeExploreTool(service);
+            var tool = new CodeExploreTool(service, TestPromptLoader.Instance);
             var defaultInput = Assert.IsType<CodeExploreInput>(tool.DeserializeInput(
                 "{\"query\":\"inspect source\",\"maxFiles\":null}"));
             Assert.Equal(8, defaultInput.MaxFiles);
@@ -345,7 +348,7 @@ public static class ToolRuntimeTests
         try
         {
             var service = new CapturingCodeExploreService();
-            var tool = new CodeExploreTool(service);
+            var tool = new CodeExploreTool(service, TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
 
             var execution = await tool.ExecuteAsync(
@@ -370,7 +373,9 @@ public static class ToolRuntimeTests
         try
         {
             await using var events = new DomainEventStream();
-            var pipeline = CreatePipeline(events, [new CodeExploreTool(new NoopCodeExploreService())]);
+            var pipeline = CreatePipeline(
+                events,
+                [new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance)]);
 
             var preflight = pipeline.PreflightBatch(
             [
@@ -447,7 +452,7 @@ public static class ToolRuntimeTests
     [Fact]
     public static void SearchTextTool_QueryTooLong_DocumentsConciseQueryRequirement()
     {
-        var tool = new SearchTextTool();
+        var tool = new SearchTextTool(TestPromptLoader.Instance);
 
         Assert.Contains("query is limited to 500 characters", tool.Definition.Description, StringComparison.Ordinal);
         Assert.Contains("do not paste source blocks", tool.Definition.Description, StringComparison.Ordinal);
@@ -474,7 +479,10 @@ public static class ToolRuntimeTests
                 false,
                 false,
                 TimeSpan.Zero));
-            var tool = new CodeExploreTool(new NoopCodeExploreService(), processManager);
+            var tool = new CodeExploreTool(
+                new NoopCodeExploreService(),
+                TestPromptLoader.Instance,
+                processManager);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"artifact prompt\"}");
             var context = CreateContext(repository) with
             {
@@ -542,8 +550,9 @@ public static class ToolRuntimeTests
         try
         {
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new NoopCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Structured));
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Structured),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
             var execution = await tool.ExecuteAsync(
                 input,
@@ -566,8 +575,9 @@ public static class ToolRuntimeTests
         try
         {
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new NoopCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
             var execution = await tool.ExecuteAsync(
                 input,
@@ -613,7 +623,8 @@ public static class ToolRuntimeTests
             const int maximumResultBytes = effectiveInputTokens * 3;
             var tool = new CodeExploreOutputFormattingTool(
                 new StaticCodeExploreResultTool(CreateRichCodeExploreResult()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var execution = await tool.ExecuteAsync(
                 new CodeExploreInput { Query = "inspect source" },
                 CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: effectiveInputTokens));
@@ -654,7 +665,8 @@ public static class ToolRuntimeTests
             });
             var tool = new CodeExploreOutputFormattingTool(
                 new StaticCodeExploreResultTool(CreateSanitizerExpansionCodeExploreResult()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = new CodeExploreInput { Query = "inspect source" };
             var directExecution = await tool.ExecuteAsync(
                 input,
@@ -713,8 +725,11 @@ public static class ToolRuntimeTests
         {
             const int maximumResultBytes = 1024;
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new LongQueryResultCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(
+                    new LongQueryResultCodeExploreService(),
+                    TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var execution = await tool.ExecuteAsync(
                 new CodeExploreInput { Query = new string('q', 1024) },
                 CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: 1));
@@ -773,8 +788,9 @@ public static class ToolRuntimeTests
         try
         {
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new ManyImpactCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(new ManyImpactCodeExploreService(), TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
             var execution = await tool.ExecuteAsync(
                 input,
@@ -807,8 +823,11 @@ public static class ToolRuntimeTests
         try
         {
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new ZeroItemImpactCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(
+                    new ZeroItemImpactCodeExploreService(),
+                    TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
             var execution = await tool.ExecuteAsync(
                 input,
@@ -834,8 +853,9 @@ public static class ToolRuntimeTests
         try
         {
             var formattingTool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new NoopCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)formattingTool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
             var execution = await formattingTool.ExecuteAsync(
                 input,
@@ -847,7 +867,7 @@ public static class ToolRuntimeTests
             var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
 
             var sourceService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(sourceService).ExecuteAsync(
+            _ = await new CodeExploreTool(sourceService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = sourceCursor },
                 CreateCodeExploreExecutionContext(repository));
             var sourceAnchor = Assert.Single(sourceService.Request?.PathAnchors ?? []);
@@ -858,14 +878,14 @@ public static class ToolRuntimeTests
             Assert.Equal(CodeExploreMode.Auto, sourceService.Request?.Mode);
 
             var impactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(impactService).ExecuteAsync(
+            _ = await new CodeExploreTool(impactService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = impactCursor },
                 CreateCodeExploreExecutionContext(repository));
             Assert.Equal(CodeExploreMode.Impact, impactService.Request?.Mode);
             Assert.Equal("symbol:example.worker", Assert.Single(impactService.Request?.SymbolIds ?? []));
 
             var artifactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+            _ = await new CodeExploreTool(artifactService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = artifactCursor },
                 CreateCodeExploreExecutionContext(repository));
             Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
@@ -890,8 +910,11 @@ public static class ToolRuntimeTests
         try
         {
             var formattingTool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new LongArtifactContinuationCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(
+                    new LongArtifactContinuationCodeExploreService(),
+                    TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var query = new string('q', 240);
             var inputJson = JsonSerializer.Serialize(new { query });
             var input = (CodeExploreInput)formattingTool.DeserializeInput(inputJson);
@@ -903,7 +926,7 @@ public static class ToolRuntimeTests
             var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
 
             var artifactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+            _ = await new CodeExploreTool(artifactService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = artifactCursor },
                 CreateCodeExploreExecutionContext(repository));
 
@@ -926,8 +949,11 @@ public static class ToolRuntimeTests
         try
         {
             var formattingTool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new ManyContinuationCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(
+                    new ManyContinuationCodeExploreService(),
+                    TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)formattingTool.DeserializeInput("{\"query\":\"inspect more source\"}");
             var execution = await formattingTool.ExecuteAsync(
                 input,
@@ -947,19 +973,19 @@ public static class ToolRuntimeTests
             var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
 
             var sourceService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(sourceService).ExecuteAsync(
+            _ = await new CodeExploreTool(sourceService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = sourceCursor },
                 CreateCodeExploreExecutionContext(repository));
             Assert.Equal("src/WorkerExtra0.cs", Assert.Single(sourceService.Request?.PathAnchors ?? []).Path);
 
             var impactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(impactService).ExecuteAsync(
+            _ = await new CodeExploreTool(impactService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = impactCursor },
                 CreateCodeExploreExecutionContext(repository));
             Assert.Equal(CodeExploreMode.Impact, impactService.Request?.Mode);
 
             var artifactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(artifactService).ExecuteAsync(
+            _ = await new CodeExploreTool(artifactService, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreInput { Query = artifactCursor },
                 CreateCodeExploreExecutionContext(repository));
             Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
@@ -982,8 +1008,9 @@ public static class ToolRuntimeTests
             var options = new CodeExploreOutputOptions();
             _ = options.SetSessionOutputFormat(structuredSession, CodeExploreOutputFormat.Structured);
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new NoopCodeExploreService()),
-                options);
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+                options,
+                TestPromptLoader.Instance);
             var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"inspect source\"}");
 
             var markdown = await tool.ExecuteAsync(
@@ -1019,8 +1046,9 @@ public static class ToolRuntimeTests
                 return Task.CompletedTask;
             });
             var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new NoopCodeExploreService()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance);
             var pipeline = CreatePipeline(events, [tool]);
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -1070,7 +1098,7 @@ public static class ToolRuntimeTests
             var outsideFile = Path.Combine(outside, "outside.txt");
             await File.WriteAllTextAsync(outsideFile, "outside");
             await using var events = new DomainEventStream();
-            var pipeline = CreatePipeline(events, [new ReadFileTool()]);
+            var pipeline = CreatePipeline(events, [new ReadFileTool(TestPromptLoader.Instance)]);
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
@@ -1105,7 +1133,7 @@ public static class ToolRuntimeTests
             await using var events = new DomainEventStream();
             var pipeline = CreatePipeline(
                 events,
-                [new ReadFileTool()],
+                [new ReadFileTool(TestPromptLoader.Instance)],
                 sanitizer: new SecretOutputSanitizer());
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -1157,6 +1185,7 @@ public static class ToolRuntimeTests
             var pipeline = new ToolInvocationPipeline(
                 new ToolRegistry([new RunProcessTool(
                     manager,
+                    TestPromptLoader.Instance,
                     allowedExecutables: [shell],
                     shellExecutable: shell)]),
                 new DefaultPolicyEngine(),
@@ -1312,7 +1341,7 @@ public static class ToolRuntimeTests
                 NullLogger<ProcessManager>.Instance);
             var pipeline = CreatePipeline(
                 events,
-                [new ReadFileTool(), new SearchTextTool(), new GitStatusTool(manager)]);
+                [new ReadFileTool(TestPromptLoader.Instance), new SearchTextTool(TestPromptLoader.Instance), new GitStatusTool(manager, TestPromptLoader.Instance)]);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1381,6 +1410,7 @@ public static class ToolRuntimeTests
                 TimeSpan.FromMilliseconds(10)));
             var bundledRipgrep = Path.Combine(repository, "bundled tools", "rg.exe");
             var tool = new SearchTextTool(
+                TestPromptLoader.Instance,
                 processManager: processManager,
                 ripgrepExecutable: bundledRipgrep);
             var context = CreateContext(repository) with
@@ -1451,7 +1481,7 @@ public static class ToolRuntimeTests
                 StandardErrorTruncated: false,
                 TimedOut: false,
                 Duration: TimeSpan.FromMilliseconds(10)));
-            var tool = new SearchTextTool(processManager: processManager);
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1494,7 +1524,7 @@ public static class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1540,7 +1570,7 @@ public static class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1579,7 +1609,7 @@ public static class ToolRuntimeTests
                 false,
                 false,
                 TimeSpan.FromMilliseconds(10)));
-            var tool = new SearchTextTool(processManager: processManager);
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1630,7 +1660,7 @@ public static class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1662,7 +1692,7 @@ public static class ToolRuntimeTests
             await File.WriteAllTextAsync(
                 Path.Combine(repository, "markers.txt"),
                 "TODO\ntodo\n");
-            var tool = new SearchTextTool();
+            var tool = new SearchTextTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1698,7 +1728,7 @@ public static class ToolRuntimeTests
                 request.FileName.Equals("git", StringComparison.OrdinalIgnoreCase)
                     ? CreateProcessResult("src/visible.txt\0")
                     : CreateProcessResult(string.Empty, exitCode: 2));
-            var tool = new SearchTextTool(processManager: processManager);
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1731,7 +1761,7 @@ public static class ToolRuntimeTests
             await File.WriteAllTextAsync(
                 Path.Combine(sourceDirectory, "Marker.cs"),
                 "public const string Marker = \"transparency\";\n");
-            var tool = new SearchTextTool();
+            var tool = new SearchTextTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1789,7 +1819,7 @@ public static class ToolRuntimeTests
 
                 throw new Win32Exception(2);
             });
-            var tool = new SearchTextTool(processManager: processManager);
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1830,6 +1860,7 @@ public static class ToolRuntimeTests
                 throw new Win32Exception(2);
             });
             var tool = new SearchTextTool(
+                TestPromptLoader.Instance,
                 processManager: processManager,
                 ripgrepExecutable: $"missing-ripgrep-{Guid.NewGuid():N}");
             var context = CreateContext(repository) with
@@ -1881,7 +1912,7 @@ public static class ToolRuntimeTests
             var hostStateDirectory = Directory.CreateDirectory(Path.Combine(repository, ".threadsmith")).FullName;
             await File.WriteAllTextAsync(Path.Combine(hostStateDirectory, "threadsmith.db"), "needle");
 
-            var tool = new SearchTextTool();
+            var tool = new SearchTextTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1908,9 +1939,9 @@ public static class ToolRuntimeTests
         var resolver = new DescriptionSemanticResolver();
         string[] descriptions =
         [
-            new FindSymbolTool(resolver).Definition.Description,
-            new FindReferencesTool(resolver).Definition.Description,
-            new FindImplementationsTool(resolver).Definition.Description,
+            new FindSymbolTool(resolver, TestPromptLoader.Instance).Definition.Description,
+            new FindReferencesTool(resolver, TestPromptLoader.Instance).Definition.Description,
+            new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
         ];
 
         Assert.All(descriptions, description =>
@@ -1920,12 +1951,64 @@ public static class ToolRuntimeTests
         });
         Assert.Contains(
             "interface implementations",
-            new FindImplementationsTool(resolver).Definition.Description,
+            new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
         Assert.Contains(
             "MUST NOT replace an advertised semantic tool",
-            new SearchTextTool().Definition.Description,
+            new SearchTextTool(TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>Host-owned tool definitions use exact source assets, including rendered tokens.</summary>
+    [Fact]
+    public static void HostOwnedToolDescriptions_EqualSourcePromptAssets()
+    {
+        var processManager = new DirectProcessStartManager();
+        var resolver = new DescriptionSemanticResolver();
+        ITool[] tools =
+        [
+            new ListFilesTool(TestPromptLoader.Instance),
+            new ReadFileTool(TestPromptLoader.Instance),
+            new SearchTextTool(TestPromptLoader.Instance),
+            new GitStatusTool(processManager, TestPromptLoader.Instance),
+            new FindSymbolTool(resolver, TestPromptLoader.Instance),
+            new FindReferencesTool(resolver, TestPromptLoader.Instance),
+            new FindImplementationsTool(resolver, TestPromptLoader.Instance),
+            new DateTimeTool(TestPromptLoader.Instance),
+            new CSharpScriptTool(new StubCSharpScriptEngine(), TestPromptLoader.Instance),
+            new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
+        ];
+        var assets = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["list_files"] = PromptFileNames.ToolListFilesDescription,
+            ["read_file"] = PromptFileNames.ToolReadFileDescription,
+            ["search"] = PromptFileNames.ToolSearchDescription,
+            ["git_status"] = PromptFileNames.ToolGitStatusDescription,
+            ["find_symbol"] = PromptFileNames.ToolFindSymbolDescription,
+            ["find_references"] = PromptFileNames.ToolFindReferencesDescription,
+            ["find_implementations"] = PromptFileNames.ToolFindImplementationsDescription,
+            ["datetime"] = PromptFileNames.ToolDatetimeDescription,
+            ["csharp_script"] = PromptFileNames.ToolCsharpScriptDescription,
+            ["code_explore"] = PromptFileNames.ToolCodeExploreDescription,
+        };
+
+        Assert.All(
+            tools,
+            tool => Assert.Equal(
+                TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
+                tool.Definition.Description));
+
+        var runProcess = new RunProcessTool(
+            processManager,
+            TestPromptLoader.Instance,
+            shellExecutable: "pwsh");
+        var expectedRunProcessDescription = TestPromptLoader.Instance.Render(
+            PromptFileNames.ToolRunProcessDescription,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ShellLanguage"] = "PowerShell",
+            });
+        Assert.Equal(expectedRunProcessDescription, runProcess.Definition.Description);
     }
 
     /// <summary>A locked file does not prevent text search from returning matches in readable files.</summary>
@@ -1943,7 +2026,7 @@ public static class ToolRuntimeTests
                 FileMode.Open,
                 FileAccess.ReadWrite,
                 FileShare.None);
-            var tool = new SearchTextTool();
+            var tool = new SearchTextTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1989,7 +2072,7 @@ public static class ToolRuntimeTests
             await using var events = new DomainEventStream();
             var pipeline = CreatePipeline(
                 events,
-                [new ListFilesTool(), new SearchTextTool()]);
+                [new ListFilesTool(TestPromptLoader.Instance), new SearchTextTool(TestPromptLoader.Instance)]);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2057,6 +2140,7 @@ public static class ToolRuntimeTests
             var pipeline = new ToolInvocationPipeline(
                 new ToolRegistry([new RunProcessTool(
                     manager,
+                    TestPromptLoader.Instance,
                     allowedExecutables: [shell],
                     shellExecutable: shell)]),
                 new DefaultPolicyEngine(),
@@ -2099,6 +2183,7 @@ public static class ToolRuntimeTests
     {
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
+            TestPromptLoader.Instance,
             allowedExecutables: ["pwsh"],
             shellExecutable: "pwsh");
 
@@ -2119,6 +2204,7 @@ public static class ToolRuntimeTests
     {
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
+            TestPromptLoader.Instance,
             allowedExecutables: ["powershell"],
             requireApproval: false,
             shellExecutable: "powershell.exe");
@@ -2138,6 +2224,7 @@ public static class ToolRuntimeTests
     {
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
+            TestPromptLoader.Instance,
             allowedExecutables: [allowedExecutable],
             requireApproval: false,
             shellExecutable: shellExecutable);
@@ -2151,6 +2238,7 @@ public static class ToolRuntimeTests
     {
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
+            TestPromptLoader.Instance,
             allowedExecutables: ["pwsh"],
             requireApproval: false,
             shellExecutable: "pwsh");
@@ -2178,6 +2266,7 @@ public static class ToolRuntimeTests
                 TimeSpan.FromMilliseconds(1)));
             var tool = new RunProcessTool(
                 processManager,
+                TestPromptLoader.Instance,
                 allowedExecutables: ["bash"],
                 requireApproval: false,
                 shellExecutable: "bash");
@@ -2310,7 +2399,7 @@ public static class ToolRuntimeTests
         {
             var lines = Enumerable.Range(1, 430).Select(index => $"line {index}").ToArray();
             await File.WriteAllLinesAsync(Path.Combine(repository, "source.cs"), lines);
-            var tool = new ReadFileTool();
+            var tool = new ReadFileTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2346,7 +2435,7 @@ public static class ToolRuntimeTests
                 Path.Combine(repository, "long.cs"),
                 Enumerable.Range(1, 2001).Select(static index => index.ToString(
                     System.Globalization.CultureInfo.InvariantCulture)));
-            var tool = new ReadFileTool();
+            var tool = new ReadFileTool(TestPromptLoader.Instance);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2380,7 +2469,7 @@ public static class ToolRuntimeTests
         try
         {
             await File.WriteAllLinesAsync(Path.Combine(repository, "content.txt"), ["1234", "5678", "9"]);
-            var tool = new ReadFileTool(new ToolLimits
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits
             {
                 ReadFileMaximumContentBytes = 9,
             });
@@ -2425,8 +2514,8 @@ public static class ToolRuntimeTests
                 ReadFileDefaultLines = 2,
                 ListFilesMaxEntries = 5,
             };
-            var readTool = new ReadFileTool(tightLimits);
-            var listTool = new ListFilesTool(tightLimits);
+            var readTool = new ReadFileTool(TestPromptLoader.Instance, tightLimits);
+            var listTool = new ListFilesTool(TestPromptLoader.Instance, tightLimits);
 
             // Custom ReadFileMaximumBytes rejects a file that exceeds the configured bound.
             var context = CreateContext(repository) with
@@ -2451,7 +2540,7 @@ public static class ToolRuntimeTests
                 listTool.DeserializeInput("{\"path\":\".\",\"maximumEntries\":6}"));
 
             // Default tool limits (no injection) still apply the compiled 1 MiB read bound, so big.txt reads fine.
-            var defaultReadTool = new ReadFileTool();
+            var defaultReadTool = new ReadFileTool(TestPromptLoader.Instance);
             var defaultResult = await defaultReadTool.ExecuteAsync(
                 new ReadFileInput { Path = "big.txt", MaximumLines = 4 },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
@@ -2473,7 +2562,7 @@ public static class ToolRuntimeTests
     public static async Task DateTimeTool_ReturnsCurrentHostClockInformation()
     {
         var before = DateTimeOffset.UtcNow;
-        var tool = new DateTimeTool();
+        var tool = new DateTimeTool(TestPromptLoader.Instance);
         var result = await tool.ExecuteAsync(
             new DateTimeInput(),
             new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory)),
@@ -2669,7 +2758,7 @@ public static class ToolRuntimeTests
             var configPath = Path.Combine(repository, ".threadsmith", "config.json");
             IConfiguration configuration = new ConfigurationBuilder().Build();
             var engine = new StubCSharpScriptEngine();
-            ITool[] tools = [new DateTimeTool(), new CSharpScriptTool(engine)];
+            ITool[] tools = [new DateTimeTool(TestPromptLoader.Instance), new CSharpScriptTool(engine, TestPromptLoader.Instance)];
             var state = new ToolStateManager(tools.Select(tool => tool.Definition), configuration, configPath);
             var registry = new ToolRegistry(tools, state);
             Assert.Contains(registry.Definitions, definition => definition.Id == "datetime");
@@ -3074,7 +3163,7 @@ public static class ToolRuntimeTests
     [Fact]
     public static void Search_SchedulingDescriptor_SerializesPotentialProcessExecution()
     {
-        var scheduling = new SearchTextTool().Definition.Scheduling;
+        var scheduling = new SearchTextTool(TestPromptLoader.Instance).Definition.Scheduling;
 
         Assert.Equal(ToolConcurrencyMode.SerializedPerRegistration, scheduling.ConcurrencyMode);
         Assert.Equal(1, scheduling.MaximumSourceConcurrency);
@@ -3385,7 +3474,8 @@ public static class ToolRuntimeTests
     private sealed class StaticCodeExploreResultTool : Tool<CodeExploreInput, CodeExploreResult>
     {
         private static readonly ToolDefinition _definition = new CodeExploreTool(
-            new NoopCodeExploreService()).Definition;
+            new NoopCodeExploreService(),
+            TestPromptLoader.Instance).Definition;
 
         private readonly CodeExploreResult _result;
 

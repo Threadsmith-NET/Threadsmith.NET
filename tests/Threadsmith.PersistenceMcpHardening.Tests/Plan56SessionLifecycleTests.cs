@@ -488,7 +488,9 @@ public static class Plan56SessionLifecycleTests
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 sessionUsage: usage,
-                conversationStore: conversations);
+                conversationStore: conversations,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var lifecycle = new SessionLifecycleApplication(
                 repositoryPath,
                 store,

@@ -938,7 +938,8 @@ public sealed class SemanticEngine : ISemanticEngine
                         cancellationToken);
                     if (compilation is null)
                     {
-                        omissions.Add($"Compilation diagnostics were unavailable for project '{project.Name}'.");
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            $"Compilation diagnostics were unavailable for project '{project.Name}'."));
                         continue;
                     }
 
@@ -993,12 +994,13 @@ public sealed class SemanticEngine : ISemanticEngine
             }
             else if (syntaxBlocks)
             {
-                omissions.Add("Compilation diagnostics were skipped because syntax diagnostics blocked compilation.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Compilation diagnostics were skipped because syntax diagnostics blocked compilation."));
             }
             else
             {
-                omissions.Add(
-                    $"Semantic and compilation pre-mutation checks require PartialCompilation confidence; current confidence is {confidence}.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    $"Semantic and compilation pre-mutation checks require PartialCompilation confidence; current confidence is {confidence}."));
             }
         }
         catch (OperationCanceledException)

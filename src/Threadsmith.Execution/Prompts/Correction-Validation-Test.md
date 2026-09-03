@@ -1,0 +1,1 @@
+Selected test project {{ProjectName}} failed with {{FailedCount}} failing tests.

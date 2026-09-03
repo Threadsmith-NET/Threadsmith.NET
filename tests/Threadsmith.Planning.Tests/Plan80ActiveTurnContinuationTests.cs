@@ -35,7 +35,7 @@ public static class Plan80ActiveTurnContinuationTests
                 1_000_000,
                 100,
                 TimeSpan.FromMinutes(2)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -74,8 +74,9 @@ public static class Plan80ActiveTurnContinuationTests
                 });
             var compactor = new ActiveTurnCompactor(
                 candidateProvider,
-                new ActiveTurnCompactionValidator(policy, sanitizer),
-                policy);
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
             var hooks = new RecordingHookCoordinator();
             var usage = new SessionUsageProjection();
             var application = new SessionApplication(
@@ -100,7 +101,9 @@ public static class Plan80ActiveTurnContinuationTests
                 hooks: hooks,
                 activeTurnCompactor: compactor,
                 activeTurnCompactionPolicy: policy,
-                activeTurnCompactionProfile: compactionProfile);
+                activeTurnCompactionProfile: compactionProfile,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-80"));
             var runId = await dispatcher.DispatchAsync(
@@ -241,7 +244,7 @@ public static class Plan80ActiveTurnContinuationTests
                 1_000_000,
                 100,
                 TimeSpan.FromMinutes(2)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -278,8 +281,9 @@ public static class Plan80ActiveTurnContinuationTests
                 });
             var compactor = new ActiveTurnCompactor(
                 candidateProvider,
-                new ActiveTurnCompactionValidator(policy, sanitizer),
-                policy);
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
             var hooks = new RecordingHookCoordinator { BlockActiveTurnCompaction = true };
             var application = new SessionApplication(
                 events,
@@ -301,7 +305,9 @@ public static class Plan80ActiveTurnContinuationTests
                 new ExecutionLimits { MaxModelRounds = 5 },
                 hooks: hooks,
                 activeTurnCompactor: compactor,
-                activeTurnCompactionPolicy: policy);
+                activeTurnCompactionPolicy: policy,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-80-hook"));
             var runId = await dispatcher.DispatchAsync(
@@ -349,7 +355,7 @@ public static class Plan80ActiveTurnContinuationTests
                 1_000_000,
                 100,
                 TimeSpan.FromMinutes(2)));
-            var registry = new ToolRegistry([new ListFilesTool()]);
+            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -384,7 +390,9 @@ public static class Plan80ActiveTurnContinuationTests
                 null,
                 registry,
                 profile.Id,
-                new ExecutionLimits { MaxModelRounds = 3 });
+                new ExecutionLimits { MaxModelRounds = 3 },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-80-order"));
             var runId = await dispatcher.DispatchAsync(
@@ -440,6 +448,7 @@ public static class Plan80ActiveTurnContinuationTests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions { MaximumTokens = 32_000 },
             resolver);
     }

@@ -1,0 +1,1 @@
+Gets bounded read-only Git branch and working-tree status.

@@ -1,0 +1,1 @@
+- … {{HiddenCount}} more impact item{{Plural}} hidden by the model projection.

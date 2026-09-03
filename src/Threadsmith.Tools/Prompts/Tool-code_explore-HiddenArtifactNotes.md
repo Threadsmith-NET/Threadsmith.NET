@@ -1,0 +1,1 @@
+- _{{Count}} artifact note{{PluralSuffix}} not shown._

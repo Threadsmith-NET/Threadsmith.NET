@@ -278,6 +278,7 @@ public sealed class McpManagerTests
             new UnusedSecretResolver(),
             new IdentitySanitizer(),
             NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
             registry);
         await using var manager = new McpManager(
             [Profile("server")],
@@ -404,7 +405,8 @@ public sealed class McpManagerTests
             _ => transport,
             new EmptySecretStore(),
             new IdentitySanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = Profile("server") with
         {
             DrainKillTimeout = TimeSpan.FromSeconds(2),
@@ -446,7 +448,8 @@ public sealed class McpManagerTests
             _ => transport,
             new EmptySecretStore(),
             new IdentitySanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var connection = await adapter.ConnectAsync(Profile("server"));
         var resolvedBeforeDisconnect = Assert.Single(connection.Tools);
         var input = resolvedBeforeDisconnect.DeserializeInput("{\"message\":\"late\"}");

@@ -62,7 +62,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                 [new CallHierarchyEdge(caller.Id, callee.Id, CallDispatchKind.Interface, location, IsAmbiguous: true, ClosesCycle: false)],
                 new SemanticTraversalSummary(2, 1, false, false, false, false, false, ["Runtime-only call targets are not resolved."]));
             var service = new StubAdvancedSemanticService { CallHierarchyResult = result };
-            var tool = new CallHierarchyTool(service);
+            var tool = new CallHierarchyTool(service, TestPromptLoader.Instance);
             using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
             var root = schema.RootElement;
             Assert.False(root.GetProperty("additionalProperties").GetBoolean());
@@ -94,11 +94,28 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal(200, captured.Limits.MaximumNodes);
             Assert.Equal(500, captured.Limits.MaximumEdges);
             Assert.NotNull(execution.ModelResultContent);
-            Assert.Contains("**Call hierarchy:** `symbol:runner.run` (Outgoing, depth 1)", execution.ModelResultContent, StringComparison.Ordinal);
+            var expectedHeader = TestPromptLoader.Instance.Render(
+                PromptFileNames.ToolCallHierarchyResultHeader,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["SymbolId"] = "`symbol:runner.run`",
+                    ["Direction"] = "Outgoing",
+                    ["Depth"] = "1",
+                    ["SymbolCount"] = "2",
+                    ["SymbolPlural"] = "s",
+                    ["RelationshipCount"] = "1",
+                    ["RelationshipPlural"] = string.Empty,
+                });
+            expectedHeader = NormalizePromptLines(expectedHeader);
+            Assert.StartsWith(expectedHeader, execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Calls**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("`Runner.Run` → `IWorker.Execute` (Interface)", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Code.cs", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("ambiguous dispatch", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Get(
+                    PromptFileNames.ToolCallHierarchyCallFlagAmbiguousDispatch).TrimEnd(),
+                execution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.Contains("Runtime-only call targets are not resolved.", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("workspaceGeneration", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         }
@@ -134,14 +151,17 @@ public sealed class Plan43AdvancedSemanticToolTests
                     [],
                     new SemanticTraversalSummary(1, 0, true, false, false, false, false, [])),
             };
-            var noEdgeTool = new CallHierarchyTool(noEdgeService);
+            var noEdgeTool = new CallHierarchyTool(noEdgeService, TestPromptLoader.Instance);
             var defaultInput = Assert.IsType<CallHierarchyInput>(noEdgeTool.DeserializeInput(
                 "{\"symbolId\":\"symbol:root\"}"));
             var noEdgeExecution = await ((ITool)noEdgeTool).ExecuteAsync(defaultInput, CreateToolExecutionContext(repositoryPath), TestContext.Current.CancellationToken);
             var defaultRequest = noEdgeService.CapturedCallHierarchyRequest ?? throw new InvalidOperationException("Expected default call-hierarchy request capture.");
             Assert.Equal(CallHierarchyDirection.Both, defaultRequest.Direction);
             Assert.Equal(2, defaultRequest.Limits.MaximumDepth);
-            Assert.Contains("**Call hierarchy:** `symbol:root` (Both, depth host default)", noEdgeExecution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                "host default",
+                noEdgeExecution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.Contains("**Symbols**", noEdgeExecution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("`Root.Run` (Method, depth 0)", noEdgeExecution.ModelResultContent, StringComparison.Ordinal);
 
@@ -157,14 +177,27 @@ public sealed class Plan43AdvancedSemanticToolTests
                     edges,
                     new SemanticTraversalSummary(2, edges.Length, false, false, false, true, false, ["The traversal edge limit was reached."])),
             };
-            var boundedTool = new CallHierarchyTool(boundedService);
+            var boundedTool = new CallHierarchyTool(boundedService, TestPromptLoader.Instance);
             var directInput = Assert.IsType<CallHierarchyInput>(boundedTool.DeserializeInput(
                 "{\"symbolId\":\"symbol:root\",\"depth\":0}"));
             var boundedExecution = await ((ITool)boundedTool).ExecuteAsync(directInput, CreateToolExecutionContext(repositoryPath), TestContext.Current.CancellationToken);
             var directRequest = boundedService.CapturedCallHierarchyRequest ?? throw new InvalidOperationException("Expected direct call-hierarchy request capture.");
             Assert.Equal(0, directRequest.Limits.MaximumDepth);
-            Assert.Contains("cycle", boundedExecution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("1 more call relationship hidden by the model projection", boundedExecution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Get(
+                    PromptFileNames.ToolCallHierarchyCallFlagCycle).TrimEnd(),
+                boundedExecution.ModelResultContent,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Render(
+                    PromptFileNames.ToolCallHierarchyHiddenCallRelationships,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["HiddenCount"] = "1",
+                        ["Plural"] = string.Empty,
+                    }).TrimEnd(),
+                boundedExecution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.Contains("The traversal edge limit was reached.", boundedExecution.ModelResultContent, StringComparison.Ordinal);
         }
         finally
@@ -266,7 +299,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                 ],
                 new SemanticTraversalSummary(3, 2, false, false, false, false, false, ["Runtime-only relationships are not resolved."]));
             var service = new StubAdvancedSemanticService { SymbolImpactResult = result };
-            var tool = new SymbolImpactTool(service);
+            var tool = new SymbolImpactTool(service, TestPromptLoader.Instance);
             using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
             var root = schema.RootElement;
             Assert.False(root.GetProperty("additionalProperties").GetBoolean());
@@ -291,11 +324,25 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal("symbol:root", captured.SymbolId);
             Assert.Equal(2, captured.Limits.MaximumDepth);
             Assert.NotNull(execution.ModelResultContent);
-            Assert.Contains("**Symbol impact:** `symbol:root`", execution.ModelResultContent, StringComparison.Ordinal);
+            var expectedHeader = TestPromptLoader.Instance.Render(
+                PromptFileNames.ToolSymbolImpactResultHeader,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["SymbolId"] = "`symbol:root`",
+                    ["NodeCount"] = "3",
+                    ["NodePlural"] = "s",
+                    ["RelationshipCount"] = "2",
+                    ["RelationshipPlural"] = "s",
+                });
+            expectedHeader = NormalizePromptLines(expectedHeader);
+            Assert.StartsWith(expectedHeader, execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Ranked impact**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("**Caller:** `Runner.Run`", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Runner.Run calls the requested member.", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("**Test:** `Library.Tests` — project `Library.Tests`", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                "**Test:** `Library.Tests` — project `Library.Tests`",
+                execution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.True(
                 execution.ModelResultContent.IndexOf("**Caller:**", StringComparison.Ordinal)
                 < execution.ModelResultContent.IndexOf("**Test:**", StringComparison.Ordinal));
@@ -415,15 +462,17 @@ public sealed class Plan43AdvancedSemanticToolTests
             result.Matches,
             match => string.Equals(Path.GetFileName(match.Location.FilePath), "Code.cs", StringComparison.Ordinal));
 
-        var tool = new CSharpPatternSearchTool(new StubAdvancedSemanticService
-        {
-            PatternResult = new CSharpPatternSearchResult(
-                1,
-                SemanticConfidenceLevel.FullSemantic,
-                [],
-                true,
-                []),
-        });
+        var tool = new CSharpPatternSearchTool(
+            new StubAdvancedSemanticService
+            {
+                PatternResult = new CSharpPatternSearchResult(
+                    1,
+                    SemanticConfidenceLevel.FullSemantic,
+                    [],
+                    true,
+                    []),
+            },
+            TestPromptLoader.Instance);
         var input = Assert.IsType<CSharpPatternSearchInput>(tool.DeserializeInput(
             JsonSerializer.Serialize(new { kind = "MethodDeclaration", name = decomposedName })));
         Assert.Equal(decomposedName, input.Name);
@@ -451,15 +500,17 @@ public sealed class Plan43AdvancedSemanticToolTests
             var callee = new SemanticSymbolIdentity("M:Example.Callee`2.Execute", "Callee`2.Execute", "Method");
             var context = CreateToolExecutionContext(repositoryPath);
 
-            var callTool = new CallHierarchyTool(new StubAdvancedSemanticService
-            {
-                CallHierarchyResult = new CallHierarchyResult(
-                    3,
-                    SemanticConfidenceLevel.FullSemantic,
-                    [new CallHierarchyNode(caller, [location], 0), new CallHierarchyNode(callee, [location], 1)],
-                    [new CallHierarchyEdge(caller.Id, callee.Id, CallDispatchKind.Direct, location, false, false)],
-                    new SemanticTraversalSummary(2, 1, true, false, false, false, false, [])),
-            });
+            var callTool = new CallHierarchyTool(
+                new StubAdvancedSemanticService
+                {
+                    CallHierarchyResult = new CallHierarchyResult(
+                        3,
+                        SemanticConfidenceLevel.FullSemantic,
+                        [new CallHierarchyNode(caller, [location], 0), new CallHierarchyNode(callee, [location], 1)],
+                        [new CallHierarchyEdge(caller.Id, callee.Id, CallDispatchKind.Direct, location, false, false)],
+                        new SemanticTraversalSummary(2, 1, true, false, false, false, false, [])),
+                },
+                TestPromptLoader.Instance);
             var callExecution = await ((ITool)callTool).ExecuteAsync(
                 new CallHierarchyInput
                 {
@@ -477,18 +528,20 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Contains("(`Library - injected`)", callMarkdown, StringComparison.Ordinal);
             Assert.DoesNotContain("\n- injected", callMarkdown, StringComparison.Ordinal);
 
-            var impactTool = new SymbolImpactTool(new StubAdvancedSemanticService
-            {
-                SymbolImpactResult = new SymbolImpactResult(
-                    3,
-                    SemanticConfidenceLevel.FullSemantic,
-                    [
-                        new ImpactNode("symbol:root", "Root`1", ImpactKind.RootSymbol, location, projectName),
-                        new ImpactNode(caller.Id, caller.DisplayName, ImpactKind.Caller, location, projectName),
-                    ],
-                    [new ImpactEdge("symbol:root", caller.Id, ImpactKind.Caller, "Reason\ncontinued")],
-                    new SemanticTraversalSummary(1, 1, true, false, false, false, false, [])),
-            });
+            var impactTool = new SymbolImpactTool(
+                new StubAdvancedSemanticService
+                {
+                    SymbolImpactResult = new SymbolImpactResult(
+                        3,
+                        SemanticConfidenceLevel.FullSemantic,
+                        [
+                            new ImpactNode("symbol:root", "Root`1", ImpactKind.RootSymbol, location, projectName),
+                            new ImpactNode(caller.Id, caller.DisplayName, ImpactKind.Caller, location, projectName),
+                        ],
+                        [new ImpactEdge("symbol:root", caller.Id, ImpactKind.Caller, "Reason\ncontinued")],
+                        new SemanticTraversalSummary(1, 1, true, false, false, false, false, [])),
+                },
+                TestPromptLoader.Instance);
             var impactExecution = await ((ITool)impactTool).ExecuteAsync(
                 new SymbolImpactInput { SymbolId = caller.Id },
                 context,
@@ -500,15 +553,17 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Contains("Reason continued", impactMarkdown, StringComparison.Ordinal);
             Assert.DoesNotContain("Reason\ncontinued", impactMarkdown, StringComparison.Ordinal);
 
-            var patternTool = new CSharpPatternSearchTool(new StubAdvancedSemanticService
-            {
-                PatternResult = new CSharpPatternSearchResult(
-                    3,
-                    SemanticConfidenceLevel.FullSemantic,
-                    [new CSharpPatternMatch(CSharpPatternKind.MethodDeclaration, location, [])],
-                    true,
-                    []),
-            });
+            var patternTool = new CSharpPatternSearchTool(
+                new StubAdvancedSemanticService
+                {
+                    PatternResult = new CSharpPatternSearchResult(
+                        3,
+                        SemanticConfidenceLevel.FullSemantic,
+                        [new CSharpPatternMatch(CSharpPatternKind.MethodDeclaration, location, [])],
+                        true,
+                        []),
+                },
+                TestPromptLoader.Instance);
             var patternExecution = await ((ITool)patternTool).ExecuteAsync(
                 new CSharpPatternSearchInput
                 {
@@ -560,7 +615,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                     false,
                     ["The host-owned match cap was reached."]),
             };
-            var tool = new CSharpPatternSearchTool(service);
+            var tool = new CSharpPatternSearchTool(service, TestPromptLoader.Instance);
             using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
             var root = schema.RootElement;
             Assert.False(root.GetProperty("additionalProperties").GetBoolean());
@@ -618,7 +673,16 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.NotNull(execution.ModelResultContent);
             Assert.Contains("**C# pattern search:**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("Code.cs", execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains("1 more match hidden by the model projection", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Render(
+                    PromptFileNames.ToolCsharpPatternSearchHiddenMatches,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["HiddenCount"] = "1",
+                        ["Plural"] = string.Empty,
+                    }).TrimEnd(),
+                execution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.Contains("**Omissions**", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("The host-owned match cap was reached.", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("workspaceGeneration", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
@@ -674,7 +738,16 @@ public sealed class Plan43AdvancedSemanticToolTests
                     1,
                     SemanticConfidenceLevel.FullSemantic,
                     [
-                        new GeneratedDocumentInfo("allowed", "Allowed.g.cs", "Project", allowedPath, false, GeneratedCodeOrigin.FileConvention, null, "allowed", false),
+                        new GeneratedDocumentInfo(
+                            "allowed",
+                            "Allowed.g.cs",
+                            "Project",
+                            allowedPath,
+                            false,
+                            GeneratedCodeOrigin.FileConvention,
+                            null,
+                            "allowed" + new string('a', 5_000),
+                            true),
                         new GeneratedDocumentInfo("secret", "Token.g.cs", "Project", prohibitedPath, false, GeneratedCodeOrigin.FileConvention, null, "secret", false),
                     ],
                     true,
@@ -694,7 +767,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                     RequestedBy = "plan-43-tests",
                 });
 
-            var execution = await new GeneratedCodeTool(stub).ExecuteAsync(
+            var execution = await new GeneratedCodeTool(stub, TestPromptLoader.Instance).ExecuteAsync(
                 new GeneratedCodeQuery { IncludeContent = true },
                 context,
                 TestContext.Current.CancellationToken);
@@ -703,9 +776,19 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal("Allowed.g.cs", document.Name);
             Assert.False(execution.Value.IsComplete);
             Assert.True(execution.IsTruncated);
-            Assert.Contains(execution.Value.Omissions, omission => omission.Contains("path policy", StringComparison.Ordinal));
+            Assert.Contains(
+                TestPromptLoader.Instance.Get(PromptFileNames.ToolAdvancedSemanticPathPolicyOmission).TrimEnd(),
+                execution.Value.Omissions);
             Assert.Contains("Allowed.g.cs", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.Contains("allowed", execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Get(PromptFileNames.ToolGeneratedCodeQueryContentHostTruncation).TrimEnd(),
+                execution.ModelResultContent,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                TestPromptLoader.Instance.Get(PromptFileNames.ToolGeneratedCodeQueryContentProjectionTruncation).TrimEnd(),
+                execution.ModelResultContent,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("Token.g.cs", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("secret", execution.ModelResultContent, StringComparison.Ordinal);
             Assert.DoesNotContain("workspaceGeneration", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
@@ -723,13 +806,25 @@ public sealed class Plan43AdvancedSemanticToolTests
         var stub = new StubAdvancedSemanticService();
         ITool[] tools =
         [
-            new CallHierarchyTool(stub),
-            new SymbolImpactTool(stub),
-            new CSharpPatternSearchTool(stub),
-            new GeneratedCodeTool(stub),
+            new CallHierarchyTool(stub, TestPromptLoader.Instance),
+            new SymbolImpactTool(stub, TestPromptLoader.Instance),
+            new CSharpPatternSearchTool(stub, TestPromptLoader.Instance),
+            new GeneratedCodeTool(stub, TestPromptLoader.Instance),
         ];
 
         Assert.Equal(4, tools.Select(tool => tool.Definition.Id).Distinct(StringComparer.Ordinal).Count());
+        string[] descriptionAssets =
+        [
+            PromptFileNames.ToolCallHierarchyDescription,
+            PromptFileNames.ToolSymbolImpactDescription,
+            PromptFileNames.ToolCsharpPatternSearchDescription,
+            PromptFileNames.ToolGeneratedCodeQueryDescription,
+        ];
+        Assert.All(
+            tools.Select((tool, index) => (Tool: tool, Asset: descriptionAssets[index])),
+            item => Assert.Equal(
+                TestPromptLoader.Instance.Get(item.Asset),
+                item.Tool.Definition.Description));
         Assert.All(tools, tool => Assert.Equal(ToolSideEffect.ReadOnly, tool.Definition.SideEffect));
         Assert.All(tools, tool => Assert.Equal(ToolCategory.SemanticSearch, tool.Definition.Category));
         Assert.All(
@@ -769,6 +864,15 @@ public sealed class Plan43AdvancedSemanticToolTests
                 ApprovedRoots = ["."],
                 RequestedBy = "plan-43-tests",
             });
+    }
+
+    private static string NormalizePromptLines(string value)
+    {
+        return value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .TrimEnd('\n')
+            .Replace("\n", Environment.NewLine, StringComparison.Ordinal);
     }
 
     private sealed class StubAdvancedSemanticService : IAdvancedSemanticQueryService
@@ -839,7 +943,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         }
 
         public SemanticEngineRegistry Registry { get; }

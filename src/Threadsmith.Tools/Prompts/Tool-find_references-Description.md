@@ -1,0 +1,1 @@
+Primary compiler-aware tool for C# symbol references. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.

@@ -50,7 +50,8 @@ public sealed class Plan91DelegationToolTests
         var factory = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(baseline),
             preferences,
-            toolSnapshots);
+            toolSnapshots,
+            TestPromptLoader.Instance);
         var context = CreateExecutionContext(
             workspaceId,
             ConversationSensitivity.Sensitive,
@@ -131,6 +132,7 @@ public sealed class Plan91DelegationToolTests
             new StubWorkspaceResolver(baseline),
             new SessionModelPreferences(),
             toolSnapshots,
+            TestPromptLoader.Instance,
             new DelegateAgentsOptions
             {
                 MaximumAgents = 1,
@@ -206,7 +208,8 @@ public sealed class Plan91DelegationToolTests
         var factory = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(baseline),
             new SessionModelPreferences(),
-            toolSnapshots);
+            toolSnapshots,
+            TestPromptLoader.Instance);
         var context = CreateExecutionContext(
             workspaceId,
             ConversationSensitivity.None,
@@ -317,19 +320,23 @@ public sealed class Plan91DelegationToolTests
         var firstPlan = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(first),
             new SessionModelPreferences(),
-            toolSnapshots).Create(input, context);
+            toolSnapshots,
+            TestPromptLoader.Instance).Create(input, context);
         var secondPlan = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(second),
             new SessionModelPreferences(),
-            toolSnapshots).Create(input, context);
+            toolSnapshots,
+            TestPromptLoader.Instance).Create(input, context);
         var delimitedPlan = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(delimited),
             new SessionModelPreferences(),
-            toolSnapshots).Create(input, context);
+            toolSnapshots,
+            TestPromptLoader.Instance).Create(input, context);
         var formerlyAmbiguousPlan = new DelegateAgentsPlanFactory(
             new StubWorkspaceResolver(formerlyAmbiguous),
             new SessionModelPreferences(),
-            toolSnapshots).Create(input, context);
+            toolSnapshots,
+            TestPromptLoader.Instance).Create(input, context);
 
         // Assert
         Assert.NotEqual(firstPlan.Provenance.BaselineIdentity, secondPlan.Provenance.BaselineIdentity);

@@ -9,14 +9,16 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 ## Ownership
 
 - `docs/user-guide.md` — Primary comprehensive user-facing guide for currently implemented behavior.
+- `docs/prompt-file-reference.md` — Categorized user-facing prompt-file catalog and complete placeholder glossary.
 - `docs/skill-authoring.md` — Declarative package layout, manifest/schema/workflow/signing/import/testing guide.
+- `docs/operations/prompts.md` — Complete deployed prompt-asset catalog, safe customization, restart, capacity, logging, and upgrade behavior.
 - `docs/skill-compatibility-spec-v1.md` — pinned Agent Skills and Claude-extension metadata/parser/tool-mapping compatibility contract.
 - `docs/hook-authoring.md` — Lifecycle-hook envelope/result protocol, compatibility, and handler bounds.
 - `docs/third-party-license-inventory-status.md` and `docs/dotnet-package-graph.json` — durable release-licensing assessment and machine-readable restored dependency snapshot; update together when release closure evidence is refreshed.
 - `docs/architecture/` — Architecture Decision Records (ADRs), the `delegate_agents` and `code_explore` implementation guides, including ADR-34 governed declarative skills, ADR-36 structured file lifecycle mutations, ADR-37 canonical release payloads/installers, ADR-38 closed OpenAI-compatible reasoning compatibility, ADR-39 compatible skill adaptation/active model selection, ADR-40 native Codex provider isolation/output reserve semantics, ADR-41 canonical cache-optimized model requests, ADR-42 serialized active-session lifecycle, ADR-43 host-owned tool effect/conflict scheduling, ADR-44 governed web fetch, ADR-45 host-owned MCP lifecycle management, ADR-47 low-friction exact fetch authorization, ADR-48 extensible static-secret discovery, ADR-49 canonical release-license closure and fail-closed publication, ADR-50 local repository-scoped cross-session memory, and spike notes.
 - `docs/guardrails/` — Portable C# coding guardrails (G-1…G-31).
 - `docs/implementation-plans/` — Governed implementation records, milestone lifecycle, acceptance specifications, manual verification, and dependency sequencing; governed by its child `AGENTS.md`.
-- `docs/operations/` — Operator-facing interaction references, including keyboard shortcuts, repository opening, providers/tools/themes, bounded conversation context, approved-plan execution cancellation/checkpoint/resumption, parallel-agent delegation/worktree recovery, governed skill catalog/workflow operations, lifecycle-hook installation/trust/audit/recovery, cross-platform release packaging/publication, cache-optimized context diagnostics/recovery, durable session lifecycle/resume/clone, interactive/headless MCP lifecycle management, and static-secret discovery operations.
+- `docs/operations/` — Operator-facing interaction references, including deployed prompt assets, keyboard shortcuts, repository opening, providers/tools/themes, bounded conversation context, approved-plan execution cancellation/checkpoint/resumption, parallel-agent delegation/worktree recovery, governed skill catalog/workflow operations, lifecycle-hook installation/trust/audit/recovery, cross-platform release packaging/publication, cache-optimized context diagnostics/recovery, durable session lifecycle/resume/clone, interactive/headless MCP lifecycle management, and static-secret discovery operations.
 - `docs/extension-authoring/` — Stable host contracts that future extension packages must preserve, plus the `authoring-guide.md` walkthrough (reference convention, capabilities, unload-leak avoidance).
 - `docs/testing/` — Test fixture and deterministic fake-model format documentation.
 
@@ -27,6 +29,12 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 - Document implemented user-facing behavior only; planned features remain in implementation plans until they ship.
 - Cover installation, startup, repository onboarding, trust, interaction, governed changes, tools, models, configuration, extensions, automation, safety, and troubleshooting.
 - Keep the root README concise: product overview, quick start, repository build/test commands, layout, status, and links belong there; operational detail belongs in the guide.
+
+### Prompt asset references
+
+- `docs/operations/prompts.md` owns source/deployment paths, exact catalog purpose text, token contracts, operational limits, logging, and upgrade behavior. `docs/prompt-file-reference.md` owns the user-facing categorized catalog and placeholder-meaning glossary.
+- Update both files in the same change whenever a prompt file is added, removed, renamed, recategorized, or repurposed; a required or optional token changes; or a call site changes what a token value means.
+- Keep every prompt listed exactly once, category and total counts exact, required and optional tokens distinguished, and every declared token linked to one accurate glossary definition. Derive claims from the loader, code-owned catalog, prompt body, and rendering call sites rather than from filename inference alone.
 
 ### `docs/architecture/`
 
@@ -55,6 +63,7 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 - Follow the planning subtree's dependency and prerequisite rules; unrelated work may proceed when its prerequisites are satisfied.
 - Keep implemented user-facing documentation synchronized with behavior; do not copy planning progress into this `AGENTS.md`.
 - Update `docs/user-guide.md` in the same change whenever implemented behavior affects installation, startup, commands, configuration, trust, tools, models, extensions, safety boundaries, output, exit codes, or troubleshooting.
+- Keep the prompt asset references synchronized under the local contract above; do not update one catalog without the other.
 - Update the manual test plan only when an executable user/operator verification procedure changes; do not add planning or coverage-status narratives.
 - Keep startup repository defaults, branded status fields, repository-aware prompts, interactive slash commands, and numbered choice behavior synchronized across their owning implementation, operator documentation, and maintained manual tests.
 - When a spike completes, update `docs/architecture/spike-notes.md` with results, versions, and deviations.
@@ -62,7 +71,7 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 
 ## Verification
 
-- No automated verification yet. Manual review ensures consistency between implementation records, ADRs, guardrails, implemented contracts, shared context, and declared dependencies.
+- Architecture tests verify the deployed prompt catalogs and placeholder glossary against code-owned metadata. Manual review ensures consistency between implementation records, ADRs, guardrails, implemented contracts, shared context, and declared dependencies.
 
 ## Child DOX Index
 

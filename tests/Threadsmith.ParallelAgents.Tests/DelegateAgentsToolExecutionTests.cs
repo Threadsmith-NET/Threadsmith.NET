@@ -93,6 +93,28 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(result.DelegationId, execution.Sources.Single().Identifier);
         Assert.Contains(result.DelegationId, execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("raw child transcript sentinel", execution.ModelResultContent, StringComparison.Ordinal);
+        var firstChild = result.Children[0];
+        var firstFinding = Assert.Single(firstChild.Findings);
+        Assert.Contains(
+            PromptAssetRenderer.RenderWithPlatformLineEndings(
+                TestPromptLoader.Instance,
+                PromptFileNames.ToolDelegateAgentsFinding,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["AssignmentId"] = $"{firstChild.AssignmentId}",
+                    ["Title"] = firstFinding.Title,
+                    ["FilePathBlock"] = firstFinding.FilePath is null
+                        ? string.Empty
+                        : $" [{firstFinding.FilePath}]",
+                    ["SymbolBlock"] = firstFinding.Symbol is null
+                        ? string.Empty
+                        : $" symbol={firstFinding.Symbol}",
+                    ["Evidence"] = firstFinding.Evidence,
+                    ["Confidence"] = $"{firstFinding.Confidence}",
+                    ["UncertaintyBlock"] = string.Empty,
+                }),
+            execution.ModelResultContent,
+            StringComparison.Ordinal);
         Assert.NotNull(inspected);
         Assert.Equal(DelegationCheckpointPhase.ResearchJoined, inspected.Phase);
         Assert.Contains(checkpoints.History, checkpoint =>
@@ -112,6 +134,34 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.All(
             observed.OfType<AgentRunLifecycleObserved>(),
             domainEvent => Assert.True(domainEvent.Revision > 0));
+    }
+
+    /// <summary>Verifies finding uncertainty uses the exact conditional prompt block.</summary>
+    [Fact]
+    public async Task ExecuteAsync_FindingUncertainty_RendersExactConditionalPromptBlock()
+    {
+        // Arrange
+        const string uncertainty = "bounded uncertainty";
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new UncertainFindingRunner(uncertainty)));
+
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+
+        // Assert
+        var expected = PromptAssetRenderer.RenderWithPlatformLineEndings(
+            TestPromptLoader.Instance,
+            PromptFileNames.ToolDelegateAgentsFindingUncertainty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Uncertainty"] = uncertainty,
+            });
+        Assert.Contains(expected, execution.ModelResultContent, StringComparison.Ordinal);
     }
 
     /// <summary>Verifies an active delegation can be inspected while its child is still running.</summary>
@@ -646,6 +696,64 @@ public sealed class DelegateAgentsToolExecutionTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>Enlarged editable blocks cannot bypass the model projection bound or hide truncation.</summary>
+    [Fact]
+    public async Task ExecuteAsync_EnlargedPromptBlocks_RemainBoundedAndCountOmissions()
+    {
+        // Arrange
+        const int maximumModelProjectionCharacters = 48 * 1024;
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var prompts = TestPromptLoader.Instance
+            .WithPrompt(
+                PromptFileNames.ToolDelegateAgentsResultHeader,
+                new string('h', 100_000) + "{{DelegationId}}{{Status}}")
+            .WithPrompt(
+                PromptFileNames.ToolDelegateAgentsChildStatus,
+                new string('c', 100_000) + "{{AssignmentId}}{{Role}}{{ToolAccess}}{{Status}}");
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new CompletedFindingRunner()),
+            prompts: prompts);
+
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+
+        // Assert
+        var modelContent = Assert.IsType<string>(execution.ModelResultContent);
+        Assert.True(execution.IsTruncated);
+        Assert.True(modelContent.Length <= maximumModelProjectionCharacters);
+        Assert.Contains(
+            "2 complete detail block(s) omitted by the model projection bound.",
+            modelContent,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>An editable truncation footer that cannot fit fails without returning partial prose.</summary>
+    [Fact]
+    public async Task ExecuteAsync_EnlargedTruncationPrompt_FailsWithoutPartialProjection()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.ToolDelegateAgentsTruncation,
+            "{{OmittedBlockCount}}" + new string('t', 100_000));
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new CompletedFindingRunner()),
+            prompts: prompts);
+
+        // Act and assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context));
+        Assert.Contains("truncation prompt exceeds", exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Verifies a non-cooperative progress store cannot indefinitely block child completion.</summary>
     [Fact]
     public async Task ExecuteAsync_NonCooperativeProgressCheckpoint_CompletesWithinBound()
@@ -724,7 +832,8 @@ public sealed class DelegateAgentsToolExecutionTests
     private static ToolFixture CreateTool(
         IDelegationCoordinator coordinator,
         IExplorerAssignmentRunnerFactory runners,
-        DelegateAgentsOptions? configuredOptions = null)
+        DelegateAgentsOptions? configuredOptions = null,
+        IPromptLoader? prompts = null)
     {
         var workspaceId = WorkspaceId.New();
         var baseline = new WorkspaceBaseline(
@@ -757,9 +866,15 @@ public sealed class DelegateAgentsToolExecutionTests
             new StubWorkspaceResolver(baseline),
             new SessionModelPreferences(),
             snapshots,
+            TestPromptLoader.Instance,
             options);
         return new ToolFixture(
-            new DelegateAgentsTool(plans, runners, coordinator, options),
+            new DelegateAgentsTool(
+                plans,
+                runners,
+                coordinator,
+                options,
+                prompts ?? TestPromptLoader.Instance),
             context,
             plans);
     }
@@ -835,6 +950,24 @@ public sealed class DelegateAgentsToolExecutionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateCompletedOutcome(plan, assignment));
+        }
+    }
+
+    private sealed class UncertainFindingRunner(string uncertainty) : IAgentAssignmentRunner
+    {
+        public Task<AgentRunOutcome> RunAsync(
+            DelegationPlan plan,
+            AgentAssignment assignment,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var completed = CreateCompletedOutcome(plan, assignment);
+            var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
+            var finding = Assert.Single(findings.Findings) with { Uncertainty = uncertainty };
+            return Task.FromResult(completed with
+            {
+                Findings = findings with { Findings = [finding] },
+            });
         }
     }
 

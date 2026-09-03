@@ -1,0 +1,1 @@
+Primary compiler-aware tool for bounded reference, caller, implementation, project, test, and classified-source impact. Arguments use the flat shape {symbolId}. Host owns traversal depth, node/edge counts, and time bounds. MUST use before search and fall back only if this tool fails or reports incomplete evidence.

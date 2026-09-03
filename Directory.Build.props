@@ -57,6 +57,7 @@
     <NoWarn>$(NoWarn);SA1118;SA1515;SA1600;SA1601</NoWarn>
   </PropertyGroup>
 
+
   <PropertyGroup Condition="'$(IsPackable)' == ''">
     <IsPackable>false</IsPackable>
   </PropertyGroup>

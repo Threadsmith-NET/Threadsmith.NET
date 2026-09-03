@@ -11,6 +11,8 @@ Host the 21 Threadsmith.NET product projects implementing a .NET-native coding h
 - Owns product-source layering, dependency direction, and cross-project implementation contracts.
 - `Threadsmith.App` is the composition root — references all other product projects.
 - `Threadsmith.Core`, `Threadsmith.Extensions.Abstractions`, and the isolated `Threadsmith.Scripting.Worker` reference no other `Threadsmith.*` project.
+- `Threadsmith.Core` owns the filesystem-neutral prompt loader/catalog contracts; `Threadsmith.Context` owns deployed loading; owning consumers keep source Markdown under their own `Prompts/` directories; `Threadsmith.App` composes one loader and flattens the complete catalog into application output.
+- `Threadsmith.Execution/Prompts/` owns planning/mutation/delegation descriptions, corrections, delegated-child request guidance, active-run steering framing, and joined-delegation result prose; execution policy and schemas remain in C#.
 
 ## Local Contracts
 
@@ -50,6 +52,7 @@ Projects are organized in dependency layers. A project may only reference projec
 - Central Package Management: add packages in `Directory.Packages.props`, never inline.
 - Nullable enabled, no `!` suppression.
 - Constructor injection only; no property injection.
+- Model-facing host prose comes from constructor-injected `IPromptLoader` access using `PromptFileNames`; do not add inline fallback prose or independent filesystem reads. C# owns prompt selection, roles, ordering, schemas, policy, sanitization, bounds, and named-token values. Preserve the exact default wording and whitespace when externalizing an existing sink.
 - Return host-owned DTOs across subsystem boundaries — no SDK, Roslyn, extension, PrettyPrompt, or Spectre.Console types in domain events or persistent state. `ApprovalRequested.Action` is presentation-only; semantic routing uses the closed host-owned `ApprovalRequestKind`, and legacy `Unspecified` events remain unclassified rather than inferring authority from text.
 - Model endpoints are selected per request from `ConfiguredModelCatalog`; the effective catalog binds selected profiles to immutable compiled-provider registrations after bounded user/repository ID-based layering and allowlisted polymorphic deserialization. Sensitivity is classified before selection and asserted again at the provider boundary. Shared session model preferences track the effective profile, start from its validated reasoning default, and durably reset reasoning to `None` when resolution changes profile. OpenAI reasoning compatibility is closed/versioned, projects provider-neutral selectable/always-on/unsupported capability, preserves legacy request behavior when absent, and prevents repository overrides from changing an inherited compatibility mode/version. Explicit process-scoped raw model exchange diagnostics wrap the provider-neutral `IModelProvider` boundary only when requested, never persist an enabled setting, require repository-local output paths to be untracked, unstaged, and effectively Git-ignored, and must not record HTTP authorization headers or credentials.
 - Remote model endpoints require HTTPS. Plain HTTP is limited to loopback local-provider endpoints.

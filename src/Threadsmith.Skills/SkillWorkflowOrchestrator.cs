@@ -11,6 +11,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly ISkillCompatibilityEvaluator _compatibility;
     private readonly ISkillContentLoader _content;
     private readonly IDomainEventStream _events;
+    private readonly IPromptLoader _prompts;
     private readonly ISkillPackageVerifier _verifier;
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
@@ -25,6 +26,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         ISkillContentLoader content,
         BoundedJsonSchemaValidator schemas,
         ISkillProcedureRunner runner,
+        IPromptLoader prompts,
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
         IDomainEventStream events)
@@ -35,6 +37,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(schemas);
         ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(hostContext);
         ArgumentNullException.ThrowIfNull(events);
@@ -44,6 +47,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _content = content;
         _schemas = schemas;
         _runner = runner;
+        _prompts = prompts;
         _state = state;
         _hostContext = hostContext;
         _events = events;
@@ -102,7 +106,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             AvailableToolIds = plan.AvailableToolIds,
             EffectiveBudget = budget,
             Status = SkillInvocationStatus.Accepted,
-            NextAction = "execute first eligible workflow step",
+            NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionExecuteFirstEligibleStep),
             RecordedAt = DateTimeOffset.UtcNow,
         };
         await SaveAsync(checkpoint, expectedVersion: null, cancellationToken);
@@ -135,7 +139,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
-            NextAction = "resume from the next incomplete safe workflow step",
+            NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionResumeNextIncompleteSafeStep),
             RecordedAt = DateTimeOffset.UtcNow,
         };
         await SaveAsync(resumed, VersionOf(checkpoint), cancellationToken);
@@ -180,7 +184,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
-            NextAction = "execute next workflow step after host result",
+            NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionExecuteAfterHostResult),
             RecordedAt = DateTimeOffset.UtcNow,
         };
         await SaveAsync(continued, VersionOf(checkpoint), cancellationToken);
@@ -222,7 +226,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var cancelled = checkpoint with
             {
                 Status = SkillInvocationStatus.Cancelled,
-                NextAction = "resume after package, policy, schema, and repository revalidation",
+                NextAction = GetPromptValue(
+                    PromptFileNames.SkillWorkflowNextActionResumeAfterPackagePolicySchemaRepositoryRevalidation),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(cancelled, VersionOf(checkpoint), cancellationToken);
@@ -252,7 +257,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var running = checkpoint with
             {
                 Status = SkillInvocationStatus.Running,
-                NextAction = "execute bounded declarative workflow",
+                NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionExecuteBoundedDeclarativeWorkflow),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(running, VersionOf(checkpoint), source.Token);
@@ -296,8 +301,13 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                         ? SkillInvocationStatus.Running
                         : SkillInvocationStatus.AwaitingHost,
                     NextAction = result.HostAction is null
-                        ? "execute next eligible workflow step"
-                        : $"host must resolve {result.HostAction.Kind}",
+                        ? GetPromptValue(PromptFileNames.SkillWorkflowNextActionExecuteNextEligibleStep)
+                        : RenderPromptValue(
+                            PromptFileNames.SkillWorkflowNextActionResolveHostAction,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["HostActionKind"] = result.HostAction.Kind.ToString(),
+                            }),
                     RecordedAt = DateTimeOffset.UtcNow,
                 };
                 await SaveAsync(current, VersionOf(latest), source.Token);
@@ -311,7 +321,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var completed = current with
             {
                 Status = SkillInvocationStatus.Completed,
-                NextAction = "inspect authoritative skill outcome",
+                NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectAuthoritativeOutcome),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(completed, VersionOf(current), CancellationToken.None);
@@ -323,7 +333,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var cancelled = latest with
             {
                 Status = SkillInvocationStatus.Cancelled,
-                NextAction = "resume after complete package and host-policy revalidation",
+                NextAction = GetPromptValue(
+                    PromptFileNames.SkillWorkflowNextActionResumeAfterCompletePackageHostPolicyRevalidation),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(cancelled, VersionOf(latest), CancellationToken.None);
@@ -339,7 +350,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var failed = latest with
             {
                 Status = SkillInvocationStatus.Failed,
-                NextAction = "inspect sanitized failure and resume only after revalidation",
+                NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectFailureThenRevalidate),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(failed, VersionOf(latest), CancellationToken.None);
@@ -353,6 +364,18 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             _active.TryRemove(checkpoint.InvocationId, out _);
         }
+    }
+
+    private string GetPromptValue(string promptFileName)
+    {
+        return _prompts.Get(promptFileName).TrimEnd('\r', '\n');
+    }
+
+    private string RenderPromptValue(
+        string promptFileName,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        return _prompts.Render(promptFileName, tokens).TrimEnd('\r', '\n');
     }
 
     private async Task<SkillWorkflowStepResult> ExecuteStepAsync(

@@ -29,7 +29,7 @@ public sealed class Plan42NativeValidationToolTests
         var process = new RecordingProcessManager();
         var service = new NativeValidationToolService(process);
 
-        var execution = await new NuGetHealthTool(service).ExecuteAsync(
+        var execution = await new NuGetHealthTool(service, TestPromptLoader.Instance).ExecuteAsync(
             new NuGetDependencyHealthRequest { ProjectPath = "src/App/App.csproj" },
             CreateToolExecutionContext(repository.Path),
             TestContext.Current.CancellationToken);
@@ -138,7 +138,7 @@ public sealed class Plan42NativeValidationToolTests
         Assert.Equal(ValidationAuthority.Exploratory, format.Authority);
         Assert.Single(query.Items);
 
-        var toolExecution = await new DotNetBuildTool(service).ExecuteAsync(
+        var toolExecution = await new DotNetBuildTool(service, TestPromptLoader.Instance).ExecuteAsync(
             new BuildToolRequest { TargetPath = "App.csproj" },
             CreateToolExecutionContext(repository.Path, runId),
             TestContext.Current.CancellationToken);
@@ -181,7 +181,7 @@ public sealed class Plan42NativeValidationToolTests
         var runId = RunId.New();
 
         var context = CreateToolExecutionContext(repository.Path, runId);
-        var discoveryExecution = await new TestDiscoveryTool(service).ExecuteAsync(
+        var discoveryExecution = await new TestDiscoveryTool(service, TestPromptLoader.Instance).ExecuteAsync(
             new TestDiscoveryRequest
             {
                 ProjectPath = "Tests.csproj",
@@ -190,7 +190,7 @@ public sealed class Plan42NativeValidationToolTests
             context,
             TestContext.Current.CancellationToken);
         var discovery = discoveryExecution.Value;
-        var resultExecution = await new TargetedTestTool(service).ExecuteAsync(
+        var resultExecution = await new TargetedTestTool(service, TestPromptLoader.Instance).ExecuteAsync(
             new TargetedTestRequest { TestId = discovery.Tests.Single().Id },
             context,
             TestContext.Current.CancellationToken);
@@ -410,16 +410,31 @@ public sealed class Plan42NativeValidationToolTests
         var service = new NativeValidationToolService(new RecordingProcessManager());
         ITool[] tools =
         [
-            new NuGetHealthTool(service),
-            new DotNetBuildTool(service),
-            new DotNetAnalyzerTool(service),
-            new DotNetFormatCheckTool(service),
-            new DiagnosticQueryTool(service),
-            new TestDiscoveryTool(service),
-            new TargetedTestTool(service),
+            new NuGetHealthTool(service, TestPromptLoader.Instance),
+            new DotNetBuildTool(service, TestPromptLoader.Instance),
+            new DotNetAnalyzerTool(service, TestPromptLoader.Instance),
+            new DotNetFormatCheckTool(service, TestPromptLoader.Instance),
+            new DiagnosticQueryTool(service, TestPromptLoader.Instance),
+            new TestDiscoveryTool(service, TestPromptLoader.Instance),
+            new TargetedTestTool(service, TestPromptLoader.Instance),
         ];
 
         Assert.Equal(7, tools.Select(tool => tool.Definition.Id).Distinct(StringComparer.Ordinal).Count());
+        string[] descriptionAssets =
+        [
+            PromptFileNames.ToolNugetHealthDescription,
+            PromptFileNames.ToolDotnetBuildDescription,
+            PromptFileNames.ToolDotnetAnalyzersDescription,
+            PromptFileNames.ToolDotnetFormatCheckDescription,
+            PromptFileNames.ToolDiagnosticQueryDescription,
+            PromptFileNames.ToolTestDiscoverDescription,
+            PromptFileNames.ToolTestRunTargetedDescription,
+        ];
+        Assert.All(
+            tools.Select((tool, index) => (Tool: tool, Asset: descriptionAssets[index])),
+            item => Assert.Equal(
+                TestPromptLoader.Instance.Get(item.Asset),
+                item.Tool.Definition.Description));
         Assert.All(tools, tool => Assert.DoesNotContain("command", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
         Assert.All(tools, tool => Assert.DoesNotContain("arguments", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(RepositoryTrustLevel.TrustedBuild, tools.Single(tool => tool.Definition.Id == "test_run_targeted").Definition.RequiredTrust);

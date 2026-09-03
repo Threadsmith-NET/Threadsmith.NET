@@ -141,7 +141,10 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
+        Assert.Equal(
+            TestPromptLoader.Instance.Get(PromptFileNames.ToolWebFetchDescription),
+            tool.Definition.Description);
         var registry = new ToolRegistry([tool], activationPolicy: authority);
         var producingContext = CreateContext(fixture.Path);
         var reference = authority.IssueSearchResult(
@@ -181,7 +184,7 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
         var context = CreateContext(fixture.Path);
         var reference = authority.IssueSearchResult(
             fixture.Path,
@@ -241,7 +244,7 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
         var context = CreateContext(fixture.Path);
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://example.com/docs?q=hidden");
         var request = new WebFetchRequest { Reference = "https://example.com/docs?q=hidden" };
@@ -281,7 +284,7 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
         var context = CreateContext(fixture.Path);
         authority.GrantDirectUrlChain(
             fixture.Path,
@@ -311,7 +314,7 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
         var context = CreateContext(fixture.Path);
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://example.com/start");
         authority.GrantDirectUrl(fixture.Path, context.SessionId, "https://redirect.example/independent");
@@ -334,7 +337,10 @@ public sealed class WebFetchTests
     {
         // Arrange
         var options = new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) };
-        var fetcher = new WebContentFetcher(new DeadlineExpiringTransport(), options);
+        var fetcher = new WebContentFetcher(
+            new DeadlineExpiringTransport(),
+            options,
+            TestPromptLoader.Instance);
 
         // Act
         var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
@@ -359,7 +365,8 @@ public sealed class WebFetchTests
         // Arrange
         var fetcher = new WebContentFetcher(
             new StaticContentTransport(mediaType, Encoding.UTF8.GetBytes(body)),
-            new WebFetchOptions());
+            new WebFetchOptions(),
+            TestPromptLoader.Instance);
 
         // Act
         var response = await fetcher.FetchAsync(
@@ -383,7 +390,8 @@ public sealed class WebFetchTests
         // Arrange
         var fetcher = new WebContentFetcher(
             new StaticContentTransport(mediaType, Encoding.UTF8.GetBytes(body)),
-            new WebFetchOptions());
+            new WebFetchOptions(),
+            TestPromptLoader.Instance);
 
         // Act
         var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
@@ -423,7 +431,7 @@ public sealed class WebFetchTests
             initialConfigurationPath,
             fetchAuthorization: authority);
         var transport = new CapturingOptionsTransport();
-        var fetcher = new WebContentFetcher(transport, options);
+        var fetcher = new WebContentFetcher(transport, options, TestPromptLoader.Instance);
         var sessionId = SessionId.New();
         authority.GrantDirectUrlChain(
             fixture.Path,
@@ -491,7 +499,7 @@ public sealed class WebFetchTests
     {
         // Arrange
         var options = new WebFetchOptions { MaximumExtractedCharacters = 512 * 1024 };
-        var tool = new WebFetchTool(new StubFetcher(), new WebFetchAuthorizationAuthority(options), options);
+        var tool = new WebFetchTool(new StubFetcher(), new WebFetchAuthorizationAuthority(options), options, TestPromptLoader.Instance);
 
         // Act
         var worstCaseEscapedTextBytes = (long)options.MaximumExtractedCharacters * 6;
@@ -521,7 +529,7 @@ public sealed class WebFetchTests
             ["webFetch:maximumExtractedCharacters"] = "262144",
         }).Build();
         var state = new WebFetchOptionsState(new ConfigurationBuilder().Build(), trusted);
-        var tool = new WebFetchTool(new StubFetcher(), new WebFetchAuthorizationAuthority(state), state.TrustedCeiling);
+        var tool = new WebFetchTool(new StubFetcher(), new WebFetchAuthorizationAuthority(state), state.TrustedCeiling, TestPromptLoader.Instance);
 
         // Act
         await state.BindRepositoryAsync(narrowRepository);
@@ -668,7 +676,7 @@ public sealed class WebFetchTests
         var options = new WebFetchOptions();
         var authority = new WebFetchAuthorizationAuthority(options);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, options);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance);
         var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
@@ -748,7 +756,11 @@ public sealed class WebFetchTests
             "https://activator.example/docs",
             context.Invocation);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, new WebFetchOptions());
+        var tool = new WebFetchTool(
+            fetcher,
+            authority,
+            new WebFetchOptions(),
+            TestPromptLoader.Instance);
         const string proposedUrl = "https://proposed.example/reset/SECRET?q=protected";
 
         // Act
@@ -790,7 +802,12 @@ public sealed class WebFetchTests
             DirectFetchApprovalOutcome.Approved,
             DirectFetchApprovalOutcome.Unavailable);
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, new WebFetchOptions(), prompt);
+        var tool = new WebFetchTool(
+            fetcher,
+            authority,
+            new WebFetchOptions(),
+            TestPromptLoader.Instance,
+            prompt);
         var request = new WebFetchRequest { Reference = "https://proposed.example/reset/SECRET?token=protected" };
 
         // Act
@@ -913,7 +930,11 @@ public sealed class WebFetchTests
         var issuedContext = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
         var fetcher = new StubFetcher();
-        var tool = new WebFetchTool(fetcher, authority, new WebFetchOptions());
+        var tool = new WebFetchTool(
+            fetcher,
+            authority,
+            new WebFetchOptions(),
+            TestPromptLoader.Instance);
         var references = authority.IssueCurrentUserMessageUrls(
             fixture.Path,
             sessionId,
@@ -1225,6 +1246,7 @@ public sealed class WebFetchTests
                 DecodedBytes = bytes.Length,
                 CompressedBytes = bytes.Length,
                 ExtractedCharacters = 7,
+                TrustBoundary = TestPromptLoader.Instance.Get(PromptFileNames.ToolWebFetchTrustBoundary),
             });
         }
     }

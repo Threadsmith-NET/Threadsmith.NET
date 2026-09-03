@@ -1,0 +1,1 @@
+{{TaskState}}{{GovernedState}}{{EvidenceSet}}{{ToolInventory}}{{RequiredOutput}}

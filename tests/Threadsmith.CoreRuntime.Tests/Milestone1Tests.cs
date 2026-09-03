@@ -1504,9 +1504,9 @@ public static class Milestone1Tests
         Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>The /help text aligns descriptions and wraps only commands that exceed the command column.</summary>
+    /// <summary>The /help text contains every command alphabetically and preserves aligned descriptions.</summary>
     [Fact]
-    public static async Task ConversationalShell_HelpAlignsCommandDescriptions()
+    public static async Task ConversationalShell_HelpIsCompleteAlphabeticalAndAligned()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/help", "/quit"]);
@@ -1516,6 +1516,45 @@ public static class Milestone1Tests
             surface);
 
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        string[] expectedCommands =
+        [
+            "/agents <id> [cancel|cancel-child <id>]",
+            "/auth openai-codex [login|status|logout]",
+            "/clone",
+            "/code_explore_inspect {on|off}",
+            "/code_explore_output {structured|markdown}",
+            "/context [mode|inspect|compact]",
+            "/extensions",
+            "/fetch-authorize <url> [redirect ...]",
+            "/help",
+            "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]",
+            "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]",
+            "/memory [remember|list|inspect|supersede|forget|validate]",
+            "/models",
+            "/new",
+            "/open [path]",
+            "/plan-policy [name|current|reset|revoke]",
+            "/policy [name|current]",
+            "/quit",
+            "/reasoning [level]",
+            "/resume [id]",
+            "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]",
+            "/theme [id|current]",
+            "/thinking [on|off]",
+            "/tools",
+            "/trust [inspect|read|build|mutation]",
+            "/validation retry",
+        ];
+        var commandLines = surface.Output
+            .Split(Environment.NewLine, StringSplitOptions.None)
+            .Where(line => line.StartsWith("/", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(expectedCommands.Length, commandLines.Length);
+        for (var index = 0; index < expectedCommands.Length; index++)
+        {
+            Assert.StartsWith(expectedCommands[index], commandLines[index], StringComparison.Ordinal);
+        }
 
         const string descriptionIndent = "                                          ";
         Assert.Contains(
@@ -1538,14 +1577,14 @@ public static class Milestone1Tests
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
-            "/skills [list|inspect|verify|enable|disable|pin|use|status|cancel]"
+            "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]"
                 + Environment.NewLine
                 + descriptionIndent
                 + "Govern skills",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
-            "/plan-policy [name|current]               Select or report plan approval policy",
+            "/plan-policy [name|current|reset|revoke]  Select or report plan approval policy",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains("Ctrl+T", surface.Output, StringComparison.Ordinal);
@@ -4672,6 +4711,23 @@ public static class Milestone1Tests
                 new HookHandlerId("policy-check"),
                 new HookConfigurationDigest(new string('c', 64)),
                 true),
+            new RunSteeringPauseRequested(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                SteeringPauseId.New()),
+            new RunSteeringPaused(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                SteeringPauseId.New()),
+            new RunSteeringSubmitted(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                SteeringPauseId.New(),
+                Sequence: 1,
+                HasText: true),
             new RunCompleted(sessionId, occurredAt, RunId.New(), true),
         ];
     }

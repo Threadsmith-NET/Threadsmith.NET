@@ -118,6 +118,42 @@ public sealed class TuiPresenter
             cancellationToken);
     }
 
+    /// <summary>Requests one idempotent steering pause for an active run.</summary>
+    public Task<RunSteeringPauseRequestResult> RequestRunSteeringPauseAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new RequestRunSteeringPauseCommand(sessionId, runId),
+            cancellationToken);
+    }
+
+    /// <summary>Waits until one requested steering pause reaches a safe boundary.</summary>
+    public Task<RunSteeringPauseWaitResult> WaitForRunSteeringPauseAsync(
+        SessionId sessionId,
+        RunId runId,
+        SteeringPauseId pauseId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new WaitForRunSteeringPauseCommand(sessionId, runId, pauseId),
+            cancellationToken);
+    }
+
+    /// <summary>Submits or dismisses one ready steering prompt.</summary>
+    public Task<RunSteeringSubmissionResult> SubmitRunSteeringAsync(
+        SessionId sessionId,
+        RunId runId,
+        SteeringPauseId pauseId,
+        string? text,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SubmitRunSteeringCommand(sessionId, runId, pauseId, text),
+            cancellationToken);
+    }
+
     /// <summary>Lists enabled models through the shared host command boundary.</summary>
     public Task<IReadOnlyList<SelectableModelEntry>> ListActiveModelsAsync(
         CancellationToken cancellationToken = default)
@@ -1543,6 +1579,45 @@ public sealed class TuiController
         return true;
     }
 
+    /// <summary>Requests one idempotent steering pause for the active run.</summary>
+    public Task<RunSteeringPauseRequestResult> RequestActiveRunSteeringPauseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        (var sessionId, var runId) = GetActiveRunIdentity();
+        return _presenter.RequestRunSteeringPauseAsync(
+            sessionId,
+            runId,
+            cancellationToken);
+    }
+
+    /// <summary>Waits for the active run to reach one requested steering boundary.</summary>
+    public Task<RunSteeringPauseWaitResult> WaitForActiveRunSteeringPauseAsync(
+        SteeringPauseId pauseId,
+        CancellationToken cancellationToken = default)
+    {
+        (var sessionId, var runId) = GetActiveRunIdentity();
+        return _presenter.WaitForRunSteeringPauseAsync(
+            sessionId,
+            runId,
+            pauseId,
+            cancellationToken);
+    }
+
+    /// <summary>Submits or dismisses one steering prompt for the active run.</summary>
+    public Task<RunSteeringSubmissionResult> SubmitActiveRunSteeringAsync(
+        SteeringPauseId pauseId,
+        string? text,
+        CancellationToken cancellationToken = default)
+    {
+        (var sessionId, var runId) = GetActiveRunIdentity();
+        return _presenter.SubmitRunSteeringAsync(
+            sessionId,
+            runId,
+            pauseId,
+            text,
+            cancellationToken);
+    }
+
     /// <summary>Approves the active run's pending plan.</summary>
     public Task<bool> ApproveActivePlanAsync(CancellationToken cancellationToken = default)
     {
@@ -1804,6 +1879,16 @@ public sealed class TuiController
         }
 
         return _presenter.RenderAsync(sessionId, cancellationToken);
+    }
+
+    private (SessionId SessionId, RunId RunId) GetActiveRunIdentity()
+    {
+        lock (_gate)
+        {
+            return (
+                _sessionId ?? throw new InvalidOperationException("The TUI session is not open."),
+                _activeRunId ?? throw new InvalidOperationException("No run is active."));
+        }
     }
 
     private void Activate(SessionId sessionId)

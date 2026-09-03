@@ -31,6 +31,7 @@ internal sealed class ChildAgentModelLoop
     private readonly IReadOnlyList<ToolRegistration> _parentRegistrations;
     private readonly IOutputSanitizer _sanitizer;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentModelLoop"/> class.</summary>
@@ -41,7 +42,8 @@ internal sealed class ChildAgentModelLoop
         IOutputSanitizer sanitizer,
         DelegateAgentsOptions options,
         IReadOnlyList<ToolRegistration> parentRegistrations,
-        SessionUsageProjection? sessionUsage = null)
+        SessionUsageProjection? sessionUsage = null,
+        RunSteeringCoordinator? steering = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -56,6 +58,7 @@ internal sealed class ChildAgentModelLoop
         _options = options;
         _parentRegistrations = parentRegistrations.ToArray();
         _sessionUsage = sessionUsage;
+        _steering = steering;
     }
 
     /// <summary>Runs until one valid finding set is returned or a child bound is exhausted.</summary>
@@ -87,7 +90,7 @@ internal sealed class ChildAgentModelLoop
         var deliveredEvidenceIds = initialRequest.DeliveredEvidenceIds.ToHashSet();
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
         var rejectedResponseDigests = new HashSet<string>(StringComparer.Ordinal);
-        ModelWireEstimate? initialWireEstimate = initialRequest.WireEstimate;
+        var initialWireEstimate = initialRequest.WireEstimate;
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var parser = new ChildAgentFindingParser(_options, _sanitizer);
         var stopwatch = Stopwatch.StartNew();
@@ -99,6 +102,20 @@ internal sealed class ChildAgentModelLoop
             for (var round = 0; round < maximumRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (_steering is not null)
+                {
+                    var steering = await _steering.PauseChildAtBoundaryAsync(
+                        plan.Provenance.SessionId,
+                        plan.Provenance.ParentRunId,
+                        assignment.ChildRunId,
+                        cancellationToken);
+                    if (steering.Count > 0)
+                    {
+                        messages.AddRange(steering.Select(ChildAgentPrompt.CreateSteeringMessage));
+                        initialWireEstimate = null;
+                    }
+                }
+
                 var unreservedEstimate = initialWireEstimate is null
                     ? ModelWireEstimator.Estimate(
                         messages,
@@ -135,6 +152,20 @@ internal sealed class ChildAgentModelLoop
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
                 if (response.ToolRequests.Count > 0)
                 {
+                    if (_steering is not null)
+                    {
+                        var steering = await _steering.PauseChildAtBoundaryAsync(
+                            plan.Provenance.SessionId,
+                            plan.Provenance.ParentRunId,
+                            assignment.ChildRunId,
+                            cancellationToken);
+                        if (steering.Count > 0)
+                        {
+                            messages.AddRange(steering.Select(ChildAgentPrompt.CreateSteeringMessage));
+                            continue;
+                        }
+                    }
+
                     try
                     {
                         var continuation = await InvokeToolsAsync(

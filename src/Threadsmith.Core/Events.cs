@@ -72,6 +72,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(HookInvocationStartedEvent), "hookInvocationStarted")]
 [JsonDerivedType(typeof(HookInvocationCompletedEvent), "hookInvocationCompleted")]
 [JsonDerivedType(typeof(HookRepositoryApprovalChanged), "hookRepositoryApprovalChanged")]
+[JsonDerivedType(typeof(RunSteeringPauseRequested), "runSteeringPauseRequested")]
+[JsonDerivedType(typeof(RunSteeringPaused), "runSteeringPaused")]
+[JsonDerivedType(typeof(RunSteeringSubmitted), "runSteeringSubmitted")]
 [JsonDerivedType(typeof(RunCompleted), "runCompleted")]
 public interface IDomainEvent
 {
@@ -754,6 +757,29 @@ public sealed record HookRepositoryApprovalChanged(
     HookConfigurationDigest ConfigurationDigest,
     bool Approved) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>A user requested one idempotent steering pause for an active run.</summary>
+public sealed record RunSteeringPauseRequested(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active run reached the requested safe steering boundary.</summary>
+public sealed record RunSteeringPaused(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A ready steering prompt was submitted or dismissed.</summary>
+public sealed record RunSteeringSubmitted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId,
+    long? Sequence,
+    bool HasText) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>A run completed.</summary>
 public sealed record RunCompleted(
     SessionId SessionId,
@@ -835,6 +861,9 @@ public static class DomainEventJson
             ["hookInvocationStarted"] = typeof(HookInvocationStartedEvent),
             ["hookInvocationCompleted"] = typeof(HookInvocationCompletedEvent),
             ["hookRepositoryApprovalChanged"] = typeof(HookRepositoryApprovalChanged),
+            ["runSteeringPauseRequested"] = typeof(RunSteeringPauseRequested),
+            ["runSteeringPaused"] = typeof(RunSteeringPaused),
+            ["runSteeringSubmitted"] = typeof(RunSteeringSubmitted),
             ["runCompleted"] = typeof(RunCompleted),
         };
 

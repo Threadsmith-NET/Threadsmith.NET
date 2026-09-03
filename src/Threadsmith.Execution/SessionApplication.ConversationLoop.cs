@@ -30,6 +30,17 @@ public sealed partial class SessionApplication
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
+            var boundarySteering = await _steering.PauseParentAtBoundaryAsync(
+                registration.SessionId,
+                runId,
+                cancellationToken);
+            await CommitRunSteeringAsync(
+                runId,
+                registration,
+                loopState,
+                modelRound,
+                boundarySteering,
+                cancellationToken);
             var round = await PrepareConversationRoundAsync(
                 runId,
                 registration,
@@ -57,6 +68,46 @@ public sealed partial class SessionApplication
                 {
                     _conversationToolSnapshots?.Release(snapshotId);
                 }
+            }
+
+            var submittedSteering = outcome.PreToolSteering.Count > 0
+                ? outcome.PreToolSteering
+                : await _steering.PauseParentAtBoundaryAsync(
+                    registration.SessionId,
+                    runId,
+                    cancellationToken);
+            if (submittedSteering.Count > 0)
+            {
+                if (!outcome.ToolInvoked
+                    && outcome.Plan is null
+                    && !string.IsNullOrWhiteSpace(outcome.TextOutput))
+                {
+                    loopState.CommitStandaloneMessage(
+                        modelRound,
+                        CreateVisibleAssistantMessage(outcome.TextOutput),
+                        purgeAfterCorrection: false);
+                    await ArchiveVisibleMessageAsync(
+                        registration.SessionId,
+                        runId,
+                        ConversationRole.Assistant,
+                        outcome.TextOutput,
+                        cancellationToken);
+                }
+
+                await CommitRunSteeringAsync(
+                    runId,
+                    registration,
+                    loopState,
+                    modelRound,
+                    submittedSteering,
+                    cancellationToken);
+                if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
+                {
+                    throw new InvalidOperationException(
+                        $"The model cannot continue steering after the configured limit of {maximumModelRounds} rounds.");
+                }
+
+                continue;
             }
 
             var plan = CompleteRoundPlan(
@@ -112,6 +163,56 @@ public sealed partial class SessionApplication
         }
 
         throw new UnreachableException();
+    }
+
+    private async Task CommitRunSteeringAsync(
+        RunId runId,
+        RunRegistration registration,
+        ConversationLoopState loopState,
+        int modelRound,
+        IReadOnlyList<RunSteeringMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        foreach (var message in messages)
+        {
+            loopState.CommitStandaloneMessage(
+                modelRound,
+                CreateRunSteeringMessage(message),
+                purgeAfterCorrection: false);
+            await ArchiveVisibleMessageAsync(
+                registration.SessionId,
+                runId,
+                ConversationRole.User,
+                message.Text,
+                cancellationToken);
+        }
+    }
+
+    private static ModelMessage CreateRunSteeringMessage(RunSteeringMessage message)
+    {
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.User,
+            SectionId = "run-user-steering",
+            Content =
+            [
+                new ModelContentPart
+                {
+                    Content = $"User steering #{message.Sequence} submitted at "
+                        + $"{message.SubmittedAt:O}:\n{message.Text}",
+                },
+            ],
+        };
+    }
+
+    private static ModelMessage CreateVisibleAssistantMessage(string text)
+    {
+        return new ModelMessage
+        {
+            Role = ModelMessageRole.Assistant,
+            SectionId = "active-turn-visible-assistant",
+            Content = [new ModelContentPart { Content = text }],
+        };
     }
 
     private async Task<ToolInvocationContext?> CreateToolInvocationContextAsync(
@@ -378,6 +479,7 @@ public sealed partial class SessionApplication
             round.ModelRequest.Tools.Count);
         await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
         BudgetStatus? modelWallClockBudget = null;
+        IReadOnlyList<RunSteeringMessage> preToolSteering = [];
 
         try
         {
@@ -438,7 +540,16 @@ public sealed partial class SessionApplication
                     modelWallClockBudget.Reason ?? "Execution budget exhausted.");
             }
 
-            if (!streamState.CorrectiveTurnRequested
+            if (!streamState.CorrectiveTurnRequested && streamState.PendingToolCalls.Count > 0)
+            {
+                preToolSteering = await _steering.PauseParentAtBoundaryAsync(
+                    round.Registration.SessionId,
+                    round.RunId,
+                    cancellationToken);
+            }
+
+            if (preToolSteering.Count == 0
+                && !streamState.CorrectiveTurnRequested
                 && await InvokePendingToolBatchAsync(
                     round,
                     loopState,
@@ -448,6 +559,10 @@ public sealed partial class SessionApplication
                     cancellationToken))
             {
                 streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
+            }
+            else if (preToolSteering.Count > 0)
+            {
+                loopState.AbortCurrentGroup();
             }
 
             if (!streamState.CorrectiveTurnRequested
@@ -493,7 +608,8 @@ public sealed partial class SessionApplication
         return new ConversationRoundOutcome(
             streamState.Plan,
             streamState.TextOutput.ToString(),
-            streamState.ToolInvoked);
+            streamState.ToolInvoked,
+            preToolSteering);
     }
 
     private async Task ProcessModelChunkAsync(
@@ -2145,7 +2261,8 @@ public sealed partial class SessionApplication
     private sealed record ConversationRoundOutcome(
         ImplementationPlan? Plan,
         string TextOutput,
-        bool ToolInvoked);
+        bool ToolInvoked,
+        IReadOnlyList<RunSteeringMessage> PreToolSteering);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,

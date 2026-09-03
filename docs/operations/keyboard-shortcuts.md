@@ -1,9 +1,10 @@
 # Interactive Terminal Commands and Keys
 
-- `Enter`: submit the current composer text.
+- `Enter`: submit the current composer text. While a conversation run is active and no composer is visible, request one steering prompt at the next safe model/tool boundary; repeated Enter presses reuse the same pending request.
 - `Shift+Enter`: insert a soft newline in the multiline composer.
 - `Ctrl+V` or `Shift+Insert`: paste clipboard text into the composer as one operation.
 - `Ctrl+C`: cancel the current composer input or an active run. When the terminal emulator has a native selection, it copies that selection instead.
+- `Esc Esc`: while a conversation run is active, cooperatively cancel it when both unmodified Escape presses occur within 850 ms.
 - `Ctrl+Shift+C`: copy a PrettyPrompt editor selection where supported.
 - `Ctrl+T`: on an empty composer, toggle live streaming of future sanitized reasoning. Reasoning streaming is off by default.
 - Mouse drag: create a native terminal selection across composer text or any transcript output.

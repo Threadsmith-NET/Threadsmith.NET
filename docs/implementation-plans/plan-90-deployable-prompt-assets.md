@@ -2,10 +2,10 @@
 
 **Status:** Planned  
 **Delivery track:** Milestone 29 — Deployable prompt customization  
-**Prerequisites:** M12, M15, M23.4, and M28. Plan 89 and any concurrent edits to prompt-producing files must be complete or reconciled before the Task 1 baseline is frozen.  
+**Prerequisites:** M12, M15, M23.4, and M28. Implemented Plans 89, 91, 94, and 96, planned Plan 95, and any concurrent edits to prompt-producing files must be complete or reconciled before the Task 1 baseline is frozen.
 **Milestone contract:** [Milestone 29 — Deployable Prompt Customization](milestones/milestone-29-deployable-prompt-customization.md)  
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially host-owned control flow, bounded context, typed tool contracts, provider isolation, cancellation, and auditability  
-**Related contracts:** [ADR-10](../architecture/adr-10-host-owned-model-abstraction.md), [ADR-12](../architecture/adr-12-phase-specific-governed-context.md), [ADR-37](../architecture/adr-37-canonical-release-payload-and-installers.md), [ADR-40](../architecture/adr-40-native-codex-provider-and-output-reserve.md), [ADR-41](../architecture/adr-41-canonical-cache-optimized-model-requests.md), [portable C# guardrails](../guardrails/portable-csharp-guardrails.md), [model-provider operations](../operations/model-providers.md), [project prompt-append operations](../operations/project-prompt-append.md), and [release packaging](../operations/release-packaging.md)
+**Related contracts:** [ADR-10](../architecture/adr-10-host-owned-model-abstraction.md), [ADR-12](../architecture/adr-12-phase-specific-governed-context.md), [ADR-37](../architecture/adr-37-canonical-release-payload-and-installers.md), [ADR-40](../architecture/adr-40-native-codex-provider-and-output-reserve.md), [ADR-41](../architecture/adr-41-canonical-cache-optimized-model-requests.md), [Plan 91](plan-91-create-sub-agent-delegation-tool.md), [Plan 95](plan-95-subagent-efficiency-code-explore-role-model-routing.md), [Plan 96](plan-96-active-run-steering-and-double-escape.md), [delegate-agents architecture](../architecture/delegate-agents-tool.md), [portable C# guardrails](../guardrails/portable-csharp-guardrails.md), [model-provider operations](../operations/model-providers.md), [parallel-agent operations](../operations/parallel-agents.md), [project prompt-append operations](../operations/project-prompt-append.md), and [release packaging](../operations/release-packaging.md)
 
 ---
 
@@ -13,9 +13,9 @@
 
 Ship Threadsmith-owned model-facing prose as separately editable UTF-8 Markdown files rather than C# string literals. Source assets remain close to their owning components; every deployed application exposes one flat `prompts` directory beside the executable. A single injectable loader eagerly reads the required catalog once during startup, publishes an immutable in-memory cache, and supplies exact text or strictly rendered named-token templates for the process lifetime.
 
-Operators can inspect or experiment with the main system prompt, phase/output instructions, corrections, tool descriptions, skill/provider instructions, and model-visible response guidance without recompiling Threadsmith. Changes take effect only after restart. Editing a prompt cannot grant tools, bypass approval, change policy, execute configuration, or weaken any host-enforced authority boundary.
+Operators can inspect or experiment with the main system prompt, phase/output instructions, corrections, tool descriptions, delegated-child instructions and continuations, skill/provider instructions, and model-visible response guidance without recompiling Threadsmith. Changes take effect only after restart. Editing a prompt cannot grant tools, create delegation authority, bypass approval, change policy, execute configuration, or weaken any host-enforced authority boundary.
 
-This plan implements the [M29 capability contract](milestones/milestone-29-deployable-prompt-customization.md) and adds product-level acceptance Scenario AP plus manual procedure MTP-254.
+This plan implements the [M29 capability contract](milestones/milestone-29-deployable-prompt-customization.md) and adds product-level acceptance Scenario AP plus manual procedure MTP-255.
 
 ---
 
@@ -25,6 +25,7 @@ This plan implements the [M29 capability contract](milestones/milestone-29-deplo
 - `Threadsmith.Context` already owns host prompt/context assembly and prompt loading, so it owns the concrete deployed-asset loader.
 - `Threadsmith.App` is the composition and deployment root. It supplies `AppContext.BaseDirectory`, initializes the catalog before consumers, and passes one loader instance by constructor injection.
 - Model tools, corrections, context, skills, and provider instructions are model-visible data but not authority. Tool availability, schemas, approval, mutation, validation, and execution policy remain typed host contracts.
+- Model-callable delegation has two distinct prompt consumers: the parent sees the `delegate_agents` definition and joined result, while each child receives host/output policy, assignment/evidence framing, correction/progress/steering messages, and the exact request-fenced child tool definitions. Both request paths use the same deployed catalog and immutable process-lifetime loader; neither child runs nor the delegation tool may load prompt files independently.
 - ADR-41 requires capacity planning to include all structured messages, tool definitions, and provider framing. The native Codex `instructions` value is currently added by the adapter after provider-neutral estimation; externalizing and enlarging it therefore requires a new exact capacity contribution before dispatch.
 - `--raw-model-log` is an explicit privileged diagnostic contract. `LoggingModelProvider` intentionally records complete provider-visible messages and tool definitions when enabled. Ordinary logs and summaries do not record those bodies.
 - Release packaging is canonical: prompt assets must flow through `dotnet publish` into every staged installer/archive rather than being reconstructed independently by each platform packager.
@@ -70,7 +71,7 @@ One file owns one independently meaningful prompt, description, correction varia
 Plan 90 does not externalize:
 
 - tool ids, command names, event kinds, section ids, JSON property names, XML tag names, schema keywords, enum wire values, routes, configuration keys, or other machine contracts;
-- generated or hand-authored JSON schemas, including `invoke_skill`, plan, and mutation schemas;
+- generated or hand-authored JSON schemas, including `invoke_skill`, plan, mutation, `delegate_agents`, and child `agent-findings/1` schemas;
 - exception messages, ordinary logs, telemetry labels, diagnostic facts, persistence values, TUI labels, help text, approval summaries, or statuses not sent to a model;
 - user input, repository `AGENTS.md`, prompt appends, skill content, memory, evidence, or other dynamic/untrusted content;
 - descriptions supplied by MCP servers or extensions; only Threadsmith-owned fallback/policy prose is eligible;
@@ -89,7 +90,7 @@ Structured tool-result facts and bounded errors remain typed data unless they di
 The current source contains eligible hard-coded prose in:
 
 - `Threadsmith.Context`: stable system policy, phase instructions, required output, governed request framing, legacy request text, active-turn compaction, and summary trust framing;
-- `Threadsmith.Execution`: provider/tool/plan/mutation/validation corrective messages and the `propose_plan`/`propose_mutations` descriptions;
+- `Threadsmith.Execution`: provider/tool/plan/mutation/validation corrective messages; the `propose_plan`, `propose_mutations`, and `delegate_agents` descriptions; delegated-child host/output policy, fixed task/fallback framing, corrections, evidence-progress and steering guidance; and the model-visible joined-delegation renderer;
 - `Threadsmith.Tools`: more than thirty built-in descriptions plus `code_explore` presentation/guidance;
 - `Threadsmith.DotNet`: `code_explore` availability, source guarantees, and next-action guidance;
 - `Threadsmith.Skills`: `invoke_skill` description and procedure-runner prompts;
@@ -97,7 +98,7 @@ The current source contains eligible hard-coded prose in:
 - `Threadsmith.Models.OpenAiCodex`: native Responses `instructions` text;
 - `Threadsmith.Mcp`: explicit-read policy and imported-tool fallback prose.
 
-The initial inventory in Section 6.6 names 115 assets. Task 1 must refresh that inventory against the stabilized source before replacement begins.
+The initial inventory in Section 6.6 names 135 assets. Task 1 must refresh that inventory against the stabilized source before replacement begins, including any Plan 95 changes to delegated-child prompts or result presentation.
 
 ### 5.2 Loading and deployment
 
@@ -137,7 +138,7 @@ Assets live in an owning project's `Prompts` directory:
 | Directory | Ownership |
 |---|---|
 | `src/Threadsmith.Context/Prompts/` | system/context/compaction assets |
-| `src/Threadsmith.Execution/Prompts/` | corrections and planning/mutation tools |
+| `src/Threadsmith.Execution/Prompts/` | corrections, planning/mutation/delegation tools, child-agent prompts, and joined-delegation presentation |
 | `src/Threadsmith.Tools/Prompts/` | built-in tools and tool presentation |
 | `src/Threadsmith.DotNet/Prompts/` | semantic availability/recovery prose |
 | `src/Threadsmith.Skills/Prompts/` | skill tool and procedure prompts |
@@ -199,7 +200,7 @@ Task 1 must add any newly introduced eligible prose under the same rules before 
 
 #### Tool descriptions
 
-`Tool-list_files-Description.md`; `Tool-read_file-Description.md`; `Tool-search-Description.md`; `Tool-git_status-Description.md`; `Tool-find_symbol-Description.md`; `Tool-find_references-Description.md`; `Tool-find_implementations-Description.md`; `Tool-run_process-Description.md`; `Tool-datetime-Description.md`; `Tool-csharp_script-Description.md`; `Tool-code_explore-Description.md`; `Tool-call_hierarchy-Description.md`; `Tool-symbol_impact-Description.md`; `Tool-csharp_pattern_search-Description.md`; `Tool-generated_code_query-Description.md`; `Tool-git_diff-Description.md`; `Tool-git_log-Description.md`; `Tool-git_show-Description.md`; `Tool-git_blame-Description.md`; `Tool-git_compare_branches-Description.md`; `Tool-dotnet_inventory-Description.md`; `Tool-nuget_health-Description.md`; `Tool-dotnet_build-Description.md`; `Tool-dotnet_analyzers-Description.md`; `Tool-dotnet_format_check-Description.md`; `Tool-diagnostic_query-Description.md`; `Tool-test_discover-Description.md`; `Tool-test_run_targeted-Description.md`; `Tool-web_fetch-Description.md`; `Tool-web_search-Description.md`; `Tool-invoke_skill-Description.md`; `Tool-propose_plan-Description.md`; `Tool-propose_mutations-Description.md`; `Adapter-McpExplicitReadPolicy-Description.md`; `Adapter-McpImportedTool-FallbackDescription.md`.
+`Tool-list_files-Description.md`; `Tool-read_file-Description.md`; `Tool-search-Description.md`; `Tool-git_status-Description.md`; `Tool-find_symbol-Description.md`; `Tool-find_references-Description.md`; `Tool-find_implementations-Description.md`; `Tool-run_process-Description.md`; `Tool-datetime-Description.md`; `Tool-csharp_script-Description.md`; `Tool-code_explore-Description.md`; `Tool-call_hierarchy-Description.md`; `Tool-symbol_impact-Description.md`; `Tool-csharp_pattern_search-Description.md`; `Tool-generated_code_query-Description.md`; `Tool-git_diff-Description.md`; `Tool-git_log-Description.md`; `Tool-git_show-Description.md`; `Tool-git_blame-Description.md`; `Tool-git_compare_branches-Description.md`; `Tool-dotnet_inventory-Description.md`; `Tool-nuget_health-Description.md`; `Tool-dotnet_build-Description.md`; `Tool-dotnet_analyzers-Description.md`; `Tool-dotnet_format_check-Description.md`; `Tool-diagnostic_query-Description.md`; `Tool-test_discover-Description.md`; `Tool-test_run_targeted-Description.md`; `Tool-web_fetch-Description.md`; `Tool-web_search-Description.md`; `Tool-invoke_skill-Description.md`; `Tool-propose_plan-Description.md`; `Tool-propose_mutations-Description.md`; `Tool-delegate_agents-Description.md`; `Adapter-McpExplicitReadPolicy-Description.md`; `Adapter-McpImportedTool-FallbackDescription.md`.
 
 #### Corrections and retries
 
@@ -208,6 +209,12 @@ Task 1 must add any newly introduced eligible prose under the same rules before 
 #### Skills and providers
 
 `Skill-Procedure-System.md`; `Skill-Procedure-Request.md`; `Skill-Procedure-Continuation.md`; `Provider-OpenAiCodex-Instructions.md`.
+
+#### Delegated-child requests and joined results
+
+`System-ChildAgent-HostPolicy.md`; `System-ChildAgent-OutputPolicy.md`; `Context-ChildAgent-RepositoryInstructionsNone.md`; `Context-ChildAgent-InitialEvidenceNone.md`; `Context-ChildAgent-Task.md`; `Context-ChildAgent-EvidenceProgressExpanded.md`; `Context-ChildAgent-EvidenceProgressPayloadOnly.md`; `Context-ChildAgent-EvidenceProgressNoProgress.md`; `Context-ChildAgent-Steering.md`; `Correction-ChildAgent-InvalidOutput.md`; `Tool-delegate_agents-ResultHeader.md`; `Tool-delegate_agents-ChildStatus.md`; `Tool-delegate_agents-ChildSummary.md`; `Tool-delegate_agents-Finding.md`; `Tool-delegate_agents-ChildOmission.md`; `Tool-delegate_agents-Disagreement.md`; `Tool-delegate_agents-DelegationOmission.md`; `Tool-delegate_agents-Steering.md`; `Tool-delegate_agents-Truncation.md`.
+
+Child assignment/evidence XML element names, section ids, tool ids, `agent-findings/1`, JSON schemas, status/role/access values, resource bounds, sequence/correlation identities, and renderer block-selection/order decisions remain code-owned machine contracts. The files above own meaningful fixed prose and block wording only. Dynamic objective, supplied context, repository instructions, evidence, steering text, counts, ids, timestamps, paths, symbols, findings, omissions, disagreements, usage, and truncation totals are bounded values supplied through declared named tokens with the existing context-specific escaping. Structured result facts such as failure reasons and omission classifications remain typed unless they contain model-directed recovery prose.
 
 #### `code_explore` result blocks
 
@@ -275,7 +282,7 @@ public sealed record ModelProviderInstructions
 | `src/Threadsmith.Context/` | Add `DeployedPromptLoader`, template validation/rendering, context assets, and loader-backed context/compaction assembly. |
 | `src/Threadsmith.Models/` | Add the provider-neutral instruction DTO beside `ModelStreamRequest`; extend request/wire estimate and summary/raw serialization; externalize textual tool fallback. |
 | `src/Threadsmith.Models.OpenAiCodex/` | Map request-owned instructions to the Codex wire field; remove inline instruction text. |
-| `src/Threadsmith.Execution/` | Inject loader-backed correction factory and externalize plan/mutation descriptions and retry prose. |
+| `src/Threadsmith.Execution/` | Inject the loader into definition, child-request, correction/progress/steering, and joined-result paths; externalize plan/mutation/delegation descriptions and retry prose without moving delegation authority or schemas into assets. |
 | `src/Threadsmith.Tools/` | Externalize built-in descriptions and code-explore response blocks. |
 | `src/Threadsmith.DotNet/` | Externalize semantic availability/action/source-guarantee prose without moving decisions out of DTO logic. |
 | `src/Threadsmith.Skills/` | Externalize `invoke_skill` description and procedure prompts. |
@@ -286,9 +293,9 @@ public sealed record ModelProviderInstructions
 | `tests/Threadsmith.ConversationContext.Tests/` | Context, compaction, and model-visible prompt regression. |
 | `tests/Threadsmith.ModelTooling.Tests/`, `tests/Threadsmith.NativeTools.Tests/` | Tool descriptions, request estimates, logging, and code-explore presentation. |
 | `tests/Threadsmith.CodexProvider.Tests/` | Exact Codex instruction mapping and expanded-instruction capacity behavior. |
-| `tests/Threadsmith.ExecutionOrchestration.Tests/`, `tests/Threadsmith.Planning.Tests/`, `tests/Threadsmith.Mutations.Tests/` | Correction roles, retries, plan/mutation descriptions, and final wire-budget admission. |
+| `tests/Threadsmith.ExecutionOrchestration.Tests/`, `tests/Threadsmith.Planning.Tests/`, `tests/Threadsmith.Mutations.Tests/`, `tests/Threadsmith.ParallelAgents.Tests/` | Correction roles, retries, plan/mutation/delegation descriptions, exact parent/child prompt projection, joined-result rendering, and final wire-budget admission. |
 | `tests/Threadsmith.Skills.Tests/`, `tests/Threadsmith.Architecture.Tests/` | Skill prompts, dependency direction, source-literal audit, composition, raw-log boundary, and payload contracts. |
-| `docs/` | Add prompt operations/user guide, Scenario AP, MTP-254, release/provider notes, and required DOX updates. |
+| `docs/` | Add prompt operations/user guide, Scenario AP, MTP-255, release/provider/parallel-agent notes, and required DOX updates. |
 
 No new product or test project is planned.
 
@@ -300,7 +307,7 @@ No new product or test project is planned.
 
 - [ ] Re-run syntax-aware searches over all model-message, provider-instruction, tool-description, correction, and model-visible renderer sinks.
 - [ ] Classify concatenated/raw/interpolated literals under Sections 3–4.
-- [ ] Reconcile Plan 89/concurrent changes and add any newly eligible asset with exact filename/owner/token contract.
+- [ ] Reconcile Plans 89, 91, 94, 95, and 96 plus concurrent changes; inventory the parent `delegate_agents` definition/result and every child model-message sink; add each newly eligible asset with exact filename/owner/token contract.
 - [ ] Record narrow symbol-level exclusions in the completeness test; no directory-wide exemptions.
 
 ### Task 2 — Add loader and catalog contracts
@@ -330,12 +337,14 @@ No new product or test project is planned.
 - [ ] Replace system, phase, output, governed-state, legacy, and compaction literals.
 - [ ] Replace provider-neutral textual tool framing.
 - [ ] Replace skill procedure prompt/request/continuation literals while retaining untrusted framing and bounds.
+- [ ] Replace delegated-child host/output policies, fixed assignment task, empty instruction/evidence fallbacks, and other initial child-request prose while retaining code-owned XML/JSON/section/schema framing.
 - [ ] Preserve structured/legacy chronology and cache identity behavior with default assets.
 
 ### Task 6 — Externalize tool descriptions
 
 - [ ] Inject the loader into each host-owned definition path.
 - [ ] Replace all description assets from Section 6.6.
+- [ ] Externalize the `delegate_agents` description with a declared `MaximumAgents` token while preserving the exact model-visible input/output schemas and request-fenced child capability selection.
 - [ ] Preserve ids, schemas, risk, idempotency, essential status, policy, ordering, and canonicalization.
 - [ ] Preserve untrusted MCP/extension descriptions; use assets only for host-owned policy/fallback prose.
 
@@ -343,11 +352,13 @@ No new product or test project is planned.
 
 - [ ] Convert static correction construction to an injected cohesive service where required.
 - [ ] Preserve roles, call/result pairing, batch atomicity, retry limits, evidence, sanitization, and capacity admission.
+- [ ] Externalize child invalid-output correction, all evidence-progress variants, and lower-authority steering framing; keep reason/text/count/identity values bounded and preserve their existing authority.
+- [ ] Externalize joined `delegate_agents` result blocks while retaining code-owned block selection, deterministic order, complete-block truncation, structured result DTOs, and projection bounds.
 - [ ] Externalize code-explore response/guidance prose while retaining structured DTO authority and deterministic block ordering.
 
 ### Task 8 — Add completeness and drift gates
 
-- [ ] Add a syntax-aware source audit for governed sinks.
+- [ ] Add a syntax-aware source audit for governed parent and delegated-child sinks, including `ToolDefinition.Description`, `ModelMessage.Content`, child correction/progress/steering creation, and model-visible tool-result renderers.
 - [ ] Enforce a bijection among constants, code catalog, source assets, published assets, token tests, and user-guide rows.
 - [ ] Reject case-insensitive collisions, undeclared packaged assets, traversal, and stale constants.
 - [ ] Prove no per-call prompt filesystem I/O after initialization.
@@ -356,7 +367,7 @@ No new product or test project is planned.
 
 - [ ] Add `docs/operations/prompts.md` and link it from `docs/user-guide.md`.
 - [ ] Update model-provider and release-packaging docs for provider-instruction capacity, raw-log visibility, prompt payloads, restart, and upgrade behavior.
-- [ ] Add Scenario AP and MTP-254 without milestone/work-item bookkeeping in those owner documents.
+- [ ] Add Scenario AP and MTP-255 without milestone/work-item bookkeeping in those owner documents.
 - [ ] Perform the DOX pass and update only durable ownership/deployment guidance.
 - [ ] Mark Plan 90 complete after all exit evidence passes; change M29 lifecycle only in `milestones.md`.
 
@@ -383,6 +394,9 @@ Add loader/cache/template tests to existing `tests/Threadsmith.ContextCaching.Te
 - Tools: every name/schema/risk unchanged and description equals its asset.
 - Skills: exact procedure system/request/continuation framing.
 - Corrections: exact roles, pairing, attempts, bounded reasons, batch semantics, and retry capacity.
+- Delegation parent: exact `delegate_agents` id/schema/policy remains code-owned, its description equals the rendered asset, and its joined result preserves block order, complete-block truncation, and structured projection.
+- Delegation children: exact host/output policy, repository/evidence fallbacks, task, correction, evidence-progress variants, steering authority wrapper, model roles/section ids, request-fenced tool definitions, and full wire estimates match default assets.
+- Delegation isolation: editing child prose cannot enable delegation, widen tools/trust/paths/network/budget, change role/model selection, approve/mutate, alter result admission, or bypass parent joins.
 - `code_explore`: structured JSON authority and deterministic Markdown sections/guidance.
 - Codex: the exact request-owned instruction maps to the wire field once.
 - Capacity: a large permitted Codex instruction reduces other context or fails before dispatch; admitted requests satisfy context window plus output reserve; `ProviderInstructionTokens` and section totals are exact and overflow-safe.
@@ -413,6 +427,7 @@ dotnet test tests\Threadsmith.ConversationContext.Tests\Threadsmith.Conversation
 dotnet test tests\Threadsmith.ExecutionOrchestration.Tests\Threadsmith.ExecutionOrchestration.Tests.csproj --no-build
 dotnet test tests\Threadsmith.Planning.Tests\Threadsmith.Planning.Tests.csproj --no-build
 dotnet test tests\Threadsmith.Mutations.Tests\Threadsmith.Mutations.Tests.csproj --no-build
+dotnet test tests\Threadsmith.ParallelAgents.Tests\Threadsmith.ParallelAgents.Tests.csproj --no-build
 dotnet test tests\Threadsmith.ModelTooling.Tests\Threadsmith.ModelTooling.Tests.csproj --no-build
 dotnet test tests\Threadsmith.NativeTools.Tests\Threadsmith.NativeTools.Tests.csproj --no-build
 dotnet test tests\Threadsmith.CodexProvider.Tests\Threadsmith.CodexProvider.Tests.csproj --no-build
@@ -425,16 +440,16 @@ Run the repository release-contract and staged-payload scripts for all six suppo
 
 ### 10.6 Manual acceptance
 
-MTP-254 uses a temporary publish and deterministic/fake provider to verify:
+MTP-255 uses a temporary publish and deterministic/fake provider to verify:
 
 1. the documented flat catalog exists;
 2. default capture matches expected prompts/tools;
-3. editing `System-SystemPrompt.md`, a tool description, and Codex instruction then restarting changes only the corresponding model-visible content and capacity totals;
+3. editing `System-SystemPrompt.md`, an ordinary tool description, `Tool-delegate_agents-Description.md`, one delegated-child policy/guidance asset, and the Codex instruction then restarting changes only the corresponding parent/child model-visible content and capacity totals;
 4. edits after startup do not affect the running cache;
 5. restart loads them;
 6. missing/corrupt/oversized assets fail safely;
 7. an expanded instruction cannot bypass context capacity;
-8. prompt edits cannot enable a disabled tool or bypass approval;
+8. prompt edits cannot enable a disabled tool, let a child delegate or widen authority, change schemas/result admission, or bypass approval;
 9. ordinary logs omit bodies while explicitly enabled raw logs contain provider-visible bodies;
 10. upgrades replace shipped defaults and experiments require backup.
 
@@ -445,6 +460,7 @@ MTP-254 uses a temporary publish and deterministic/fake provider to verify:
 - Prompt files are application assets, not repository configuration, and are never executed.
 - Loading is confined to the code-declared flat catalog under the deployed application root. No absolute, relative, symlink/reparse, environment, include, or dynamic file selection is accepted.
 - Template text cannot change host policy, tool advertisement, approval, mutation, validation, trust, or authentication.
+- Delegation assets cannot change child membership, role, model selection, tool snapshots, tool access, network access, trust/path/budget/deadline ceilings, cancellation, steering authority, finding admission, or parent join behavior. The `delegate_agents` and `agent-findings/1` schemas remain compiled contracts.
 - Runtime token values preserve existing sanitization, bounds, encoding, provenance, and sensitivity decisions.
 - Local modification requires whatever operating-system permissions protect the installation. Threadsmith adds no privilege elevation or writable user override directory.
 - Documentation warns that prompt content is sent to the configured provider and must not contain secrets.
@@ -466,7 +482,7 @@ MTP-254 uses a temporary publish and deterministic/fake provider to verify:
 
 ## 13. Migration/Compatibility
 
-- Default Markdown assets preserve current semantic content. Any newline/whitespace normalization that changes provider/tool digests requires explicit fixture review.
+- Default Markdown assets preserve current semantic content, including parent delegation definition/result wording and child message roles, order, section ids, and text. Any newline/whitespace normalization that changes provider/tool/request digests requires explicit fixture review.
 - Inline fallbacks are removed; an incomplete installation fails startup rather than silently reverting.
 - Existing provider configurations, repository prompt appends, tool ids/schemas, events, SQLite data, and command syntax require no migration.
 - `ModelStreamRequest`/wire-estimate additions are host-owned version-compatible DTO changes; update every producer, adapter, fixture, logger, and estimator call site together.
@@ -486,15 +502,15 @@ Plan 90 and M29 are complete only when:
 3. the app eagerly loads the declared catalog once from `AppContext.BaseDirectory/prompts`, atomically caches it, and performs no later prompt-file I/O;
 4. consumers use constructor-injected `IPromptLoader` and constants;
 5. rendering is bounded, deterministic, non-recursive, and non-executable;
-6. default assets preserve existing model requests, tools, corrections, skills, and code-explore behavior;
+6. default assets preserve existing parent and delegated-child model requests, tools, corrections, skills, delegation results, and code-explore behavior;
 7. editable Codex instructions are included exactly in wire/context capacity and cannot cause an admitted request to exceed the selected model window;
 8. edits take effect after restart and missing/corrupt assets fail before model/tool activity;
 9. host authority, approvals, mutation, policy, validation, trust, redaction, cache identity, and provider isolation remain intact;
 10. ordinary logs omit bodies, while explicitly enabled raw logs continue to capture complete provider-visible prompts/tool descriptions/instructions;
 11. every supported publish/release payload contains the complete collision-free flat `prompts` directory;
-12. the syntax-aware regression gate rejects newly inlined eligible prose;
+12. the syntax-aware regression gate rejects newly inlined eligible prose in parent, delegated-child, correction/progress/steering, and model-visible renderer sinks;
 13. the user guide documents every file, tokens, location, restart, capacity, raw-log, upgrade, and secret boundary;
-14. Scenario AP, MTP-254, all suites in Section 10.5, release gates, and the DOX closeout pass.
+14. Scenario AP, MTP-255, all suites in Section 10.5, release gates, and the DOX closeout pass.
 
 ---
 
@@ -513,6 +529,8 @@ Plan 90 and M29 are complete only when:
 | Catalog/docs drift | Enforce source/catalog/deployment/docs bijection and sink audit. |
 | Constructor churn changes lifetimes | Reuse App composition and existing async ownership/teardown order. |
 | Code-explore prose becomes authority | Keep policy/ranking/availability/continuations in structured DTOs. |
+| Delegated-child prose becomes authority | Keep child identity, model/tool snapshots, trust, paths, budgets, role, cancellation, finding admission, and join behavior in compiled contracts; adversarially test edited assets. |
+| Parent and child catalogs diverge | Use one eager process-lifetime loader/catalog and include both request paths in the source/catalog/deployment/docs bijection. |
 | Default whitespace changes cache behavior | Exact canonical fixtures and reviewed digest changes. |
 
 ---
@@ -524,9 +542,10 @@ Implementation updates:
 - add `docs/operations/prompts.md` with every filename, source owner, deployed path, purpose, token contract, size behavior, restart requirement, capacity impact, raw-log visibility, secret warning, and upgrade replacement behavior;
 - link the page from `docs/user-guide.md`;
 - update `docs/operations/model-providers.md` for request-owned Codex instructions, capacity, and raw logging;
+- update `docs/operations/parallel-agents.md` for parent/child delegation assets, restart behavior, and the invariant that edited prose cannot widen child authority;
 - update `docs/operations/release-packaging.md` for the required `prompts` payload and upgrade behavior;
 - keep `docs/operations/project-prompt-append.md` explicit that repository prompt append precedence is unchanged;
-- add Scenario AP to `acceptance-scenarios.md` and MTP-254 to `manual-test-plan.md` without work-item/milestone bookkeeping;
+- add Scenario AP to `acceptance-scenarios.md` and MTP-255 to `manual-test-plan.md` without work-item/milestone bookkeeping;
 - update affected source/test/eng `AGENTS.md` files only when durable asset ownership or deployment guidance changes;
 - update lifecycle status only in `milestones.md` after M29 exit criteria pass.
 
@@ -546,5 +565,6 @@ Resolved decisions:
 - Provider-added instructions become request-owned and are counted exactly before dispatch.
 - Ordinary logs omit bodies; explicitly enabled raw-model logging preserves complete provider-visible content.
 - Dynamic MCP ids remain dynamic; host policy/fallback assets use adapter-component filenames.
+- Parent `delegate_agents` prose, delegated-child prompts/corrections/progress/steering, and joined-result blocks use the same loader and catalog as ordinary model-facing assets; delegation schemas and authority remain code-owned.
 
 Task 1 may add newly discovered asset names under these fixed rules, but it may not change eligibility, authority, capacity, logging, deployment, or precedence without revising this plan and the M29 capability contract first.

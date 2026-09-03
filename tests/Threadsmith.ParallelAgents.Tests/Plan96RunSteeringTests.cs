@@ -88,4 +88,55 @@ public static class Plan96RunSteeringTests
 
         coordinator.CompleteRun(sessionId, runId);
     }
+
+    /// <summary>Accepted steering preserves intentional surrounding whitespace.</summary>
+    [Fact]
+    public static async Task Submit_SurroundingWhitespace_PreservesExactText()
+    {
+        var coordinator = new RunSteeringCoordinator();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        coordinator.RegisterRun(sessionId, runId);
+        var request = coordinator.RequestPause(sessionId, runId);
+        var boundary = coordinator.PauseParentAtBoundaryAsync(
+            sessionId,
+            runId,
+            CancellationToken.None);
+        _ = await coordinator.WaitForPauseAsync(sessionId, runId, request.PauseId);
+        const string steering = "  preserve this code\n";
+
+        var submitted = coordinator.Submit(sessionId, runId, request.PauseId, steering);
+        var messages = await boundary;
+
+        Assert.Equal(RunSteeringSubmissionStatus.Accepted, submitted.Status);
+        Assert.Equal(steering, Assert.Single(messages).Text);
+        coordinator.CompleteRun(sessionId, runId);
+    }
+
+    /// <summary>An invalid submission releases the held barrier so the run can continue.</summary>
+    [Fact]
+    public static async Task Submit_OversizedText_ReleasesParentBarrier()
+    {
+        var coordinator = new RunSteeringCoordinator();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        coordinator.RegisterRun(sessionId, runId);
+        var request = coordinator.RequestPause(sessionId, runId);
+        var boundary = coordinator.PauseParentAtBoundaryAsync(
+            sessionId,
+            runId,
+            CancellationToken.None);
+        _ = await coordinator.WaitForPauseAsync(sessionId, runId, request.PauseId);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => coordinator.Submit(
+            sessionId,
+            runId,
+            request.PauseId,
+            new string('x', RunSteeringCoordinator.MaximumSteeringCharacters + 1)));
+        Assert.Empty(await boundary.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(
+            RunSteeringPauseRequestStatus.Accepted,
+            coordinator.RequestPause(sessionId, runId).Status);
+        coordinator.CompleteRun(sessionId, runId);
+    }
 }

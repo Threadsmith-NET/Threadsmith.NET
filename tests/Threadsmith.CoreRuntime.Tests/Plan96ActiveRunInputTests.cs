@@ -95,6 +95,33 @@ public static class Plan96ActiveRunInputTests
         Assert.Equal(expected, expected.Select(_ => console.ReadKey(intercept: true)).ToArray());
     }
 
+    /// <summary>Disposal waits for a consumed batch to be classified and replayed.</summary>
+    [Fact]
+    public static async Task ActiveRunInput_DisposeDuringRead_PreservesConsumedKeys()
+    {
+        var expected = CreateKey('a', ConsoleKey.A);
+        var inner = new QueueConsole([expected])
+        {
+            ReadEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            AllowReadToReturn = new ManualResetEventSlim(initialState: false),
+        };
+        var console = new BufferedPromptConsole(inner);
+        var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+            console.TryBeginActiveRunInput(TimeProvider.System));
+        var pendingSignal = session.ReadAsync();
+        await inner.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var disposal = session.DisposeAsync().AsTask();
+        inner.AllowReadToReturn.Set();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(2));
+
+#pragma warning disable VSTHRD003 // The test started and owns the active-input read.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pendingSignal);
+#pragma warning restore VSTHRD003
+        Assert.Equal(expected, console.ReadKey(intercept: true));
+        inner.AllowReadToReturn.Dispose();
+    }
+
     private static ConsoleKeyInfo CreateKey(char character, ConsoleKey key)
     {
         return new ConsoleKeyInfo(character, key, shift: false, alt: false, control: false);
@@ -104,6 +131,13 @@ public static class Plan96ActiveRunInputTests
     {
         private readonly Lock _gate = new();
         private readonly Queue<ConsoleKeyInfo> _keys = new(keys);
+        private int _readObserved;
+
+        /// <summary>Gets a test barrier that delays the first consumed key.</summary>
+        public ManualResetEventSlim? AllowReadToReturn { get; init; }
+
+        /// <summary>Gets a signal completed when the first key has been consumed.</summary>
+        public TaskCompletionSource? ReadEntered { get; init; }
 
         public int CursorTop => 0;
 
@@ -138,6 +172,12 @@ public static class Plan96ActiveRunInputTests
 
         public ConsoleKeyInfo ReadKey(bool intercept)
         {
+            if (Interlocked.Exchange(ref _readObserved, 1) == 0)
+            {
+                ReadEntered?.TrySetResult();
+                AllowReadToReturn?.Wait();
+            }
+
             lock (_gate)
             {
                 return _keys.Dequeue();

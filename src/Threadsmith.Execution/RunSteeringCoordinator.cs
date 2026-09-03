@@ -257,26 +257,32 @@ public sealed class RunSteeringCoordinator
                 return new RunSteeringSubmissionResult(RunSteeringSubmissionStatus.Rejected, null);
             }
 
-            var text = sanitizedText?.Trim();
+            var text = sanitizedText;
             long? sequence = null;
-            if (!string.IsNullOrWhiteSpace(text))
+            try
             {
-                if (text.Length > MaximumSteeringCharacters)
+                if (!string.IsNullOrWhiteSpace(text))
                 {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(sanitizedText),
-                        $"Steering text cannot exceed {MaximumSteeringCharacters} characters.");
-                }
+                    if (text.Length > MaximumSteeringCharacters)
+                    {
+                        throw new ArgumentOutOfRangeException(
+                            nameof(sanitizedText),
+                            $"Steering text cannot exceed {MaximumSteeringCharacters} characters.");
+                    }
 
-                sequence = checked(++state.LastSequence);
-                state.Messages.Add(new SteeringDelivery(
-                    new RunSteeringMessage(sequence.Value, DateTimeOffset.UtcNow, text),
-                    pause.DelegationId,
-                    pause.ChildRunIds));
+                    sequence = checked(++state.LastSequence);
+                    state.Messages.Add(new SteeringDelivery(
+                        new RunSteeringMessage(sequence.Value, DateTimeOffset.UtcNow, text),
+                        pause.DelegationId,
+                        pause.ChildRunIds));
+                }
+            }
+            finally
+            {
+                state.CurrentPause = null;
+                pause.Release.TrySetResult();
             }
 
-            state.CurrentPause = null;
-            pause.Release.TrySetResult();
             return new RunSteeringSubmissionResult(
                 sequence is null
                     ? RunSteeringSubmissionStatus.Dismissed
@@ -390,6 +396,14 @@ public sealed class RunSteeringCoordinator
         if (release is not null)
         {
             await release.WaitAsync(cancellationToken);
+        }
+
+        lock (state.Gate)
+        {
+            if (state.Delegation is { } delegation && delegation.DelegationId == delegationId)
+            {
+                state.Delegation = null;
+            }
         }
     }
 

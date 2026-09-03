@@ -308,6 +308,7 @@ internal sealed class BufferedPromptConsole : IConsole
         private readonly BufferedPromptConsole _owner;
         private readonly TimeProvider _timeProvider;
         private DateTimeOffset? _escapeArmedAt;
+        private TaskCompletionSource? _readCompletion;
         private int _readActive;
 
         public ActiveRunInputSession(BufferedPromptConsole owner, TimeProvider timeProvider)
@@ -320,8 +321,11 @@ internal sealed class BufferedPromptConsole : IConsole
         public async Task<ActiveRunInputSignal> ReadAsync(
             CancellationToken cancellationToken = default)
         {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _readCompletion, completion);
             if (Interlocked.Exchange(ref _readActive, 1) != 0)
             {
+                Interlocked.CompareExchange(ref _readCompletion, null, completion);
                 throw new InvalidOperationException("Only one active-run input read may be pending.");
             }
 
@@ -348,6 +352,7 @@ internal sealed class BufferedPromptConsole : IConsole
             finally
             {
                 Interlocked.Exchange(ref _readActive, 0);
+                completion.TrySetResult();
             }
         }
 
@@ -355,6 +360,11 @@ internal sealed class BufferedPromptConsole : IConsole
         public async ValueTask DisposeAsync()
         {
             await _disposed.CancelAsync();
+            if (Volatile.Read(ref _readCompletion) is { } completion)
+            {
+                await completion.Task;
+            }
+
             _owner.Release(this);
             _disposed.Dispose();
         }

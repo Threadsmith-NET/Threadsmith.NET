@@ -152,6 +152,20 @@ internal sealed class ChildAgentModelLoop
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
                 if (response.ToolRequests.Count > 0)
                 {
+                    if (_steering is not null)
+                    {
+                        var steering = await _steering.PauseChildAtBoundaryAsync(
+                            plan.Provenance.SessionId,
+                            plan.Provenance.ParentRunId,
+                            assignment.ChildRunId,
+                            cancellationToken);
+                        if (steering.Count > 0)
+                        {
+                            messages.AddRange(steering.Select(ChildAgentPrompt.CreateSteeringMessage));
+                            continue;
+                        }
+                    }
+
                     try
                     {
                         var continuation = await InvokeToolsAsync(

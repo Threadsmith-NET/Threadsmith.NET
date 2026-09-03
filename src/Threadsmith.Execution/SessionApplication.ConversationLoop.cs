@@ -70,10 +70,12 @@ public sealed partial class SessionApplication
                 }
             }
 
-            var submittedSteering = await _steering.PauseParentAtBoundaryAsync(
-                registration.SessionId,
-                runId,
-                cancellationToken);
+            var submittedSteering = outcome.PreToolSteering.Count > 0
+                ? outcome.PreToolSteering
+                : await _steering.PauseParentAtBoundaryAsync(
+                    registration.SessionId,
+                    runId,
+                    cancellationToken);
             if (submittedSteering.Count > 0)
             {
                 if (!outcome.ToolInvoked
@@ -477,6 +479,7 @@ public sealed partial class SessionApplication
             round.ModelRequest.Tools.Count);
         await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
         BudgetStatus? modelWallClockBudget = null;
+        IReadOnlyList<RunSteeringMessage> preToolSteering = [];
 
         try
         {
@@ -537,7 +540,16 @@ public sealed partial class SessionApplication
                     modelWallClockBudget.Reason ?? "Execution budget exhausted.");
             }
 
-            if (!streamState.CorrectiveTurnRequested
+            if (!streamState.CorrectiveTurnRequested && streamState.PendingToolCalls.Count > 0)
+            {
+                preToolSteering = await _steering.PauseParentAtBoundaryAsync(
+                    round.Registration.SessionId,
+                    round.RunId,
+                    cancellationToken);
+            }
+
+            if (preToolSteering.Count == 0
+                && !streamState.CorrectiveTurnRequested
                 && await InvokePendingToolBatchAsync(
                     round,
                     loopState,
@@ -547,6 +559,10 @@ public sealed partial class SessionApplication
                     cancellationToken))
             {
                 streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
+            }
+            else if (preToolSteering.Count > 0)
+            {
+                loopState.AbortCurrentGroup();
             }
 
             if (!streamState.CorrectiveTurnRequested
@@ -592,7 +608,8 @@ public sealed partial class SessionApplication
         return new ConversationRoundOutcome(
             streamState.Plan,
             streamState.TextOutput.ToString(),
-            streamState.ToolInvoked);
+            streamState.ToolInvoked,
+            preToolSteering);
     }
 
     private async Task ProcessModelChunkAsync(
@@ -2244,7 +2261,8 @@ public sealed partial class SessionApplication
     private sealed record ConversationRoundOutcome(
         ImplementationPlan? Plan,
         string TextOutput,
-        bool ToolInvoked);
+        bool ToolInvoked,
+        IReadOnlyList<RunSteeringMessage> PreToolSteering);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,

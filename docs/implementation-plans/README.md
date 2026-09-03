@@ -131,6 +131,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 93 | `plan-93-codex-headless-auth-json-numeric-compatibility.md` | Codex headless OAuth JSON numeric compatibility |
 | 94 | `plan-94-code-explore-agent-execution-quality.md` | Code explore agent-execution ranking and presentation quality |
 | 95 | `plan-95-subagent-efficiency-code-explore-role-model-routing.md` | Subagent efficiency, residual code explore precision, and role-specific provider/model routing |
+| 96 | `plan-96-active-run-steering-and-double-escape.md` | Serialized active-run steering and double-Escape cancellation |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

@@ -76,6 +76,15 @@ internal interface IConsoleSurface
     /// <returns>The completed composer interaction.</returns>
     Task<ConsoleInput> ReadAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Begins serialized active-run hot-key capture when the surface supports it.</summary>
+    /// <param name="timeProvider">Clock used for the bounded double-Escape chord.</param>
+    /// <returns>An exclusive input lease, or <see langword="null"/> when unavailable.</returns>
+    IActiveRunInputSession? BeginActiveRunInput(TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        return null;
+    }
+
     /// <summary>Lets the user choose one item with arrow keys and Enter.</summary>
     /// <param name="title">Prompt displayed above the choices.</param>
     /// <param name="choices">Numbered choice labels.</param>
@@ -167,6 +176,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
     private readonly SemaphoreSlim _consoleGate = new(1, 1);
     private readonly IAnsiConsole _ansiConsole;
     private readonly bool _isOutputRedirected;
+    private readonly BufferedPromptConsole _promptConsole;
     private readonly TextWriter _redirectedOutput;
     private readonly bool _suppressStyles;
 
@@ -181,6 +191,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         IAnsiConsole? ansiConsole = null)
     {
         _ansiConsole = ansiConsole ?? AnsiConsole.Console;
+        _promptConsole = new BufferedPromptConsole(new SystemConsole());
         _isOutputRedirected = isOutputRedirected ?? Console.IsOutputRedirected;
         _redirectedOutput = _ansiConsole.Profile.Out.Writer;
         var suppressionReason = TuiThemeResolver.GetSuppressionReason(
@@ -280,6 +291,15 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         {
             _consoleGate.Release();
         }
+    }
+
+    /// <inheritdoc />
+    public IActiveRunInputSession? BeginActiveRunInput(TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        return Console.IsInputRedirected
+            ? null
+            : _promptConsole.TryBeginActiveRunInput(timeProvider);
     }
 
     /// <inheritdoc />
@@ -570,6 +590,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
             or SemanticCheckCompleted
             or PlanProposed
             or MutationSetProposed
+            or RunSteeringPaused
             or RunCompleted
             || (domainEvent is ModelOutputObserved && emittedModelOutput);
     }
@@ -681,6 +702,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         _minimumCompletionItemsField.SetValue(configuration, -_completionPaneVerticalBorderRows);
         return new Prompt(
             callbacks: new ThinkingPromptCallbacks(),
+            console: _promptConsole,
             configuration: configuration);
     }
 
@@ -1009,6 +1031,11 @@ public sealed class ConversationalShell
             SingleReader = true,
             SingleWriter = true,
         });
+        var steeringPauses = Channel.CreateUnbounded<RunSteeringPaused>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+        });
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var directFetchApprovalLease = _directFetchApprovalPrompt?.Attach(
             PromptForDirectFetchApprovalAsync,
@@ -1066,6 +1093,7 @@ public sealed class ConversationalShell
                     lifetime.Token);
                 dispatcher.Complete();
                 decisions.Writer.TryComplete();
+                steeringPauses.Writer.TryComplete();
                 return;
             }
         }
@@ -1092,6 +1120,7 @@ public sealed class ConversationalShell
                     CancellationToken.None);
                 dispatcher.Complete();
                 decisions.Writer.TryComplete();
+                steeringPauses.Writer.TryComplete();
                 return;
             }
         }
@@ -1174,6 +1203,7 @@ public sealed class ConversationalShell
             {
                 var output = new List<TuiOutputItem>();
                 var pendingDecisions = new List<InteractiveDecision>();
+                var readySteeringPauses = new List<RunSteeringPaused>();
                 var runCompletedInBatch = false;
                 var nextActivity = currentActivity;
                 var nextSemanticActivityKey = currentSemanticActivityKey;
@@ -1266,6 +1296,28 @@ public sealed class ConversationalShell
                     var transcriptDelta = transcript.Apply(domainEvent)
                         ? transcript.Text[previousLength..]
                         : string.Empty;
+                    if (domainEvent is RunSteeringPauseRequested)
+                    {
+                        output.Add(new TuiSegmentOutput(
+                        [
+                            new TuiTextSegment(
+                                "Steering request received; waiting for the current model/tool boundary.\n",
+                                TuiTextRole.Status),
+                        ]));
+                    }
+
+                    if (domainEvent is RunSteeringSubmitted submitted)
+                    {
+                        output.Add(new TuiSegmentOutput(
+                        [
+                            new TuiTextSegment(
+                                submitted.HasText
+                                    ? "Steering submitted; resuming the run.\n"
+                                    : "Steering dismissed; resuming the run.\n",
+                                TuiTextRole.Status),
+                        ]));
+                    }
+
                     var emittedModelOutput = false;
                     if (streamingThinkingActive && domainEvent is not ModelReasoningObserved)
                     {
@@ -1405,6 +1457,9 @@ public sealed class ConversationalShell
                                 proposed.ApprovalId,
                                 proposed.RequiredApproval));
                             break;
+                        case RunSteeringPaused paused:
+                            readySteeringPauses.Add(paused);
+                            break;
                         case RunCompleted:
                             runCompletedInBatch = true;
                             break;
@@ -1437,6 +1492,11 @@ public sealed class ConversationalShell
                 if (output.Count > 0)
                 {
                     await WriteOutputWithCancellationFallbackAsync(_surface, output, token);
+                }
+
+                foreach (var paused in readySteeringPauses)
+                {
+                    steeringPauses.Writer.TryWrite(paused);
                 }
 
                 if (nextActivity is not null && activityCompletion is null)
@@ -2017,22 +2077,151 @@ public sealed class ConversationalShell
                     _ = await controller.SubmitAsync(submittedText, operation.Token);
                     var waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
-                    while (!waitTask.IsCompleted || awaitingMutationReview)
+                    IActiveRunInputSession? activeInput = _surface.BeginActiveRunInput(_timeProvider);
+                    Task<ActiveRunInputSignal>? activeInputTask = activeInput?.ReadAsync(operation.Token);
+                    Task<RunSteeringPauseWaitResult>? steeringWaitTask = null;
+                    Task<RunSteeringPaused>? steeringRenderedTask = null;
+                    CancellationTokenSource? steeringRenderedCancellation = null;
+                    SteeringPauseId? pendingSteeringPauseId = null;
+                    try
                     {
-                        if (waitTask.IsFaulted)
+                        if (activeInput is not null)
                         {
-                            _ = await waitTask;
+                            await _surface.WriteAsync(
+                                "Running — Enter to steer; Esc Esc to stop.\n",
+                                TuiTextRole.Status,
+                                operation.Token);
                         }
 
-                        var decisionAvailableTask = decisions.Reader
-                            .WaitToReadAsync(operation.Token)
-                            .AsTask();
-                        if (!awaitingMutationReview)
+                        while (!waitTask.IsCompleted || awaitingMutationReview)
                         {
-                            var completed = await Task.WhenAny(
-                                waitTask,
+                            if (waitTask.IsFaulted)
+                            {
+                                _ = await waitTask;
+                            }
+
+                            if (steeringWaitTask?.IsCompleted == true)
+                            {
+                                var pauseResult = await steeringWaitTask;
+                                if (pauseResult.Status != RunSteeringPauseWaitStatus.Ready)
+                                {
+                                    await CancelAndDisposeAsync(steeringRenderedCancellation);
+                                    steeringWaitTask = null;
+                                    steeringRenderedTask = null;
+                                    steeringRenderedCancellation = null;
+                                    pendingSteeringPauseId = null;
+                                }
+                                else if (steeringRenderedTask?.IsCompleted == true
+                                    && pendingSteeringPauseId is { } readyPauseId)
+                                {
+                                    _ = await steeringRenderedTask;
+                                    await DisposeActiveRunInputAsync(activeInput, activeInputTask);
+                                    activeInput = null;
+                                    activeInputTask = null;
+                                    string? steeringText = null;
+                                    await _surface.SetPromptAsync("steer > ", operation.Token);
+                                    try
+                                    {
+                                        while (true)
+                                        {
+                                            var steeringInput = await _surface.ReadAsync(operation.Token);
+                                            if (!steeringInput.IsSubmitted)
+                                            {
+                                                break;
+                                            }
+
+                                            if (steeringInput.Kind == ConsoleInputKind.ToggleThinking)
+                                            {
+                                                continue;
+                                            }
+
+                                            var steeringCommand = steeringInput.Text.Trim();
+                                            if (steeringCommand.StartsWith("/agents", StringComparison.OrdinalIgnoreCase)
+                                                && (steeringCommand.Length == 7
+                                                    || char.IsWhiteSpace(steeringCommand[7])))
+                                            {
+                                                await HandleAgentsCommandAsync(
+                                                    controller,
+                                                    steeringCommand,
+                                                    operation.Token);
+                                                continue;
+                                            }
+
+                                            if (steeringCommand.StartsWith('/'))
+                                            {
+                                                await _surface.WriteAsync(
+                                                    "Only /agents inspection or cancellation is available while steering is paused.\n",
+                                                    TuiTextRole.Warning,
+                                                    operation.Token);
+                                                continue;
+                                            }
+
+                                            steeringText = steeringInput.Text;
+                                            break;
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        if (activeRepository?.Repository?.RepositoryPath is { } activePath)
+                                        {
+                                            await SetRepositoryPromptAsync(activePath, CancellationToken.None);
+                                        }
+                                        else
+                                        {
+                                            await _surface.SetPromptAsync(
+                                                "threadsmith > ",
+                                                CancellationToken.None);
+                                        }
+                                    }
+
+                                    _ = await controller.SubmitActiveRunSteeringAsync(
+                                        readyPauseId,
+                                        steeringText,
+                                        operation.Token);
+                                    await CancelAndDisposeAsync(steeringRenderedCancellation);
+                                    steeringWaitTask = null;
+                                    steeringRenderedTask = null;
+                                    steeringRenderedCancellation = null;
+                                    pendingSteeringPauseId = null;
+                                    if (!waitTask.IsCompleted)
+                                    {
+                                        activeInput = _surface.BeginActiveRunInput(_timeProvider);
+                                        activeInputTask = activeInput?.ReadAsync(operation.Token);
+                                    }
+
+                                    continue;
+                                }
+                            }
+
+                            var decisionAvailableTask = decisions.Reader
+                                .WaitToReadAsync(operation.Token)
+                                .AsTask();
+                            var pendingTasks = new List<Task>
+                            {
                                 decisionAvailableTask,
-                                drainTask);
+                                drainTask,
+                            };
+                            if (!awaitingMutationReview)
+                            {
+                                pendingTasks.Add(waitTask);
+                            }
+
+                            if (activeInputTask is not null)
+                            {
+                                pendingTasks.Add(activeInputTask);
+                            }
+
+                            if (steeringWaitTask?.IsCompleted == false)
+                            {
+                                pendingTasks.Add(steeringWaitTask);
+                            }
+
+                            if (steeringRenderedTask?.IsCompleted == false)
+                            {
+                                pendingTasks.Add(steeringRenderedTask);
+                            }
+
+                            var completed = await Task.WhenAny(pendingTasks);
                             if (completed == drainTask)
                             {
                                 await drainTask;
@@ -2042,29 +2231,73 @@ public sealed class ConversationalShell
                             {
                                 break;
                             }
-                        }
-                        else
-                        {
-                            var completed = await Task.WhenAny(decisionAvailableTask, drainTask);
-                            if (completed == drainTask)
+
+                            if (completed == activeInputTask && activeInput is not null)
                             {
-                                await drainTask;
+                                var signal = await activeInputTask;
+                                activeInputTask = activeInput.ReadAsync(operation.Token);
+                                if (signal == ActiveRunInputSignal.CancellationRequested)
+                                {
+                                    await operation.CancelAsync();
+                                    operation.Token.ThrowIfCancellationRequested();
+                                }
+
+                                if (signal == ActiveRunInputSignal.SteeringRequested
+                                    && pendingSteeringPauseId is null)
+                                {
+                                    var request = await controller.RequestActiveRunSteeringPauseAsync(
+                                        operation.Token);
+                                    if (request.Status is RunSteeringPauseRequestStatus.Accepted
+                                        or RunSteeringPauseRequestStatus.AlreadyPending)
+                                    {
+                                        pendingSteeringPauseId = request.PauseId;
+                                        steeringRenderedCancellation =
+                                            CancellationTokenSource.CreateLinkedTokenSource(operation.Token);
+                                        steeringWaitTask = controller.WaitForActiveRunSteeringPauseAsync(
+                                            request.PauseId,
+                                            operation.Token);
+                                        steeringRenderedTask = WaitForSteeringPauseRenderedAsync(
+                                            steeringPauses.Reader,
+                                            request.PauseId,
+                                            steeringRenderedCancellation.Token);
+                                    }
+                                }
+
+                                continue;
+                            }
+
+                            if (completed == decisionAvailableTask)
+                            {
+                                if (!await decisionAvailableTask)
+                                {
+                                    break;
+                                }
+
+                                await DisposeActiveRunInputAsync(activeInput, activeInputTask);
+                                activeInput = null;
+                                activeInputTask = null;
+                                while (decisions.Reader.TryRead(out var decision))
+                                {
+                                    var decisionResult = await HandleDecisionAsync(
+                                        controller,
+                                        decision,
+                                        operation.Token);
+                                    awaitingMutationReview = decisionResult
+                                        == InteractiveDecisionResult.AwaitingMutationReview;
+                                }
+
+                                if (!waitTask.IsCompleted)
+                                {
+                                    activeInput = _surface.BeginActiveRunInput(_timeProvider);
+                                    activeInputTask = activeInput?.ReadAsync(operation.Token);
+                                }
                             }
                         }
-
-                        if (!await decisionAvailableTask)
-                        {
-                            break;
-                        }
-
-                        while (decisions.Reader.TryRead(out var decision))
-                        {
-                            var decisionResult = await HandleDecisionAsync(
-                                controller,
-                                decision,
-                                operation.Token);
-                            awaitingMutationReview = decisionResult == InteractiveDecisionResult.AwaitingMutationReview;
-                        }
+                    }
+                    finally
+                    {
+                        await DisposeActiveRunInputAsync(activeInput, activeInputTask);
+                        await CancelAndDisposeAsync(steeringRenderedCancellation);
                     }
 
                     _ = await waitTask;
@@ -2081,6 +2314,19 @@ public sealed class ConversationalShell
                 catch (OperationCanceledException) when (operation.IsCancellationRequested)
                 {
                     _ = await controller.CancelActiveRunAsync(CancellationToken.None);
+                    if (renderedRunCompletion is not null)
+                    {
+                        var cancelledRendering = renderedRunCompletion.Task;
+                        var cancellationDrain = await Task.WhenAny(cancelledRendering, drainTask);
+                        if (cancellationDrain == drainTask)
+                        {
+                            await drainTask;
+                        }
+
+                        await cancelledRendering;
+                        renderedRunCompletion = null;
+                    }
+
                     await _surface.WriteAsync(
                         "Run cancelled.\n",
                         TuiTextRole.Status,
@@ -2107,6 +2353,7 @@ public sealed class ConversationalShell
             var finalActivityDisplayTask = activityDisplayTask ?? Task.CompletedTask;
             dispatcher.Complete();
             decisions.Writer.TryComplete();
+            steeringPauses.Writer.TryComplete();
             try
             {
                 await Task.WhenAll(finalActivityDisplayTask, drainTask);
@@ -2131,6 +2378,61 @@ public sealed class ConversationalShell
                 }
             }
         }
+    }
+
+    /// <summary>Cancels and disposes an optional one-use linked source.</summary>
+    internal static async Task CancelAndDisposeAsync(CancellationTokenSource? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        await source.CancelAsync();
+        source.Dispose();
+    }
+
+    /// <summary>Releases one active-run input lease and observes its outstanding read.</summary>
+    internal static async Task DisposeActiveRunInputAsync(
+        IActiveRunInputSession? session,
+        Task<ActiveRunInputSignal>? readTask)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        await session.DisposeAsync();
+        if (readTask is not null)
+        {
+            try
+            {
+#pragma warning disable VSTHRD003 // The shell started and owns the one active-input read task.
+                _ = await readTask;
+#pragma warning restore VSTHRD003
+            }
+            catch (OperationCanceledException)
+            {
+                // Releasing the lease intentionally ends its one outstanding poll.
+            }
+        }
+    }
+
+    /// <summary>Waits until the event drain has rendered one exact steering pause.</summary>
+    internal static async Task<RunSteeringPaused> WaitForSteeringPauseRenderedAsync(
+        ChannelReader<RunSteeringPaused> reader,
+        SteeringPauseId pauseId,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var paused in reader.ReadAllAsync(cancellationToken))
+        {
+            if (paused.PauseId == pauseId)
+            {
+                return paused;
+            }
+        }
+
+        throw new InvalidOperationException("The steering-pause render channel completed unexpectedly.");
     }
 
     /// <summary>Writes one batch, terminalizing source with a non-cancelled token if admission is cancelled.</summary>
@@ -2705,32 +3007,32 @@ public sealed class ConversationalShell
         const int descriptionColumn = 42;
         (string Command, string Description)[] entries =
         [
-            ("/open [path]", "Open a repository and choose trust"),
-            ("/trust [inspect|read|build|mutation]", "Set or upgrade repository trust"),
-            ("/new", "Start a fresh independent session"),
-            ("/resume [id]", "Resume a durable repository session"),
-            ("/clone", "Clone governed context into an independent session"),
-            ("/models", "Select and persist the repository model"),
-            ("/auth openai-codex [login|status|logout]", "Manage Codex authentication"),
-            ("/reasoning [level]", "Set reasoning effort for the active model (none|minimal|low|medium|high)"),
-            ("/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
-            ("/extensions", "Browse, load, and unload extensions (Up/Down, Enter)"),
-            ("/tools", "Browse and toggle repository tool availability (Up/Down, Enter)"),
-            ("/code_explore_output {structured|markdown}", "Set code_explore output format for this session"),
-            ("/code_explore_inspect {on|off}", "Show future code_explore outputs in the tool block for this session"),
-            ("/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
-            ("/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource|prompt|auth|logout|revoke|switch-account|diagnose]", "Manage MCP profiles and capabilities"),
-            ("/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Govern lifecycle hooks"),
-            ("/memory [remember|list|inspect|supersede|forget|validate]", "Manage local repository memory"),
-            ("/context [mode|inspect|compact]", "Inspect or control bounded conversation context"),
-            ("/validation retry", "Resume interrupted post-apply validation"),
             ("/agents <id> [cancel|cancel-child <id>]", "Inspect or cancel a delegation tree"),
-            ("/skills [list|inspect|verify|enable|disable|pin|use|status|cancel]", "Govern skills"),
-            ("/plan-policy [name|current]", "Select or report plan approval policy"),
-            ("/policy [name|current]", "Select or report mutation approval policy"),
-            ("/theme [id|current]", "Select, change, or report the active theme"),
+            ("/auth openai-codex [login|status|logout]", "Manage Codex authentication"),
+            ("/clone", "Clone governed context into an independent session"),
+            ("/code_explore_inspect {on|off}", "Show future code_explore outputs in the tool block for this session"),
+            ("/code_explore_output {structured|markdown}", "Set code_explore output format for this session"),
+            ("/context [mode|inspect|compact]", "Inspect or control bounded conversation context"),
+            ("/extensions", "Browse, load, and unload extensions (Up/Down, Enter)"),
+            ("/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
             ("/help", "Show commands"),
+            ("/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Govern lifecycle hooks"),
+            ("/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]", "Manage MCP profiles and capabilities"),
+            ("/memory [remember|list|inspect|supersede|forget|validate]", "Manage local repository memory"),
+            ("/models", "Select and persist the repository model"),
+            ("/new", "Start a fresh independent session"),
+            ("/open [path]", "Open a repository and choose trust"),
+            ("/plan-policy [name|current|reset|revoke]", "Select or report plan approval policy"),
+            ("/policy [name|current]", "Select or report mutation approval policy"),
             ("/quit", "End the interactive session"),
+            ("/reasoning [level]", "Set reasoning effort for the active model (none|minimal|low|medium|high)"),
+            ("/resume [id]", "Resume a durable repository session"),
+            ("/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Govern skills"),
+            ("/theme [id|current]", "Select, change, or report the active theme"),
+            ("/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
+            ("/tools", "Browse and toggle repository tool availability (Up/Down, Enter)"),
+            ("/trust [inspect|read|build|mutation]", "Set or upgrade repository trust"),
+            ("/validation retry", "Resume interrupted post-apply validation"),
         ];
 
         var output = new StringBuilder();

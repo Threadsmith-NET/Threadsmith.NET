@@ -135,7 +135,7 @@ public sealed record DelegateAgentOutcomeSummary(
     [property: JsonPropertyName("omissions")] IReadOnlyList<string> Omissions,
     [property: JsonPropertyName("usage")] DelegateAgentUsageSummary Usage);
 
-/// <summary>Steering accounting retained even when the active-input feature is deferred.</summary>
+/// <summary>Active-run steering delivery accounting for one joined delegation.</summary>
 public sealed record DelegationSteeringSummary(
     [property: JsonPropertyName("submitted")] int Submitted,
     [property: JsonPropertyName("delivered")] int Delivered,

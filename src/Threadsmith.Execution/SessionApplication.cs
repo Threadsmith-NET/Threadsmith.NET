@@ -18,6 +18,9 @@ public sealed partial class SessionApplication :
     ICommandHandler<SubmitRequestCommand, RunId>,
     ICommandHandler<WaitForRunCommand, bool>,
     ICommandHandler<CancelRunCommand, bool>,
+    ICommandHandler<RequestRunSteeringPauseCommand, RunSteeringPauseRequestResult>,
+    ICommandHandler<WaitForRunSteeringPauseCommand, RunSteeringPauseWaitResult>,
+    ICommandHandler<SubmitRunSteeringCommand, RunSteeringSubmissionResult>,
     ICommandHandler<ApprovePlanCommand, bool>,
     ICommandHandler<RejectPlanCommand, bool>,
     ICommandHandler<RevisePlanCommand, bool>,
@@ -96,6 +99,7 @@ public sealed partial class SessionApplication :
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
+    private readonly RunSteeringCoordinator _steering;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ConcurrentDictionary<SessionId, byte> _sessions = new();
     private readonly Func<SessionId, CancellationToken, Task<ToolInvocationContext>>?
@@ -170,7 +174,8 @@ public sealed partial class SessionApplication :
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
         ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null,
-        IConversationToolSnapshotStore? conversationToolSnapshots = null)
+        IConversationToolSnapshotStore? conversationToolSnapshots = null,
+        RunSteeringCoordinator? steering = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -222,6 +227,7 @@ public sealed partial class SessionApplication :
         _conversationGovernor = conversationGovernor;
         _conversationCompactor = conversationCompactor;
         _conversationToolSnapshots = conversationToolSnapshots;
+        _steering = steering ?? new RunSteeringCoordinator();
         if (!Enum.IsDefined(defaultConversationMode))
         {
             throw new ArgumentOutOfRangeException(nameof(defaultConversationMode));
@@ -287,6 +293,8 @@ public sealed partial class SessionApplication :
             linkedSource.Dispose();
             throw new InvalidOperationException("The run identifier already exists.");
         }
+
+        _steering.RegisterRun(command.SessionId, runId);
 
         _ = ExecuteRunAsync(command, runId, registration);
         return Task.FromResult(runId);
@@ -366,6 +374,83 @@ public sealed partial class SessionApplication :
         }
 
         return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringPauseRequestResult> HandleAsync(
+        RequestRunSteeringPauseCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = _steering.RequestPause(command.SessionId, command.RunId);
+        if (result.Status == RunSteeringPauseRequestStatus.Accepted)
+        {
+            await _events.PublishAsync(
+                new RunSteeringPauseRequested(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    result.PauseId),
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringPauseWaitResult> HandleAsync(
+        WaitForRunSteeringPauseCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _steering.WaitForPauseAsync(
+            command.SessionId,
+            command.RunId,
+            command.PauseId,
+            cancellationToken);
+        if (result.Status == RunSteeringPauseWaitStatus.Ready
+            && _steering.TryMarkPausedPublished(command.SessionId, command.RunId, command.PauseId))
+        {
+            await _events.PublishAsync(
+                new RunSteeringPaused(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    command.PauseId),
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringSubmissionResult> HandleAsync(
+        SubmitRunSteeringCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var sanitized = string.IsNullOrWhiteSpace(command.Text)
+            ? null
+            : _sanitizer.Sanitize(command.Text);
+        var result = _steering.Submit(
+            command.SessionId,
+            command.RunId,
+            command.PauseId,
+            sanitized);
+        if (result.Status is RunSteeringSubmissionStatus.Accepted
+            or RunSteeringSubmissionStatus.Dismissed)
+        {
+            await _events.PublishAsync(
+                new RunSteeringSubmitted(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    command.PauseId,
+                    result.Sequence,
+                    result.Status == RunSteeringSubmissionStatus.Accepted),
+                cancellationToken);
+        }
+
+        return result;
     }
 
     /// <inheritdoc />
@@ -734,6 +819,10 @@ public sealed partial class SessionApplication :
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, false),
                 CancellationToken.None);
             registration.Completion.TrySetException(exception);
+        }
+        finally
+        {
+            _steering.CompleteRun(command.SessionId, runId);
         }
     }
 

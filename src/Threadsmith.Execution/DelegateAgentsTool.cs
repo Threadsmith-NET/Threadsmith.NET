@@ -77,13 +77,15 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
     private readonly DelegateAgentsPlanFactory _plans;
     private readonly DelegateAgentsResultProjector _projector;
     private readonly IExplorerAssignmentRunnerFactory _runners;
+    private readonly RunSteeringCoordinator? _steering;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsTool"/> class.</summary>
     public DelegateAgentsTool(
         DelegateAgentsPlanFactory plans,
         IExplorerAssignmentRunnerFactory runners,
         IDelegationCoordinator coordinator,
-        DelegateAgentsOptions options)
+        DelegateAgentsOptions options,
+        RunSteeringCoordinator? steering = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
         ArgumentNullException.ThrowIfNull(runners);
@@ -94,6 +96,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         _runners = runners;
         _coordinator = coordinator;
         _options = options;
+        _steering = steering;
         _projector = new DelegateAgentsResultProjector(options);
         _definition = CreateDefinition(options);
     }
@@ -109,15 +112,47 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
     {
         var plan = _plans.Create(input, context);
         var runner = _runners.Create(context);
-        var checkpoint = await _coordinator.StartAsync(plan, runner, cancellationToken);
-        var projection = _projector.Project(plan, checkpoint);
-        var result = projection.Result;
-        var modelContent = DelegateAgentsResultRenderer.Render(result, out var modelTruncated);
-        return new ToolExecution<DelegateAgentsResult>(
-            result,
-            [new ToolProvenanceSource("delegation", result.DelegationId)],
-            projection.IsTruncated || modelTruncated,
-            modelContent);
+        _steering?.RegisterDelegation(
+            context.SessionId,
+            context.RunId,
+            plan.DelegationId,
+            plan.Assignments.Select(assignment => assignment.ChildRunId).ToArray());
+        try
+        {
+            var checkpoint = await _coordinator.StartAsync(plan, runner, cancellationToken);
+            if (_steering is not null)
+            {
+                await _steering.PauseDelegationAtJoinBoundaryAsync(
+                    context.SessionId,
+                    context.RunId,
+                    plan.DelegationId,
+                    cancellationToken);
+            }
+
+            var projection = _projector.Project(plan, checkpoint);
+            var result = _steering is null
+                ? projection.Result
+                : projection.Result with
+                {
+                    Steering = _steering.GetDelegationSummary(
+                        context.SessionId,
+                        context.RunId,
+                        plan.DelegationId),
+                };
+            var modelContent = DelegateAgentsResultRenderer.Render(result, out var modelTruncated);
+            return new ToolExecution<DelegateAgentsResult>(
+                result,
+                [new ToolProvenanceSource("delegation", result.DelegationId)],
+                projection.IsTruncated || modelTruncated,
+                modelContent);
+        }
+        finally
+        {
+            _steering?.CompleteDelegation(
+                context.SessionId,
+                context.RunId,
+                plan.DelegationId);
+        }
     }
 
     /// <inheritdoc />

@@ -140,6 +140,7 @@ internal static class ApplicationComposition
             planPolicyPersistence,
             host.Events);
         var planSanityChecker = new PlanSanityChecker();
+        var runSteering = new RunSteeringCoordinator();
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectResolvedFallback =
@@ -265,7 +266,8 @@ internal static class ApplicationComposition
             activeTurnCompactionPolicy: activeTurnCompactionPolicy,
             activeTurnCompactionProfile: activeTurnCompactionProfile,
             selectActiveModel: selectResolvedFallback,
-            conversationToolSnapshots: conversationToolSnapshots);
+            conversationToolSnapshots: conversationToolSnapshots,
+            steering: runSteering);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -379,7 +381,8 @@ internal static class ApplicationComposition
                         conversationToolSnapshots,
                         host.Sanitizer,
                         delegateAgentsOptions,
-                        usage);
+                        usage,
+                        runSteering);
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
@@ -388,7 +391,8 @@ internal static class ApplicationComposition
                             delegateAgentsOptions),
                         explorerRunners,
                         delegationCoordinator,
-                        delegateAgentsOptions);
+                        delegateAgentsOptions,
+                        runSteering);
                     tools.ToolRegistry.RegisterOrReplace(
                         delegateAgentsTool,
                         new ToolActivitySource(

@@ -334,6 +334,9 @@ internal sealed class BufferedPromptConsole : IConsole
                 _disposed.Token);
             try
             {
+                // Console reads may block despite a preceding KeyAvailable check. Always cross an
+                // asynchronous boundary before polling so ReadAsync never blocks its caller inline.
+                await Task.Yield();
                 while (true)
                 {
                     linked.Token.ThrowIfCancellationRequested();
@@ -362,7 +365,9 @@ internal sealed class BufferedPromptConsole : IConsole
             await _disposed.CancelAsync();
             if (Volatile.Read(ref _readCompletion) is { } completion)
             {
+#pragma warning disable VSTHRD003 // This session creates and owns the active-read completion task.
                 await completion.Task;
+#pragma warning restore VSTHRD003
             }
 
             _owner.Release(this);

@@ -1,6 +1,6 @@
 # Implementation Plan 90: Deployable Prompt Assets and Cached Prompt Loading
 
-**Status:** Planned  
+**Status:** Active. Production implementation, focused automated coverage, syntax-aware completeness gates, and a self-contained prompt-payload publish are complete. MTP-255 execution and unrelated pre-existing repository-wide baseline failures remain before final Plan 90/M29 completion.
 **Delivery track:** Milestone 29 — Deployable prompt customization  
 **Prerequisites:** M12, M15, M23.4, and M28. Implemented Plans 89, 91, 94, and 96, planned Plan 95, and any concurrent edits to prompt-producing files must be complete or reconciled before the Task 1 baseline is frozen.
 **Milestone contract:** [Milestone 29 — Deployable Prompt Customization](milestones/milestone-29-deployable-prompt-customization.md)  
@@ -305,70 +305,70 @@ No new product or test project is planned.
 
 ### Task 1 — Freeze the inventory
 
-- [ ] Re-run syntax-aware searches over all model-message, provider-instruction, tool-description, correction, and model-visible renderer sinks.
-- [ ] Classify concatenated/raw/interpolated literals under Sections 3–4.
-- [ ] Reconcile Plans 89, 91, 94, 95, and 96 plus concurrent changes; inventory the parent `delegate_agents` definition/result and every child model-message sink; add each newly eligible asset with exact filename/owner/token contract.
-- [ ] Record narrow symbol-level exclusions in the completeness test; no directory-wide exemptions.
+- [x] Re-run syntax-aware searches over all model-message, provider-instruction, tool-description, correction, and model-visible renderer sinks.
+- [x] Classify concatenated/raw/interpolated literals under Sections 3–4.
+- [x] Reconcile Plans 89, 91, 94, 95, and 96 plus concurrent changes; inventory the parent `delegate_agents` definition/result and every child model-message sink; add each newly eligible asset with exact filename/owner/token contract.
+- [x] Record narrow symbol-level exclusions in the completeness test; no directory-wide exemptions.
 
 ### Task 2 — Add loader and catalog contracts
 
-- [ ] Add `IPromptLoader`, `PromptFileNames`, `All`, and code-owned asset/token metadata.
-- [ ] Implement eager atomic `DeployedPromptLoader` initialization, confinement, strict decoding, bounds, hashing, cancellation, and immutable cache.
-- [ ] Implement deterministic named-token rendering.
-- [ ] Add test-only in-memory loader support without a runtime override seam.
+- [x] Add `IPromptLoader`, `PromptFileNames`, `All`, and code-owned asset/token metadata.
+- [x] Implement eager atomic `DeployedPromptLoader` initialization, confinement, strict decoding, bounds, hashing, cancellation, and immutable cache.
+- [x] Implement deterministic named-token rendering.
+- [x] Add test-only in-memory loader support without a runtime override seam.
 
 ### Task 3 — Close provider-wire capacity
 
-- [ ] Add request-owned provider instructions and wire-estimate contribution.
-- [ ] Make the active Codex request assembly attach the loaded instruction before context reduction/admission.
-- [ ] Count instruction tokens in total, section, and stable-prefix accounting.
-- [ ] Map the same content to the Codex protocol; remove adapter-side literal/duplicate loading.
-- [ ] Fail before network I/O when fixed/provider content cannot fit.
+- [x] Add request-owned provider instructions and wire-estimate contribution.
+- [x] Make the active Codex request assembly attach the loaded instruction before context reduction/admission.
+- [x] Count instruction tokens in total, section, and stable-prefix accounting.
+- [x] Map the same content to the Codex protocol; remove adapter-side literal/duplicate loading.
+- [x] Fail before network I/O when fixed/provider content cannot fit.
 
 ### Task 4 — Add source assets and deployment
 
-- [ ] Create every catalog Markdown file under its owning `Prompts` directory.
-- [ ] Preserve default semantics and deliberately snapshot whitespace/newline-sensitive canonical requests.
-- [ ] Add App output/publish items with `PreserveNewest` and case-insensitive duplicate validation.
-- [ ] Extend all-RID staged/published release contract checks.
+- [x] Create every catalog Markdown file under its owning `Prompts` directory.
+- [x] Preserve default semantics and deliberately snapshot whitespace/newline-sensitive canonical requests.
+- [x] Add App output/publish items with `PreserveNewest` and case-insensitive duplicate validation.
+- [x] Extend all-RID staged/published release contract checks.
 
 ### Task 5 — Externalize system/context/provider/skill text
 
-- [ ] Replace system, phase, output, governed-state, legacy, and compaction literals.
-- [ ] Replace provider-neutral textual tool framing.
-- [ ] Replace skill procedure prompt/request/continuation literals while retaining untrusted framing and bounds.
-- [ ] Replace delegated-child host/output policies, fixed assignment task, empty instruction/evidence fallbacks, and other initial child-request prose while retaining code-owned XML/JSON/section/schema framing.
-- [ ] Preserve structured/legacy chronology and cache identity behavior with default assets.
+- [x] Replace system, phase, output, governed-state, legacy, and compaction literals.
+- [x] Replace provider-neutral textual tool framing.
+- [x] Replace skill procedure prompt/request/continuation literals while retaining untrusted framing and bounds.
+- [x] Replace delegated-child host/output policies, fixed assignment task, empty instruction/evidence fallbacks, and other initial child-request prose while retaining code-owned XML/JSON/section/schema framing.
+- [x] Preserve structured/legacy chronology and cache identity behavior with default assets.
 
 ### Task 6 — Externalize tool descriptions
 
-- [ ] Inject the loader into each host-owned definition path.
-- [ ] Replace all description assets from Section 6.6.
-- [ ] Externalize the `delegate_agents` description with a declared `MaximumAgents` token while preserving the exact model-visible input/output schemas and request-fenced child capability selection.
-- [ ] Preserve ids, schemas, risk, idempotency, essential status, policy, ordering, and canonicalization.
-- [ ] Preserve untrusted MCP/extension descriptions; use assets only for host-owned policy/fallback prose.
+- [x] Inject the loader into each host-owned definition path.
+- [x] Replace all description assets from Section 6.6.
+- [x] Externalize the `delegate_agents` description with a declared `MaximumAgents` token while preserving the exact model-visible input/output schemas and request-fenced child capability selection.
+- [x] Preserve ids, schemas, risk, idempotency, essential status, policy, ordering, and canonicalization.
+- [x] Preserve untrusted MCP/extension descriptions; use assets only for host-owned policy/fallback prose.
 
 ### Task 7 — Externalize corrections and model guidance
 
-- [ ] Convert static correction construction to an injected cohesive service where required.
-- [ ] Preserve roles, call/result pairing, batch atomicity, retry limits, evidence, sanitization, and capacity admission.
-- [ ] Externalize child invalid-output correction, all evidence-progress variants, and lower-authority steering framing; keep reason/text/count/identity values bounded and preserve their existing authority.
-- [ ] Externalize joined `delegate_agents` result blocks while retaining code-owned block selection, deterministic order, complete-block truncation, structured result DTOs, and projection bounds.
-- [ ] Externalize code-explore response/guidance prose while retaining structured DTO authority and deterministic block ordering.
+- [x] Convert static correction construction to an injected cohesive service where required.
+- [x] Preserve roles, call/result pairing, batch atomicity, retry limits, evidence, sanitization, and capacity admission.
+- [x] Externalize child invalid-output correction, all evidence-progress variants, and lower-authority steering framing; keep reason/text/count/identity values bounded and preserve their existing authority.
+- [x] Externalize joined `delegate_agents` result blocks while retaining code-owned block selection, deterministic order, complete-block truncation, structured result DTOs, and projection bounds.
+- [x] Externalize code-explore response/guidance prose while retaining structured DTO authority and deterministic block ordering.
 
 ### Task 8 — Add completeness and drift gates
 
-- [ ] Add a syntax-aware source audit for governed parent and delegated-child sinks, including `ToolDefinition.Description`, `ModelMessage.Content`, child correction/progress/steering creation, and model-visible tool-result renderers.
-- [ ] Enforce a bijection among constants, code catalog, source assets, published assets, token tests, and user-guide rows.
-- [ ] Reject case-insensitive collisions, undeclared packaged assets, traversal, and stale constants.
-- [ ] Prove no per-call prompt filesystem I/O after initialization.
+- [x] Add a syntax-aware source audit for governed parent and delegated-child sinks, including `ToolDefinition.Description`, `ModelMessage.Content`, child correction/progress/steering creation, and model-visible tool-result renderers.
+- [x] Enforce a bijection among constants, code catalog, source assets, published assets, token tests, and user-guide rows.
+- [x] Reject case-insensitive collisions, undeclared packaged assets, traversal, and stale constants.
+- [x] Prove no per-call prompt filesystem I/O after initialization.
 
 ### Task 9 — Documentation and milestone acceptance
 
-- [ ] Add `docs/operations/prompts.md` and link it from `docs/user-guide.md`.
-- [ ] Update model-provider and release-packaging docs for provider-instruction capacity, raw-log visibility, prompt payloads, restart, and upgrade behavior.
-- [ ] Add Scenario AP and MTP-255 without milestone/work-item bookkeeping in those owner documents.
-- [ ] Perform the DOX pass and update only durable ownership/deployment guidance.
+- [x] Add `docs/operations/prompts.md` and link it from `docs/user-guide.md`.
+- [x] Update model-provider and release-packaging docs for provider-instruction capacity, raw-log visibility, prompt payloads, restart, and upgrade behavior.
+- [x] Add Scenario AP and MTP-255 without milestone/work-item bookkeeping in those owner documents.
+- [x] Perform the DOX pass and update only durable ownership/deployment guidance.
 - [ ] Mark Plan 90 complete after all exit evidence passes; change M29 lifecycle only in `milestones.md`.
 
 ---

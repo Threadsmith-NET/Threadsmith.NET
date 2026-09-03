@@ -21,6 +21,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly IChildAgentInstructionProvider _instructions;
     private readonly IModelProvider _models;
     private readonly DelegateAgentsOptions _options;
+    private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
     private readonly AgentModelSelector _selection;
     private readonly SessionUsageProjection? _sessionUsage;
@@ -40,6 +41,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         IConversationToolSnapshotStore snapshots,
         IOutputSanitizer sanitizer,
         DelegateAgentsOptions options,
+        IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null)
     {
@@ -53,6 +55,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         ArgumentNullException.ThrowIfNull(snapshots);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(prompts);
         _contexts = contexts;
         _admission = admission;
         _selection = selection;
@@ -63,6 +66,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _snapshots = snapshots;
         _sanitizer = sanitizer;
         _options = options;
+        _prompts = prompts;
         _sessionUsage = sessionUsage;
         _steering = steering;
     }
@@ -90,6 +94,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _options,
             parentContext,
             registrations,
+            _prompts,
             _sessionUsage,
             _steering);
     }
@@ -119,6 +124,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         DelegateAgentsOptions options,
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
+        IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null)
     {
@@ -133,6 +139,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(parentContext);
         ArgumentNullException.ThrowIfNull(registrations);
+        ArgumentNullException.ThrowIfNull(prompts);
         _contexts = contexts;
         _admission = admission;
         _selection = selection;
@@ -146,6 +153,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             sanitizer,
             options,
             registrations,
+            prompts,
             sessionUsage,
             steering);
     }

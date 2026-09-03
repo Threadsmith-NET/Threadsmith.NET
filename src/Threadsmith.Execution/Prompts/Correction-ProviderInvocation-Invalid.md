@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: Nothing from the invalid model request was executed. {{Reason}} Emit a corrected request using a valid tool name and JSON-object arguments. Do not answer from unsupported repository assumptions; if a required tool cannot be called, say so.

@@ -62,7 +62,7 @@ public sealed class CapabilityRegistryTests
     [Fact]
     public async Task Extension_tool_id_collision_preserves_the_builtin_registration()
     {
-        var builtIn = new ReadFileTool();
+        var builtIn = new ReadFileTool(TestPromptLoader.Instance);
         var toolRegistry = new ToolRegistry([builtIn]);
         var (host, generation) = await LoadSampleAsync(toolRegistry);
         var collision = new ConfigurableToolCapability("extension_read", builtIn.Definition.Id);

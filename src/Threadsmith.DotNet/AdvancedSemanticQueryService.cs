@@ -262,13 +262,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private readonly Dictionary<Guid, long> _latestCodeExploreCatalogGenerations = [];
     private readonly Dictionary<string, IReadOnlyList<string>> _naturalLanguageGraphNeighbors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SharedCodeExploreBuild<IReadOnlyList<string>>> _naturalLanguageGraphBuilds = new(StringComparer.Ordinal);
+    private readonly IPromptLoader _prompts;
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
-    public AdvancedSemanticQueryService(SemanticEngineRegistry registry)
+    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(prompts);
         _registry = registry;
+        _prompts = prompts;
     }
 
     /// <inheritdoc />
@@ -459,7 +462,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     "Source references the selected symbol."))
                 {
                     UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add("Reference results exceeded the graph bounds or could not be projected.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "Reference results exceeded the graph bounds or could not be projected."));
                     break;
                 }
             }
@@ -485,7 +489,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     "Symbol implements or overrides the selected contract."))
                 {
                     UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add("Implementation results exceeded the graph bounds.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "Implementation results exceeded the graph bounds."));
                     break;
                 }
             }
@@ -508,7 +513,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     "Caller directly invokes the selected symbol."))
                 {
                     UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add("Caller results exceeded the graph bounds.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "Caller results exceeded the graph bounds."));
                     break;
                 }
             }
@@ -557,7 +563,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         reason))
                     {
                         UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                        omissions.Add("Dependent project/test results exceeded the graph bounds.");
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "Dependent project/test results exceeded the graph bounds."));
                         projectBoundsReached = true;
                         break;
                     }
@@ -590,7 +597,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     reason))
                 {
                     UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add("Generated or linked document results exceeded the graph bounds.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "Generated or linked document results exceeded the graph bounds."));
                     break;
                 }
             }
@@ -598,14 +606,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
             timeReached = true;
-            omissions.Add("The traversal time limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact("The traversal time limit was reached."));
         }
 
-        omissions.Add("Runtime reflection, dynamic dispatch, execution traces, and diagnostics outside the loaded semantic snapshot are not inferred.");
+        omissions.Add(ModelVisibleStructuredFact.Exact(
+            "Runtime reflection, dynamic dispatch, execution traces, and diagnostics outside the loaded semantic snapshot are not inferred."));
         EnsureCurrent(engine, snapshot.Generation);
         if (depthReached)
         {
-            omissions.Add("The traversal depth limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact("The traversal depth limit was reached."));
         }
 
         return new SymbolImpactResult(
@@ -682,7 +691,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                                 snapshot.Confidence,
                                 matches,
                                 false,
-                                ["The maximum match count was reached."]);
+                                [ModelVisibleStructuredFact.Exact("The maximum match count was reached.")]);
                         }
                     }
                 }
@@ -699,7 +708,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             snapshot.Confidence,
             matches,
             !timeReached,
-            timeReached ? ["The query time limit was reached."] : []);
+            timeReached ? [ModelVisibleStructuredFact.Exact("The query time limit was reached.")] : []);
     }
 
     /// <inheritdoc />
@@ -776,7 +785,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             snapshot.Confidence,
             documents,
             !truncated,
-            truncated ? ["The maximum generated-document count was reached."] : []);
+            truncated ? [ModelVisibleStructuredFact.Exact("The maximum generated-document count was reached.")] : []);
     }
 
     /// <inheritdoc />
@@ -962,7 +971,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
             timeReached = true;
-            omissions.Add("The code exploration time limit was reached during anchor resolution.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The code exploration time limit was reached during anchor resolution."));
         }
 
         var selectedSections = new List<CodeExploreFileSection>();
@@ -1013,7 +1023,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
                 else if (request.Mode == CodeExploreMode.Flow && flowAnchors.Count < 2)
                 {
-                    omissions.Add("Flow mode requires at least two resolved source-bearing symbol anchors.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "Flow mode requires at least two resolved source-bearing symbol anchors."));
                 }
 
                 if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors, naturalLanguageIntent))
@@ -1032,7 +1043,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
             {
                 timeReached = true;
-                omissions.Add("The code exploration time limit was reached during flow composition.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "The code exploration time limit was reached during flow composition."));
             }
         }
 
@@ -1044,7 +1056,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 && candidates.Any(candidate => IsTestSourceCandidate(candidate)
                     && !IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation)))
             {
-                omissions.Add("Unrequested test source was omitted; compact test dependencies remain available in blast-radius evidence.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Unrequested test source was omitted; compact test dependencies remain available in blast-radius evidence."));
             }
 
             await ProjectAvailableSourceAsync(
@@ -1099,14 +1112,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         CreateSkippedCandidateContinuation(
                             snapshot,
                             broadContainer,
-                            "The oversized container envelope was replaced by more specific selected members from the same file."));
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerReplaced)));
                     allocationFiles.Add(new CodeExploreAllocationFileSummary(
                         ToRepositoryRelativePath(broadContainer.FilePath, snapshot.RepositoryPath),
                         0,
                         0,
                         CodeExploreSourceCompleteness.Omitted,
                         false,
-                        "An oversized non-exact container envelope was omitted because more specific selected members carry the file's source reservation."));
+                        GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerOmitted)));
                 }
 
                 var unclutteredCandidates = eligibleCandidates
@@ -1150,7 +1163,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         var continuation = CreateSkippedCandidateContinuation(
                             snapshot,
                             candidate,
-                            "The source allocation pass retained stronger evidence above the relevance cliff.");
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationStrongerEvidence));
                         AddOrMergeContinuation(continuations, continuation);
                         allocationFiles.Add(new CodeExploreAllocationFileSummary(
                             ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
@@ -1158,7 +1171,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                             0,
                             CodeExploreSourceCompleteness.Omitted,
                             false,
-                            "Source was cliffed by relevance-aware allocation; use the continuation target if this tail evidence is needed."));
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceRelevanceCliffContinuation)));
                         continue;
                     }
 
@@ -1200,7 +1213,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                             CreateSkippedCandidateContinuation(
                                 snapshot,
                                 candidate,
-                                "The maximum file-section count was reached."));
+                                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceMaximumFileSections)));
                         continue;
                     }
 
@@ -1212,7 +1225,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                             CreateSkippedCandidateContinuation(
                                 snapshot,
                                 candidate,
-                                "The maximum total source-character count was reached."));
+                                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceMaximumSourceCharacters)));
                         continue;
                     }
 
@@ -1232,7 +1245,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         var continuation = CreateSkippedCandidateContinuation(
                             snapshot,
                             candidate,
-                            "The source allocation pass reserved remaining budget for stronger code_explore candidates.");
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationReservedStronger));
                         AddOrMergeContinuation(continuations, continuation);
                         allocationFiles.Add(new CodeExploreAllocationFileSummary(
                             ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
@@ -1240,7 +1253,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                             0,
                             CodeExploreSourceCompleteness.Omitted,
                             false,
-                            "Source was cliffed by relevance-aware allocation; use the continuation target if this tail evidence is needed."));
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceRelevanceCliffContinuation)));
                         continue;
                     }
 
@@ -1312,7 +1325,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
             {
                 timeReached = true;
-                omissions.Add($"The code exploration time limit was reached during {phase}.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    $"The code exploration time limit was reached during {phase}."));
             }
         }
 
@@ -1348,22 +1362,25 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var hasUnloadedSource = selectedSections.Any(section => string.IsNullOrWhiteSpace(section.ProjectName));
         if (snapshot.Confidence < SemanticConfidenceLevel.FullSemantic || hasUnloadedSource)
         {
-            omissions.Add("Compiled-project coverage is partial; unloaded or uncompilable projects may be absent.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Compiled-project coverage is partial; unloaded or uncompilable projects may be absent."));
         }
 
         if (alternativesCapped)
         {
-            omissions.Add("One or more ambiguity alternative sets were capped by the request limits.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "One or more ambiguity alternative sets were capped by the request limits."));
         }
 
         if (outputBoundReached)
         {
-            omissions.Add("Source or section output bounds were reached; use the continuation targets for more exact source.");
+            omissions.Add(GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceOutputBounds));
         }
 
         if (suppressedRanges > 0)
         {
-            omissions.Add("Unchanged source already visible in the current request was replaced with compact code_explore back-references.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Unchanged source already visible in the current request was replaced with compact code_explore back-references."));
         }
 
         var missingSourceForResolvedAnchor = resolutions
@@ -1372,7 +1389,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 && string.Equals(candidate.Anchor, resolution.Input, StringComparison.Ordinal)));
         if (missingSourceForResolvedAnchor)
         {
-            omissions.Add("One or more resolved anchors had no source-bearing declaration or path section.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "One or more resolved anchors had no source-bearing declaration or path section."));
         }
 
         var sourceComplete = !timeReached
@@ -1470,7 +1488,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             fileRelevance);
     }
 
-    private static CodeExploreAvailability? CreateInitialCodeExploreAvailability(
+    private CodeExploreAvailability? CreateInitialCodeExploreAvailability(
         CodeExploreReadinessSnapshot snapshot)
     {
         if (snapshot.Solution is null || string.IsNullOrWhiteSpace(snapshot.RepositoryPath))
@@ -1479,8 +1497,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 ? CodeExploreAvailabilityStatus.SemanticWorkspaceUnavailable
                 : CodeExploreAvailabilityStatus.SemanticReadinessBelowMinimum;
             var reason = snapshot.Confidence == SemanticConfidenceLevel.None
-                ? "The opened workspace has not loaded compiler-aware project state yet."
-                : "The semantic workspace does not currently expose compiler-aware project state.";
+                ? _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityWorkspaceUnavailable)
+                : _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityReadinessNoProjectState);
             return new CodeExploreAvailability(
                 status,
                 reason,
@@ -1490,56 +1508,56 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.WaitForWorkspace,
-                    "Wait for semantic workspace loading, then retry code_explore for C# source-bearing evidence.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionWaitForWorkspaceLoading))]);
         }
 
         if (snapshot.Confidence < SemanticConfidenceLevel.PartialCompilation)
         {
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.SemanticReadinessBelowMinimum,
-                "The semantic workspace is below the minimum readiness required for compiler-known C# source exploration.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityReadinessBelowMinimum),
                 true,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.WaitForWorkspace,
-                    "Wait until at least partial compilation is available, then retry code_explore.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionWaitForWorkspacePartialCompilation))]);
         }
 
         if (snapshot.CompiledProjects.Count == 0)
         {
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.NoCompiledProjects,
-                "The opened workspace has no compiled C# projects available for source-bearing semantic exploration.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityNoCompiledProjects),
                 true,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.OpenWorkspace,
-                    "Open or load a C# solution/project workspace before retrying code_explore.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionOpenWorkspaceNoCompiledProjects))]);
         }
 
         return null;
     }
 
-    private static CodeExploreAvailability CreateInitialTimeoutCodeExploreAvailability(
+    private CodeExploreAvailability CreateInitialTimeoutCodeExploreAvailability(
         CodeExploreReadinessSnapshot snapshot)
     {
         return new CodeExploreAvailability(
             CodeExploreAvailabilityStatus.TimedOutPartial,
-            "The code exploration time limit was reached while inspecting workspace scale before source could be projected.",
+            _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityTimedOutBeforeProjection),
             true,
             snapshot.Confidence,
             SemanticConfidenceLevel.PartialCompilation,
             true,
             [new CodeExploreNextActionHint(
                 CodeExploreNextActionKind.RefineAnchor,
-                "Retry code_explore with more exact symbol or path anchors, or use a narrower granular fallback for the immediate gap.")]);
+                _prompts.Get(PromptFileNames.ToolCodeExploreActionRefineAnchorPreProjectionTimeout))]);
     }
 
-    private static CodeExploreResult CreateUnavailableCodeExploreResult(
+    private CodeExploreResult CreateUnavailableCodeExploreResult(
         CodeExploreReadinessSnapshot snapshot,
         CodeExploreRequest request,
         CodeExploreQueryInterpretation interpretation,
@@ -2151,7 +2169,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
     }
 
-    private static CodeExploreAvailability CreateCodeExploreAvailability(
+    private CodeExploreAvailability CreateCodeExploreAvailability(
         AdvancedSemanticSnapshot snapshot,
         CodeExploreCoverage coverage,
         IReadOnlyList<CodeExploreAnchorResolution> resolutions,
@@ -2165,8 +2183,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         if (timeReached)
         {
             var reason = hasVisibleSource || resolutions.Count > 0 || continuationTargets.Count > 0
-                ? "The code exploration time limit was reached after returning bounded safe evidence."
-                : "The code exploration time limit was reached before source evidence could be assembled.";
+                ? _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityTimedOutWithEvidence)
+                : _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityTimedOutWithoutEvidence);
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.TimedOutPartial,
                 reason,
@@ -2194,33 +2212,33 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.NoMatchingDeclarations,
-                "No compiler-known C# declaration or confined C# path matched the request.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityNoMatches),
                 true,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.RefineAnchor,
-                    "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionRefineAnchorNoMatches))]);
         }
 
         if (!hasVisibleSource && HasPolicySourceOmission(resolutions, sections, coverage.Omissions))
         {
             return new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.NoSourceAfterPolicy,
-                "Relevant C# source was found but all source text was removed by path, policy, drift, or source-read safety checks.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityNoSourceAfterPolicy),
                 false,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.AskUser,
-                    "Ask the user whether the workspace scope or repository path policy should be adjusted before retrying.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionAskForPolicySemantic))]);
         }
 
         return new CodeExploreAvailability(
             CodeExploreAvailabilityStatus.Available,
-            "Compiler-aware code exploration completed with the returned bounded evidence.",
+            _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityAvailable),
             false,
             snapshot.Confidence,
             SemanticConfidenceLevel.PartialCompilation,
@@ -2233,7 +2251,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return Path.GetExtension(snapshot.WorkspacePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static CodeExploreAvailability CreateProjectScopedCodeExploreAvailability(
+    private CodeExploreAvailability CreateProjectScopedCodeExploreAvailability(
         AdvancedSemanticSnapshot snapshot,
         bool hasVisibleSource,
         bool canRefineAnchor)
@@ -2243,25 +2261,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             actions.Add(new CodeExploreNextActionHint(
                 CodeExploreNextActionKind.UseReturnedSource,
-                "Use the returned source only for the loaded project's advertised ranges."));
+                _prompts.Get(PromptFileNames.ToolCodeExploreActionUseReturnedSourceProjectScoped)));
         }
         else if (canRefineAnchor)
         {
             actions.Add(new CodeExploreNextActionHint(
                 CodeExploreNextActionKind.RefineAnchor,
-                "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor."));
+                _prompts.Get(PromptFileNames.ToolCodeExploreActionRefineAnchorNoMatches)));
         }
 
-        const string granularFallback = "Keep complete returned file sections as current source evidence and do not reread those ranges. "
-            + "Search once for the most distinctive missing identifier, then read only the exact missing ranges.";
         actions.Add(new CodeExploreNextActionHint(
             CodeExploreNextActionKind.UseGranularFallback,
-            granularFallback));
+            _prompts.Get(PromptFileNames.ToolCodeExploreActionUseGranularFallbackProjectScoped)));
         actions.Add(new CodeExploreNextActionHint(
             CodeExploreNextActionKind.OpenWorkspace,
-            "Load the repository solution to obtain compiler-aware cross-project source and usage coverage."));
-        var reason = $"The semantic workspace was loaded from one project ({Path.GetFileName(snapshot.WorkspacePath)}); "
-            + "referenced projects may be metadata-only and upstream projects or tests are outside this result.";
+            _prompts.Get(PromptFileNames.ToolCodeExploreActionOpenWorkspaceProjectScoped)));
+        var reason = _prompts.Render(
+            PromptFileNames.ToolCodeExploreAvailabilityProjectScopedPartial,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["WorkspaceFileName"] = Path.GetFileName(snapshot.WorkspacePath),
+            });
         return new CodeExploreAvailability(
             CodeExploreAvailabilityStatus.ProjectScopedPartial,
             reason,
@@ -2272,7 +2292,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             actions);
     }
 
-    private static IReadOnlyList<CodeExploreNextActionHint> CreateTimeoutAvailabilityActions(
+    private IReadOnlyList<CodeExploreNextActionHint> CreateTimeoutAvailabilityActions(
         IReadOnlyList<CodeExploreContinuationTarget> continuationTargets)
     {
         if (continuationTargets.Count > 0)
@@ -2280,7 +2300,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var first = continuationTargets[0];
             return [new CodeExploreNextActionHint(
                 CodeExploreNextActionKind.FollowContinuation,
-                "Use the returned continuation target for a narrower retry instead of repeating the broad request.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreActionFollowContinuationTimeout),
                 first.FilePath,
                 CreateContinuationRange(first),
                 first.Anchor)];
@@ -2288,7 +2308,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         return [new CodeExploreNextActionHint(
             CodeExploreNextActionKind.RefineAnchor,
-            "Retry with a narrower exact symbol, stable id, or C# path anchor.")];
+            _prompts.Get(PromptFileNames.ToolCodeExploreActionRefineAnchorTimeoutWithoutContinuation))];
     }
 
     private static bool HasPolicySourceOmission(
@@ -2304,7 +2324,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 || omission.Contains("could not be read", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static CodeExplorePresentation CreateCodeExplorePresentation(
+    private CodeExplorePresentation CreateCodeExplorePresentation(
         CodeExploreAvailability availability,
         IReadOnlyList<CodeExploreFileSection> sections,
         IReadOnlyList<CodeExploreBackReference> backReferences,
@@ -2325,7 +2345,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new CodeExplorePresentation(summary, guarantees, notShownTargets, nextActions);
     }
 
-    private static IReadOnlyList<CodeExploreSourceGuarantee> CreateSourceGuarantees(
+    private IReadOnlyList<CodeExploreSourceGuarantee> CreateSourceGuarantees(
         IReadOnlyList<CodeExploreFileSection> sections,
         IReadOnlyList<CodeExploreBackReference> backReferences,
         CodeExplorePresentationVerbosity verbosity)
@@ -2351,13 +2371,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 _ => CodeExploreSourceGuaranteeKind.Omitted,
             };
             var readEquivalent = kind == CodeExploreSourceGuaranteeKind.ReadEquivalent;
-            var message = kind switch
+            var promptFileName = kind switch
             {
-                CodeExploreSourceGuaranteeKind.ReadEquivalent => $"{section.FilePath} {FormatSourceRange(source.Range)} is current line-numbered source projected through host output sanitization; digests identify the original current source bytes before sanitization, so treat it as read-equivalent for code structure but not proof of redacted literal bytes.",
-                CodeExploreSourceGuaranteeKind.Partial => $"{section.FilePath} {FormatSourceRange(source.Range)} is current line-numbered partial source projected through host output sanitization; use continuation anchors for omitted lines before claiming complete-file or exact-byte coverage.",
-                CodeExploreSourceGuaranteeKind.Drifted => $"{section.FilePath} {FormatSourceRange(source.Range)} was not emitted because semantic or continuation identity drifted from current source.",
-                _ => $"{section.FilePath} {FormatSourceRange(source.Range)} was not emitted; use the omission reason or continuation target before falling back.",
+                CodeExploreSourceGuaranteeKind.ReadEquivalent => PromptFileNames.ToolCodeExploreSourceGuaranteeReadEquivalent,
+                CodeExploreSourceGuaranteeKind.Partial => PromptFileNames.ToolCodeExploreSourceGuaranteePartial,
+                CodeExploreSourceGuaranteeKind.Drifted => PromptFileNames.ToolCodeExploreSourceGuaranteeDrifted,
+                _ => PromptFileNames.ToolCodeExploreSourceGuaranteeOmitted,
             };
+            var message = _prompts.Render(
+                promptFileName,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["FilePath"] = section.FilePath,
+                    ["SourceRange"] = FormatSourceRange(source.Range),
+                });
             guarantees.Add(new CodeExploreSourceGuarantee(
                 kind,
                 section.FilePath,
@@ -2379,7 +2406,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 break;
             }
 
-            var message = $"{reference.FilePath} {FormatSourceRange(reference.Range)} is unchanged source already visible in the current model request via holder {reference.HolderId}, tool call {reference.ToolCallId}; that visible text may already be host-sanitized, so use it for code structure instead of reading the same range again but do not infer redacted literal bytes.";
+            var message = _prompts.Render(
+                PromptFileNames.ToolCodeExploreSourceGuaranteeBackReference,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["FilePath"] = reference.FilePath,
+                    ["SourceRange"] = FormatSourceRange(reference.Range),
+                    ["HolderId"] = reference.HolderId,
+                    ["ToolCallId"] = reference.ToolCallId,
+                });
             guarantees.Add(new CodeExploreSourceGuarantee(
                 CodeExploreSourceGuaranteeKind.BackReference,
                 reference.FilePath,
@@ -2488,7 +2523,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new SourceRange(startLine, 1, continuation.EndLine ?? startLine, 1);
     }
 
-    private static IReadOnlyList<CodeExploreNextActionHint> CreatePresentationNextActions(
+    private IReadOnlyList<CodeExploreNextActionHint> CreatePresentationNextActions(
         CodeExploreAvailability availability,
         IReadOnlyList<CodeExploreSourceGuarantee> guarantees,
         IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
@@ -2510,7 +2545,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 actions,
                 new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.UseReturnedSource,
-                    "Use complete current FileSections as host-sanitized, source-identity-backed evidence for their advertised ranges; do not infer redacted literal bytes.",
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionUseReturnedSourceSourceGuarantee),
                     returnedSource.FilePath,
                     returnedSource.Range),
                 maximumActions);
@@ -2523,7 +2558,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 actions,
                 new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.UseBackReference,
-                    "Use the named current-request back-reference instead of re-reading unchanged source already visible to the model.",
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionUseBackReferences),
                     backReference.FilePath,
                     backReference.Range),
                 maximumActions);
@@ -2536,7 +2571,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 actions,
                 new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.FollowContinuation,
-                    "For omitted or partial source, retry with the exact returned continuation target rather than broad search.",
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionFollowContinuationPartialSource),
                     continuation.FilePath,
                     CreateContinuationRange(continuation),
                     continuation.Anchor),
@@ -2549,7 +2584,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 actions,
                 new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.UseGranularFallback,
-                    "Use find_symbol, search, or read_file only for the specific gap described by availability or omissions."),
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionUseGranularFallbackSpecificGap)),
                 maximumActions);
         }
 
@@ -2576,40 +2611,86 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static string CreatePresentationSummary(
+    private string GetPromptValue(string promptFileName)
+    {
+        return _prompts.Get(promptFileName).TrimEnd('\r', '\n');
+    }
+
+    private string RenderPromptValue(
+        string promptFileName,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        return _prompts.Render(promptFileName, tokens).TrimEnd('\r', '\n');
+    }
+
+    private string CreatePresentationSummary(
         CodeExploreAvailability availability,
         IReadOnlyList<CodeExploreSourceGuarantee> guarantees,
         IReadOnlyList<CodeExploreNotShownTarget> notShownTargets,
         IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
         CodeExplorePresentationVerbosity verbosity)
     {
-        var parts = new List<string> { $"Availability: {availability.Status}. {availability.Reason}" };
+        var parts = new List<string>
+        {
+            RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryAvailability,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Status"] = availability.Status.ToString(),
+                    ["Reason"] = availability.Reason,
+                }),
+        };
         var readEquivalentCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.ReadEquivalent);
         if (readEquivalentCount > 0)
         {
-            parts.Add($"{readEquivalentCount} returned current line-numbered source range(s) are host-sanitized and source-identity backed for their advertised ranges.");
+            parts.Add(RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryReadEquivalent,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Count"] = readEquivalentCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
         }
 
         var partialCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.Partial);
         if (partialCount > 0)
         {
-            parts.Add($"{partialCount} returned source range(s) are partial; use exact continuations before claiming complete coverage.");
+            parts.Add(RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryPartial,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Count"] = partialCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
         }
 
         var backReferenceCount = guarantees.Count(guarantee => guarantee.Kind == CodeExploreSourceGuaranteeKind.BackReference);
         if (backReferenceCount > 0)
         {
-            parts.Add($"{backReferenceCount} unchanged range(s) are already visible by current-request back-reference.");
+            parts.Add(RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryBackReference,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Count"] = backReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
         }
 
         if (continuationTargets.Count > 0)
         {
-            parts.Add($"{continuationTargets.Count} exact continuation target(s) identify the next focused code_explore calls.");
+            parts.Add(RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryContinuationTargets,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Count"] = continuationTargets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
         }
 
         if (notShownTargets.Count > 0 && verbosity != CodeExplorePresentationVerbosity.Compact)
         {
-            parts.Add($"{notShownTargets.Count} not-shown target(s) summarize omitted source, artifacts, or safety notes.");
+            parts.Add(RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSummaryNotShown,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Count"] = notShownTargets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
         }
 
         var maximumCharacters = verbosity == CodeExplorePresentationVerbosity.Compact
@@ -2915,7 +2996,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selectionMode,
             expectedFileSha256,
             workspaceGeneration,
-            reason);
+            ModelVisibleStructuredFact.Exact(reason));
     }
 
     private static bool CanUseProjectedSectionAsArtifactOrigin(ProjectedCodeExploreSection projected)
@@ -2925,7 +3006,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 or CodeExploreSourceCompleteness.Partial;
     }
 
-    private static CodeExploreContinuationTarget CreateSkippedCandidateContinuation(
+    private CodeExploreContinuationTarget CreateSkippedCandidateContinuation(
         AdvancedSemanticSnapshot snapshot,
         CodeExploreSectionCandidate candidate,
         string reason)
@@ -2951,10 +3032,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             mode,
             candidate.ExpectedFileSha256,
             candidate.ExpectedWorkspaceGeneration ?? snapshot.Generation,
-            $"{reason} Retry with this path anchor cursor instead of the original symbol anchor.");
+            RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceSkippedCandidateRetry,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Reason"] = reason,
+                }));
     }
 
-    private static async Task<CodeExploreArtifactProjection> BuildAssociatedArtifactsAsync(
+    private async Task<CodeExploreArtifactProjection> BuildAssociatedArtifactsAsync(
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
@@ -3044,7 +3130,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 && request.Limits.MaximumAssociatedArtifactCandidates == 0;
             if (earlyCandidateLimitReached)
             {
-                omissions.Add("The associated artifact candidate limit was reached.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "The associated artifact candidate limit was reached."));
             }
 
             return CreateAssociatedArtifactProjection(
@@ -3121,7 +3208,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (candidateLimitReached)
         {
-            omissions.Add("The associated artifact candidate limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The associated artifact candidate limit was reached."));
         }
 
         var artifacts = new List<CodeExploreAssociatedArtifact>();
@@ -3150,11 +3238,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         null,
                         fileCandidate.EndLine,
                         fileCandidate.ExpectedFileSha256,
-                        "Retry with this explicit associated artifact path anchor after increasing artifact file limits."));
+                        GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceArtifactFileLimitRetry)));
                 }
                 else if (workItem.LogicalCandidate is { } logicalCandidate)
                 {
-                    omissions.Add($"Logical {logicalCandidate.Relationship} reference '{BoundText(logicalCandidate.LogicalName, 120)}' was omitted because the associated artifact output count limit was reached.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        $"Logical {logicalCandidate.Relationship} reference '{BoundText(logicalCandidate.LogicalName, 120)}' was omitted because the associated artifact output count limit was reached."));
                 }
 
                 continue;
@@ -3180,7 +3269,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     null,
                     candidate.EndLine,
                     candidate.ExpectedFileSha256,
-                    "Retry with this explicit associated artifact path anchor after increasing artifact character limits."));
+                    GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceArtifactCharacterLimitRetry)));
                 continue;
             }
 
@@ -3203,12 +3292,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (fileLimitReached)
         {
-            omissions.Add("Associated artifact file-output bounds were reached; use artifact continuation targets for focused follow-up.");
+            omissions.Add(GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceArtifactFileOutputBounds));
         }
 
         if (characterLimitReached)
         {
-            omissions.Add("Associated artifact character-output bounds were reached; use artifact continuation targets for focused follow-up.");
+            omissions.Add(GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceArtifactCharacterOutputBounds));
         }
 
         return CreateAssociatedArtifactProjection(
@@ -3248,7 +3337,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             request.Limits.MaximumAssociatedArtifacts == 0,
             false,
             true,
-            ["The code exploration time limit was reached during associated artifact discovery."],
+            [ModelVisibleStructuredFact.Exact(
+                "The code exploration time limit was reached during associated artifact discovery.")],
             []);
         return new([], coverage);
     }
@@ -3327,7 +3417,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             cancellationToken.ThrowIfCancellationRequested();
             if (!TryNormalizeRepositoryPath(snapshot, anchor.Path, snapshot.RepositoryPath, out var artifactPath))
             {
-                omissions.Add("An explicit associated artifact path anchor was omitted because it was not a safe repository-confined path.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "An explicit associated artifact path anchor was omitted because it was not a safe repository-confined path."));
                 continue;
             }
 
@@ -3491,7 +3582,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             or DecoderFallbackException
             or XmlException)
         {
-            omissions.Add($"Project metadata for associated artifact discovery could not be inspected: {exception.GetType().Name}.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project metadata for associated artifact discovery could not be inspected: {exception.GetType().Name}."));
             return;
         }
 
@@ -3509,7 +3601,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
         catch (XmlException exception)
         {
-            omissions.Add($"Project metadata for associated artifact discovery could not be parsed safely: {exception.GetType().Name}.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project metadata for associated artifact discovery could not be parsed safely: {exception.GetType().Name}."));
             return;
         }
 
@@ -3707,7 +3800,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (searchResult.Truncated)
                 {
                     var relativeDirectory = ToRepositoryRelativePath(directory, snapshot.RepositoryPath);
-                    omissions.Add($"Bounded exact-name associated artifact lookup for '{BoundText(literal, 120)}' under '{relativeDirectory}' was truncated after inspecting {searchResult.InspectedEntries} entries.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        $"Bounded exact-name associated artifact lookup for '{BoundText(literal, 120)}' under '{relativeDirectory}' was truncated after inspecting {searchResult.InspectedEntries} entries."));
                 }
 
                 foreach (var match in searchResult.Matches.OrderBy(match => match.Path, PathComparer))
@@ -3728,7 +3822,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task<ProjectedCodeExploreArtifact> ProjectAssociatedArtifactAsync(
+    private async Task<ProjectedCodeExploreArtifact> ProjectAssociatedArtifactAsync(
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
@@ -3841,7 +3935,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 projected.NextLine,
                 omittedEndLine,
                 artifactText.FileSha256,
-                "Retry with this explicit associated artifact path anchor and digest to continue omitted artifact content.")];
+                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceArtifactContentRetry))];
         return new(
             CreateAssociatedArtifact(candidate, relativePath, content, content.OmittedRanges),
             projected.SourceCharacters,
@@ -5104,7 +5198,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (nodeReached)
         {
-            omissions.Add("The flow node limit is smaller than the resolved anchor count; flow paths were omitted.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The flow node limit is smaller than the resolved anchor count; flow paths were omitted."));
         }
         else
         {
@@ -5208,7 +5303,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (pathLimitReached)
         {
-            omissions.Add("The maximum selected flow-path count was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The maximum selected flow-path count was reached."));
         }
 
         if (request.Limits.MaximumDispatchBranches > 0)
@@ -5237,7 +5333,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (nodes.Count >= request.Limits.MaximumFlowNodes)
             {
                 nodeReached = true;
-                omissions.Add("The returned flow node limit was reached.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "The returned flow node limit was reached."));
                 break;
             }
 
@@ -5251,7 +5348,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (locations.Count == 0 && !item.Value.Role.Equals(CodeExploreFlowNodeRole.NamedAnchor) && HasSourceEvidence(item.Value.Symbol))
             {
                 evidenceOmitted = true;
-                omissions.Add("Flow symbols outside the invocation path policy were omitted.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Flow symbols outside the invocation path policy were omitted."));
                 continue;
             }
 
@@ -5265,7 +5363,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 locations));
         }
 
-        omissions.Add("Dynamic, reflection, dependency-injection, and runtime-only call targets are not inferred unless Roslyn exposes an unresolved call-site boundary in returned source.");
+        omissions.Add(ModelVisibleStructuredFact.Exact(
+            "Dynamic, reflection, dependency-injection, and runtime-only call targets are not inferred unless Roslyn exposes an unresolved call-site boundary in returned source."));
         var distinctOmissions = omissions
             .Concat(BuildOmissions(depthReached, nodeReached, edgeReached, false))
             .Distinct(StringComparer.Ordinal)
@@ -5305,14 +5404,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     cancellationToken))
                 {
                     evidenceOmitted = true;
-                    omissions.Add("A compiler-proven path was omitted because one or more connector symbols are outside the invocation path policy.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "A compiler-proven path was omitted because one or more connector symbols are outside the invocation path policy."));
                     deferredIncompletePaths.Add(new CodeExploreFlowPath(
                         candidate.From.Identity.Id,
                         candidate.To.Identity.Id,
                         [candidate.From.Identity.Id, candidate.To.Identity.Id],
                         [],
                         false,
-                        "The path crosses source outside the invocation path policy."));
+                        ModelVisibleStructuredFact.Exact(
+                            "The path crosses source outside the invocation path policy.")));
                     return false;
                 }
             }
@@ -5324,14 +5425,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (bridgeIds.Count + pathBridgeIds.Count(id => !bridgeIds.Contains(id)) > request.Limits.MaximumFlowBridgeSymbols)
             {
                 nodeReached = true;
-                omissions.Add("A compiler-proven path was omitted because the unnamed connector limit was reached.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "A compiler-proven path was omitted because the unnamed connector limit was reached."));
                 deferredIncompletePaths.Add(new CodeExploreFlowPath(
                     candidate.From.Identity.Id,
                     candidate.To.Identity.Id,
                     [candidate.From.Identity.Id, candidate.To.Identity.Id],
                     [],
                     false,
-                    "The path requires more unnamed connector symbols than the request permits."));
+                    ModelVisibleStructuredFact.Exact(
+                        "The path requires more unnamed connector symbols than the request permits.")));
                 return false;
             }
 
@@ -5342,14 +5445,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (resultNodeIds.Count + newPathNodeIds.Length > request.Limits.MaximumFlowNodes)
             {
                 nodeReached = true;
-                omissions.Add("A compiler-proven path was omitted because the returned flow node limit was reached.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "A compiler-proven path was omitted because the returned flow node limit was reached."));
                 deferredIncompletePaths.Add(new CodeExploreFlowPath(
                     candidate.From.Identity.Id,
                     candidate.To.Identity.Id,
                     [candidate.From.Identity.Id, candidate.To.Identity.Id],
                     [],
                     false,
-                    "The path would exceed the returned flow node limit."));
+                    ModelVisibleStructuredFact.Exact(
+                        "The path would exceed the returned flow node limit.")));
                 return false;
             }
 
@@ -5366,14 +5471,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (edges.Count + newPathEdgeCount > request.Limits.MaximumFlowEdges)
             {
                 edgeReached = true;
-                omissions.Add("The returned flow edge limit was reached before a selected path could be emitted.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "The returned flow edge limit was reached before a selected path could be emitted."));
                 deferredIncompletePaths.Add(new CodeExploreFlowPath(
                     candidate.From.Identity.Id,
                     candidate.To.Identity.Id,
                     [candidate.From.Identity.Id, candidate.To.Identity.Id],
                     [],
                     false,
-                    "The flow edge limit was reached before this path could be emitted."));
+                    ModelVisibleStructuredFact.Exact(
+                        "The flow edge limit was reached before this path could be emitted.")));
                 return false;
             }
 
@@ -5458,7 +5565,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 pathNodeIds,
                 pathEdgeOrdinals,
                 candidate.Result.IsComplete,
-                pathReason));
+                ModelVisibleStructuredFact.Exact(pathReason)));
             return true;
         }
 
@@ -5499,7 +5606,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 isAmbiguousDispatch,
                 closesCycle,
                 proofKind,
-                proof));
+                ModelVisibleStructuredFact.Exact(proof)));
             AddFlowBoundary(boundaries, evidence.Callee, dispatchKind, callSite);
             return ordinal;
         }
@@ -6145,7 +6252,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
                 if (boundaries.Count >= maximumBoundaries)
                 {
-                    omissions.Add("The flow boundary limit was reached; additional unresolved call-site boundaries were omitted.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "The flow boundary limit was reached; additional unresolved call-site boundaries were omitted."));
                     return;
                 }
 
@@ -6205,7 +6313,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             if (dispatchBranches.Count >= request.Limits.MaximumDispatchBranches
                 || returnedTargets >= request.Limits.MaximumDispatchBranches)
             {
-                omissions.Add("The dispatch-branch limit was reached.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "The dispatch-branch limit was reached."));
                 return true;
             }
 
@@ -6278,10 +6387,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
 
             var rootEdge = edges.First(edge => string.Equals(edge.CalleeSymbolId, rootId, StringComparison.Ordinal));
-            var branchOmissions = implementations.Count > targets.Count
-                ? [$"{implementations.Count - targets.Count} compiler-known implementation or override branches were omitted by branch limits or path policy."]
-                : Array.Empty<string>();
-            if (branchOmissions.Length > 0)
+            var branchOmission = implementations.Count > targets.Count
+                ? $"{implementations.Count - targets.Count} compiler-known implementation or override branches were omitted by branch limits or path policy."
+                : null;
+            if (branchOmission is not null)
             {
                 limitReached = true;
             }
@@ -6292,12 +6401,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 targets,
                 targets.Count,
                 implementations.Count,
-                branchOmissions));
+                branchOmission is null ? [] : [ModelVisibleStructuredFact.Exact(branchOmission)]));
         }
 
         if (limitReached)
         {
-            omissions.Add("One or more compiler-known dispatch branches were omitted by branch, node, or path-policy limits.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "One or more compiler-known dispatch branches were omitted by branch, node, or path-policy limits."));
         }
 
         return limitReached;
@@ -6376,7 +6486,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     StringComparison.Ordinal));
     }
 
-    private static async Task<CodeExploreBlastRadius> BuildCodeExploreBlastRadiusAsync(
+    private async Task<CodeExploreBlastRadius> BuildCodeExploreBlastRadiusAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
@@ -6522,10 +6632,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         if (items.Count >= request.Limits.MaximumBlastRadiusItems
             && (totalCallers + totalImplementations + totalProjects + totalTests) > items.Count)
         {
-            omissions.Add("The compact blast-radius item limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The compact blast-radius item limit was reached."));
         }
 
-        omissions.Add("Blast-radius evidence is compiler/project metadata only and is not exhaustive validation scope.");
+        omissions.Add(ModelVisibleStructuredFact.Exact(
+            "Blast-radius evidence is compiler/project metadata only and is not exhaustive validation scope."));
         return new CodeExploreBlastRadius(
             items,
             items.Count(item => item.Kind == ImpactKind.Caller),
@@ -6569,7 +6681,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             cancellationToken);
         if (location is null && HasSourceEvidence(symbol))
         {
-            omissions.Add("Blast-radius symbols outside the invocation path policy were omitted.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Blast-radius symbols outside the invocation path policy were omitted."));
             return true;
         }
 
@@ -6647,7 +6760,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .ToArray();
     }
 
-    private static void AddBlastContinuation(
+    private void AddBlastContinuation(
         List<CodeExploreContinuationTarget> continuations,
         AdvancedSemanticSnapshot snapshot,
         string symbolId)
@@ -6662,7 +6775,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             null,
             snapshot.Generation,
-            "Retry symbol_impact or increase maximumBlastRadiusItems for more compact impact evidence."));
+            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceBlastRadiusRetry)));
     }
 
     private static async Task<IReadOnlyList<CodeExploreLocation>> CreateCodeExploreLocationsAsync(
@@ -7162,24 +7275,28 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var candidateLimitReached = rankedByIdentity.Length > maximumCandidateSummaries;
         if (candidateLimitReached)
         {
-            omissions.Add("Natural-language candidate summaries were capped by the host result limit.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Natural-language candidate summaries were capped by the host result limit."));
         }
 
         if (intent is CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation or CodeExploreNaturalLanguageIntent.Survey
             && rankedByIdentity.Any(candidate => candidate.Reasons.HasFlag(CodeExploreSelectionReason.GraphConnected)))
         {
-            omissions.Add("Natural-language graph connectivity was treated as low-weight corroboration for survey/tool intent; direct query-term and tool-contract evidence kept priority.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Natural-language graph connectivity was treated as low-weight corroboration for survey/tool intent; direct query-term and tool-contract evidence kept priority."));
         }
 
         if (intent == CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation
             && allowedEntries.Any(IsPrivateImplementationHelper))
         {
-            omissions.Add("Private/internal helper candidates were down-ranked for tool/capability explanation intent unless directly identified by the query.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Private/internal helper candidates were down-ranked for tool/capability explanation intent unless directly identified by the query."));
         }
 
         if (ranked.Length == 0 && summaries.Count == 0)
         {
-            omissions.Add("No compiler-known declarations matched the natural-language query terms.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "No compiler-known declarations matched the natural-language query terms."));
         }
 
         return new NaturalLanguageCodeExploreDiscovery(
@@ -7476,7 +7593,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (entries.Count >= MaximumCodeExploreCatalogEntries)
                 {
                     isComplete = false;
-                    omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
+                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                        "The declaration catalog entry limit was reached; lower-ranked declarations may be absent."));
                     return CreateCodeExploreDeclarationCatalog(
                         key,
                         snapshot.Generation,
@@ -7504,7 +7622,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     model = await document.GetSemanticModelAsync(cancellationToken);
                     if (model is null)
                     {
-                        omissions.Add("One loaded C# document was omitted from the declaration catalog because its semantic model was unavailable.");
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "One loaded C# document was omitted from the declaration catalog because its semantic model was unavailable."));
                         continue;
                     }
 
@@ -7540,7 +7659,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         if (entries.Count >= MaximumCodeExploreCatalogEntries)
                         {
                             isComplete = false;
-                            omissions.Add("The declaration catalog entry limit was reached; lower-ranked declarations may be absent.");
+                            omissions.Add(ModelVisibleStructuredFact.Exact(
+                                "The declaration catalog entry limit was reached; lower-ranked declarations may be absent."));
                             return CreateCodeExploreDeclarationCatalog(
                                 key,
                                 snapshot.Generation,
@@ -7557,7 +7677,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         if (snapshot.Confidence < SemanticConfidenceLevel.FullSemantic)
         {
             isComplete = false;
-            omissions.Add("The declaration catalog was built from partial semantic coverage.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The declaration catalog was built from partial semantic coverage."));
         }
 
         return CreateCodeExploreDeclarationCatalog(
@@ -9299,7 +9420,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         if (cappedCandidates > 0)
         {
-            omissions.Add($"Natural-language diversity capped {cappedCandidates} same-file or same-type candidate(s) so one implementation cluster could not consume all selected anchors.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Natural-language diversity capped {cappedCandidates} same-file or same-type candidate(s) so one implementation cluster could not consume all selected anchors."));
         }
 
         return [.. selected];
@@ -10553,7 +10675,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.AmbiguityGroup);
     }
 
-    private static CodeExploreResult CreateUnanchoredCodeExploreResult(
+    private CodeExploreResult CreateUnanchoredCodeExploreResult(
         AdvancedSemanticSnapshot snapshot,
         CodeExploreRequest request,
         CodeExploreQueryInterpretation interpretation,
@@ -10563,8 +10685,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         var projectScoped = IsProjectScopedCodeExploreSnapshot(snapshot);
         var reason = projectScoped
-            ? "Natural-language discovery did not find the requested declaration in the loaded project's source scope."
-            : "Natural-language discovery did not find a compiler-known C# declaration or confined C# path; retry with a stable symbol id, exact C# symbol, or repository-relative C# path anchor.";
+            ? GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceNaturalLanguageNotFoundProjectScope)
+            : GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceNaturalLanguageNotFound);
         var resolution = new CodeExploreAnchorResolution(
             request.Query,
             CodeExploreAnchorKind.Query,
@@ -10586,14 +10708,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 canRefineAnchor: true)
             : new CodeExploreAvailability(
                 CodeExploreAvailabilityStatus.NoMatchingDeclarations,
-                "No compiler-known C# declaration or confined C# path matched the request.",
+                _prompts.Get(PromptFileNames.ToolCodeExploreAvailabilityNoMatches),
                 true,
                 snapshot.Confidence,
                 SemanticConfidenceLevel.PartialCompilation,
                 true,
                 [new CodeExploreNextActionHint(
                     CodeExploreNextActionKind.RefineAnchor,
-                    "Retry code_explore with an exact symbol name, stable symbol id, or repository-relative C# path anchor.")]);
+                    _prompts.Get(PromptFileNames.ToolCodeExploreActionRefineAnchorNoMatches))]);
         var allocation = new CodeExploreAllocationSummary(
             request.Limits.MaximumSourceCharacters,
             0,
@@ -11652,7 +11774,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.FilePath);
     }
 
-    private static async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolIdAsync(
+    private async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolIdAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
@@ -11673,7 +11795,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 [],
-                "The stable symbol id is not loaded in the current semantic workspace."));
+                ModelVisibleStructuredFact.Exact(
+                    "The stable symbol id is not loaded in the current semantic workspace.")));
             return new(false);
         }
 
@@ -11693,8 +11816,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 .ToArray();
             var selected = locatedGroups[0];
             var reason = alternativesCapped
-                ? "The stable symbol id maps to multiple declarations with distinct source ownership; alternatives were capped and a path anchor is required to disambiguate."
-                : "The stable symbol id maps to multiple declarations with distinct source ownership; retry with a path anchor to disambiguate.";
+                ? GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceStableSymbolAmbiguousCapped)
+                : GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceStableSymbolAmbiguous);
             resolutions.Add(new CodeExploreAnchorResolution(
                 anchor.Value,
                 anchor.Kind,
@@ -11714,7 +11837,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             resolved.Group.Identity,
             resolved.Location,
             [],
-            "Stable symbol id resolved exactly."));
+            ModelVisibleStructuredFact.Exact("Stable symbol id resolved exactly.")));
         var sourceImportance = ResolveAnchorSourceImportance(anchor);
         foreach (var symbol in resolved.Group.Symbols)
         {
@@ -11734,7 +11857,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new(false);
     }
 
-    private static async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolNameAsync(
+    private async Task<CodeExploreSymbolResolution> ResolveCodeExploreSymbolNameAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
@@ -11759,7 +11882,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 [],
-                "No exact C# declaration matched the anchor in compiled projects."));
+                ModelVisibleStructuredFact.Exact(
+                    "No exact C# declaration matched the anchor in compiled projects.")));
             return new(false);
         }
 
@@ -11784,10 +11908,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var reason = locatedGroups.Count == 1
             ? "Exact symbol anchor resolved to one declaration identity."
             : hasStableIdentityCollision
-                ? "Exact symbol anchor maps the same stable id to multiple declarations with distinct source ownership; retry with a path anchor to disambiguate."
+                ? GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceExactSymbolOwnershipAmbiguous)
                 : alternativesCapped
-                    ? "Exact symbol anchor is ambiguous; alternatives were capped by the request limits."
-                    : "Exact symbol anchor is ambiguous; alternatives are returned deterministically.";
+                    ? GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceExactSymbolAmbiguousCapped)
+                    : GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceExactSymbolAmbiguous);
         resolutions.Add(new CodeExploreAnchorResolution(
             anchor.Value,
             anchor.Kind,
@@ -11795,7 +11919,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selected.Group.Identity,
             selected.Location,
             alternatives,
-            reason));
+            ModelVisibleStructuredFact.Exact(reason)));
         var sourceImportance = ResolveAnchorSourceImportance(anchor);
         if (!hasStableIdentityCollision || locatedGroups.Count == 1)
         {
@@ -11849,7 +11973,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 [],
-                "The C# path anchor is invalid or outside the repository scope."));
+                ModelVisibleStructuredFact.Exact(
+                    "The C# path anchor is invalid or outside the repository scope.")));
             return new(false);
         }
 
@@ -11863,7 +11988,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
                 [],
-                $"The continuation expected workspace generation {expectedGeneration}, but the current generation is {snapshot.Generation}."));
+                ModelVisibleStructuredFact.Exact(
+                    $"The continuation expected workspace generation {expectedGeneration}, but the current generation is {snapshot.Generation}.")));
             return new(false);
         }
 
@@ -11876,7 +12002,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
                 [],
-                "Only C# source paths are supported by this code_explore foundation."));
+                ModelVisibleStructuredFact.Exact(
+                    "Only C# source paths are supported by this code_explore foundation.")));
             return new(false);
         }
 
@@ -11889,7 +12016,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
                 [],
-                "The confined C# path is outside the invocation path policy."));
+                ModelVisibleStructuredFact.Exact(
+                    "The confined C# path is outside the invocation path policy.")));
             return new(false);
         }
 
@@ -11913,7 +12041,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     null,
                     new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
                     [],
-                    "The confined C# path does not exist."));
+                    ModelVisibleStructuredFact.Exact(
+                        "The confined C# path does not exist.")));
                 return new(false);
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException
@@ -11928,7 +12057,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     null,
                     new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
                     [],
-                    $"The confined C# path could not be read for code exploration: {exception.GetType().Name}."));
+                    ModelVisibleStructuredFact.Exact(
+                        $"The confined C# path could not be read for code exploration: {exception.GetType().Name}.")));
                 return new(false);
             }
 
@@ -11946,7 +12076,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 location,
                 [],
-                "The confined C# path exists but is not loaded in the semantic workspace; source is returned without symbol identity."));
+                ModelVisibleStructuredFact.Exact(
+                    "The confined C# path exists but is not loaded in the semantic workspace; source is returned without symbol identity.")));
             candidates.Add(new CodeExploreSectionCandidate(
                 null,
                 fullPath,
@@ -11994,7 +12125,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 [],
-                "The path line did not map to loaded C# source."));
+                ModelVisibleStructuredFact.Exact(
+                    "The path line did not map to loaded C# source.")));
             return new(false);
         }
 
@@ -12025,7 +12157,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selected.Identity,
             selected.Location,
             alternatives,
-            reason));
+            ModelVisibleStructuredFact.Exact(reason)));
         candidates.AddRange(pathCandidates.Take(maximumAlternatives + 1));
         return new(alternativesCapped);
     }
@@ -12213,7 +12345,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             null,
             [],
-            "Resolved declaration evidence is outside the invocation path policy and was omitted.");
+            ModelVisibleStructuredFact.Exact(
+                "Resolved declaration evidence is outside the invocation path policy and was omitted."));
     }
 
     private static async Task<IReadOnlyList<CodeExploreLocatedSymbolGroup>> LocateAllowedSymbolGroupsAsync(
@@ -12502,7 +12635,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             CodeExploreSourceImportance.Pinned);
     }
 
-    private static async Task<CodeExplorePriorCoverage> TryCreateCodeExploreBackReferenceAsync(
+    private async Task<CodeExplorePriorCoverage> TryCreateCodeExploreBackReferenceAsync(
         WorkspaceId workspaceId,
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreSourceReader sourceReader,
@@ -12585,7 +12718,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             fileIdentity.FileSha256,
             ComputeLineRangeSha256(text, startLineIndex, endLineIndex),
             CreateSectionIdentities(candidate).Select(identity => identity.Id).ToArray(),
-            $"Unchanged source for {relativePath} L{range.StartLine}-L{range.EndLine} is already visible in the current request from tool result {matching.ToolCallId}; use that exact prior source instead of treating this as a whole-file reference.");
+            RenderPromptValue(
+                PromptFileNames.ToolCodeExploreGuidanceBackReferenceUsePriorSource,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["RelativePath"] = relativePath,
+                    ["StartLine"] = range.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["EndLine"] = range.EndLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["ToolCallId"] = matching.ToolCallId,
+                }));
         var candidateSourceCharacters = CountProjectedNumberedCharacters(text, startLineIndex, endLineIndex);
         if (GetSerializedByteCount(backReference) >= candidateSourceCharacters)
         {
@@ -12644,7 +12785,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return characters;
     }
 
-    private static async Task<ProjectedCodeExploreSection> ProjectCodeExploreSectionAsync(
+    private async Task<ProjectedCodeExploreSection> ProjectCodeExploreSectionAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
@@ -12817,7 +12958,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExplorePathSelectionMode.ExactLineRange,
                 fileIdentity.FileSha256,
                 snapshot.Generation,
-                "Retry with this path anchor after increasing source limits; the remaining budget was too small for useful source.")]);
+                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceLimitRetry))]);
         }
 
         var projected = ProjectSourceRange(
@@ -12838,7 +12979,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExplorePathSelectionMode.ExactLineRange,
                 projected.Range.FileSha256,
                 snapshot.Generation,
-                "Retry with this path anchor and exact line range to continue only the omitted selected source."));
+                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceLineRangeRetry)));
         }
 
         var section = new CodeExploreFileSection(
@@ -12968,7 +13109,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             : (current.FileSha256, "The current file content differs from the captured semantic span; source was omitted to avoid stale evidence.");
     }
 
-    private static (CodeExploreSourceRange Range, int SourceCharacters, int? NextLine) ProjectSourceRange(
+    private (CodeExploreSourceRange Range, int SourceCharacters, int? NextLine) ProjectSourceRange(
         SourceText text,
         TextSpan span,
         string? fileSha256,
@@ -13023,7 +13164,13 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 fileSha256,
                 null,
                 CodeExploreSourceCompleteness.Omitted,
-                [$"L{start}-L{endLineIndex + 1} omitted because the first line exceeds the source-character budget; increase the per-file source limit for this anchor."],
+                [RenderPromptValue(
+                    PromptFileNames.ToolCodeExploreGuidanceFirstLineBudgetOmission,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["StartLine"] = start.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["EndLine"] = (endLineIndex + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    })],
                 relativePath),
                 0,
                 start);
@@ -14026,25 +14173,30 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var omissions = new List<string>();
         if (depth)
         {
-            omissions.Add("The traversal depth limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The traversal depth limit was reached."));
         }
 
         if (nodes)
         {
-            omissions.Add("The traversal node limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The traversal node limit was reached."));
         }
 
         if (edges)
         {
-            omissions.Add("The traversal edge limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The traversal edge limit was reached."));
         }
 
         if (time)
         {
-            omissions.Add("The traversal time limit was reached.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "The traversal time limit was reached."));
         }
 
-        omissions.Add("Dynamic, reflection, and runtime-only call targets are not resolved.");
+        omissions.Add(ModelVisibleStructuredFact.Exact(
+            "Dynamic, reflection, and runtime-only call targets are not resolved."));
         return [.. omissions];
     }
 

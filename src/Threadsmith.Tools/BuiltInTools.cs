@@ -38,21 +38,22 @@ public sealed record ListFilesOutput(
 /// <summary>Lists repository files without following reparse points.</summary>
 public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
-        "list_files",
-        "Fast repository file inventory under a bounded approved root. Use for directory/file discovery before reading files, and batch with other independent read-only inspections when possible.",
-        ToolCategory.RepositoryInspection,
-        RepositoryTrustLevel.UntrustedInspection,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(10),
-        128 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="ListFilesTool"/> class.</summary>
-    public ListFilesTool(ToolLimits? limits = null)
+    public ListFilesTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
+            "list_files",
+            promptLoader.Get(PromptFileNames.ToolListFilesDescription),
+            ToolCategory.RepositoryInspection,
+            RepositoryTrustLevel.UntrustedInspection,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(10),
+            128 * 1024);
         _limits = limits ?? ToolLimits.Default;
     }
 
@@ -180,21 +181,22 @@ public sealed record ReadFileOutput(
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
-        "read_file",
-        "Reads an approved repository text file. Omit startLine and maximumLines to read from the beginning up to 2,000 lines or 50 KiB, whichever comes first. Set a narrower range only when exact relevant line numbers are already known. Do not paginate with adjacent small ranges; continue only when the result reports truncation and use nextStartLine. Batch independent file reads in one response.",
-        ToolCategory.FileRead,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(10),
-        384 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="ReadFileTool"/> class.</summary>
-    public ReadFileTool(ToolLimits? limits = null)
+    public ReadFileTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
+            "read_file",
+            promptLoader.Get(PromptFileNames.ToolReadFileDescription),
+            ToolCategory.FileRead,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(10),
+            384 * 1024);
         _limits = limits ?? ToolLimits.Default;
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
@@ -354,16 +356,6 @@ public sealed record SearchTextOutput(
 /// <summary>Searches bounded text without executing repository code.</summary>
 public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
-        "search",
-        "Search file contents for concise exact literals, configuration keys, routes, log messages, comments, and docs. query is limited to 500 characters; do not paste source blocks, tool output, or long regular expressions as the query. Use optional path to scope a file or directory and glob to filter files. MUST NOT replace an advertised semantic tool for C# symbols, source-bearing natural-language or exact exploration, references, implementations, call relationships, impact, syntax shapes, or generated code. Batch independent searches with other read-only inspections.",
-        ToolCategory.FileSearch,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
     private static readonly string[] _searchExcludedDirectories =
     [
         ".codegraph",
@@ -378,17 +370,31 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     ];
 
     private readonly ToolLimits _limits;
+    private readonly IPromptLoader _prompts;
     private readonly IProcessManager? _processManager;
     private readonly string _ripgrepExecutable;
+    private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="SearchTextTool"/> class.</summary>
     public SearchTextTool(
+        IPromptLoader promptLoader,
         ToolLimits? limits = null,
         IProcessManager? processManager = null,
         string ripgrepExecutable = "rg")
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
         ArgumentException.ThrowIfNullOrWhiteSpace(ripgrepExecutable);
+        _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
+            "search",
+            promptLoader.Get(PromptFileNames.ToolSearchDescription),
+            ToolCategory.FileSearch,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _limits = limits ?? ToolLimits.Default;
+        _prompts = promptLoader;
         _processManager = processManager;
         _ripgrepExecutable = ripgrepExecutable;
     }
@@ -534,7 +540,13 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(
-                $"query is limited to 500 characters; use a concise literal or regex, not pasted source/tool output. maximumMatches is limited to 0..{_limits.SearchMaxMatches} (0 uses the host default).");
+                _prompts.Render(
+                    PromptFileNames.CorrectionSearchBounds,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["MaximumMatches"] = _limits.SearchMaxMatches.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture),
+                    }));
         }
 
         if (input.UseRegularExpression)
@@ -1073,22 +1085,23 @@ public sealed record GitStatusOutput(
 /// <summary>Gets machine-readable read-only Git status through the process manager.</summary>
 public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<GitStatusInput, GitStatusOutput>(
-        "git_status",
-        "Gets bounded read-only Git branch and working-tree status.",
-        ToolCategory.GitInspection,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(15),
-        128 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
 
     /// <summary>Initializes a new instance of the <see cref="GitStatusTool"/> class.</summary>
-    public GitStatusTool(IProcessManager processManager)
+    public GitStatusTool(IProcessManager processManager, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(processManager);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<GitStatusInput, GitStatusOutput>(
+            "git_status",
+            promptLoader.Get(PromptFileNames.ToolGitStatusDescription),
+            ToolCategory.GitInspection,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(15),
+            128 * 1024);
         _processManager = processManager;
     }
 
@@ -1186,23 +1199,27 @@ public sealed record FindImplementationsInput
 /// <summary>Compiler-aware declaration search tool.</summary>
 public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
-        "find_symbol",
-        "Primary compiler-aware tool for C# declarations when source is not required. Prefer code_explore for natural-language, exact symbol, or path questions that need current source, structural survey, flow, or compact impact. MUST use a semantic tool before search for a symbol; returns stable symbol identifiers for find_references, find_implementations, call_hierarchy, and symbol_impact.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedBuild,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindSymbolTool"/> class.</summary>
-    public FindSymbolTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindSymbolTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
+            "find_symbol",
+            promptLoader.Get(PromptFileNames.ToolFindSymbolDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedBuild,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1267,23 +1284,27 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
 /// <summary>Compiler-aware reference search tool with host-selected degraded fallback.</summary>
 public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList<ReferenceResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
-        "find_references",
-        "Primary compiler-aware tool for C# symbol references. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindReferencesTool"/> class.</summary>
-    public FindReferencesTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindReferencesTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
+            "find_references",
+            promptLoader.Get(PromptFileNames.ToolFindReferencesDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1345,23 +1366,27 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
 /// <summary>Compiler-aware implementation search tool.</summary>
 public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IReadOnlyList<ImplementationResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindImplementationsInput, IReadOnlyList<ImplementationResult>>(
-        "find_implementations",
-        "Primary compiler-aware tool for interface implementations and derived or overriding symbols. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedBuild,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindImplementationsTool"/> class.</summary>
-    public FindImplementationsTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindImplementationsTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindImplementationsInput, IReadOnlyList<ImplementationResult>>(
+            "find_implementations",
+            promptLoader.Get(PromptFileNames.ToolFindImplementationsDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedBuild,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1520,19 +1545,23 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
     private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
     private readonly ToolLimits _limits;
+    private readonly IPromptLoader _prompts;
     private readonly string _shellExecutable;
 
     /// <summary>Initializes a new instance of the <see cref="RunProcessTool"/> class.</summary>
     public RunProcessTool(
         IProcessManager processManager,
+        IPromptLoader promptLoader,
         ToolLimits? limits = null,
         IEnumerable<string>? allowedExecutables = null,
         bool requireApproval = true,
         string? shellExecutable = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
+        ArgumentNullException.ThrowIfNull(promptLoader);
         _processManager = processManager;
         _limits = limits ?? ToolLimits.Default;
+        _prompts = promptLoader;
         _shellExecutable = string.IsNullOrWhiteSpace(shellExecutable)
             ? OperatingSystem.IsWindows() ? "powershell" : "bash"
             : shellExecutable.Trim();
@@ -1549,7 +1578,12 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 StringComparer.OrdinalIgnoreCase) ?? false);
         _definition = ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
             "run_process",
-            $"Executes a {GetShellLanguage(_shellExecutable)} command in the repository root and returns bounded stdout and stderr.",
+            promptLoader.Render(
+                PromptFileNames.ToolRunProcessDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
+                }),
             ToolCategory.ProcessExecution,
             RepositoryTrustLevel.TrustedBuild,
             requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
@@ -1658,7 +1692,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         };
     }
 
-    private static IReadOnlyList<string> CreateShellArguments(string shellExecutable, string command)
+    private IReadOnlyList<string> CreateShellArguments(string shellExecutable, string command)
     {
         var shellName = Path.GetFileNameWithoutExtension(shellExecutable);
         return shellName.ToLowerInvariant() switch
@@ -1667,7 +1701,12 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             "bash" or "sh" or "zsh" => ["-c", command],
             "cmd" => ["/d", "/s", "/c", command],
             _ => throw new ToolArgumentValidationException(
-                $"Configured shell '{shellExecutable}' is not supported. Use pwsh, powershell, bash, sh, zsh, or cmd."),
+                _prompts.Render(
+                    PromptFileNames.CorrectionRunProcessUnsupportedShell,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ShellExecutable"] = shellExecutable,
+                    })),
         };
     }
 

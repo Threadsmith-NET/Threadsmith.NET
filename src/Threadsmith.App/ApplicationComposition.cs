@@ -37,6 +37,9 @@ internal static class ApplicationComposition
         IModelResolver? modelResolver = integration.Models.Catalog.Profiles.Count > 0
             ? new ModelResolver(integration.Models.Catalog, modelHints)
             : null;
+        var providerInstructionResolver = new ModelProviderInstructionResolver(
+            integration.Models.Catalog,
+            host.PromptLoader);
         var conversationPolicy = host.Configuration
             .GetSection("context:conversation")
             .Get<ConversationContextPolicy>() ?? new ConversationContextPolicy();
@@ -53,6 +56,7 @@ internal static class ApplicationComposition
             host.PromptAppendLoader,
             host.Sanitizer,
             host.Events,
+            host.PromptLoader,
             new ContextAssemblerOptions
             {
                 PromptAppendFiles = promptAppendFiles,
@@ -64,7 +68,8 @@ internal static class ApplicationComposition
             persistence.ConversationStore,
             conversationRetriever,
             repositoryInstructionResolver,
-            persistence.RepositoryMemoryStore);
+            persistence.RepositoryMemoryStore,
+            providerInstructionResolver: providerInstructionResolver);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -105,6 +110,8 @@ internal static class ApplicationComposition
                 ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
                 SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
                 Cost = activeTurnCompactionModelProfile.Cost,
+                ProviderInstructions = providerInstructionResolver.Resolve(
+                    activeTurnCompactionModelProfile.Id),
             };
         var activeTurnCandidateProvider = activeTurnCompactionModelProfile is null
             ? integration.Models.Provider
@@ -112,9 +119,14 @@ internal static class ApplicationComposition
         var activeTurnCompactor = new ActiveTurnCompactor(
             new ModelActiveTurnCompactionCandidateProvider(
                 activeTurnCandidateProvider,
-                activeTurnCompactionPolicy),
-            new ActiveTurnCompactionValidator(activeTurnCompactionPolicy, host.Sanitizer),
-            activeTurnCompactionPolicy);
+                activeTurnCompactionPolicy,
+                host.PromptLoader),
+            new ActiveTurnCompactionValidator(
+                activeTurnCompactionPolicy,
+                host.Sanitizer,
+                host.PromptLoader),
+            activeTurnCompactionPolicy,
+            host.PromptLoader);
         var conversationContextApplication = new ConversationContextApplication(
             contextAssembler,
             conversationCompactor,
@@ -139,7 +151,8 @@ internal static class ApplicationComposition
             planTrustGrantStore,
             planPolicyPersistence,
             host.Events);
-        var planSanityChecker = new PlanSanityChecker();
+        var planSanityChecker = new PlanSanityChecker(host.PromptLoader);
+        var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
         var runSteering = new RunSteeringCoordinator();
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
@@ -267,7 +280,9 @@ internal static class ApplicationComposition
             activeTurnCompactionProfile: activeTurnCompactionProfile,
             selectActiveModel: selectResolvedFallback,
             conversationToolSnapshots: conversationToolSnapshots,
-            steering: runSteering);
+            steering: runSteering,
+            correctiveMessages: correctiveMessages,
+            prompts: host.PromptLoader);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -299,7 +314,9 @@ internal static class ApplicationComposition
                 usage,
                 budgetFactory: host.Budget.CreateScope,
                 semanticMutations: semantic.SemanticMutations,
-                preMutationAnalyzer: semantic.SemanticEngines);
+                preMutationAnalyzer: semantic.SemanticEngines,
+                correctiveMessages: correctiveMessages,
+                prompts: host.PromptLoader);
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -339,7 +356,8 @@ internal static class ApplicationComposition
                 new ExecutionArtifactPublisher(persistence.ArtifactStore),
                 host.Events,
                 host.Sanitizer,
-                host.LoggerFactory.CreateLogger<ExecutionOrchestrator>());
+                host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
+                correctiveMessages);
             var agentScheduler = new AgentRunScheduler(new AgentSchedulerOptions
             {
                 QueueCapacity = host.Configuration.GetValue("agents:queueCapacity", 32),
@@ -361,7 +379,8 @@ internal static class ApplicationComposition
                 delegateAgentsOptions.Validate();
                 var childModelSelection = new AgentModelSelector(
                     integration.Models.Catalog,
-                    new DefaultModelSelectionPolicy(integration.Models.Catalog));
+                    new DefaultModelSelectionPolicy(integration.Models.Catalog),
+                    providerInstructionResolver);
                 if (childModelSelection.CanSelectExplorer(
                     delegateAgentsOptions.ChildBudget,
                     ConversationSensitivity.None))
@@ -381,6 +400,7 @@ internal static class ApplicationComposition
                         conversationToolSnapshots,
                         host.Sanitizer,
                         delegateAgentsOptions,
+                        host.PromptLoader,
                         usage,
                         runSteering);
                     delegateAgentsTool = new DelegateAgentsTool(
@@ -388,10 +408,12 @@ internal static class ApplicationComposition
                             mutationCoordinator,
                             preferences,
                             conversationToolSnapshots,
+                            host.PromptLoader,
                             delegateAgentsOptions),
                         explorerRunners,
                         delegationCoordinator,
                         delegateAgentsOptions,
+                        host.PromptLoader,
                         runSteering);
                     tools.ToolRegistry.RegisterOrReplace(
                         delegateAgentsTool,
@@ -525,7 +547,11 @@ internal static class ApplicationComposition
                             key,
                             cancellationToken);
                         return CreateToolInvocationContext(host, state);
-                    }),
+                    },
+                    host.PromptLoader,
+                    integration.Models.Catalog,
+                    providerInstructionResolver),
+                host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>
                 {
@@ -553,7 +579,7 @@ internal static class ApplicationComposition
                 new SkillPackageInstaller(
                     userSkillRoot,
                     Path.Combine(userProfile, ".threadsmith", "skill-quarantine")));
-            var invokeSkillTool = new InvokeSkillTool(skillWorkflow);
+            var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader);
             tools.ToolRegistry.RegisterOrReplace(
                 invokeSkillTool,
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn));
@@ -845,6 +871,9 @@ internal sealed record HostCompositionInputs
 
     /// <summary>Gets the bounded untrusted prompt-append loader.</summary>
     internal required PromptAppendLoader PromptAppendLoader { get; init; }
+
+    /// <summary>Gets the immutable deployed prompt catalog.</summary>
+    internal required IPromptLoader PromptLoader { get; init; }
 
     /// <summary>Gets the session execution budget.</summary>
     internal required ExecutionBudget Budget { get; init; }

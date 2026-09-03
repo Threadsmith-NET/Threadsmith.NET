@@ -1,0 +1,1 @@
+{{FieldName}} is required for git_diff {{ModeDescription}}; use mode WorkingTree or Staged when no revision comparison is intended.

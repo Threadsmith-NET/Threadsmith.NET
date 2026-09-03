@@ -7,18 +7,19 @@ using Threadsmith.Core;
 /// <summary>Inspects NuGet dependency and advisory health without restoring or mutating packages.</summary>
 public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDependencyHealthResult>
 {
-    private static readonly ToolDefinition _definition = NativeValidationToolDefinitions.Create<NuGetDependencyHealthRequest, NuGetDependencyHealthResult>(
-        "nuget_health",
-        "Inspects existing NuGet restore assets and optional trusted-source advisories.",
-        RepositoryTrustLevel.TrustedBuild,
-        executable: true);
-
+    private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="NuGetHealthTool"/> class.</summary>
-    public NuGetHealthTool(INativeValidationToolService service)
+    public NuGetHealthTool(INativeValidationToolService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _definition = NativeValidationToolDefinitions.Create<NuGetDependencyHealthRequest, NuGetDependencyHealthResult>(
+            "nuget_health",
+            promptLoader,
+            PromptFileNames.ToolNugetHealthDescription,
+            RepositoryTrustLevel.TrustedBuild,
+            executable: true);
         _service = service;
     }
 
@@ -85,11 +86,15 @@ public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDe
 public sealed class DotNetBuildTool : NativeValidationTargetTool<BuildToolRequest>
 {
     /// <summary>Initializes a new instance of the <see cref="DotNetBuildTool"/> class.</summary>
-    public DotNetBuildTool(INativeValidationToolService service)
+    public DotNetBuildTool(INativeValidationToolService service, IPromptLoader promptLoader)
         : base(
             service,
             NativeValidationToolDefinitions.Create<BuildToolRequest, ValidationToolResult>(
-                "dotnet_build", "Runs a bounded exploratory build without restore.", RepositoryTrustLevel.TrustedBuild, executable: true))
+                "dotnet_build",
+                promptLoader,
+                PromptFileNames.ToolDotnetBuildDescription,
+                RepositoryTrustLevel.TrustedBuild,
+                executable: true))
     {
     }
 
@@ -108,11 +113,15 @@ public sealed class DotNetBuildTool : NativeValidationTargetTool<BuildToolReques
 public sealed class DotNetAnalyzerTool : NativeValidationTargetTool<AnalyzerToolRequest>
 {
     /// <summary>Initializes a new instance of the <see cref="DotNetAnalyzerTool"/> class.</summary>
-    public DotNetAnalyzerTool(INativeValidationToolService service)
+    public DotNetAnalyzerTool(INativeValidationToolService service, IPromptLoader promptLoader)
         : base(
             service,
             NativeValidationToolDefinitions.Create<AnalyzerToolRequest, ValidationToolResult>(
-                "dotnet_analyzers", "Runs analyzers through a bounded no-restore build.", RepositoryTrustLevel.TrustedBuild, executable: true))
+                "dotnet_analyzers",
+                promptLoader,
+                PromptFileNames.ToolDotnetAnalyzersDescription,
+                RepositoryTrustLevel.TrustedBuild,
+                executable: true))
     {
     }
 
@@ -130,18 +139,19 @@ public sealed class DotNetAnalyzerTool : NativeValidationTargetTool<AnalyzerTool
 /// <summary>Checks formatter drift without writing repository files.</summary>
 public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationToolResult>
 {
-    private static readonly ToolDefinition _definition = NativeValidationToolDefinitions.Create<FormatCheckRequest, ValidationToolResult>(
-        "dotnet_format_check",
-        "Checks dotnet formatting without applying changes.",
-        RepositoryTrustLevel.TrustedBuild,
-        executable: true);
-
+    private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetFormatCheckTool"/> class.</summary>
-    public DotNetFormatCheckTool(INativeValidationToolService service)
+    public DotNetFormatCheckTool(INativeValidationToolService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _definition = NativeValidationToolDefinitions.Create<FormatCheckRequest, ValidationToolResult>(
+            "dotnet_format_check",
+            promptLoader,
+            PromptFileNames.ToolDotnetFormatCheckDescription,
+            RepositoryTrustLevel.TrustedBuild,
+            executable: true);
         _service = service;
     }
 
@@ -190,18 +200,19 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
 /// <summary>Queries normalized exploratory diagnostics.</summary>
 public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryResult>
 {
-    private static readonly ToolDefinition _definition = NativeValidationToolDefinitions.Create<DiagnosticQuery, DiagnosticQueryResult>(
-        "diagnostic_query",
-        "Queries bounded normalized diagnostics from exploratory native runs.",
-        RepositoryTrustLevel.TrustedRead,
-        executable: false);
-
+    private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DiagnosticQueryTool"/> class.</summary>
-    public DiagnosticQueryTool(INativeValidationToolService service)
+    public DiagnosticQueryTool(INativeValidationToolService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _definition = NativeValidationToolDefinitions.Create<DiagnosticQuery, DiagnosticQueryResult>(
+            "diagnostic_query",
+            promptLoader,
+            PromptFileNames.ToolDiagnosticQueryDescription,
+            RepositoryTrustLevel.TrustedRead,
+            executable: false);
         _service = service;
     }
 
@@ -278,18 +289,19 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
 /// <summary>Discovers stable test identities in one supported project.</summary>
 public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscoveryResult>
 {
-    private static readonly ToolDefinition _definition = NativeValidationToolDefinitions.Create<TestDiscoveryRequest, TestDiscoveryResult>(
-        "test_discover",
-        "Discovers bounded stable test identities without restore or build.",
-        RepositoryTrustLevel.TrustedBuild,
-        executable: true);
-
+    private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="TestDiscoveryTool"/> class.</summary>
-    public TestDiscoveryTool(INativeValidationToolService service)
+    public TestDiscoveryTool(INativeValidationToolService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _definition = NativeValidationToolDefinitions.Create<TestDiscoveryRequest, TestDiscoveryResult>(
+            "test_discover",
+            promptLoader,
+            PromptFileNames.ToolTestDiscoverDescription,
+            RepositoryTrustLevel.TrustedBuild,
+            executable: true);
         _service = service;
     }
 
@@ -356,18 +368,19 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
 /// <summary>Runs exactly one previously discovered stable test identity.</summary>
 public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestResult>
 {
-    private static readonly ToolDefinition _definition = NativeValidationToolDefinitions.Create<TargetedTestRequest, TargetedTestResult>(
-        "test_run_targeted",
-        "Runs one host-issued stable test identity with an explained generated filter.",
-        RepositoryTrustLevel.TrustedBuild,
-        executable: true);
-
+    private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="TargetedTestTool"/> class.</summary>
-    public TargetedTestTool(INativeValidationToolService service)
+    public TargetedTestTool(INativeValidationToolService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _definition = NativeValidationToolDefinitions.Create<TargetedTestRequest, TargetedTestResult>(
+            "test_run_targeted",
+            promptLoader,
+            PromptFileNames.ToolTestRunTargetedDescription,
+            RepositoryTrustLevel.TrustedBuild,
+            executable: true);
         _service = service;
     }
 
@@ -495,13 +508,15 @@ internal static class NativeValidationToolDefinitions
     /// <summary>Creates a bounded native validation tool definition.</summary>
     internal static ToolDefinition Create<TInput, TOutput>(
         string id,
-        string description,
+        IPromptLoader promptLoader,
+        string promptFileName,
         RepositoryTrustLevel trust,
         bool executable)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
         return ToolDefinitionFactory.Create<TInput, TOutput>(
             id,
-            description,
+            promptLoader.Get(promptFileName),
             executable ? ToolCategory.ProcessExecution : ToolCategory.RepositoryInspection,
             trust,
             ApprovalLevel.None,

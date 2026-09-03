@@ -1,0 +1,1 @@
+Invokes one explicit enabled verified declarative skill with schema-validated JSON input.

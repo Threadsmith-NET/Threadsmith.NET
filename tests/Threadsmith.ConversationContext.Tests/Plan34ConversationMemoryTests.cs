@@ -65,7 +65,9 @@ public static class Plan34ConversationMemoryTests
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             conversationStore: fixture.Store,
-            conversationGovernor: governor);
+            conversationGovernor: governor,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("memory-test"));
 
         var runId = await application.HandleAsync(new SubmitRequestCommand(sessionId, "Explain the repository."));
@@ -103,6 +105,8 @@ public static class Plan34ConversationMemoryTests
             NullLogger<SessionApplication>.Instance,
             conversationStore: fixture.Store,
             conversationGovernor: governor,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance,
             userUrlIntake: (sessionId, runId, messageId, _, _) => Task.FromResult<IReadOnlyList<UserUrlReference>>(
             [
                 new UserUrlReference

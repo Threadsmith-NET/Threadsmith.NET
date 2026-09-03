@@ -204,6 +204,8 @@ public sealed class JsonlModelExchangeLog
             ReasoningLevel = request.ReasoningLevel.ToString(),
             ContainsSensitiveData = request.ContainsSensitiveData,
             ResolvedProfileId = request.ResolvedProfileId?.Value.ToString(),
+            ProviderInstructionCharacters = request.ProviderInstructions?.Content.Length ?? 0,
+            ProviderInstructionSectionId = request.ProviderInstructions?.SectionId,
             AdvertisedTools = request.Tools
                 .Select(tool => new ModelExchangeToolSummary
                 {
@@ -493,6 +495,12 @@ public sealed record ModelExchangeRequestSummary
 
     /// <summary>Gets the selected profile id, when resolved.</summary>
     public string? ResolvedProfileId { get; init; }
+
+    /// <summary>Gets the exact provider-instruction content length without exposing its body.</summary>
+    public int ProviderInstructionCharacters { get; init; }
+
+    /// <summary>Gets the stable provider-instruction section identity, when present.</summary>
+    public string? ProviderInstructionSectionId { get; init; }
 
     /// <summary>Gets compact summaries of advertised tools.</summary>
     public IReadOnlyList<ModelExchangeToolSummary> AdvertisedTools { get; init; } = [];

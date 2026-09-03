@@ -441,35 +441,39 @@ internal sealed class DelegateAgentsResultProjector
             var omissions = RetainedOmissions.ToList();
             if (!SummaryRetained)
             {
-                omissions.Add("Child summary omitted by the structured output bound.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Child summary omitted by the structured output bound."));
             }
             else if (SummaryWasTruncated)
             {
-                omissions.Add("Child summary truncated by the structured output bound.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Child summary truncated by the structured output bound."));
             }
 
             if (FindingFieldsWereTruncated)
             {
-                omissions.Add("One or more finding fields were truncated by their field bounds.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "One or more finding fields were truncated by their field bounds."));
             }
 
             if (OmissionFieldsWereTruncated)
             {
-                omissions.Add("One or more omission details were truncated by their field bounds.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "One or more omission details were truncated by their field bounds."));
             }
 
             if (RetainedFindings.Count != TotalFindingCount)
             {
-                omissions.Add(
+                omissions.Add(ModelVisibleStructuredFact.Exact(
                     $"Finding projection retained {RetainedFindings.Count} of {TotalFindingCount}; "
-                        + $"{TotalFindingCount - RetainedFindings.Count} omitted.");
+                        + $"{TotalFindingCount - RetainedFindings.Count} omitted."));
             }
 
             if (RetainedOmissions.Count != TotalOmissionCount)
             {
-                omissions.Add(
+                omissions.Add(ModelVisibleStructuredFact.Exact(
                     $"Detail projection retained {RetainedOmissions.Count} of {TotalOmissionCount}; "
-                        + $"{TotalOmissionCount - RetainedOmissions.Count} omitted.");
+                        + $"{TotalOmissionCount - RetainedOmissions.Count} omitted."));
             }
 
             return CreateSummary(SummaryRetained ? Summary : string.Empty, RetainedFindings, omissions);

@@ -16,6 +16,7 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - `ClaudeSkillCompatibilityCatalog.cs` — pinned safe scalar frontmatter parsing, explicit-root metadata discovery, compatibility/tool projection, confinement, strict-UTF-8 resource loading, and deterministic immutable activation digests.
 - The Claude compatibility adapter owns combined native/Claude catalog projection, activation-time exact verification and external policy, content adaptation, shared invocation, and exact-digest resume fencing.
 - `SkillApplication.cs` / `InvokeSkillTool.cs` — shared command and model-tool adapters.
+- `Prompts/` — host-owned `invoke_skill` description and model procedure system/request/continuation prose.
 - `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, and `review-pr` packages copied to output when newer.
 
 ## Local Contracts
@@ -34,6 +35,7 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - Schemas use the closed supported keyword/type subset. No `$ref`, remote resolution, regex/custom format execution, dynamic type activation, or unknown action/step kinds.
 - Required content that cannot fit fails explicitly. Optional references are omitted deterministically. Strict UTF-8, hashes, sanitizer, confinement, and provenance apply to every loaded segment.
 - Procedure turns advertise only declared available tools while preserving provider-neutral tool metadata such as strict-argument preference, request at most one model tool call per response, and call it through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
+- Procedure prompt assets use the application-wide immutable loader and declared named tokens. Skill package content remains separately framed untrusted input; externalized host prose does not become a package override surface.
 - Workflow host actions remain proposals. The execution subsystem owns planning/mutation/validation; the delegation subsystem owns scheduling/worktrees/review/integration. Nested skills, arbitrary loops, and package-owned concurrency are prohibited.
 - Maintained packages use exactly the same manifest/hash/schema/content/model/tool/workflow/persistence path as third-party packages.
 

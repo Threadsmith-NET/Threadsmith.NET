@@ -41,6 +41,25 @@ public sealed record ModelToolDefinition
     public bool PreferStrictArguments { get; init; }
 }
 
+/// <summary>Provider-neutral exact instructions contributed to one provider request.</summary>
+public sealed record ModelProviderInstructions
+{
+    /// <summary>Stable section identity used for capacity and request inspection.</summary>
+    public required string SectionId { get; init; }
+
+    /// <summary>Exact provider-visible instruction content.</summary>
+    public required string Content { get; init; }
+}
+
+/// <summary>Resolves an optional compiled provider instruction contribution for a selected profile.</summary>
+public interface IModelProviderInstructionResolver
+{
+    /// <summary>Resolves the exact instruction contribution for one configured profile.</summary>
+    /// <param name="profileId">Selected configured profile.</param>
+    /// <returns>The exact contribution, or <see langword="null"/> when the provider declares none.</returns>
+    ModelProviderInstructions? Resolve(ModelProfileId profileId);
+}
+
 /// <summary>Request passed to a host-owned model provider.</summary>
 public sealed record ModelStreamRequest
 {
@@ -98,6 +117,9 @@ public sealed record ModelStreamRequest
 
     /// <summary>How canonical tool schemas are transported.</summary>
     public ToolTransportMode ToolTransportMode { get; init; } = ToolTransportMode.Native;
+
+    /// <summary>Optional exact request-owned provider instructions counted before dispatch.</summary>
+    public ModelProviderInstructions? ProviderInstructions { get; init; }
 
     /// <summary>Host-owned estimate of the exact serialized request capacity.</summary>
     public ModelWireEstimate? WireEstimate { get; init; }

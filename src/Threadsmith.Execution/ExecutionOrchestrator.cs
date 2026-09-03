@@ -35,6 +35,7 @@ public sealed class ExecutionOrchestrator :
     private readonly ICommandHandler<CaptureBaselineBuildCommand, BaselineCapture> _baselineValidation;
     private readonly ICommandHandler<ValidateMutationCommand, MutationValidationResult> _mutationValidation;
     private readonly ITransactionalWorkspaceResolver _workspaces;
+    private readonly CorrectiveMessageFactory _correctiveMessages;
 
     /// <summary>Initializes a new instance of the <see cref="ExecutionOrchestrator"/> class.</summary>
     public ExecutionOrchestrator(
@@ -47,7 +48,8 @@ public sealed class ExecutionOrchestrator :
         IExecutionArtifactPublisher artifacts,
         IDomainEventStream events,
         IOutputSanitizer sanitizer,
-        ILogger<ExecutionOrchestrator> logger)
+        ILogger<ExecutionOrchestrator> logger,
+        CorrectiveMessageFactory correctiveMessages)
     {
         ArgumentNullException.ThrowIfNull(proposals);
         ArgumentNullException.ThrowIfNull(commits);
@@ -59,6 +61,7 @@ public sealed class ExecutionOrchestrator :
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(correctiveMessages);
         _proposals = proposals;
         _commits = commits;
         _baselineValidation = baselineValidation;
@@ -69,6 +72,7 @@ public sealed class ExecutionOrchestrator :
         _events = events;
         _sanitizer = sanitizer;
         _logger = logger;
+        _correctiveMessages = correctiveMessages;
     }
 
     /// <inheritdoc />
@@ -1255,7 +1259,10 @@ public sealed class ExecutionOrchestrator :
         if (diagnostic is not null)
         {
             return SanitizeAndBoundCorrectionReason(
-                $"Compiler {diagnostic.Code} in {diagnostic.File ?? diagnostic.Project}: {diagnostic.Message}");
+                RequireCorrectiveMessages().CreateCompilerValidationReason(
+                    diagnostic.Code,
+                    diagnostic.File ?? diagnostic.Project,
+                    diagnostic.Message));
         }
 
         var failedTest = validation.Tests.Results.FirstOrDefault(item =>
@@ -1263,11 +1270,19 @@ public sealed class ExecutionOrchestrator :
         if (failedTest is not null)
         {
             return SanitizeAndBoundCorrectionReason(
-                $"Selected test project {failedTest.Project.Name} failed with {failedTest.Failed} failing tests.");
+                RequireCorrectiveMessages().CreateTestValidationReason(
+                    failedTest.Project.Name,
+                    failedTest.Failed));
         }
 
         return SanitizeAndBoundCorrectionReason(
-            $"Validation gate requires correction: {string.Join("; ", validation.Gate.Reasons.Take(3))}");
+            RequireCorrectiveMessages().CreateGeneralValidationReason(
+                string.Join("; ", validation.Gate.Reasons.Take(3))));
+    }
+
+    private CorrectiveMessageFactory RequireCorrectiveMessages()
+    {
+        return _correctiveMessages;
     }
 
     private string SanitizeAndBoundCorrectionReason(string value)

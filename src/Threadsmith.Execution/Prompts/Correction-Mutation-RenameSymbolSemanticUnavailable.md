@@ -1,0 +1,1 @@
+RenameSymbol requires an available semantic mutation engine; use exact ReplaceText only when semantic rename is unavailable.

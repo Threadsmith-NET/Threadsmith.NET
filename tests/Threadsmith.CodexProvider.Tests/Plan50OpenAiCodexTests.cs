@@ -11,6 +11,9 @@ using Xunit;
 /// <summary>Plan 50 native Codex provider and OAuth acceptance coverage.</summary>
 public sealed class Plan50OpenAiCodexTests
 {
+    private const string ProviderInstructions =
+        "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.";
+
     /// <summary>Authenticated discovery projects every distinct model returned by the backend.</summary>
     [Fact]
     public async Task Discovery_ProjectsEveryReturnedModelWithoutCompiledList()
@@ -278,7 +281,7 @@ public sealed class Plan50OpenAiCodexTests
             ResolvedSecret = CreateJwt("account-2"),
         });
 
-        var streamRequest = new ModelStreamRequest
+        var streamRequest = WithCapacity(new ModelStreamRequest
         {
             RunId = RunId.New(),
             Input = "hello",
@@ -295,7 +298,7 @@ public sealed class Plan50OpenAiCodexTests
                     PreferStrictArguments = true,
                 },
             ],
-        };
+        });
         var chunks = await provider.StreamAsync(
             streamRequest,
             TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
@@ -317,10 +320,16 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("\"parallel_tool_calls\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"additionalProperties\":false", requestBody, StringComparison.Ordinal);
         Assert.DoesNotContain("\"max_output_tokens\"", requestBody, StringComparison.Ordinal);
+        using (var document = JsonDocument.Parse(requestBody))
+        {
+            Assert.Equal(
+                ProviderInstructions,
+                document.RootElement.GetProperty("instructions").GetString());
+        }
 
         var ordinaryTool = Assert.Single(streamRequest.Tools) with { PreferStrictArguments = false };
         _ = await provider.StreamAsync(
-            streamRequest with { Tools = [ordinaryTool] },
+            WithCapacity(streamRequest with { Tools = [ordinaryTool] }),
             TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("\"strict\":false", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
@@ -364,7 +373,7 @@ public sealed class Plan50OpenAiCodexTests
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
         });
         var provider = await CreateProviderAsync(handler, "token");
-        var request = CreateStreamRequest() with
+        var request = WithCapacity(CreateStreamRequest() with
         {
             AllowMultipleToolCalls = true,
             Tools =
@@ -372,7 +381,7 @@ public sealed class Plan50OpenAiCodexTests
                 CreateReadTool("read_first"),
                 CreateReadTool("read_second"),
             ],
-        };
+        });
 
         var chunks = await provider.StreamAsync(
             request,
@@ -426,7 +435,7 @@ public sealed class Plan50OpenAiCodexTests
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(
-                CreateStreamRequest() with { MaximumOutputTokens = 4 },
+                WithCapacity(CreateStreamRequest() with { MaximumOutputTokens = 4 }),
                 TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
 
         Assert.Contains("output ceiling of 4 tokens", exception.Message, StringComparison.Ordinal);
@@ -451,7 +460,7 @@ public sealed class Plan50OpenAiCodexTests
         var provider = await CreateProviderAsync(handler, "token");
 
         var chunks = await provider.StreamAsync(
-            CreateStreamRequest() with
+            WithCapacity(CreateStreamRequest() with
             {
                 Tools =
                 [
@@ -462,7 +471,7 @@ public sealed class Plan50OpenAiCodexTests
                         ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
                     },
                 ],
-            },
+            }),
             TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("\"name\":\"greenstreet-cre_search_sectors\"", handler.RequestBody ?? string.Empty, StringComparison.Ordinal);
@@ -535,6 +544,50 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 
+    /// <summary>Codex rejects complete requests beyond the profile window before network I/O.</summary>
+    [Fact]
+    public async Task Provider_OversizedCompleteRequest_FailsBeforeNetwork()
+    {
+        var handler = new RecordingHandler(_ => StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token");
+        var request = WithCapacity(CreateStreamRequest() with
+        {
+            Input = new string('x', 400_000),
+        });
+
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(
+                request,
+                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("complete Codex request", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    /// <summary>Oversized editable provider instructions fail before any Codex network request.</summary>
+    [Fact]
+    public async Task Provider_OversizedProviderInstructions_FailsBeforeNetwork()
+    {
+        var handler = new RecordingHandler(_ => StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token");
+        var request = WithCapacity(
+            new ModelStreamRequest
+            {
+                RunId = RunId.New(),
+                Input = "hello",
+                ReasoningLevel = ReasoningLevel.Medium,
+            },
+            new string('i', 400_000));
+
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(
+                request,
+                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("complete Codex request", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
     private static HttpResponseMessage JsonResponse(string value)
     {
         return new(HttpStatusCode.OK)
@@ -581,11 +634,45 @@ public sealed class Plan50OpenAiCodexTests
 
     private static ModelStreamRequest CreateStreamRequest()
     {
-        return new()
+        return WithCapacity(new ModelStreamRequest
         {
             RunId = RunId.New(),
             Input = "hello",
             ReasoningLevel = ReasoningLevel.Medium,
+        });
+    }
+
+    private static ModelStreamRequest WithCapacity(
+        ModelStreamRequest request,
+        string providerInstructionContent = ProviderInstructions)
+    {
+        var providerInstructions = new ModelProviderInstructions
+        {
+            SectionId = "provider-openai-codex-instructions",
+            Content = providerInstructionContent,
+        };
+        IReadOnlyList<ModelMessage> messages = request.Messages.Count == 0
+            ?
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.User,
+                    SectionId = "legacy-input",
+                    Content = [new ModelContentPart { Content = request.Input }],
+                },
+            ]
+            : request.Messages;
+        var wireEstimate = ModelWireEstimator.Estimate(
+            messages,
+            request.Tools,
+            request.ToolTransportMode,
+            request.Layout?.StablePrefixMessageCount ?? 0,
+            request.MaximumOutputTokens ?? 32_000,
+            providerInstructions);
+        return request with
+        {
+            ProviderInstructions = providerInstructions,
+            WireEstimate = wireEstimate,
         };
     }
 

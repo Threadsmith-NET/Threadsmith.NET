@@ -54,6 +54,7 @@ Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (
 - Repository configuration lives under `.threadsmith/config.*` and is **data, not code** — never execute it.
 - Static secret stores stay outside ordinary configuration and resolve only at explicit privileged boundaries.
 - Prompt append files are untrusted input: sanitized and bounded, never executed, never allowed to override host policy or guardrails, and referenced by id+version in execution records.
+- Threadsmith-owned model-facing prose is a deployed application asset: code declares the complete flat filename/token catalog, startup loads it once into an immutable cache, and publish/release validation keeps every payload synchronized. Assets control wording only; schemas, roles, ordering, capacity admission, trust, tool/mutation/delegation authority, and validation remain code-owned. Preserve shipped prompt text and whitespace exactly when moving it between code and assets. Any prompt filename, purpose, token contract, or call-site token meaning change must update `docs/operations/prompts.md` and `docs/prompt-file-reference.md` in the same change.
 - `.threadsmith/AGENTS.md` owns detailed repository-configuration and prompt-append contracts.
 
 ## Licensing

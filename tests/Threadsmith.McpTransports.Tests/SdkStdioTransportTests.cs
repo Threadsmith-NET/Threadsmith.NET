@@ -177,7 +177,8 @@ public sealed class SdkStdioTransportTests
             _ => new SdkStdioTransport(sanitizer, NullLoggerFactory.Instance),
             new EmptySecretStore(),
             sanitizer,
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
     }
 
     private static ToolInvocationContext CreateInvocationContext()

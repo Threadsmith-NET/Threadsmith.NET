@@ -9,6 +9,7 @@ Own MCP profile loading, SDK-isolated transports, capability translation, lifecy
 - This project is the only product layer that references the official MCP SDK.
 - `McpManager` is the single lifecycle authority composed by `Threadsmith.App`; Core owns only provider-neutral command/result DTOs.
 - `McpAdapter` owns live transport generations and registry publication; `ToolStateManager` remains the repository availability owner.
+- `Prompts/` owns only Threadsmith-authored explicit-read policy and imported-tool fallback-description prose; dynamic server ids, descriptions, schemas, and content remain server-provided bounded data.
 
 ## Local Contracts
 

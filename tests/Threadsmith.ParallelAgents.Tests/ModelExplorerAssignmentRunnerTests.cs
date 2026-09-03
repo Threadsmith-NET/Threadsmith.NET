@@ -737,6 +737,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
             CreateOptions(),
             parentContext,
             registrations,
+            TestPromptLoader.Instance,
             usage);
     }
 

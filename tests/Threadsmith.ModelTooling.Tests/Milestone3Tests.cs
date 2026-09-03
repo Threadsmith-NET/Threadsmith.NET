@@ -73,7 +73,7 @@ public static class Milestone3Tests
         var references = await engine.FindReferencesAsync(symbol.Symbol.Id);
         var implementations = await engine.FindImplementationsAsync(symbol.Symbol.Id);
         var resolver = new TestSemanticResolver(request.WorkspaceId, engine);
-        var toolResult = await new FindSymbolTool(resolver).ExecuteAsync(
+        var toolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindSymbolInput { Query = "IService" },
             new ToolExecutionContext(
                 ToolInvocationId.New(),
@@ -86,7 +86,7 @@ public static class Milestone3Tests
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
                     RequestedBy = "test",
                 }));
-        var referenceToolResult = await new FindReferencesTool(resolver).ExecuteAsync(
+        var referenceToolResult = await new FindReferencesTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindReferencesInput { SymbolId = symbol.Symbol.Id },
             new ToolExecutionContext(
                 ToolInvocationId.New(),
@@ -99,7 +99,7 @@ public static class Milestone3Tests
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
                     RequestedBy = "test",
                 }));
-        var implementationToolResult = await new FindImplementationsTool(resolver).ExecuteAsync(
+        var implementationToolResult = await new FindImplementationsTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindImplementationsInput { SymbolId = symbol.Symbol.Id },
             new ToolExecutionContext(
                 ToolInvocationId.New(),
@@ -112,7 +112,7 @@ public static class Milestone3Tests
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
                     RequestedBy = "test",
                 }));
-        var confinedToolResult = await new FindSymbolTool(resolver).ExecuteAsync(
+        var confinedToolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindSymbolInput { Query = "IService" },
             new ToolExecutionContext(
                 ToolInvocationId.New(),
@@ -926,7 +926,9 @@ public static class Milestone3Tests
         var fallback = await engine.FindReferencesAsync(
             "T:SmallSolution.Contracts.IService",
             allowTextFallback: true);
-        var tool = new FindReferencesTool(new TestSemanticResolver(request.WorkspaceId, engine));
+        var tool = new FindReferencesTool(
+            new TestSemanticResolver(request.WorkspaceId, engine),
+            TestPromptLoader.Instance);
         var toolResult = await tool.ExecuteAsync(
             new FindReferencesInput { SymbolId = "T:SmallSolution.Contracts.IService" },
             new ToolExecutionContext(
@@ -1492,8 +1494,8 @@ public static class Milestone3Tests
         var git = new UnusedGitQueryService();
         ToolDefinition[] definitions =
         [
-            new GitLogTool(git).Definition,
-            new GitDiffTool(git).Definition,
+            new GitLogTool(git, TestPromptLoader.Instance).Definition,
+            new GitDiffTool(git, TestPromptLoader.Instance).Definition,
         ];
 
         await CollectAsync(provider, new ModelStreamRequest
@@ -1905,7 +1907,7 @@ public static class Milestone3Tests
                 {
                     Name = "datetime",
                     Description = "Returns the current date and time.",
-                    ArgumentsJsonSchema = new DateTimeTool().Definition.InputSchema.JsonSchema,
+                    ArgumentsJsonSchema = new DateTimeTool(TestPromptLoader.Instance).Definition.InputSchema.JsonSchema,
                 },
             ],
         };
@@ -1935,7 +1937,7 @@ public static class Milestone3Tests
                 {
                     Name = "datetime",
                     Description = "Returns the current date and time.",
-                    ArgumentsJsonSchema = new DateTimeTool().Definition.InputSchema.JsonSchema,
+                    ArgumentsJsonSchema = new DateTimeTool(TestPromptLoader.Instance).Definition.InputSchema.JsonSchema,
                 },
             ],
         };
@@ -2654,7 +2656,9 @@ public static class Milestone3Tests
             provider,
             new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
             new PassthroughSanitizer(),
-            NullLogger<SessionApplication>.Instance);
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
 
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
@@ -2684,7 +2688,9 @@ public static class Milestone3Tests
             new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            sessionPreferences: preferences);
+            sessionPreferences: preferences,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
 
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
@@ -2707,7 +2713,9 @@ public static class Milestone3Tests
             provider,
             new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
             new PassthroughSanitizer(),
-            NullLogger<SessionApplication>.Instance);
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
 
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));

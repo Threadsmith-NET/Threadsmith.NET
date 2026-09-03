@@ -1,0 +1,1 @@
+Unchanged source for {{RelativePath}} L{{StartLine}}-L{{EndLine}} is already visible in the current request from tool result {{ToolCallId}}; use that exact prior source instead of treating this as a whole-file reference.

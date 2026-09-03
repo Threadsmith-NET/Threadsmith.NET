@@ -562,7 +562,9 @@ public sealed class Plan81CodeExploreToolTests
                     ModelEffectiveInputBudgetTokens = 600,
                 });
 
-            var execution = await new CodeExploreTool(new StubCodeExploreService(result)).ExecuteAsync(
+            var execution = await new CodeExploreTool(
+                new StubCodeExploreService(result),
+                TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreRequest { Query = "large" },
                 context,
                 TestContext.Current.CancellationToken);
@@ -858,7 +860,7 @@ public sealed class Plan81CodeExploreToolTests
         try
         {
             var workspaceId = WorkspaceId.New();
-            var service = new AdvancedSemanticQueryService(registry);
+            var service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
             var reader = new TestCodeExploreSourceReader(new ToolInvocationContext
             {
                 RepositoryPath = repositoryPath,
@@ -946,7 +948,7 @@ public sealed class Plan81CodeExploreToolTests
                     RequestedBy = "plan-81-tests",
                 });
 
-            var execution = await new CodeExploreTool(service).ExecuteAsync(
+            var execution = await new CodeExploreTool(service, TestPromptLoader.Instance).ExecuteAsync(
                 new CodeExploreRequest
                 {
                     Query = "SecretType",
@@ -1208,7 +1210,7 @@ public sealed class Plan81CodeExploreToolTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         }
 
         public AdvancedSemanticQueryService Service { get; }

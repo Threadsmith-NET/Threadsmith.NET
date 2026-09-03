@@ -6,13 +6,14 @@ Own repository-maintained build, development-tool staging, and release automatio
 
 ## Ownership
 
-- `release/` — release target matrix; reviewed license evidence, deterministic SPDX/notices, exact runtime legal staging, artifact compliance; self-contained publish/staging; Windows, Linux, and macOS packaging; signing/notarization hooks; aggregate provenance; and release contract/smoke checks.
+- `release/` — release target matrix; reviewed license evidence, deterministic SPDX/notices, exact runtime legal staging, artifact compliance; self-contained publish/staging; complete prompt-catalog validation; Windows, Linux, and macOS packaging; signing/notarization hooks; aggregate provenance; and release contract/smoke checks.
 - `Stage-DevelopmentRipgrep.ps1` — detects or accepts one supported RID and delegates to the release-owned checksum-verified ripgrep stager under ignored `artifacts/dev-tools/<rid>` for source-development App builds.
 
 ## Local Contracts
 
 - Release scripts accept immutable explicit versions and declared RIDs; unsupported targets fail before publish.
 - The canonical staged payload is assembled from explicit same-RID application and scripting-worker publishes plus the matching pinned official ripgrep asset, reviewed exact package closure, generated notices/SPDX, and legal files from the exact restored RID/version runtime pack; runtime packs are validated separately from bundled NuGet packages. Each publish restores its requested RID and staging requires both self-contained apphosts, `tools/rg(.exe)`, and ripgrep license/provenance notices.
+- Every application publish and staged or extracted release payload must contain exactly the code-declared flat `prompts/` catalog, with case-insensitive uniqueness and byte-identical source-to-publish assets. Packaging consumes the application publish and never reconstructs prompt files independently.
 - Platform builders preserve absolute output roots exactly; repository-relative defaults resolve from the repository root.
 - Native staged-payload execution occurs only when the host OS and architecture match the target; cross-published payloads receive structural validation without execution.
 - Reviewed evidence and full legal inputs are tracked; generated payloads, notices, SBOMs, manifests, checksums, installers, and credentials remain outside Git history.

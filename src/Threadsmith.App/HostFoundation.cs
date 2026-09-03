@@ -47,6 +47,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HookCoordinator hookCoordinator,
         HttpClient hookHttpClient,
         EvidenceStore evidenceStore,
+        IPromptLoader promptLoader,
         PromptAppendLoader promptAppendLoader,
         ExecutionBudget budget,
         ISecretResolver secretResolver,
@@ -89,6 +90,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HookCoordinator = hookCoordinator;
         _hookHttpClient = hookHttpClient;
         EvidenceStore = evidenceStore;
+        PromptLoader = promptLoader;
         PromptAppendLoader = promptAppendLoader;
         Budget = budget;
         SecretResolver = secretResolver;
@@ -183,6 +185,9 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Gets governed session evidence storage.</summary>
     internal EvidenceStore EvidenceStore { get; }
 
+    /// <summary>Gets the immutable deployed prompt catalog.</summary>
+    internal IPromptLoader PromptLoader { get; }
+
     /// <summary>Gets bounded prompt-append loading.</summary>
     internal PromptAppendLoader PromptAppendLoader { get; }
 
@@ -233,12 +238,14 @@ internal sealed class HostFoundation : IAsyncDisposable
         IConfiguration configuration,
         IConfiguration trustedConfiguration,
         ConfigurationPaths paths,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(promptLoader);
 
         var maximumCorrectiveTurns = configuration.GetValue("execution:maxCorrectiveTurns", 3);
         var executionLimits = new ExecutionLimits
@@ -383,7 +390,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             // Tool registration precedes extension capability composition so extensions share one governed catalog.
             var gitQueries = new GitQueryService();
             var dotNetInventory = new DotNetInventoryService(semanticEngines, gitQueries);
-            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines);
+            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines, promptLoader);
             var advisorySources = LoadNuGetAdvisorySources(trustedConfiguration);
             var nativeValidation = new NativeValidationToolService(
                 processManager,
@@ -402,7 +409,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 advancedSemanticQueries,
                 secretResolver,
                 toolLimits,
-                codeExploreOutputOptions);
+                codeExploreOutputOptions,
+                promptLoader);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -452,6 +460,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 hookCoordinator,
                 hookHttpClient,
                 evidenceStore,
+                promptLoader,
                 promptAppendLoader,
                 budget,
                 secretResolver,
@@ -819,7 +828,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         ICodeExploreService codeExplore,
         ISecretResolver secretResolver,
         ToolLimits limits,
-        CodeExploreOutputOptions codeExploreOutputOptions)
+        CodeExploreOutputOptions codeExploreOutputOptions,
+        IPromptLoader promptLoader)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -841,7 +851,10 @@ internal sealed class HostFoundation : IAsyncDisposable
         var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration);
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(webFetchOptions);
         var directFetchApprovalPrompt = new DirectFetchApprovalPromptRouter();
-        var webContentFetcher = new WebContentFetcher(new PublicHttpsWebContentTransport(), webFetchOptions);
+        var webContentFetcher = new WebContentFetcher(
+            new PublicHttpsWebContentTransport(),
+            webFetchOptions,
+            promptLoader);
         var webSearchClient = new BraveWebSearchClient(
             new HttpClient(new SocketsHttpHandler
             {
@@ -854,7 +867,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 PooledConnectionLifetime = TimeSpan.FromMinutes(15),
             }),
             secretResolver,
-            webSearchOptions);
+            webSearchOptions,
+            promptLoader);
         var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
         var allowedExecutables = ResolveAllowedExecutables(configuration);
         var requireRunProcessApproval = trustedConfiguration.GetValue(
@@ -864,50 +878,54 @@ internal sealed class HostFoundation : IAsyncDisposable
             ?? defaultShellExecutable;
         ITool[] tools =
         [
-            new ListFilesTool(limits),
-            new ReadFileTool(limits),
-            new SearchTextTool(limits, processManager, ripgrepExecutable),
-            new GitStatusTool(processManager),
-            new GitDiffTool(gitQueries),
-            new GitLogTool(gitQueries),
-            new GitShowTool(gitQueries),
-            new GitBlameTool(gitQueries),
-            new GitBranchComparisonTool(gitQueries),
-            new DotNetInventoryTool(dotNetInventory),
-            new NuGetHealthTool(nativeValidation),
-            new DotNetBuildTool(nativeValidation),
-            new DotNetAnalyzerTool(nativeValidation),
-            new DotNetFormatCheckTool(nativeValidation),
-            new DiagnosticQueryTool(nativeValidation),
-            new TestDiscoveryTool(nativeValidation),
-            new TargetedTestTool(nativeValidation),
+            new ListFilesTool(promptLoader, limits),
+            new ReadFileTool(promptLoader, limits),
+            new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
+            new GitStatusTool(processManager, promptLoader),
+            new GitDiffTool(gitQueries, promptLoader),
+            new GitLogTool(gitQueries, promptLoader),
+            new GitShowTool(gitQueries, promptLoader),
+            new GitBlameTool(gitQueries, promptLoader),
+            new GitBranchComparisonTool(gitQueries, promptLoader),
+            new DotNetInventoryTool(dotNetInventory, promptLoader),
+            new NuGetHealthTool(nativeValidation, promptLoader),
+            new DotNetBuildTool(nativeValidation, promptLoader),
+            new DotNetAnalyzerTool(nativeValidation, promptLoader),
+            new DotNetFormatCheckTool(nativeValidation, promptLoader),
+            new DiagnosticQueryTool(nativeValidation, promptLoader),
+            new TestDiscoveryTool(nativeValidation, promptLoader),
+            new TargetedTestTool(nativeValidation, promptLoader),
             new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(codeExplore, processManager),
-                codeExploreOutputOptions),
-            new CallHierarchyTool(advancedSemanticQueries),
-            new SymbolImpactTool(advancedSemanticQueries),
-            new CSharpPatternSearchTool(advancedSemanticQueries),
-            new GeneratedCodeTool(advancedSemanticQueries),
-            new FindSymbolTool(semanticEngines, limits),
-            new FindReferencesTool(semanticEngines, limits),
-            new FindImplementationsTool(semanticEngines, limits),
+                new CodeExploreTool(codeExplore, promptLoader, processManager),
+                codeExploreOutputOptions,
+                promptLoader),
+            new CallHierarchyTool(advancedSemanticQueries, promptLoader),
+            new SymbolImpactTool(advancedSemanticQueries, promptLoader),
+            new CSharpPatternSearchTool(advancedSemanticQueries, promptLoader),
+            new GeneratedCodeTool(advancedSemanticQueries, promptLoader),
+            new FindSymbolTool(semanticEngines, promptLoader, limits),
+            new FindReferencesTool(semanticEngines, promptLoader, limits),
+            new FindImplementationsTool(semanticEngines, promptLoader, limits),
             new RunProcessTool(
                 processManager,
+                promptLoader,
                 limits,
                 allowedExecutables,
                 requireRunProcessApproval,
                 shellExecutable),
-            new DateTimeTool(),
-            new CSharpScriptTool(scriptEngine),
+            new DateTimeTool(promptLoader),
+            new CSharpScriptTool(scriptEngine, promptLoader),
             new WebSearchTool(
                 webSearchClient,
                 webSearchOptions,
                 new SecretOutputSanitizer(),
+                promptLoader,
                 webFetchAuthorization),
             new WebFetchTool(
                 webContentFetcher,
                 webFetchAuthorization,
                 webFetchOptions.TrustedCeiling,
+                promptLoader,
                 directFetchApprovalPrompt),
         ];
         var mcpApprovalPath = Path.Combine(

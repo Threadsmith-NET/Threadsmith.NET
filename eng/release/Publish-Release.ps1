@@ -20,6 +20,7 @@ dotnet restore (Join-Path $root 'src/Threadsmith.Scripting.Worker/Threadsmith.Sc
 if ($LASTEXITCODE -ne 0) { throw 'Worker restore failed.' }
 dotnet publish (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') -c Release -r $RuntimeIdentifier --self-contained true --no-restore -p:Version=$Version -p:PublishSingleFile=false -p:PublishTrimmed=false -p:PublishAot=false -o $appPublish
 if ($LASTEXITCODE -ne 0) { throw 'Application publish failed.' }
+Assert-ReleasePromptPayload -PayloadDirectory $appPublish -RuntimeIdentifier $RuntimeIdentifier -SourceRoot $root
 dotnet publish (Join-Path $root 'src/Threadsmith.Scripting.Worker/Threadsmith.Scripting.Worker.csproj') -c Release -r $RuntimeIdentifier --self-contained true --no-restore -p:Version=$Version -p:PublishSingleFile=false -p:PublishTrimmed=false -p:PublishAot=false -o $workerPublish
 if ($LASTEXITCODE -ne 0) { throw 'Worker publish failed.' }
 

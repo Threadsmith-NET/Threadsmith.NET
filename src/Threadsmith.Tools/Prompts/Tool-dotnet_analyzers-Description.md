@@ -1,0 +1,1 @@
+Runs analyzers through a bounded no-restore build.

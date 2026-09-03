@@ -252,6 +252,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions { MaximumTokens = 32_000 });
         var plan = new ImplementationPlan
         {
@@ -325,6 +326,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions(),
             instructionResolver: new RepositoryInstructionResolver(sanitizer));
         var context = new RecordingContextAssembler(innerContext);
@@ -340,7 +342,9 @@ public static class Milestone5Tests
                 1)),
             sanitizer,
             events,
-            sessionUsage: usage);
+            sessionUsage: usage,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change Example.",
@@ -496,6 +500,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -503,7 +508,9 @@ public static class Milestone5Tests
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -630,6 +637,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions());
         var semanticMutations = new FakeSemanticMutationEngine();
         semanticMutations.Warnings.Add("Projects outside the compiled subset were skipped.");
@@ -642,7 +650,9 @@ public static class Milestone5Tests
             sanitizer,
             events,
             semanticMutations: semanticMutations,
-            preMutationAnalyzer: preMutationAnalyzer);
+            preMutationAnalyzer: preMutationAnalyzer,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Rename IRetriever to IRetrieval.",
@@ -758,6 +768,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var semanticMutations = new FakeSemanticMutationEngine();
         semanticMutations.MissingSymbolIds.Add("T:Demo.MissingRetriever");
@@ -768,7 +779,9 @@ public static class Milestone5Tests
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            semanticMutations: semanticMutations);
+            semanticMutations: semanticMutations,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Rename IRetriever to IRetrieval.",
@@ -878,6 +891,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var preMutationAnalyzer = new FakePreMutationAnalyzer();
         var application = new MutationProposalApplication(
@@ -887,7 +901,9 @@ public static class Milestone5Tests
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            preMutationAnalyzer: preMutationAnalyzer);
+            preMutationAnalyzer: preMutationAnalyzer,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Edit Example.",
@@ -919,11 +935,17 @@ public static class Milestone5Tests
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
         var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
         Assert.Equal(ModelCorrectionCategory.PreMutationAnalysis, correction.Category);
-        Assert.Contains("Pre-mutation Roslyn analysis", correction.SafeReason, StringComparison.Ordinal);
+        var expectedPreMutationCorrection =
+            "Pre-mutation Roslyn analysis found blocking diagnostics before staging or approval. "
+            + "Revise the proposed mutation set against the same baseline; no repository files were changed."
+            + " - src/Example.cs:4:20 CS1001 (Syntax): Identifier expected. "
+            + "[containing MethodDeclaration] Hunk: public void Broken( { }"
+            + " Omission: Repository analyzers were not loaded before approval.";
+        Assert.Equal(expectedPreMutationCorrection, correction.SafeReason);
         Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
         Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
         Assert.Contains(
-            "Pre-mutation Roslyn analysis",
+            expectedPreMutationCorrection,
             GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
             StringComparison.Ordinal);
         PreMutationAnalysisCompleted[] analysisEvents = [.. observed.OfType<PreMutationAnalysisCompleted>()];
@@ -1002,12 +1024,15 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions())),
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            preMutationAnalyzer: new ThrowingPreMutationAnalyzer());
+            preMutationAnalyzer: new ThrowingPreMutationAnalyzer(),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Create existing file.",
@@ -1124,12 +1149,15 @@ public static class Milestone5Tests
                     new PromptAppendLoader(sanitizer),
                     sanitizer,
                     events,
+                    TestPromptLoader.Instance,
                     new ContextAssemblerOptions())),
                 workspaces,
                 new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
                 sanitizer,
                 events,
-                preMutationAnalyzer: preMutationAnalyzer);
+                preMutationAnalyzer: preMutationAnalyzer,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
             var plan = new ImplementationPlan
             {
                 Summary = "Edit case-distinct files.",
@@ -1272,12 +1300,15 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions())),
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            preMutationAnalyzer: new DecisionPreMutationAnalyzer(decision));
+            preMutationAnalyzer: new DecisionPreMutationAnalyzer(decision),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Edit Example.",
@@ -1370,6 +1401,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -1381,7 +1413,9 @@ public static class Milestone5Tests
             limits: ExecutionLimits.Default with
             {
                 MaxStructuredOutputCharacters = "propose_mutations".Length + 8,
-            });
+            },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change Example.",
@@ -1462,6 +1496,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -1469,7 +1504,9 @@ public static class Milestone5Tests
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Add a file.",
@@ -1542,6 +1579,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -1549,7 +1587,9 @@ public static class Milestone5Tests
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -1732,6 +1772,7 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions { MaximumTokens = maximumTokens });
             return await assembler.AssembleAsync(new ContextAssemblyRequest
             {
@@ -1797,6 +1838,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -1805,7 +1847,9 @@ public static class Milestone5Tests
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 });
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -1941,6 +1985,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions()));
         var application = new MutationProposalApplication(
             model,
@@ -1948,7 +1993,9 @@ public static class Milestone5Tests
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -2054,6 +2101,7 @@ public static class Milestone5Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions());
         var application = new MutationProposalApplication(
             model,
@@ -2061,7 +2109,9 @@ public static class Milestone5Tests
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change Example.",
@@ -2156,12 +2206,15 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions()),
             workspaces,
             new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
             sanitizer,
             events,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
+            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Revision = 1,
@@ -2235,6 +2288,7 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions()),
             workspaces,
             new ExecutionBudget(new BudgetDimensions(
@@ -2243,7 +2297,9 @@ public static class Milestone5Tests
                 TimeSpan.FromMinutes(1),
                 1)),
             sanitizer,
-            events);
+            events,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Change only the planned file.",
@@ -2331,6 +2387,7 @@ public static class Milestone5Tests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
+                TestPromptLoader.Instance,
                 new ContextAssemblerOptions()),
             workspaces,
             new ExecutionBudget(new BudgetDimensions(
@@ -2340,7 +2397,9 @@ public static class Milestone5Tests
                 1)),
             sanitizer,
             events,
-            preMutationAnalyzer: new ThrowingPreMutationAnalyzer());
+            preMutationAnalyzer: new ThrowingPreMutationAnalyzer(),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
         var plan = new ImplementationPlan
         {
             Summary = "Modify only the planned file.",

@@ -1,0 +1,1 @@
+Use complete current FileSections as host-sanitized, source-identity-backed evidence for their advertised ranges; do not infer redacted literal bytes.

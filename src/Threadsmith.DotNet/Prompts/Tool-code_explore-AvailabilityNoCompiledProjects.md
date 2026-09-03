@@ -1,0 +1,1 @@
+The opened workspace has no compiled C# projects available for source-bearing semantic exploration.

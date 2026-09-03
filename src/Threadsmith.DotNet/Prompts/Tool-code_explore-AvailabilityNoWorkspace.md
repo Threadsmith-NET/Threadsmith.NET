@@ -1,0 +1,1 @@
+No workspace is open for code_explore. Open or select a C# workspace, then retry semantic source exploration.

@@ -1,0 +1,1 @@
+Use the returned continuation target for a narrower retry instead of repeating the broad request.

@@ -442,8 +442,9 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             fixture.Service,
             fixture.CreateArtifactReader());
         var formattingTool = new CodeExploreOutputFormattingTool(
-            new CodeExploreTool(service),
-            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            new CodeExploreTool(service, TestPromptLoader.Instance),
+            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+            TestPromptLoader.Instance);
         var context = CreateToolExecutionContext(fixture);
         var firstExecution = await formattingTool.ExecuteAsync(
             new CodeExploreInput { Query = new string('q', 240) },
@@ -570,7 +571,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 RequestedBy = "plan-85-tests",
             });
 
-        var execution = await new CodeExploreTool(service, processManager).ExecuteAsync(
+        var execution = await new CodeExploreTool(service, TestPromptLoader.Instance, processManager).ExecuteAsync(
             new CodeExploreRequest
             {
                 Query = "artifact policy probe",
@@ -640,7 +641,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 RequestedBy = "plan-85-tests",
             });
 
-        _ = await new CodeExploreTool(service, processManager).ExecuteAsync(
+        _ = await new CodeExploreTool(service, TestPromptLoader.Instance, processManager).ExecuteAsync(
             new CodeExploreRequest
             {
                 Query = "literal pathspec",
@@ -675,7 +676,9 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 ModelRequestOutputReserveTokens = 256,
             });
 
-        var execution = await new CodeExploreTool(new OversizedArtifactResultService()).ExecuteAsync(
+        var execution = await new CodeExploreTool(
+            new OversizedArtifactResultService(),
+            TestPromptLoader.Instance).ExecuteAsync(
             new CodeExploreRequest
             {
                 Query = "trim associated artifact",
@@ -704,7 +707,9 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
     [Fact]
     public void CodeExploreTool_InputSchema_ExcludesInternalAssociatedArtifactControls()
     {
-        var schema = new CodeExploreTool(new EmptyCodeExploreService()).Definition.InputSchema.JsonSchema;
+        var schema = new CodeExploreTool(
+            new EmptyCodeExploreService(),
+            TestPromptLoader.Instance).Definition.InputSchema.JsonSchema;
 
         Assert.DoesNotContain("associatedArtifacts", schema, StringComparison.Ordinal);
         Assert.DoesNotContain("associatedArtifactPathAnchors", schema, StringComparison.Ordinal);
@@ -825,7 +830,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         }
 
         public string RepositoryPath { get; }

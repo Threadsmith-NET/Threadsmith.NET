@@ -342,6 +342,7 @@ public static class AppBootstrapTests
             new Threadsmith.Telemetry.SecretOutputSanitizer(),
             new ToolRegistry([]),
             loggerFactory,
+            TestPromptLoader.Instance,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(adapter.GetConnections());
@@ -578,10 +579,16 @@ public static class AppBootstrapTests
     {
         var path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-" + Guid.NewGuid().ToString("N") + ".jsonl");
         var provider = new LoggingModelProvider(new SingleChunkModelProvider(), new JsonlModelExchangeLog(path));
+        const string providerInstructions = "PRIVATE_PROVIDER_PROMPT";
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
             Input = "diagnose tool chain",
+            ProviderInstructions = new ModelProviderInstructions
+            {
+                SectionId = "provider-openai-codex-instructions",
+                Content = providerInstructions,
+            },
             Tools =
             [
                 new ModelToolDefinition
@@ -609,8 +616,12 @@ public static class AppBootstrapTests
         using var completionEntry = JsonDocument.Parse(lines[4]);
         Assert.Equal("requestSummary", requestSummaryEntry.RootElement.GetProperty("Kind").GetString());
         Assert.Equal(1, requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("ToolCount").GetInt32());
+        Assert.Equal(providerInstructions.Length, requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("ProviderInstructionCharacters").GetInt32());
+        Assert.Equal("provider-openai-codex-instructions", requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("ProviderInstructionSectionId").GetString());
+        Assert.DoesNotContain(providerInstructions, lines[0], StringComparison.Ordinal);
         Assert.Equal("read_file", requestSummaryEntry.RootElement.GetProperty("Payload").GetProperty("AdvertisedTools")[0].GetProperty("Name").GetString());
         Assert.Equal("request", requestEntry.RootElement.GetProperty("Kind").GetString());
+        Assert.Equal(providerInstructions, requestEntry.RootElement.GetProperty("Payload").GetProperty("ProviderInstructions").GetProperty("Content").GetString());
         Assert.Equal("diagnose tool chain", requestEntry.RootElement.GetProperty("Payload").GetProperty("Input").GetString());
         Assert.Equal("read_file", requestEntry.RootElement.GetProperty("Payload").GetProperty("Tools")[0].GetProperty("Name").GetString());
         Assert.Equal("chunk", chunkEntry.RootElement.GetProperty("Kind").GetString());

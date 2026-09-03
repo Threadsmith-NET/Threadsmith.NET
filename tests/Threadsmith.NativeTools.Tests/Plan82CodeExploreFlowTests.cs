@@ -229,7 +229,9 @@ public sealed class Plan82CodeExploreFlowTests
         await using var fixture = await CodeExploreFlowFixture.CreateAsync();
         var context = fixture.CreateToolExecutionContext("src/CoreFlow/Dispatch.cs");
 
-        var execution = await new CodeExploreTool(new StubCodeExploreService(CreatePolicyConfineResult())).ExecuteAsync(
+        var execution = await new CodeExploreTool(
+            new StubCodeExploreService(CreatePolicyConfineResult()),
+            TestPromptLoader.Instance).ExecuteAsync(
             new CodeExploreRequest
             {
                 Query = "StartInterface to ConcreteProcessor.Process",
@@ -545,7 +547,7 @@ public sealed class Plan82CodeExploreFlowTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         }
 
         public AdvancedSemanticQueryService Service { get; }

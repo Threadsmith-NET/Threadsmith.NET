@@ -21,6 +21,7 @@ public sealed class McpAdapter : IMcpAdapter
     private readonly ISecretResolver _secretResolver;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ILogger<McpAdapter> _logger;
+    private readonly IPromptLoader _prompts;
     private readonly ToolRegistry? _toolRegistry;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, Connection> _connections = new(StringComparer.Ordinal);
@@ -32,6 +33,7 @@ public sealed class McpAdapter : IMcpAdapter
         ISecretResolver secretResolver,
         IOutputSanitizer sanitizer,
         ILogger<McpAdapter> logger,
+        IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
         TimeProvider? timeProvider = null)
     {
@@ -39,10 +41,12 @@ public sealed class McpAdapter : IMcpAdapter
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(prompts);
         _transportFactory = transportFactory;
         _secretResolver = secretResolver;
         _sanitizer = sanitizer;
         _logger = logger;
+        _prompts = prompts;
         _toolRegistry = toolRegistry;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -53,6 +57,7 @@ public sealed class McpAdapter : IMcpAdapter
         ISecretStore secretStore,
         IOutputSanitizer sanitizer,
         ILogger<McpAdapter> logger,
+        IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -60,6 +65,7 @@ public sealed class McpAdapter : IMcpAdapter
             new LegacySecretStoreResolver(secretStore),
             sanitizer,
             logger,
+            prompts,
             toolRegistry,
             timeProvider)
     {
@@ -154,6 +160,7 @@ public sealed class McpAdapter : IMcpAdapter
                 profile,
                 capability,
                 _sanitizer,
+                _prompts,
                 _timeProvider,
                 () => connection.AcquireInvocation(capabilityGeneration)));
         }
@@ -492,6 +499,7 @@ public sealed class McpAdapter : IMcpAdapter
                             connection.Profile,
                             capability,
                             _sanitizer,
+                            _prompts,
                             _timeProvider,
                             () => connection.AcquireInvocation(replacementGeneration))),
                 ];

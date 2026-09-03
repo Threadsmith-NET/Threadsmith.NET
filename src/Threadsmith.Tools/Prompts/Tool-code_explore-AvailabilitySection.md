@@ -1,0 +1,3 @@
+**Availability**
+
+- **{{Status}}:** {{Reason}}

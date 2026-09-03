@@ -1,0 +1,1 @@
+Keep complete returned file sections as current source evidence and do not reread those ranges. Search once for the most distinctive missing identifier, then read only the exact missing ranges.

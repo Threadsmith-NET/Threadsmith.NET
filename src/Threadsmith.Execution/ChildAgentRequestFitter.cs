@@ -19,18 +19,21 @@ internal static class ChildAgentRequestFitter
         RepositoryInstructionBundle instructions,
         ModelWireToolEstimate toolEstimate,
         AgentModelSelection model,
-        int desiredOutputTokens)
+        int desiredOutputTokens,
+        ChildAgentPrompt prompt)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(instructions);
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(prompt);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(desiredOutputTokens);
-        var messages = ChildAgentPrompt.CreateMessages(context, instructions);
+        var messages = prompt.CreateMessages(context, instructions);
         var wireEstimate = ModelWireEstimator.Estimate(
             messages,
             toolEstimate,
             stablePrefixMessageCount: 0,
-            outputReserveTokens: desiredOutputTokens);
+            outputReserveTokens: desiredOutputTokens,
+            model.ProviderInstructions);
         return wireEstimate.TotalCapacityTokens <= model.ContextWindowTokens
             ? new ChildAgentInitialRequest(
                 messages,

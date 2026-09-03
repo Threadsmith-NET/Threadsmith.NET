@@ -77,6 +77,8 @@ public sealed partial class SessionApplication :
     private readonly IConversationMemoryGovernor? _conversationGovernor;
     private readonly IConversationStore? _conversationStore;
     private readonly IConversationToolSnapshotStore? _conversationToolSnapshots;
+    private readonly CorrectiveMessageFactory _correctiveMessages;
+    private readonly IPromptLoader _prompts;
     private readonly ConversationContextMode _defaultConversationMode;
     private readonly ModelProfileId? _defaultModelProfileId;
     private readonly IEvidenceStore? _evidenceStore;
@@ -175,13 +177,17 @@ public sealed partial class SessionApplication :
         ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null,
         IConversationToolSnapshotStore? conversationToolSnapshots = null,
-        RunSteeringCoordinator? steering = null)
+        RunSteeringCoordinator? steering = null,
+        CorrectiveMessageFactory? correctiveMessages = null,
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(correctiveMessages);
+        ArgumentNullException.ThrowIfNull(prompts);
         if ((toolPipeline is null) != (toolContextFactory is null))
         {
             throw new ArgumentException(
@@ -228,6 +234,8 @@ public sealed partial class SessionApplication :
         _conversationCompactor = conversationCompactor;
         _conversationToolSnapshots = conversationToolSnapshots;
         _steering = steering ?? new RunSteeringCoordinator();
+        _correctiveMessages = correctiveMessages;
+        _prompts = prompts;
         if (!Enum.IsDefined(defaultConversationMode))
         {
             throw new ArgumentOutOfRangeException(nameof(defaultConversationMode));
@@ -665,6 +673,16 @@ public sealed partial class SessionApplication :
                 cancellationToken);
     }
 
+    private CorrectiveMessageFactory RequireCorrectiveMessages()
+    {
+        return _correctiveMessages;
+    }
+
+    private IPromptLoader RequirePrompts()
+    {
+        return _prompts;
+    }
+
     private async Task ExecuteRunAsync(
         SubmitRequestCommand command,
         RunId runId,
@@ -692,7 +710,14 @@ public sealed partial class SessionApplication :
                 registration.CurrentTurnHostContext =
                 [
                     .. userUrlReferences.Select(reference =>
-                        $"Host-authorized current-user URL candidate #{reference.Ordinal}: use web_fetch userUrlId '{reference.Id}'."),
+                        _prompts.Render(
+                            PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["Ordinal"] = reference.Ordinal.ToString(
+                                    System.Globalization.CultureInfo.CurrentCulture),
+                                ["UserUrlId"] = reference.Id,
+                            })),
                 ];
             }
 
@@ -1112,7 +1137,8 @@ public sealed partial class SessionApplication :
             tools,
             ToolTransportMode.Native,
             layout.StablePrefixMessageCount,
-            context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
+            context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
+            context.ProviderInstructions);
         var estimate = Estimate();
         foreach (var index in continuationMessages
             .Select((message, index) => (message, index))
@@ -1243,7 +1269,7 @@ public sealed partial class SessionApplication :
         };
     }
 
-    private static bool TryCreateSemanticFirstSearchCorrection(
+    private bool TryCreateSemanticFirstSearchCorrection(
         ToolRequestModelOutput tool,
         bool workspaceAvailable,
         bool semanticToolAttempted,
@@ -1290,12 +1316,12 @@ public sealed partial class SessionApplication :
         var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
             ? "code_explore"
             : "find_symbol";
-        var suggestedCall = suggestedTool == "code_explore"
-            ? $"Call code_explore with query '{suggestedQuery}' before text search."
-            : $"Call find_symbol with query '{suggestedQuery}' before text search.";
-        content = $"A semantic workspace is loaded and {suggestedTool} is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
-            + $"{suggestedCall} The rejected search query was '{boundedQuery}'. "
-            + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";
+        content = RequireCorrectiveMessages().CreateSemanticFirstSearchReason(
+            suggestedTool,
+            suggestedQuery,
+            boundedQuery,
+            isExactPathQuery,
+            isExactSymbolQuery);
         return true;
     }
 

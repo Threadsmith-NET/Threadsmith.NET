@@ -738,3 +738,19 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 10. Compare repeated fixed-task runs against the granular-tool baseline. Confirm equal or better answer correctness with fewer dependent rounds, fewer repeated/contained searches and overlapping reads, lower repeated model-visible source, and no regression in policy, approval, audit, cancellation, semantic confidence, or mutation/build/test authority.
 
 **Verifies:** compiler-aware repository discovery, native tool policy, semantic generation and confidence, context/cache/session governance, source provenance, bounded flow and impact, natural-language structural retrieval, safe model-visible deduplication, associated textual artifacts, interactive/headless parity, and task-sufficient exploration without replacing granular tools or host authority.
+
+---
+
+## Scenario AP - Deployable Prompt Assets and Cached Loading
+
+1. Build and publish Threadsmith for every supported runtime. Confirm each application output, staged payload, archive, and installer contains one flat, case-insensitively collision-free `prompts/` directory whose filenames agree exactly with the code-declared catalog and documented token contracts.
+2. Start a deterministic provider capture with the shipped assets. Confirm system/phase/output context, provider instructions, built-in tool descriptions, corrections, skill procedure prompts, parent delegation descriptions/results, delegated-child policy/progress/steering, and `code_explore` guidance preserve their expected roles, order, wording, whitespace, schemas, and host decisions.
+3. Stop the process; edit the main system prompt, one ordinary tool description, the `delegate_agents` description, one delegated-child policy or guidance asset, and the native Codex instruction; then restart. Confirm only the corresponding provider-visible content and honest capacity/identity totals change.
+4. Edit those files again while Threadsmith remains running. Confirm active and later requests in that process continue using the immutable startup snapshot; restart and confirm the new content is then loaded.
+5. Independently remove a required file; introduce invalid UTF-8, NUL, an unresolved/unknown/missing token, a case-only filename collision, an oversized file/catalog, traversal, and a link/reparse target. Confirm startup fails before provider, tool, delegation, skill, or repository activity and ordinary diagnostics expose no body or token value.
+6. Expand the Codex instruction near and beyond a selected model's capacity. Confirm it is counted exactly before context admission, reduces lower-priority context while the request can still fit, and fails before network dispatch when fixed content plus tools and output reserve cannot fit.
+7. Attempt to use edited assets to advertise or invoke a disabled tool, change a tool or result schema, approve/apply a mutation, widen repository/child trust or paths, let a child delegate, grant process/network/secret authority, change model/role/budgets, alter finding admission, or bypass validation. Confirm every compiled host boundary remains authoritative.
+8. Compare ordinary startup/request logs with explicitly enabled raw-model logging. Confirm ordinary logs contain only bounded safe metadata, while the privileged raw log contains the complete provider-visible externalized content but no credentials, authorization headers, or host-only secrets.
+9. Upgrade an installation containing local prompt experiments. Confirm the installer replaces the complete shipped defaults without merging local edits, documented backup/restore guidance is accurate, and an incomplete mixed-version catalog fails closed.
+
+**Verifies:** complete cross-platform prompt deployment, exact default compatibility, eager immutable startup loading, deterministic bounded named-token rendering, provider-wire capacity, raw-log boundaries, authority isolation, safe failure, and replace-on-upgrade behavior.

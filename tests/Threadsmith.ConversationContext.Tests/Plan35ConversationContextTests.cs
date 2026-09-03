@@ -651,6 +651,7 @@ public static class Plan35ConversationContextTests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
+            TestPromptLoader.Instance,
             new ContextAssemblerOptions
             {
                 MaximumTokens = maximumTokens,

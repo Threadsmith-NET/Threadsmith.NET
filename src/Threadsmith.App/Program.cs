@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Extensions.Runtime;
 using Threadsmith.Hooks;
@@ -116,13 +117,22 @@ public static class Program
             && commandLine.McpAction is null;
 
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
+        var promptLoader = await DeployedPromptLoader.LoadAsync(
+            AppContext.BaseDirectory,
+            CancellationToken.None);
+        loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts").LogInformation(
+            "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
+            promptLoader.Assets.Count,
+            promptLoader.TotalBytes,
+            promptLoader.CatalogDigest);
 
         // Initialize durable state and shared host services before composing applications that consume them.
         await using var foundation = await HostFoundation.CreateAsync(
             configuration,
             trustedConfiguration,
             paths,
-            loggerFactory);
+            loggerFactory,
+            promptLoader);
 
         // Compose model transport, catalogs, migration, selection, and offline fallback as one owned phase.
         ModelServices composedModels;
@@ -171,6 +181,7 @@ public static class Program
             foundation.ToolPipeline,
             paths.RepositoryRoot,
             loggerFactory,
+            foundation.PromptLoader,
             foundation.HookCoordinator,
             processCancellation.Token);
 
@@ -189,6 +200,7 @@ public static class Program
                     ExecutionLimits = foundation.ExecutionLimits,
                     Sanitizer = foundation.Sanitizer,
                     PromptAppendLoader = foundation.PromptAppendLoader,
+                    PromptLoader = foundation.PromptLoader,
                     Budget = foundation.Budget,
                 },
                 Persistence = new PersistenceCompositionInputs

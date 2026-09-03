@@ -1,0 +1,1 @@
+Gets a compact normalized inventory from the host-selected loaded .NET workspace. The host supplies repository, workspace, and solution identity.

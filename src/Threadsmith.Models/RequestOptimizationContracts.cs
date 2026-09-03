@@ -162,6 +162,9 @@ public sealed record ModelWireEstimate
     /// <summary>Estimated provider framing tokens.</summary>
     public int FramingTokens { get; init; }
 
+    /// <summary>Estimated exact request-owned provider-instruction tokens.</summary>
+    public int ProviderInstructionTokens { get; init; }
+
     /// <summary>Host-reserved output/reasoning tokens.</summary>
     public int OutputReserveTokens { get; init; }
 
@@ -374,13 +377,21 @@ public static class ModelToolCanonicalizer
     }
 
     /// <summary>Renders a single deterministic textual fallback inventory.</summary>
-    public static string RenderText(IReadOnlyList<ModelToolDefinition> definitions)
+    public static string RenderText(
+        IReadOnlyList<ModelToolDefinition> definitions,
+        IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(definitions);
+        ArgumentNullException.ThrowIfNull(prompts);
         return string.Join('\n', definitions.Select(definition =>
-            $"<tool id=\"{System.Security.SecurityElement.Escape(definition.Name)}\">"
-            + $"<description>{System.Security.SecurityElement.Escape(definition.Description)}</description>"
-            + $"<schema>{System.Security.SecurityElement.Escape(definition.ArgumentsJsonSchema)}</schema></tool>"));
+            prompts.Render(
+                PromptFileNames.SystemToolInventoryTextFallback,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ToolId"] = System.Security.SecurityElement.Escape(definition.Name),
+                    ["Description"] = System.Security.SecurityElement.Escape(definition.Description),
+                    ["Schema"] = System.Security.SecurityElement.Escape(definition.ArgumentsJsonSchema),
+                })));
     }
 
     private static string CanonicalizeSchema(string toolName, string schemaJson)
@@ -491,17 +502,24 @@ public static class ModelWireEstimator
     /// <summary>Estimates one canonical tool inventory for reuse across continuation rounds.</summary>
     public static ModelWireToolEstimate EstimateTools(
         IReadOnlyList<ModelToolDefinition> tools,
-        ToolTransportMode toolTransportMode)
+        ToolTransportMode toolTransportMode,
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
+        var textToolTokens = 0;
+        if (toolTransportMode == ToolTransportMode.Text)
+        {
+            var textPrompts = prompts
+                ?? throw new InvalidOperationException("Text tool transport requires the deployed prompt catalog.");
+            textToolTokens = EstimateCharacters(ModelToolCanonicalizer.RenderText(tools, textPrompts).Length);
+        }
+
         return new ModelWireToolEstimate
         {
             NativeToolTokens = toolTransportMode == ToolTransportMode.Native
                 ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
                 : 0,
-            TextToolTokens = toolTransportMode == ToolTransportMode.Text
-                ? EstimateCharacters(ModelToolCanonicalizer.RenderText(tools).Length)
-                : 0,
+            TextToolTokens = textToolTokens,
         };
     }
 
@@ -511,14 +529,17 @@ public static class ModelWireEstimator
         IReadOnlyList<ModelToolDefinition> tools,
         ToolTransportMode toolTransportMode,
         int stablePrefixMessageCount,
-        int outputReserveTokens)
+        int outputReserveTokens,
+        ModelProviderInstructions? providerInstructions = null,
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
         return Estimate(
             messages,
-            EstimateTools(tools, toolTransportMode),
+            EstimateTools(tools, toolTransportMode, prompts),
             stablePrefixMessageCount,
-            outputReserveTokens);
+            outputReserveTokens,
+            providerInstructions);
     }
 
     /// <summary>Estimates deterministic framing and content capacity from a reusable tool estimate.</summary>
@@ -526,7 +547,8 @@ public static class ModelWireEstimator
         IReadOnlyList<ModelMessage> messages,
         ModelWireToolEstimate tools,
         int stablePrefixMessageCount,
-        int outputReserveTokens)
+        int outputReserveTokens,
+        ModelProviderInstructions? providerInstructions = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentOutOfRangeException.ThrowIfNegative(stablePrefixMessageCount);
@@ -534,10 +556,25 @@ public static class ModelWireEstimator
         ArgumentOutOfRangeException.ThrowIfNegative(outputReserveTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(tools.NativeToolTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(tools.TextToolTokens);
+        if (providerInstructions is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(providerInstructions.SectionId);
+            ArgumentNullException.ThrowIfNull(providerInstructions.Content);
+        }
 
         var sections = new Dictionary<string, int>(StringComparer.Ordinal);
         var logicalTokens = 0;
         var stablePrefixTokens = 0;
+        var providerInstructionTokens = providerInstructions is null
+            ? 0
+            : EstimateCharacters(providerInstructions.Content.Length);
+        if (providerInstructions is not null)
+        {
+            sections[providerInstructions.SectionId] = providerInstructionTokens;
+            logicalTokens = providerInstructionTokens;
+            stablePrefixTokens = checked(providerInstructionTokens + 3);
+        }
+
         for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
@@ -555,7 +592,7 @@ public static class ModelWireEstimator
             }
         }
 
-        var framingTokens = checked((messages.Count * 3) + 3);
+        var framingTokens = checked((messages.Count * 3) + 3 + (providerInstructions is null ? 0 : 3));
         var wireInputTokens = checked(
             logicalTokens
             + tools.NativeToolTokens
@@ -569,6 +606,7 @@ public static class ModelWireEstimator
             NativeToolTokens = tools.NativeToolTokens,
             TextToolTokens = tools.TextToolTokens,
             FramingTokens = framingTokens,
+            ProviderInstructionTokens = providerInstructionTokens,
             OutputReserveTokens = outputReserveTokens,
             SectionTokens = new ReadOnlyDictionary<string, int>(sections),
         };

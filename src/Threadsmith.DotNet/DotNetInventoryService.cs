@@ -53,7 +53,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         var omissions = new List<string>();
         if (semanticProjects.Count > MaximumProjects)
         {
-            omissions.Add($"Project inventory was limited to {MaximumProjects} entries.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project inventory was limited to {MaximumProjects} entries."));
         }
 
         var centralVersions = ReadCentralVersions(repositoryRoot, omissions);
@@ -63,7 +64,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
             .OrderBy(project => project.Path, StringComparer.OrdinalIgnoreCase)];
         if (projects.Length == 0)
         {
-            omissions.Add("No projects are loaded for the selected semantic workspace.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "No projects are loaded for the selected semantic workspace."));
         }
 
         var repositoryRevision = await _gitQueries.GetRevisionAsync(
@@ -120,12 +122,14 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
             {
-                omissions.Add($"Could not inspect package metadata for {ToRelative(repositoryRoot, projectPath)}.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    $"Could not inspect package metadata for {ToRelative(repositoryRoot, projectPath)}."));
             }
         }
         else
         {
-            omissions.Add($"Project file is missing or exceeds 1 MiB: {ToRelative(repositoryRoot, projectPath)}.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project file is missing or exceeds 1 MiB: {ToRelative(repositoryRoot, projectPath)}."));
         }
 
         foreach (var package in semantic.PackageReferences.Where(package => !string.IsNullOrWhiteSpace(package)))
@@ -171,7 +175,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         {
             if (new FileInfo(path).Length > 1024 * 1024)
             {
-                omissions.Add("Directory.Packages.props exceeds the 1 MiB inventory limit.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Directory.Packages.props exceeds the 1 MiB inventory limit."));
                 return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             }
 
@@ -189,7 +194,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
-            omissions.Add("Directory.Packages.props could not be inspected.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Directory.Packages.props could not be inspected."));
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
     }

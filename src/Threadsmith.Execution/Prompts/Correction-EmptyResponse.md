@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: The previous model response ended without assistant text, a plan, or a tool call. Nothing was delivered to the user from that response. {{Reason}} Answer the user's request using the available conversation and tool evidence, or request a valid tool call if more evidence is required.

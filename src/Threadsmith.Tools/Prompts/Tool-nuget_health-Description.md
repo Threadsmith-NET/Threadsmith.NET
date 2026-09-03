@@ -1,0 +1,1 @@
+Inspects existing NuGet restore assets and optional trusted-source advisories.

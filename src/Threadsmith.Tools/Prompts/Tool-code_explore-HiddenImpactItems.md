@@ -1,0 +1,1 @@
+- _{{Count}} impact item{{PluralSuffix}} not shown._

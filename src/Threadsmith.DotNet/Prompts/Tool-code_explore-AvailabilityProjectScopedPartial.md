@@ -1,0 +1,1 @@
+The semantic workspace was loaded from one project ({{WorkspaceFileName}}); referenced projects may be metadata-only and upstream projects or tests are outside this result.

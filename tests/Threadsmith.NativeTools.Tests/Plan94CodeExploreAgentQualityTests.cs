@@ -528,8 +528,9 @@ public sealed class Plan94CodeExploreAgentQualityTests
     {
         await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
         var tool = new CodeExploreOutputFormattingTool(
-            new CodeExploreTool(fixture.Service),
-            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown));
+            new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
+            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+            TestPromptLoader.Instance);
         var query = "Explain how the semantic code exploration tools work, and specifically show me "
             + "FindDispatchImplementationSymbolsAsync.";
         const int modelEffectiveInputBudgetTokens = 6_000;
@@ -853,7 +854,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         }
 
         public AdvancedSemanticQueryService Service { get; }
@@ -1291,13 +1292,13 @@ public sealed class Plan94CodeExploreAgentQualityTests
                         ICodeExploreService codeExploreService = semanticService;
                         return
                         [
-                            new CodeExploreTool(codeExploreService),
-                            new FindSymbolTool(resolver),
-                            new FindReferencesTool(resolver),
-                            new FindImplementationsTool(resolver),
-                            new SymbolImpactTool(resolver),
-                            new CallHierarchyTool(resolver),
-                            new CSharpPatternSearchTool(resolver),
+                            new CodeExploreTool(codeExploreService, TestPromptLoader.Instance),
+                            new FindSymbolTool(resolver, TestPromptLoader.Instance),
+                            new FindReferencesTool(resolver, TestPromptLoader.Instance),
+                            new FindImplementationsTool(resolver, TestPromptLoader.Instance),
+                            new SymbolImpactTool(resolver, TestPromptLoader.Instance),
+                            new CallHierarchyTool(resolver, TestPromptLoader.Instance),
+                            new CSharpPatternSearchTool(resolver, TestPromptLoader.Instance),
                             new GeneratedCodeTool(),
                         ];
                     }

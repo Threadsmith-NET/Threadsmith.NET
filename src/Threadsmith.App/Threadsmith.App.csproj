@@ -43,6 +43,38 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Context\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Execution\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Tools\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.DotNet\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Skills\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Models\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Models.OpenAiCodex\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Mcp\Prompts\*.md" />
+    <None Include="@(ThreadsmithPromptAsset)"
+          Link="prompts/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateThreadsmithPromptAssetNames" BeforeTargets="PrepareForBuild;ComputeFilesToPublish">
+    <ItemGroup>
+      <_ThreadsmithPromptAssetName Include="@(ThreadsmithPromptAsset)">
+        <NormalizedName>$([System.String]::Copy('%(Filename)%(Extension)').ToUpperInvariant())</NormalizedName>
+      </_ThreadsmithPromptAssetName>
+    </ItemGroup>
+    <RemoveDuplicates Inputs="@(_ThreadsmithPromptAssetName->'%(NormalizedName)')">
+      <Output TaskParameter="Filtered" ItemName="_ThreadsmithUniquePromptAssetName" />
+    </RemoveDuplicates>
+    <PropertyGroup>
+      <_ThreadsmithPromptAssetCount>@(_ThreadsmithPromptAssetName->Count())</_ThreadsmithPromptAssetCount>
+      <_ThreadsmithUniquePromptAssetCount>@(_ThreadsmithUniquePromptAssetName->Count())</_ThreadsmithUniquePromptAssetCount>
+    </PropertyGroup>
+    <Error Condition="'$(_ThreadsmithPromptAssetCount)' != '$(_ThreadsmithUniquePromptAssetCount)'"
+           Text="Prompt asset filenames must be globally unique case-insensitively in the flat prompts deployment directory." />
+  </Target>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
   </ItemGroup>
 

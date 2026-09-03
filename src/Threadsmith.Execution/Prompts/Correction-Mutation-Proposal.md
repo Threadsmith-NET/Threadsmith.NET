@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: The mutation proposal was rejected before staging, approval, or execution. {{Reason}} Call propose_mutations exactly once using the advertised schema and the approved plan scope.

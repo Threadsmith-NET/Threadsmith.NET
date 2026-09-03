@@ -17,25 +17,26 @@ public sealed record DateTimeOutput(
 /// <summary>Returns the current UTC and host-local date/time.</summary>
 public sealed class DateTimeTool : Tool<DateTimeInput, DateTimeOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory
-        .Create<DateTimeInput, DateTimeOutput>(
-            "datetime",
-            "Returns the current UTC and local date/time with timezone information.",
-            ToolCategory.SystemInformation,
-            RepositoryTrustLevel.UntrustedInspection,
-            ApprovalLevel.None,
-            ToolSideEffect.ReadOnly,
-            TimeSpan.FromSeconds(2),
-            8 * 1024) with
-    {
-        DisplayName = "Date/Time",
-    };
-
+    private readonly ToolDefinition _definition;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="DateTimeTool"/> class.</summary>
-    public DateTimeTool(TimeProvider? timeProvider = null)
+    public DateTimeTool(IPromptLoader promptLoader, TimeProvider? timeProvider = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory
+            .Create<DateTimeInput, DateTimeOutput>(
+                "datetime",
+                promptLoader.Get(PromptFileNames.ToolDatetimeDescription),
+                ToolCategory.SystemInformation,
+                RepositoryTrustLevel.UntrustedInspection,
+                ApprovalLevel.None,
+                ToolSideEffect.ReadOnly,
+                TimeSpan.FromSeconds(2),
+                8 * 1024) with
+        {
+            DisplayName = "Date/Time",
+        };
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -259,28 +260,29 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 /// <summary>Runs a bounded C# expression or statement sequence in an isolated worker.</summary>
 public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory
-        .Create<CSharpScriptInput, CSharpScriptOutput>(
-            "csharp_script",
-            "Compiles and executes bounded C# in an isolated worker process.",
-            ToolCategory.CodeExecution,
-            RepositoryTrustLevel.FullyTrustedAutomation,
-            ApprovalLevel.None,
-            ToolSideEffect.ExecutesCode,
-            TimeSpan.FromSeconds(35),
-            7 * 1024 * 1024) with
-    {
-        DisplayName = "C# Script",
-        EnabledByDefault = false,
-        Idempotency = ToolIdempotency.NonIdempotent,
-    };
-
+    private readonly ToolDefinition _definition;
     private readonly ICSharpScriptEngine _engine;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptTool"/> class.</summary>
-    public CSharpScriptTool(ICSharpScriptEngine engine)
+    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory
+            .Create<CSharpScriptInput, CSharpScriptOutput>(
+                "csharp_script",
+                promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
+                ToolCategory.CodeExecution,
+                RepositoryTrustLevel.FullyTrustedAutomation,
+                ApprovalLevel.None,
+                ToolSideEffect.ExecutesCode,
+                TimeSpan.FromSeconds(35),
+                7 * 1024 * 1024) with
+        {
+            DisplayName = "C# Script",
+            EnabledByDefault = false,
+            Idempotency = ToolIdempotency.NonIdempotent,
+        };
         _engine = engine;
     }
 

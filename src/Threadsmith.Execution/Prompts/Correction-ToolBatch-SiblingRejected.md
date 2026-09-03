@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: This tool call was not executed because the sibling tool batch was rejected before execution. {{FailureSummary}} Re-emit the full intended batch with corrected arguments, or answer without tools.

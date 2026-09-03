@@ -16,11 +16,12 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 - `ApplicationComposition.cs` — evidence/conversation context, compaction/retrieval, session, repository, mutation, validation, approved-plan delegation, model-callable Explorer delegation/tool registration, governed skill catalog/workflow/tool registration, and shared TUI/headless command-dispatch composition.
 - `IntegrationComposition.cs` — optional extension startup plus application-lifetime MCP manager/transport/OAuth composition.
 - `ShellRunner.cs` — interactive/headless projection, exact `--mcp` routing, and process-global cancellation registration.
-- `Threadsmith.App.csproj` — executable references and configuration-example deployment; canonical release assembly is owned by `eng/release/`.
+- `Threadsmith.App.csproj` — executable references, configuration-example deployment, and explicit flattening of every owning project's prompt assets into `prompts/`; canonical release assembly is owned by `eng/release/`.
 
 ## Local Contracts
 
 - `Program.Main` reads as the startup sequence; move cohesive phases into descriptively named files when doing so clarifies ordering, testability, or resource ownership.
+- Startup eagerly creates exactly one deployed prompt loader from `AppContext.BaseDirectory` before prompt consumers are composed, then passes that immutable instance through constructor injection. Missing or invalid catalog content fails before provider/tool activity; no consumer receives an override or fallback seam.
 - Phase state is immutable where practical. Resource-owning classes explicitly dispose in reverse dependency order and clean up partial initialization failures.
 - Configuration parsing and command-line parsing remain independently testable and avoid startup side effects. Malformed JSON configuration fails startup with exit code 2 and one concise actionable file/parser-location message on standard error. The process entry boundary catches every otherwise-unhandled ordinary exception, emits one bounded single-line message without a stack trace, and returns a nonzero exit code; cancellation returns 130. Startup compiles `tui:showOperationDurations=true` into the normal layered configuration; TUI binding takes one immutable effective snapshot and malformed values warn while recovering to that default.
 - Authenticated Codex startup discovery passes one bounded token through credential loading or refresh and metadata-cache loading because the shared model `HttpClient` intentionally has no global timeout. Optional refresh, network, response-validation, and timeout failures recover as unavailable Codex authentication so other configured providers can still start.

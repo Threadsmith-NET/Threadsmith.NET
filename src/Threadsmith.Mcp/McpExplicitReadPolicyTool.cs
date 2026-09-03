@@ -9,10 +9,14 @@ public sealed class McpExplicitReadPolicyTool : ITool
     private readonly McpConnectionProfile _profile;
 
     /// <summary>Initializes a new instance of the <see cref="McpExplicitReadPolicyTool"/> class as a policy probe for one immutable capability descriptor.</summary>
-    public McpExplicitReadPolicyTool(McpConnectionProfile profile, McpImportedCapability capability)
+    public McpExplicitReadPolicyTool(
+        McpConnectionProfile profile,
+        McpImportedCapability capability,
+        IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(prompts);
         _profile = profile;
         Definition = new ToolDefinition
         {
@@ -21,7 +25,7 @@ public sealed class McpExplicitReadPolicyTool : ITool
             Source = $"MCP:{profile.Id}",
             EnabledByDefault = true,
             Version = $"mcp-explicit-read-1-{capability.Digest}",
-            Description = "Authorizes an explicit MCP resource or prompt read.",
+            Description = prompts.Get(PromptFileNames.AdapterMcpExplicitReadPolicyDescription),
             Category = ToolCategory.RepositoryInspection,
             InputSchema = new ToolSchema("McpExplicitRead", 1, "{\"type\":\"object\"}"),
             OutputSchema = new ToolSchema("McpExplicitReadPolicyResult", 1, "{\"type\":\"object\"}"),

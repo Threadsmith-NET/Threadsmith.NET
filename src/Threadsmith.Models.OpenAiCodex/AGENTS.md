@@ -10,6 +10,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 - Protected Codex endpoint/request headers and Responses SSE normalization.
 - Independent browser/device OAuth and user-owned token cache.
 - Sanitized parity fixtures derived from the reviewed Pi 0.84.1 specification.
+- `Prompts/Provider-OpenAiCodex-Instructions.md` — the exact native Responses instruction body deployed through the shared catalog.
 
 ## Local Contracts
 
@@ -19,6 +20,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 - Provider maximum output remains distinct from request output reserve. The native Codex request omits the unsupported `max_output_tokens` field; Threadsmith validates and enforces its host-owned output ceiling independently.
 - Errors and diagnostics never include access tokens, refresh tokens, authorization codes, or raw response bodies that may contain them.
 - The provider reasserts the selected profile's sensitive-data policy before constructing or dispatching a request.
+- Native Responses maps the exact request-owned provider instruction to `instructions` once. The adapter neither owns an inline fallback nor rereads the asset; host estimation/admission has already counted the same content before dispatch.
 - User-owned credential and model-metadata caches are fully validated before projection; malformed payloads recover as unauthenticated or cache-missing state.
 - Authenticated model discovery uses the source-backed Codex backend model `slug` as the provider identifier, keeps display names optional, sends a reviewed Codex model-catalog compatibility `client_version` rather than Threadsmith's product version, and never logs raw response bodies; live response drift needs redacted schema evidence before adding aliases.
 - A pre-stream 401/403 may force one generation-fenced credential refresh and safe replay. Transient 408/429/502/503/504 responses honor the selected profile's bounded attempt count and cancellation-aware delay.

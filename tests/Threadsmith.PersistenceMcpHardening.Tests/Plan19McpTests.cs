@@ -74,7 +74,8 @@ public static class McpAdapterTests
             _ => transport,
             secretStore,
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -108,7 +109,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -129,7 +131,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -154,7 +157,8 @@ public static class McpAdapterTests
             _ => transport,
             secretStore,
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -181,7 +185,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = new McpConnectionProfile
         {
             Id = "malformed-scope",
@@ -208,7 +213,8 @@ public static class McpAdapterTests
             _ => transport,
             new SecretResolver([new FixedSecretProvider()]),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = new McpConnectionProfile
         {
             Id = "local server",
@@ -233,7 +239,8 @@ public static class McpAdapterTests
             _ => transport,
             new SecretResolver([new MissingSecretProvider()]),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = new McpConnectionProfile
         {
             Id = "missing-secret",
@@ -280,7 +287,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -317,7 +325,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {
@@ -353,7 +362,8 @@ public static class McpAdapterTests
             _ => transport,
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
 
         var profile = new McpConnectionProfile
         {

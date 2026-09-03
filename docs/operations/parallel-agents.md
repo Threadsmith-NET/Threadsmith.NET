@@ -68,6 +68,10 @@ Headless automation uses the same command dispatcher:
 - `CancelDelegationCommand`
 - `CancelAgentAssignmentCommand`
 
+## Deployed delegation prompts
+
+The parent `delegate_agents` description and joined-result wording, together with delegated-child host/output policy, task/evidence framing, correction, progress, and steering guidance, are loaded from the application-wide deployed [prompt catalog](prompts.md). The same immutable startup snapshot serves parent and child request paths. Edits require a process restart and may change wording or token cost, but they cannot change child count, depth, role, model selection, tool snapshots, trust, paths, network, secrets, budgets, deadlines, cancellation, finding admission, parent evidence admission, or join behavior. Those decisions and the `delegate_agents` and `agent-findings/1` schemas remain compiled host contracts.
+
 ## Configuration
 
 The repository example documents these conservative defaults:

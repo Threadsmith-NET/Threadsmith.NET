@@ -294,7 +294,7 @@ public sealed class SkillSubsystemTests
     {
         // Arrange
         var workflows = new CapturingWorkflowOrchestrator();
-        var tool = new InvokeSkillTool(workflows);
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
         var context = new ToolExecutionContext(
             ToolInvocationId.New(),
             SessionId.New(),
@@ -343,7 +343,8 @@ public sealed class SkillSubsystemTests
     {
         // Arrange
         var model = new CapturingSkillToolModelProvider();
-        var registry = new ToolRegistry([new CodeExploreTool(new ThrowingCodeExploreService())]);
+        var registry = new ToolRegistry(
+            [new CodeExploreTool(new ThrowingCodeExploreService(), TestPromptLoader.Instance)]);
         var runner = new ModelSkillProcedureRunner(
             model,
             registry,
@@ -358,7 +359,8 @@ public sealed class SkillSubsystemTests
                     TrustLevel = request.Trust,
                     RequestedBy = "skill-test",
                 });
-            });
+            },
+            TestPromptLoader.Instance);
         var profileId = new ModelProfileId(Guid.NewGuid());
         var request = new SkillInvocationRequest
         {
@@ -486,6 +488,7 @@ public sealed class SkillSubsystemTests
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
             new FixedProcedureRunner(ValidPlanJson()),
+            TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(new SkillInvocationHostContext
             {
@@ -515,7 +518,9 @@ public sealed class SkillSubsystemTests
         // Assert
         Assert.Equal(SkillInvocationStatus.AwaitingHost, waiting.Status);
         Assert.Equal(SkillHostActionKind.ProposePlan, Assert.Single(waiting.HostActions).Kind);
+        Assert.Equal("host must resolve ProposePlan", waiting.Checkpoint.NextAction);
         Assert.Equal(SkillInvocationStatus.Completed, completed.Status);
+        Assert.Equal("inspect authoritative skill outcome", completed.Checkpoint.NextAction);
         Assert.Equal(2, completed.Checkpoint.Steps.Count);
         Assert.Equal(completed.Checkpoint, await state.GetCheckpointAsync(invocationId));
         await orchestrator.DisposeAsync();
@@ -547,6 +552,7 @@ public sealed class SkillSubsystemTests
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
             new FixedProcedureRunner(ValidPlanJson()),
+            TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(current),
             events);
@@ -597,6 +603,7 @@ public sealed class SkillSubsystemTests
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
             new FixedProcedureRunner(ValidPlanJson()),
+            TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(current),
             events);
@@ -663,6 +670,7 @@ public sealed class SkillSubsystemTests
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
             new FixedProcedureRunner("{}"),
+            TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(new SkillInvocationHostContext
             {

@@ -98,7 +98,8 @@ public sealed class SdkHttpTransportTests
             },
             new DictionarySecretStore(),
             new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
         {
             OAuth = new McpOAuthOptions { Enabled = true, ClientId = "threadsmith", RedirectPort = 8400 },
@@ -126,7 +127,8 @@ public sealed class SdkHttpTransportTests
             new NoOpTransport(),
             profile,
             capability,
-            new SecretOutputSanitizer());
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
         var input = tool.DeserializeInput("{}");
         var policy = new DefaultPolicyEngine();
 
@@ -260,7 +262,8 @@ public sealed class SdkHttpTransportTests
             _ => new SdkHttpTransport(secretStore, NullLoggerFactory.Instance),
             secretStore,
             sanitizer,
-            NullLogger<McpAdapter>.Instance);
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
         var profile = CreateProfile(endpoint, mode);
 
         var connection = await adapter.ConnectAsync(profile);

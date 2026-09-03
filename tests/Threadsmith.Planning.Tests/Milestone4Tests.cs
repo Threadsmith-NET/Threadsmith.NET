@@ -1,4 +1,4 @@
-﻿namespace Threadsmith.Planning.Tests;
+namespace Threadsmith.Planning.Tests;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;

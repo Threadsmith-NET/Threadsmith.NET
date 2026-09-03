@@ -1,6 +1,4 @@
-global using TestPromptLoader = Threadsmith.Tests.TestPromptLoader;
-
-namespace Threadsmith.Tests;
+namespace Threadsmith.ContextCaching.Tests;
 
 using System.Collections.ObjectModel;
 using System.Text;

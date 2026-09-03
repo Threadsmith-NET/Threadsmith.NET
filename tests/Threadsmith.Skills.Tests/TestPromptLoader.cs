@@ -1,6 +1,6 @@
-global using TestPromptLoader = Threadsmith.Tests.TestPromptLoader;
+global using TestPromptLoader = Threadsmith.Skills.Tests.TestPromptLoader;
 
-namespace Threadsmith.Tests;
+namespace Threadsmith.Skills.Tests;
 
 using System.Collections.ObjectModel;
 using System.Text;

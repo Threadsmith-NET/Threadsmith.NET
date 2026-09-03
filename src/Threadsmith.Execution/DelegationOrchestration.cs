@@ -993,7 +993,7 @@ public sealed class DelegationCoordinator :
             [],
             "queue validated child assignments",
             revisions.Next());
-        AgentRunOutcome[] observedOutcomes = queuedOutcomes;
+        var observedOutcomes = queuedOutcomes;
         try
         {
             await SaveRequiredAsync(accepted, cancellationToken);

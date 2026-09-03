@@ -2077,8 +2077,8 @@ public sealed class ConversationalShell
                     _ = await controller.SubmitAsync(submittedText, operation.Token);
                     var waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
-                    IActiveRunInputSession? activeInput = _surface.BeginActiveRunInput(_timeProvider);
-                    Task<ActiveRunInputSignal>? activeInputTask = activeInput?.ReadAsync(operation.Token);
+                    var activeInput = _surface.BeginActiveRunInput(_timeProvider);
+                    var activeInputTask = activeInput?.ReadAsync(operation.Token);
                     Task<RunSteeringPauseWaitResult>? steeringWaitTask = null;
                     Task<RunSteeringPaused>? steeringRenderedTask = null;
                     CancellationTokenSource? steeringRenderedCancellation = null;

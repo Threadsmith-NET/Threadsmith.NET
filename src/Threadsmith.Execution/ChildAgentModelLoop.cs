@@ -90,7 +90,7 @@ internal sealed class ChildAgentModelLoop
         var deliveredEvidenceIds = initialRequest.DeliveredEvidenceIds.ToHashSet();
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
         var rejectedResponseDigests = new HashSet<string>(StringComparer.Ordinal);
-        ModelWireEstimate? initialWireEstimate = initialRequest.WireEstimate;
+        var initialWireEstimate = initialRequest.WireEstimate;
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var parser = new ChildAgentFindingParser(_options, _sanitizer);
         var stopwatch = Stopwatch.StartNew();

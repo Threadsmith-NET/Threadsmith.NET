@@ -1,7 +1,5 @@
 namespace Threadsmith.DotNet;
 
-using Threadsmith.Core;
-
 /// <summary>Matches natural-language concepts against catalog-derived declaration-name segments.</summary>
 internal static class NaturalLanguageNameSegmentMatcher
 {

@@ -10,6 +10,7 @@ This guide documents the currently implemented user-facing behavior. Features de
 2. [Starting Threadsmith](#starting-threadsmith)
    - [Customizing deployed prompts](#customizing-deployed-prompts)
 3. [Opening and initializing a repository](#opening-and-initializing-a-repository)
+   - [Keeping the semantic workspace current](#keeping-the-semantic-workspace-current)
 4. [Trust levels](#trust-levels)
 5. [Using the interactive terminal](#using-the-interactive-terminal)
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
@@ -179,6 +180,20 @@ Initialization creates a minimal UTF-8 `.threadsmith/config.json` containing neu
 
 Declining leaves the repository unchanged.
 
+### Keeping the semantic workspace current
+
+After a solution or supported project is loaded, Threadsmith monitors relevant files beneath the active repository. A short bounded settling interval coalesces editor save bursts before one workspace-scoped refresh begins. An edit to an existing loaded C# document is applied incrementally when its settled path still exists and its identity and project membership remain stable, including editors that save by atomically replacing the same file. Actual document membership changes, project/solution files, build props and targets, analyzer configuration, uncertain changes, and watcher recovery use a complete semantic reload.
+
+An externally attributed cycle prints `External changes detected; updating semantic model...` once, followed by one completion or actionable failure. Watcher recovery instead starts with `External changes require semantic recovery; updating semantic model...` and uses the same single terminal projection. The refresh uses the same serialized console boundary as the composer, so background output does not submit, clear, or discard a draft. Compiler diagnostics may reduce the resulting semantic confidence without making refresh infrastructure fail.
+
+The semantic update itself runs without waiting for Threadsmith to regain focus or for composer input. When the composer is empty, refresh lifecycle output automatically closes and reopens that empty prompt, so the update appears without a keypress or other console interaction. Once any draft text exists, including whitespace, lifecycle output waits until the draft is submitted, cancelled, or cleared back to empty; the refresh never submits, clears, or discards the draft. Focusing the window alone does not trigger or release semantic work. A submitted model request still waits for the already-running refresh before a run is created.
+
+A model request submitted while relevant changes are settling or refreshing waits for the same single-flight refresh before a run identity, budget, conversation entry, model call, or tool call is created. A refresh failure leaves the workspace dirty and rejects new model requests until a later change, retry, or manual refresh establishes current state. Non-model commands such as `/help`, `/quit`, and `/semantic_refresh` remain local.
+
+Run `/semantic_refresh` to force and await one complete refresh even when the workspace appears clean. It reports the changed-file count, duration, and resulting confidence, creates no model run, and returns a clear error if no repository and solution are bound. Cancelling the waiter does not corrupt or cancel refresh work already shared with another trigger.
+
+See [Semantic refresh](operations/semantic-refresh.md) for the full command behavior and the exact external-edit trigger and ignore rules.
+
 ## Trust levels
 
 Trust controls what the host may inspect or execute. It is separate from model capability, tool availability, and per-invocation approval.
@@ -207,35 +222,36 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 | Command | Purpose |
 |---|---|
-| `/open [path]` | Open or switch repositories. |
-| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
-| `/tools` | Browse and toggle non-essential repository tools. |
-| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/clone` | Create and activate an independent governed copy of the current session. |
 | `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
+| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
+| `/context mode` | Report the effective cross-turn conversation mode. |
+| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
+| `/extensions` | Browse, load, and unload discovered extensions. |
+| `/help` | Display available commands. |
+| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
+| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
+| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
+| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
+| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
+| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
+| `/models` | Select and persist the active repository provider/model. |
+| `/new` | Checkpoint the current session and activate a fresh empty session. |
+| `/open [path]` | Open or switch repositories. |
 | `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
 | `/policy [name|current]` | Select or report the mutation approval policy for exact staged diffs. |
-| `/extensions` | Browse, load, and unload discovered extensions. |
-| `/new` | Checkpoint the current session and activate a fresh empty session. |
-| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
-| `/clone` | Create and activate an independent governed copy of the current session. |
-| `/models` | Select and persist the active repository provider/model. |
+| `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
-| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
+| `/semantic_refresh` | Force and await a complete semantic refresh without creating a model run. |
 | `/theme` | Select a theme. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
-| `/context mode` | Report the effective cross-turn conversation mode. |
-| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
-| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
-| `/context compact` | Request bounded compaction at a safe turn boundary. |
-| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
-| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
-| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
-| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
-| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
-| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
-| `/help` | Display available commands. |
-| `/quit` | Exit cleanly. |
+| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/tools` | Browse and toggle non-essential repository tools. |
+| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
 
 
 ### Durable session lifecycle
@@ -1396,7 +1412,7 @@ See [Lifecycle hook operations](operations/lifecycle-hooks.md), [hook authoring]
 
 ## Headless and automated use
 
-The headless adapter uses the same command dispatcher and policy path as the TUI. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
+The headless adapter uses the same command dispatcher and policy path as the TUI. `ForceSemanticRefreshAsync` dispatches `ForceSemanticRefreshCommand` and returns the same structured refresh result as `/semantic_refresh`; it does not create a model run. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
 
 Headless mode writes model/tool activity to standard output and uses these primary exit codes:
 
@@ -1575,6 +1591,10 @@ Pass `--solution <repository-relative-path>`. A successful selection is remember
 
 Confirm the file still exists beneath the repository and that `.threadsmith/config.json` contains nested `solution.path`. Missing entries are cleared automatically; escaping, prohibited, or linked paths are rejected.
 
+### Semantic refresh failed or requests remain blocked
+
+Run `/semantic_refresh` after confirming the selected solution still exists and the repository remains readable at its current trust level. The command forces a complete reload and reports bounded failure detail without exposing source or exception dumps. Compiler errors can yield a successful reduced-confidence refresh; repeated infrastructure failure leaves the workspace dirty so a model request cannot start from known-stale semantics. Reopen the repository when its root or selected solution changed.
+
 ### A tool is missing
 
 Check, in order:
@@ -1627,6 +1647,7 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 ## Further reference
 
 - [Opening a repository](operations/opening-a-repository.md)
+- [Semantic refresh](operations/semantic-refresh.md)
 - [Session lifecycle, resume, and clone](operations/session-lifecycle.md)
 - [Interactive commands and keys](operations/keyboard-shortcuts.md)
 - [Tool runtime operations](operations/tools.md)

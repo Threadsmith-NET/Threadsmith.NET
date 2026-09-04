@@ -1010,6 +1010,59 @@ public static class Milestone1Tests
         Assert.Equal(["status", "read"], surface.Operations);
     }
 
+    /// <summary>An empty-composer output yield rebuilds status before the shell reads the composer again.</summary>
+    [Fact]
+    public static async Task ConversationalShell_IdleOutputYield_RendersStatusBeforeNextComposer()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(
+            ["/quit"],
+            initialInput: new ConsoleInput(
+                false,
+                string.Empty,
+                CancellationToken.None,
+                ConsoleInputKind.IdleOutputYield));
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, surface.SessionStatuses.Count);
+        Assert.Equal(["status", "read", "status", "read"], surface.Operations);
+        Assert.DoesNotContain("Input cancelled", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Presentation-only yields cannot cancel or choose a plan or mutation review action.</summary>
+    /// <param name="prompt">Review prompt that must be presented again after background output.</param>
+    /// <param name="response">User response returned after the presentation-only yield.</param>
+    [Theory]
+    [InlineData("Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n", "1")]
+    [InlineData("Mutation review: 1 apply approved set, 2 discard\n", "2")]
+    public static async Task ConversationalShell_SecondaryReviewYield_RetriesWithoutChoosing(
+        string prompt,
+        string response)
+    {
+        var surface = new FakeConsoleSurface(
+            [response],
+            initialInput: new ConsoleInput(
+                false,
+                string.Empty,
+                CancellationToken.None,
+                ConsoleInputKind.IdleOutputYield));
+        var input = await ConsoleInputReader.ReadSecondaryAsync(
+            surface,
+            prompt,
+            TuiTextRole.Status,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(input.IsSubmitted);
+        Assert.Equal(response, input.Text);
+        Assert.Equal(2, surface.Writes.Count(write => string.Equals(write, prompt, StringComparison.Ordinal)));
+        Assert.Equal(["read", "read"], surface.Operations);
+    }
+
     /// <summary>The inline shell routes lifecycle-hook management locally through /hooks.</summary>
     [Fact]
     public static async Task ConversationalShell_HooksCommand_ListsConfiguredHandlers()
@@ -1539,6 +1592,7 @@ public static class Milestone1Tests
             "/quit",
             "/reasoning [level]",
             "/resume [id]",
+            "/semantic_refresh",
             "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]",
             "/theme [id|current]",
             "/thinking [on|off]",
@@ -4132,15 +4186,26 @@ public static class Milestone1Tests
             IEnumerable<int>? selections = null,
             int statusWidth = 120,
             bool suppressSessionStatus = false,
-            Exception? statusFailure = null)
+            Exception? statusFailure = null,
+            ConsoleInput? initialInput = null)
         {
             _statusWidth = statusWidth;
             _suppressSessionStatus = suppressSessionStatus;
             _statusFailure = statusFailure;
-            _inputs = new Queue<ConsoleInput>(inputs.Select(text => new ConsoleInput(
+            _inputs = new Queue<ConsoleInput>();
+            if (initialInput is not null)
+            {
+                _inputs.Enqueue(initialInput);
+            }
+
+            foreach (var input in inputs.Select(text => new ConsoleInput(
                 true,
                 text,
-                CancellationToken.None)));
+                CancellationToken.None)))
+            {
+                _inputs.Enqueue(input);
+            }
+
             if (selections is not null)
             {
                 foreach (var selection in selections)
@@ -4582,6 +4647,40 @@ public static class Milestone1Tests
             new ExtensionUnloadFailed(sessionId, occurredAt, ExtensionId.New(), "reason"),
             new SemanticConfidenceChanged(sessionId, occurredAt, "FullSemantic"),
             new SemanticLoadCompleted(sessionId, occurredAt, WorkspaceId.New(), "FullSemantic"),
+            new SemanticRefreshStarted(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.ExternalChange,
+                SemanticRefreshMode.Incremental,
+                ChangedFileCount: 1,
+                DirtyVersion: 2),
+            new SemanticRefreshCompleted(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.Manual,
+                SemanticRefreshMode.Full,
+                ChangedFileCount: 1,
+                DirtyVersion: 2,
+                AppliedVersion: 2,
+                SemanticConfidenceLevel.FullSemantic,
+                ElapsedMilliseconds: 12),
+            new SemanticRefreshFailed(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.Recovery,
+                SemanticRefreshMode.Full,
+                ChangedFileCount: 1,
+                DirtyVersion: 3,
+                AppliedVersion: 2,
+                SemanticRefreshFailureKind.Infrastructure,
+                "safe reason",
+                ElapsedMilliseconds: 12),
             new RunTransitioned(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.EvidenceCollection),
             new RunTransitionFailed(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.Testing, "reason"),
             new ModelOutputObserved(sessionId, occurredAt, "text"),

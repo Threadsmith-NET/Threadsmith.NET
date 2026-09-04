@@ -232,6 +232,8 @@ public static class Program
                 {
                     SemanticEngines = foundation.SemanticEngines,
                     SemanticMutations = foundation.SemanticMutations,
+                    SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
+                    SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
                 },
                 Integration = new IntegrationCompositionInputs
                 {

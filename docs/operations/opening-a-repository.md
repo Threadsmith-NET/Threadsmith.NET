@@ -21,6 +21,8 @@ Previously persisted `TrustedBuild` or higher trust is reused on reopen from the
 
 `TrustedRead` intentionally produces `TextOnly` semantic confidence because it does not evaluate MSBuild. Choose `TrustedBuild` initially or upgrade a persisted read grant when compiler-backed evaluation is required.
 
+After a solution is selected, Threadsmith monitors relevant confined repository changes and refreshes the shared semantic workspace after a bounded settling interval. Requests wait for pending refresh before a model run can start. Use `/semantic_refresh` to force and await a complete refresh without invoking the model; see [Semantic refresh](semantic-refresh.md) for incremental/full classification, background output, headless parity, and recovery.
+
 ## Headless CLI
 
 Inspect candidates without granting read trust:
@@ -51,3 +53,4 @@ The supported trust names are `UntrustedInspection`, `TrustedRead`, `TrustedBuil
 - Baselines include source and project/build metadata beneath configured `editableRoots`, excluding `.git`, `bin`, `obj`, prohibited paths, and reparse points.
 - `prohibitedPaths` uses slash-normalized glob syntax: `*` and `?` stay within one path segment, `**` spans directory boundaries, and a trailing `/` excludes all descendants.
 - Repository configuration is treated as data and is never executed.
+- Filesystem notifications do not grant read authority. Refresh revalidates confinement, prohibited paths, and reparse-point policy before reading a candidate.

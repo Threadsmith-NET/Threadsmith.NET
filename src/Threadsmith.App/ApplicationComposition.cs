@@ -282,7 +282,12 @@ internal static class ApplicationComposition
             conversationToolSnapshots: conversationToolSnapshots,
             steering: runSteering,
             correctiveMessages: correctiveMessages,
-            prompts: host.PromptLoader);
+            prompts: host.PromptLoader,
+            semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator);
+
+        // The foundation-owned coordinator may prepare work before session composition, but publication
+        // delegates to this sole run-lifetime authority once it exists.
+        semantic.SemanticRefreshPublicationGate.Attach(sessionApplication);
 
         // Mutation coordination is shared across repository lifecycle, proposal application, and dispatch.
         var repositoryBindings = new RepositoryScopedBindingCoordinator(
@@ -296,7 +301,8 @@ internal static class ApplicationComposition
         mutationCoordinator = new TransactionalWorkspaceCoordinator(
             host.Events,
             mutationApprovalPolicy: approvalPolicy,
-            hooks: tools.HookCoordinator);
+            hooks: tools.HookCoordinator,
+            semanticMutationAttribution: semantic.SemanticRefreshCoordinator);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         try
@@ -609,6 +615,7 @@ internal static class ApplicationComposition
             var handlers = new List<object>
             {
                 sessionApplication,
+                semantic.SemanticRefreshCoordinator,
                 sessionLifecycle,
                 tools.CodeExploreOutputOptions,
                 hookApplication,
@@ -952,6 +959,12 @@ internal sealed record SemanticCompositionInputs
 
     /// <summary>Gets semantic mutation operations backed by loaded workspaces.</summary>
     internal required SemanticMutationEngine SemanticMutations { get; init; }
+
+    /// <summary>Gets the single workspace semantic-refresh authority.</summary>
+    internal required SemanticRefreshCoordinator SemanticRefreshCoordinator { get; init; }
+
+    /// <summary>Gets the one-time router that connects refresh publication to active-run lifetime.</summary>
+    internal required SemanticRefreshPublicationGateRouter SemanticRefreshPublicationGate { get; init; }
 }
 
 /// <summary>The single MCP lifecycle authority and already-composed model selection and provider services.</summary>

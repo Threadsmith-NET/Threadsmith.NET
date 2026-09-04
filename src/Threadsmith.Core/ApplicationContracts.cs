@@ -37,7 +37,7 @@ public interface ICommandMiddleware
 /// <summary>Creates a session.</summary>
 public sealed record CreateSessionCommand(string Name) : ICommand<SessionId>;
 
-/// <summary>Starts a user request and returns its run identity immediately.</summary>
+/// <summary>Waits for semantic freshness, then starts a user request and returns its run identity.</summary>
 public sealed record SubmitRequestCommand(
     SessionId SessionId,
     string Request,

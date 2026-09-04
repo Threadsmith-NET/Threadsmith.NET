@@ -1,6 +1,8 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using System.Text;
 using Microsoft.Extensions.Configuration;
+using PrettyPrompt.Consoles;
 using Spectre.Console;
 using Threadsmith.Tui;
 using Xunit;
@@ -321,6 +323,85 @@ public static class TuiMarkdownRenderingTests
         Assert.Contains("Plan review:", writer.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>An empty live composer yields and redraws around background output without a physical key.</summary>
+    [Fact]
+    public static async Task WriteOutput_EmptyComposer_RendersWithoutPhysicalInput()
+    {
+        using var writer = new StringWriter();
+        var ansiConsole = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(writer),
+        });
+        var promptConsole = new QueuePromptConsole();
+        var surface = new PrettyPromptConsoleSurface(
+            isOutputRedirected: false,
+            ansiConsole: ansiConsole,
+            promptConsole: promptConsole);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var read = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
+        await promptConsole.PollingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var write = surface.WriteAsync(
+            "External changes detected; updating semantic model...\n",
+            TuiTextRole.Status,
+            cancellation.Token);
+
+        await write.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Contains("External changes detected", writer.ToString(), StringComparison.Ordinal);
+        var yielded = await read.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(yielded.IsSubmitted);
+        Assert.Equal(ConsoleInputKind.IdleOutputYield, yielded.Kind);
+
+        var resumedRead = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
+        await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
+        var input = await resumedRead.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(input.IsSubmitted);
+        Assert.Empty(input.Text);
+    }
+
+    /// <summary>A draft holds background output until deleting its last character makes the composer empty.</summary>
+    [Fact]
+    public static async Task WriteOutput_DraftClearedToEmpty_RendersWithoutSubmission()
+    {
+        using var writer = new StringWriter();
+        var ansiConsole = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(writer),
+        });
+        var promptConsole = new QueuePromptConsole();
+        var surface = new PrettyPromptConsoleSurface(
+            isOutputRedirected: false,
+            ansiConsole: ansiConsole,
+            promptConsole: promptConsole);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var read = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
+        await promptConsole.PollingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await promptConsole.EnqueueAsync(CreateKey('a', ConsoleKey.A));
+
+        var write = surface.WriteAsync(
+            "Semantic model updated (1 file).\n",
+            TuiTextRole.Status,
+            cancellation.Token);
+        Assert.False(write.IsCompleted);
+        await promptConsole.EnqueueAsync(CreateKey('\b', ConsoleKey.Backspace));
+
+        await write.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Contains("Semantic model updated", writer.ToString(), StringComparison.Ordinal);
+        var yielded = await read.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(yielded.IsSubmitted);
+        Assert.Equal(ConsoleInputKind.IdleOutputYield, yielded.Kind);
+
+        var resumedRead = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
+        await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
+        var input = await resumedRead.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(input.IsSubmitted);
+        Assert.Empty(input.Text);
+    }
+
     /// <summary>Shutdown flushes an incomplete Markdown answer as source rather than parsing it as complete.</summary>
     [Fact]
     public static void FlushFinalAnswerForShutdown_IncompleteMarkdown_UsesSourceFallback()
@@ -484,6 +565,143 @@ public static class TuiMarkdownRenderingTests
         {
             WasFlushed = true;
             return base.FlushAsync();
+        }
+    }
+
+    private static ConsoleKeyInfo CreateKey(char character, ConsoleKey key)
+    {
+        return new ConsoleKeyInfo(character, key, shift: false, alt: false, control: false);
+    }
+
+    private sealed class QueuePromptConsole : IConsole
+    {
+        private readonly Lock _gate = new();
+        private readonly Queue<(ConsoleKeyInfo Key, TaskCompletionSource Read)> _keys = [];
+
+        public TaskCompletionSource PollingStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CursorTop => 0;
+
+        public int BufferWidth => 120;
+
+        public int WindowHeight => 40;
+
+        public int WindowTop => 0;
+
+        public bool KeyAvailable
+        {
+            get
+            {
+                PollingStarted.TrySetResult();
+                lock (_gate)
+                {
+                    return _keys.Count > 0;
+                }
+            }
+        }
+
+        public bool IsErrorRedirected => false;
+
+        public bool CaptureControlC { get; set; }
+
+#pragma warning disable CS0067 // Required by PrettyPrompt's console contract.
+        public event ConsoleCancelEventHandler? CancelKeyPress;
+#pragma warning restore CS0067
+
+        public Task EnqueueAsync(ConsoleKeyInfo key)
+        {
+            var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                _keys.Enqueue((key, read));
+            }
+
+            return read.Task;
+        }
+
+        public ConsoleKeyInfo ReadKey(bool intercept)
+        {
+            (ConsoleKeyInfo Key, TaskCompletionSource Read) entry;
+            lock (_gate)
+            {
+                entry = _keys.Dequeue();
+            }
+
+            entry.Read.TrySetResult();
+            return entry.Key;
+        }
+
+        public void Clear()
+        {
+        }
+
+        public void InitVirtualTerminalProcessing()
+        {
+        }
+
+        public void SetNewlineAutoReturn(bool enabled)
+        {
+        }
+
+        public void SetModifyOtherKeys(bool enabled)
+        {
+        }
+
+        public void Write(StringBuilder value, bool hideCursor)
+        {
+        }
+
+        public void WriteLine(StringBuilder value, bool hideCursor)
+        {
+        }
+
+        public void WriteError(StringBuilder value, bool hideCursor)
+        {
+        }
+
+        public void WriteErrorLine(StringBuilder value, bool hideCursor)
+        {
+        }
+
+        public void Write(string? value)
+        {
+        }
+
+        public void WriteLine(string? value)
+        {
+        }
+
+        public void WriteError(string? value)
+        {
+        }
+
+        public void WriteErrorLine(string? value)
+        {
+        }
+
+        public void Write(ReadOnlySpan<char> value)
+        {
+        }
+
+        public void WriteLine(ReadOnlySpan<char> value)
+        {
+        }
+
+        public void WriteError(ReadOnlySpan<char> value)
+        {
+        }
+
+        public void WriteErrorLine(ReadOnlySpan<char> value)
+        {
+        }
+
+        public void ShowCursor()
+        {
+        }
+
+        public void HideCursor()
+        {
         }
     }
 

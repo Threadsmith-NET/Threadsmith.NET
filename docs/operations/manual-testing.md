@@ -17,13 +17,13 @@ The current directory is the default repository. Use `--repository`, `--trust`, 
 - Composer: the prompt is `<current-repository-name> >` and changes after `/open`. `Enter` submits, `Shift+Enter` inserts a newline, `Ctrl+V` performs bulk paste, and `Ctrl+C` cancels input or active work when the terminal has no native selection.
 - Repository startup: the current directory opens automatically. A single solution selects automatically; multiple solutions require explicit selection.
 - Startup cancellation: Cancel in a trust, upgrade, or solution selector exits before the composer; cancelling an in-session `/open` remains non-terminal.
-- Host commands: `/open [path]`, `/trust [inspect|read|build|mutation]`, `/help`, and `/quit`. Unknown slash commands fail locally and never reach the model.
+- Host commands include `/help`, `/open [path]`, `/quit`, `/semantic_refresh`, and `/trust [inspect|read|build|mutation]`. Unknown slash commands fail locally and never reach the model. `/semantic_refresh` forces a complete reload through the shared coordinator without creating a model run.
 - Trust: Trusted Read permits content inventory without repository execution. Trusted Build warns that repository code may execute. Trusted Mutation additionally permits explicitly approved confined changes. Persisted higher trust is not downgraded.
 - Review: structured plan and mutation decisions use sequential fail-closed prompts backed by application commands.
 - Headless parity: positional text submits a request. With no positional request, repository discovery uses `--repository` or the current directory.
 
 ## Present but not interactive yet
 
-- Dedicated build, diagnostic, test, extension, model-selection, reload, and session-resume commands arrive in later milestones.
+- Dedicated build, diagnostic, and direct tool commands remain model/tool surfaces rather than local command routers.
 - Direct mutation authoring is not yet a public terminal command; exact M5 previews and approval/discard prompts render when the engine stages a proposal.
 - Read-only semantic and filesystem tools are visible when invoked through a configured model; there is no direct tool-browser command yet.

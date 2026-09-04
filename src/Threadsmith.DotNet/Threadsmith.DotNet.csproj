@@ -17,4 +17,8 @@
     <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
+  </ItemGroup>
+
 </Project>

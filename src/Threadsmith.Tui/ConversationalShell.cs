@@ -25,6 +25,9 @@ internal enum ConsoleInputKind
 
     /// <summary>The user requested a reasoning-visibility toggle.</summary>
     ToggleThinking,
+
+    /// <summary>Background output yielded and reopened an empty composer.</summary>
+    IdleOutputYield,
 }
 
 /// <summary>Represents one completed or cancelled composer interaction.</summary>
@@ -37,6 +40,38 @@ internal sealed record ConsoleInput(
     string Text,
     CancellationToken OperationCancellationToken,
     ConsoleInputKind Kind = ConsoleInputKind.Submission);
+
+/// <summary>Coordinates presentation-only output yields for non-primary composer prompts.</summary>
+internal static class ConsoleInputReader
+{
+    /// <summary>Reads a user interaction, retrying an empty-composer output yield without choosing an action.</summary>
+    /// <param name="surface">Serialized console surface.</param>
+    /// <param name="prompt">Context to present before each attempt, or <see langword="null" />.</param>
+    /// <param name="promptRole">Semantic role for <paramref name="prompt"/>.</param>
+    /// <param name="cancellationToken">Stops the pending prompt.</param>
+    /// <returns>The first actual user interaction.</returns>
+    public static async Task<ConsoleInput> ReadSecondaryAsync(
+        IConsoleSurface surface,
+        string? prompt,
+        TuiTextRole promptRole,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+        while (true)
+        {
+            if (prompt is not null)
+            {
+                await surface.WriteAsync(prompt, promptRole, cancellationToken);
+            }
+
+            var input = await surface.ReadAsync(cancellationToken);
+            if (input.Kind != ConsoleInputKind.IdleOutputYield)
+            {
+                return input;
+            }
+        }
+    }
+}
 
 /// <summary>Abstracts interactive terminal input and output for deterministic shell tests.</summary>
 internal interface IConsoleSurface
@@ -165,6 +200,7 @@ internal interface IConsoleSurface
 internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
 {
     private const double _completionPaneHeightFraction = 0.01;
+    private const string IdleOutputYieldInput = "threadsmith:idle-output-yield";
     private const string ToggleThinkingInput = "threadsmith:toggle-thinking";
     private const int _completionPaneVerticalBorderRows = 2;
 
@@ -188,11 +224,12 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
     internal PrettyPromptConsoleSurface(
         ConfiguredTheme? initialTheme = null,
         bool? isOutputRedirected = null,
-        IAnsiConsole? ansiConsole = null)
+        IAnsiConsole? ansiConsole = null,
+        IConsole? promptConsole = null)
     {
         _ansiConsole = ansiConsole ?? AnsiConsole.Console;
-        _promptConsole = new BufferedPromptConsole(new SystemConsole());
         _isOutputRedirected = isOutputRedirected ?? Console.IsOutputRedirected;
+        _promptConsole = new BufferedPromptConsole(promptConsole ?? new SystemConsole());
         _redirectedOutput = _ansiConsole.Profile.Out.Writer;
         var suppressionReason = TuiThemeResolver.GetSuppressionReason(
             _isOutputRedirected,
@@ -274,23 +311,47 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
     /// <inheritdoc />
     public async Task<ConsoleInput> ReadAsync(CancellationToken cancellationToken = default)
     {
+        await _promptConsole.WaitForIdleOutputDrainAsync(cancellationToken);
         await _consoleGate.WaitAsync(cancellationToken);
+        PromptReadCompletion promptCompletion = new(false, Task.CompletedTask);
+        var promptReadStarted = false;
+        PromptResult result;
         try
         {
+            _promptConsole.BeginPromptRead();
+            promptReadStarted = true;
             var prompt = _prompt ??= CreatePrompt(_promptText);
-            var result = await prompt.ReadLineAsync().WaitAsync(cancellationToken);
-            var toggledThinking = result is KeyPressCallbackResult
-                && string.Equals(result.Text, ToggleThinkingInput, StringComparison.Ordinal);
-            return new ConsoleInput(
-                result.IsSuccess,
-                toggledThinking ? string.Empty : result.Text,
-                result.CancellationToken,
-                toggledThinking ? ConsoleInputKind.ToggleThinking : ConsoleInputKind.Submission);
+            result = await prompt.ReadLineAsync().WaitAsync(cancellationToken);
         }
         finally
         {
+            if (promptReadStarted)
+            {
+                promptCompletion = _promptConsole.EndPromptRead();
+            }
+
             _consoleGate.Release();
         }
+
+        if (promptCompletion.WasYieldedForIdleOutput
+            && result is KeyPressCallbackResult
+            && string.Equals(result.Text, IdleOutputYieldInput, StringComparison.Ordinal))
+        {
+            await promptCompletion.OutputDrained.WaitAsync(cancellationToken);
+            return new ConsoleInput(
+                IsSubmitted: false,
+                string.Empty,
+                CancellationToken.None,
+                ConsoleInputKind.IdleOutputYield);
+        }
+
+        var toggledThinking = result is KeyPressCallbackResult
+            && string.Equals(result.Text, ToggleThinkingInput, StringComparison.Ordinal);
+        return new ConsoleInput(
+            result.IsSuccess,
+            toggledThinking ? string.Empty : result.Text,
+            result.CancellationToken,
+            toggledThinking ? ConsoleInputKind.ToggleThinking : ConsoleInputKind.Submission);
     }
 
     /// <inheritdoc />
@@ -452,6 +513,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
             write.Segment.Validate();
         }
 
+        using var promptOutput = _promptConsole.RegisterPromptOutput();
         await _consoleGate.WaitAsync(cancellationToken);
         try
         {
@@ -701,7 +763,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         // two borders plus one completion row, so clear that unused minimum to retain the full window height.
         _minimumCompletionItemsField.SetValue(configuration, -_completionPaneVerticalBorderRows);
         return new Prompt(
-            callbacks: new ThinkingPromptCallbacks(),
+            callbacks: new ThinkingPromptCallbacks(_promptConsole),
             console: _promptConsole,
             configuration: configuration);
     }
@@ -736,18 +798,39 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
     }
 
     /// <summary>Maps the Pi-compatible reasoning shortcut without consuming drafted composer text.</summary>
-    internal sealed class ThinkingPromptCallbacks : PromptCallbacks
+    internal sealed class ThinkingPromptCallbacks(BufferedPromptConsole? promptConsole = null) : PromptCallbacks
     {
+        private readonly BufferedPromptConsole? _promptConsole = promptConsole;
+
         /// <inheritdoc />
         protected override IEnumerable<(KeyPressPattern Pattern, KeyPressCallbackAsync Callback)>
             GetKeyPressCallbacks()
         {
+            yield return (
+                new KeyPressPattern(
+                    ConsoleModifiers.Control | ConsoleModifiers.Alt | ConsoleModifiers.Shift,
+                    ConsoleKey.F24),
+                (text, _, _) => Task.FromResult<KeyPressCallbackResult?>(
+                    _promptConsole?.TryAcknowledgeIdlePromptYield(text) is true
+                        ? new KeyPressCallbackResult(IdleOutputYieldInput, output: null)
+                        : null));
             yield return (
                 new KeyPressPattern(ConsoleModifiers.Control, ConsoleKey.T),
                 (text, _, _) => Task.FromResult<KeyPressCallbackResult?>(
                     text.Length == 0
                         ? new KeyPressCallbackResult(ToggleThinkingInput, output: null)
                         : null));
+        }
+
+        /// <inheritdoc />
+        protected override Task<(string Text, int Caret)> FormatInput(
+            string text,
+            int caret,
+            KeyPress keyPress,
+            CancellationToken cancellationToken)
+        {
+            _promptConsole?.ObservePromptText(text);
+            return Task.FromResult((text, caret));
         }
     }
 }
@@ -1579,6 +1662,11 @@ public sealed class ConversationalShell
                     break;
                 }
 
+                if (input.Kind == ConsoleInputKind.IdleOutputYield)
+                {
+                    continue;
+                }
+
                 if (!input.IsSubmitted)
                 {
                     await _surface.WriteAsync(
@@ -1933,11 +2021,11 @@ public sealed class ConversationalShell
                         : commandText[5..].Trim();
                     if (string.IsNullOrWhiteSpace(openPath))
                     {
-                        await _surface.WriteAsync(
+                        var pathInput = await ConsoleInputReader.ReadSecondaryAsync(
+                            _surface,
                             "Repository path:\n",
                             TuiTextRole.Status,
                             lifetime.Token);
-                        var pathInput = await _surface.ReadAsync(lifetime.Token);
                         openPath = pathInput.IsSubmitted ? pathInput.Text.Trim() : string.Empty;
                     }
 
@@ -2057,6 +2145,30 @@ public sealed class ConversationalShell
                     continue;
                 }
 
+                if (string.Equals(commandText, "/semantic_refresh", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        _ = await controller.ForceSemanticRefreshAsync(lifetime.Token);
+                    }
+                    catch (InvalidOperationException exception) when (string.Equals(
+                        exception.Message,
+                        "No repository solution is bound for semantic refresh.",
+                        StringComparison.Ordinal))
+                    {
+                        await _surface.WriteAsync(
+                            "Semantic refresh failed: " + FormatStatusError(exception) + Environment.NewLine,
+                            TuiTextRole.Error,
+                            lifetime.Token);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The host publishes one bounded SemanticRefreshFailed event before the command faults.
+                    }
+
+                    continue;
+                }
+
                 if (commandText.StartsWith('/'))
                 {
                     await _surface.WriteAsync(
@@ -2124,7 +2236,11 @@ public sealed class ConversationalShell
                                     {
                                         while (true)
                                         {
-                                            var steeringInput = await _surface.ReadAsync(operation.Token);
+                                            var steeringInput = await ConsoleInputReader.ReadSecondaryAsync(
+                                                _surface,
+                                                null,
+                                                TuiTextRole.Status,
+                                                operation.Token);
                                             if (!steeringInput.IsSubmitted)
                                             {
                                                 break;
@@ -3027,6 +3143,7 @@ public sealed class ConversationalShell
             ("/quit", "End the interactive session"),
             ("/reasoning [level]", "Set reasoning effort for the active model (none|minimal|low|medium|high)"),
             ("/resume [id]", "Resume a durable repository session"),
+            ("/semantic_refresh", "Force and await a complete semantic refresh"),
             ("/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Govern skills"),
             ("/theme [id|current]", "Select, change, or report the active theme"),
             ("/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
@@ -5151,11 +5268,11 @@ public sealed class ConversationalShell
     {
         if (decision.Kind == InteractiveDecisionKind.Plan)
         {
-            await _surface.WriteAsync(
+            var input = await ConsoleInputReader.ReadSecondaryAsync(
+                _surface,
                 "Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n",
                 TuiTextRole.Status,
                 cancellationToken);
-            var input = await _surface.ReadAsync(cancellationToken);
             switch (input.IsSubmitted ? input.Text.Trim() : "4")
             {
                 case "1":
@@ -5164,11 +5281,11 @@ public sealed class ConversationalShell
                             ? InteractiveDecisionResult.AwaitingMutationReview
                             : InteractiveDecisionResult.ContinueWaiting;
                 case "2":
-                    await _surface.WriteAsync(
+                    var reason = await ConsoleInputReader.ReadSecondaryAsync(
+                        _surface,
                         "Rejection reason:\n",
                         TuiTextRole.Status,
                         cancellationToken);
-                    var reason = await _surface.ReadAsync(cancellationToken);
                     _ = reason.IsSubmitted && !string.IsNullOrWhiteSpace(reason.Text)
                         ? await controller.RejectActivePlanAsync(reason.Text, cancellationToken)
                         : await controller.RejectActivePlanAsync(
@@ -5176,11 +5293,11 @@ public sealed class ConversationalShell
                             cancellationToken);
                     return InteractiveDecisionResult.ContinueWaiting;
                 case "3":
-                    await _surface.WriteAsync(
+                    var revision = await ConsoleInputReader.ReadSecondaryAsync(
+                        _surface,
                         "Revision instructions:\n",
                         TuiTextRole.Status,
                         cancellationToken);
-                    var revision = await _surface.ReadAsync(cancellationToken);
                     if (revision.IsSubmitted && !string.IsNullOrWhiteSpace(revision.Text))
                     {
                         _ = await controller.ReviseActivePlanAsync(
@@ -5232,11 +5349,11 @@ public sealed class ConversationalShell
                 : InteractiveDecisionResult.ContinueWaiting;
         }
 
-        await _surface.WriteAsync(
+        var mutationInput = await ConsoleInputReader.ReadSecondaryAsync(
+            _surface,
             "Mutation review: 1 apply approved set, 2 discard\n",
             TuiTextRole.Status,
             cancellationToken);
-        var mutationInput = await _surface.ReadAsync(cancellationToken);
         if (mutationInput.IsSubmitted && mutationInput.Text.Trim() == "1")
         {
             _ = await controller.CommitMutationSetAsync(

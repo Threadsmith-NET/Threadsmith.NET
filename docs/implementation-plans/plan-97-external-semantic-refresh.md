@@ -1,6 +1,6 @@
 # Implementation Plan 97: External Semantic Refresh and Request Admission
 
-**Status:** Planned.
+**Status:** Implemented.
 **Delivery track:** Maintenance — live semantic-workspace freshness, background refresh, and explicit recovery
 **Prerequisites:** Completed Plans 05–06 repository/solution and Roslyn lifecycle, completed Plan 29 repository initialization, completed Plans 77 and 81 semantic activity/source-drift presentation, completed Plan 96 serialized PrettyPrompt console ownership, the current `SemanticEngineRegistry`, `SemanticLifecycleObserver`, generation-fenced semantic query services, and application submission command boundary
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially host-owned control flow, UI-as-projection, Roslyn/MSBuild as semantic sources of truth, cancellation propagation, immutable read snapshots, controlled-boundary invalidation, and structured observability
@@ -120,7 +120,7 @@ Classify relevance from the loaded Roslyn inventory plus graph-control names:
 - changes to loaded additional/analyzer-config documents receive their supported refresh treatment;
 - create/delete/rename events that may change wildcard project membership require a full reload unless exact membership is proven;
 - `.csproj`, `.sln`, `.slnx`, `.props`, `.targets`, `Directory.Build.*`, `Directory.Packages.props`, `global.json`, NuGet configuration, analyzer configuration, rulesets, generated-source inputs, and SDK/reference-affecting files require a full reload;
-- `.git`, `bin`, `obj`, Threadsmith state, known temporary/editor files, and unrelated files do not dirty semantic state unless the loaded project inventory explicitly includes them.
+- `.git`, `bin`, `obj`, Threadsmith state, known generated/IDE/local-tool/test-result directories, temporary/editor files, and unrelated files do not dirty semantic state unless the loaded text-document inventory explicitly includes them.
 
 The monitor does not perform semantic work. It normalizes a bounded change record, increments the dirty version, and resets a bounded settling timer. After no relevant change has arrived for the configured settle interval, it asks the coordinator to refresh. Use a conservative host-owned default in the 200–500 ms range and a maximum burst window so a noisy source cannot defer refresh forever.
 
@@ -191,7 +191,7 @@ Semantic model updated (3 files, 240 ms).
 
 The exact duration formatting must reuse the existing operation-duration formatter. A reduced-confidence completion states the resulting confidence without treating compiler diagnostics as refresh infrastructure failure. Failure output is sanitized, bounded, actionable, and leaves the workspace dirty.
 
-Background output must not corrupt, clear, submit, or lose an active composer draft. Reuse Plan 96's single serialized console owner and Plan 77 lifecycle presentation; do not add a second console reader or direct console write. One coalesced cycle produces one start/completion pair, not one line per raw event.
+Background output must not corrupt, clear, submit, or lose an active composer draft. Reuse Plan 96's single serialized console owner and Plan 77 lifecycle presentation; do not add a second console reader or direct console write. When the composer is empty, cooperatively end and immediately reopen that PrettyPrompt interaction so lifecycle output appears without physical input. When any draft text exists, including whitespace, queue the output until the draft is submitted, cancelled, or cleared back to empty. One coalesced cycle produces one start/completion pair, not one line per raw event.
 
 If a request arrives during an already announced background refresh, it silently joins the same activity rather than printing another start message. If request admission becomes the first executor for settled unannounced changes, it publishes the same externally attributed lifecycle and message before waiting.
 
@@ -341,7 +341,7 @@ Configuration is not required for initial delivery. If debounce/resource tuning 
 4. Background, user-admission, and manual triggers use one single-flight coordinator and never implement independent refresh paths.
 5. A user request submitted while changes are settling or refreshing cannot receive a `RunId` or reach the model until applied version equals the latest settled dirty version.
 6. A change arriving during refresh cannot cause a stale generation to be reported as current.
-7. Background lifecycle output uses the serialized PrettyPrompt console boundary and preserves drafted input.
+7. Background lifecycle output uses the serialized PrettyPrompt console boundary, appears without physical input when the composer is empty, waits while any draft text exists, and preserves drafted input exactly.
 8. `/semantic_refresh` appears alphabetically in `/help`, forces/awaits a full refresh, and never creates a model run.
 9. Threadsmith-owned writes refresh through the same coordinator without being falsely announced as external or refreshed twice.
 10. Refresh failure remains visible and dirty, blocks new model-run admission, and can be recovered through later change, retry, or `/semantic_refresh`.

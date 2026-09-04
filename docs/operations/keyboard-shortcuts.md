@@ -9,15 +9,16 @@
 - `Ctrl+T`: on an empty composer, toggle live streaming of future sanitized reasoning. Reasoning streaming is off by default.
 - Mouse drag: create a native terminal selection across composer text or any transcript output.
 - Terminal keyboard mark mode: select transcript or composer output without the mouse; the activation key is terminal-specific.
-- `/open [path]`: open or switch repositories, choose trust, and select a solution when multiple candidates exist.
-- `/trust [inspect|read|build|mutation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
-- `/reasoning [none|minimal|low|medium|high]`: set reasoning effort when the active model supports the requested level.
-- `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Already printed reasoning remains in native scrollback.
+- `/help`: display available interactive commands.
 - `/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource|prompt|auth|logout|revoke|switch-account|diagnose]`: inspect or manage configured MCP profiles through the shared host authority. Omit exact IDs to use numbered selectors; identity mutations require an exact confirmation. See [MCP connections](mcp-connections.md).
+- `/open [path]`: open or switch repositories, choose trust, and select a solution when multiple candidates exist.
+- `/quit`: exit cleanly.
+- `/reasoning [none|minimal|low|medium|high]`: set reasoning effort when the active model supports the requested level.
+- `/semantic_refresh`: force and await one complete semantic refresh without creating a model run. Requires a bound repository and solution.
 - `/theme`: choose a built-in or configured theme with the numbered Up/Down/Enter selector.
 - `/theme <id>`: switch directly and save the user-level default; `/theme current` reports the effective theme.
-- `/help`: display available interactive commands.
-- `/quit`: exit cleanly.
+- `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Already printed reasoning remains in native scrollback.
+- `/trust [inspect|read|build|mutation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
 
 Repository trust, multi-solution, and theme choices show numbered labels and support Up/Down plus Enter. Plan and mutation approvals appear as numbered, fail-closed review prompts. Invalid choices do not authorize an action. State-changing choices submit application commands; PrettyPrompt and Spectre.Console remain terminal adapters and do not call execution services directly.
 

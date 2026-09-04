@@ -15,6 +15,19 @@
 
 Expected: prompt assets are complete, exact, immutable for the process lifetime, safely customizable only as model-facing prose, fully capacity-accounted, and consistently packaged. Invalid catalogs fail before activity, ordinary diagnostics never expose bodies, explicit raw logs retain provider-visible content, upgrades replace defaults, and no edit changes compiled authority or schemas.
 
+## MTP-256 — External semantic refresh, blocked admission, and manual recovery
+
+1. Open a disposable `TrustedBuild` C# repository in the interactive terminal, select its solution, wait for semantic loading, and leave the composer empty. Outside Threadsmith, save several rapid edits to one existing loaded `.cs` file. Without pressing a key, focusing the Threadsmith window, or otherwise interacting with its console, confirm one settled `External changes detected; updating semantic model...` message and one completion appear.
+2. Begin typing an unsent multiline composer draft and repeat the external edit. Confirm lifecycle output waits while any draft text, including whitespace, remains and that the draft stays exact. Delete the draft back to empty without submitting it; confirm the queued lifecycle output then appears automatically. Run a symbol/reference/implementation or `code_explore` query and confirm it observes the new source without a complete solution reload.
+3. Hold another source edit in its settling or refresh phase and submit a prepared request. Instrument or inspect host lifecycle state and confirm the request waits before any `RunId`, budget, steering registration, conversation append, model call, or tool call is created. Change the file once more while refresh is in flight and confirm the request starts only after one converged follow-up reaches the latest dirty version.
+4. Change a project file or add/remove/rename a source document. Confirm the cycle performs one complete refresh and the resulting graph/membership is visible. Repeat after simulating a watcher miss/error and confirm bounded recovery reloads authoritatively.
+5. With the workspace clean, run `/semantic_refresh`. Confirm it forces and awaits a complete refresh, reports duration and resulting confidence once, and creates no model activity. Start it while an incremental cycle is active and confirm it joins that work and performs only one shared full follow-up.
+6. Inject a transient semantic load failure. Confirm failure output is bounded/actionable, the workspace remains dirty, and a new request is rejected before run allocation. Repair the failure, rerun `/semantic_refresh`, and confirm admission recovers. Separately introduce compiler diagnostics and confirm refresh succeeds with reduced confidence rather than reporting infrastructure failure.
+7. Apply one approved Threadsmith mutation and observe its watcher echo. Confirm it refreshes through the same coordinator without an external-change message or duplicate refresh. Add an overlapping external edit and confirm it remains externally attributed.
+8. Repeat the blocked-submission and forced-refresh checks through the headless command surface, then cancel one waiter, switch repositories, and exit during refresh. Confirm headless outcomes match, shared work is not cancelled by one waiter, obsolete results do not cross the binding, shutdown is bounded, and no source body, raw changed path, secret, or exception dump appears in normal output.
+
+Expected: external edits become visible automatically through one draft-safe serialized lifecycle; proven existing C# edits update incrementally, graph/uncertain/manual/recovery changes reload completely, all triggers share one coordinator, request admission never starts from known-stale semantics, and manual/headless recovery remains local, bounded, and model-free.
+
 ## MTP-254 — Model-callable Explorer fork/join and policy narrowing
 
 1. Open a disposable `TrustedRead` C# repository, select its solution, and use a controlled provider that invokes `delegate_agents` with two Explorer requests containing only `task`, `context`, and `toolAccess`; use `readOnly` for one and `inherit` for the other.
@@ -531,7 +544,7 @@ Expected:
 - Prior output remains ordinary terminal scrollback.
 - Startup with a selected solution immediately shows an animated `Semantic confidence: Loading...` status while semantic loading runs. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
 - The status contains no credentials, endpoint secrets, or stale repository values.
-- Help lists `/open`, `/trust`, `/help`, `/reasoning`, `/thinking [on|off]`, and `/quit`, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
+- Help lists `/help`, `/open`, `/quit`, `/reasoning`, `/semantic_refresh`, `/thinking [on|off]`, and `/trust` in alphabetical command order, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
 
 ### MTP-030C - Terminal-native system theme and plain-text fallback (positive and negative)
 

@@ -46,6 +46,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ExtensionUnloadFailed), "extensionUnloadFailed")]
 [JsonDerivedType(typeof(SemanticConfidenceChanged), "semanticConfidenceChanged")]
 [JsonDerivedType(typeof(SemanticLoadCompleted), "semanticLoadCompleted")]
+[JsonDerivedType(typeof(SemanticRefreshStarted), "semanticRefreshStarted")]
+[JsonDerivedType(typeof(SemanticRefreshCompleted), "semanticRefreshCompleted")]
+[JsonDerivedType(typeof(SemanticRefreshFailed), "semanticRefreshFailed")]
 [JsonDerivedType(typeof(RunTransitioned), "runTransitioned")]
 [JsonDerivedType(typeof(RunTransitionFailed), "runTransitionFailed")]
 [JsonDerivedType(typeof(ModelOutputObserved), "modelOutputObserved")]
@@ -532,6 +535,46 @@ public sealed record SemanticLoadCompleted : DomainEvent
     public string Confidence { get; init; }
 }
 
+/// <summary>A coalesced semantic refresh began for one workspace.</summary>
+public sealed record SemanticRefreshStarted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A coalesced semantic refresh published current state.</summary>
+public sealed record SemanticRefreshCompleted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion,
+    long AppliedVersion,
+    SemanticConfidenceLevel Confidence,
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A semantic refresh failed without advancing its applied version.</summary>
+public sealed record SemanticRefreshFailed(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion,
+    long AppliedVersion,
+    SemanticRefreshFailureKind FailureKind,
+    string SafeReason,
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>A run transitioned.</summary>
 public sealed record RunTransitioned(
     SessionId SessionId,
@@ -835,6 +878,9 @@ public static class DomainEventJson
             ["extensionUnloadFailed"] = typeof(ExtensionUnloadFailed),
             ["semanticConfidenceChanged"] = typeof(SemanticConfidenceChanged),
             ["semanticLoadCompleted"] = typeof(SemanticLoadCompleted),
+            ["semanticRefreshStarted"] = typeof(SemanticRefreshStarted),
+            ["semanticRefreshCompleted"] = typeof(SemanticRefreshCompleted),
+            ["semanticRefreshFailed"] = typeof(SemanticRefreshFailed),
             ["runTransitioned"] = typeof(RunTransitioned),
             ["runTransitionFailed"] = typeof(RunTransitionFailed),
             ["modelOutputObserved"] = typeof(ModelOutputObserved),

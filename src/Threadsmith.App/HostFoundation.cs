@@ -53,6 +53,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         ISecretResolver secretResolver,
         RepositorySecretProvider repositorySecretProvider,
         SemanticEngineRegistry semanticEngines,
+        SemanticRefreshCoordinator semanticRefreshCoordinator,
+        SemanticRefreshPublicationGateRouter semanticRefreshPublicationGate,
         SemanticMutationEngine semanticMutations,
         ProcessManager processManager,
         ToolStateManager toolStateManager,
@@ -96,6 +98,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         SecretResolver = secretResolver;
         RepositorySecretProvider = repositorySecretProvider;
         SemanticEngines = semanticEngines;
+        SemanticRefreshCoordinator = semanticRefreshCoordinator;
+        SemanticRefreshPublicationGate = semanticRefreshPublicationGate;
         SemanticMutations = semanticMutations;
         ProcessManager = processManager;
         ToolStateManager = toolStateManager;
@@ -125,6 +129,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         DirectFetchApprovalPrompt.Dispose();
         await _semanticSubscription.DisposeAsync();
         await _semanticObserver.DisposeAsync();
+        await SemanticRefreshCoordinator.DisposeAsync();
         await _hookSubscription.DisposeAsync();
         await _hookObserver.DisposeAsync();
         await HookCoordinator.DisposeAsync();
@@ -202,6 +207,12 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Gets the repository semantic-engine registry.</summary>
     internal SemanticEngineRegistry SemanticEngines { get; }
+
+    /// <summary>Gets the single workspace semantic-refresh authority.</summary>
+    internal SemanticRefreshCoordinator SemanticRefreshCoordinator { get; }
+
+    /// <summary>Gets the deferred application-owned semantic publication boundary.</summary>
+    internal SemanticRefreshPublicationGateRouter SemanticRefreshPublicationGate { get; }
 
     /// <summary>Gets semantic mutation operations.</summary>
     internal SemanticMutationEngine SemanticMutations { get; }
@@ -283,6 +294,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null;
         ContextLifecycleObserver? contextLifecycle = null;
         SemanticEngineRegistry? semanticEngines = null;
+        SemanticRefreshCoordinator? semanticRefreshCoordinator = null;
+        SemanticRefreshPublicationGateRouter? semanticRefreshPublicationGate = null;
         SemanticLifecycleObserver? semanticObserver = null;
 
         try
@@ -345,11 +358,18 @@ internal sealed class HostFoundation : IAsyncDisposable
                     new UserFileSecretProvider(userSecretsPath),
                 ]);
             semanticEngines = new SemanticEngineRegistry(events, loggerFactory);
+            semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
+            semanticRefreshCoordinator = new SemanticRefreshCoordinator(
+                semanticEngines,
+                events,
+                loggerFactory.CreateLogger<SemanticRefreshCoordinator>(),
+                semanticRefreshPublicationGate);
             var semanticMutations = new SemanticMutationEngine(
                 semanticEngines,
                 loggerFactory.CreateLogger<SemanticMutationEngine>());
             semanticObserver = new SemanticLifecycleObserver(
                 semanticEngines,
+                semanticRefreshCoordinator,
                 events,
                 loggerFactory.CreateLogger<SemanticLifecycleObserver>());
             semanticSubscription = events.Subscribe(semanticObserver.ObserveAsync, subscriberCapacity);
@@ -466,6 +486,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 secretResolver,
                 repositorySecretProvider,
                 semanticEngines,
+                semanticRefreshCoordinator,
+                semanticRefreshPublicationGate,
                 semanticMutations,
                 processManager,
                 toolStateManager,
@@ -493,6 +515,11 @@ internal sealed class HostFoundation : IAsyncDisposable
             if (semanticObserver is not null)
             {
                 await semanticObserver.DisposeAsync();
+            }
+
+            if (semanticRefreshCoordinator is not null)
+            {
+                await semanticRefreshCoordinator.DisposeAsync();
             }
 
             if (semanticEngines is not null)

@@ -101,6 +101,16 @@ public sealed class TuiPresenter
             cancellationToken);
     }
 
+    /// <summary>Forces one authoritative semantic refresh through the command boundary.</summary>
+    public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
+        SessionId sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ForceSemanticRefreshCommand(sessionId),
+            cancellationToken);
+    }
+
     /// <summary>Waits for a submitted run to finish.</summary>
     public Task<bool> WaitAsync(RunId runId, CancellationToken cancellationToken = default)
     {
@@ -1129,6 +1139,20 @@ public sealed class TuiController
         return runId;
     }
 
+    /// <summary>Forces and waits for one complete semantic refresh without creating a model run.</summary>
+    public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
+        CancellationToken cancellationToken = default)
+    {
+        SessionId sessionId;
+        lock (_gate)
+        {
+            sessionId = _sessionId
+                ?? throw new InvalidOperationException("The TUI session is not open.");
+        }
+
+        return _presenter.ForceSemanticRefreshAsync(sessionId, cancellationToken);
+    }
+
     /// <summary>Gets the current plan approval policy through the shared host boundary.</summary>
     public Task<PlanApprovalPolicy> GetPlanApprovalPolicyAsync(CancellationToken cancellationToken = default)
     {
@@ -2021,6 +2045,8 @@ public sealed class UiEventDispatcher
 /// <summary>Owns the ordered conversation text produced from live domain events.</summary>
 internal sealed class ConversationTranscript
 {
+    private const int MaximumTrackedSemanticRefreshStarts = 128;
+
     private readonly StringBuilder _reasoning = new();
     private readonly bool _showOperationDurations;
     private readonly Func<bool> _inspectCodeExploreOutput;
@@ -2032,6 +2058,8 @@ internal sealed class ConversationTranscript
     private readonly Dictionary<MutationSetId, Dictionary<string, string>> _planStepDetailsByMutationSet = [];
     private readonly Dictionary<MutationSetId, MutationApprovalLevel> _mutationApprovalLevels = [];
     private readonly Dictionary<(RunId RunId, SemanticCheckId SemanticCheckId), SemanticCheckStarted> _pendingSemanticChecks = [];
+    private readonly Dictionary<SemanticRefreshId, LinkedListNode<SemanticRefreshId>> _renderedSemanticRefreshStarts = [];
+    private readonly LinkedList<SemanticRefreshId> _renderedSemanticRefreshStartOrder = [];
     private ToolInvocationStarted? _pendingTool;
     private RunId? _activeMutationProposalRunId;
     private bool _answerActive;
@@ -2166,6 +2194,14 @@ internal sealed class ConversationTranscript
                 StringComparison.Ordinal):
                 AppendSystemResponse("Semantic confidence: Unavailable");
                 return true;
+            case SemanticRefreshStarted started when IsVisibleSemanticRefreshStart(started.Reason):
+                AppendLifecycleBlock(FormatSemanticRefreshStart(started.Reason));
+                TrackRenderedSemanticRefreshStart(started.RefreshId);
+                return true;
+            case SemanticRefreshCompleted completed:
+                return AppendSemanticRefreshCompletion(completed);
+            case SemanticRefreshFailed failed:
+                return AppendSemanticRefreshFailure(failed);
             case PlanSanityCheckCompleted completed:
                 _planSanityChecks[(completed.RunId, completed.Revision)] = completed;
                 return false;
@@ -2399,6 +2435,112 @@ internal sealed class ConversationTranscript
             started,
             completed,
             _showOperationDurations));
+    }
+
+    private bool AppendSemanticRefreshCompletion(SemanticRefreshCompleted completed)
+    {
+        var startWasRendered = CompleteSemanticRefreshStartCorrelation(
+            completed.RefreshId,
+            completed.Reason);
+        if (completed.Reason == SemanticRefreshReason.HostMutation && !startWasRendered)
+        {
+            return false;
+        }
+
+        AppendLifecycleBlock(FormatSemanticRefreshCompletion(completed));
+        return true;
+    }
+
+    private bool AppendSemanticRefreshFailure(SemanticRefreshFailed failed)
+    {
+        _ = CompleteSemanticRefreshStartCorrelation(failed.RefreshId, failed.Reason);
+        AppendLifecycleBlock(FormatSemanticRefreshFailure(failed));
+        return true;
+    }
+
+    private bool CompleteSemanticRefreshStartCorrelation(
+        SemanticRefreshId refreshId,
+        SemanticRefreshReason terminalReason)
+    {
+        var startWasRendered = RemoveRenderedSemanticRefreshStart(refreshId);
+        if (!startWasRendered && IsVisibleSemanticRefreshStart(terminalReason))
+        {
+            AppendLifecycleBlock(FormatSemanticRefreshStart(terminalReason));
+        }
+
+        return startWasRendered;
+    }
+
+    private static bool IsVisibleSemanticRefreshStart(SemanticRefreshReason reason)
+    {
+        return reason is SemanticRefreshReason.ExternalChange or SemanticRefreshReason.Recovery;
+    }
+
+    private static string FormatSemanticRefreshStart(SemanticRefreshReason reason)
+    {
+        return reason == SemanticRefreshReason.Recovery
+            ? "External changes require semantic recovery; updating semantic model..." + Environment.NewLine
+            : "External changes detected; updating semantic model..." + Environment.NewLine;
+    }
+
+    private string FormatSemanticRefreshCompletion(SemanticRefreshCompleted completed)
+    {
+        var fileText = completed.ChangedFileCount == 1
+            ? "1 file"
+            : $"{completed.ChangedFileCount} files";
+        var duration = _showOperationDurations
+            && OperationDurationFormatter.TryFormat(completed.ElapsedMilliseconds, out var formatted)
+                ? $", {formatted}"
+                : string.Empty;
+        var confidence = completed.Reason == SemanticRefreshReason.Manual
+            || completed.Confidence != SemanticConfidenceLevel.FullSemantic
+                ? $"; confidence {completed.Confidence}"
+                : string.Empty;
+        return $"Semantic model updated ({fileText}{duration}{confidence}).{Environment.NewLine}";
+    }
+
+    private string FormatSemanticRefreshFailure(SemanticRefreshFailed failed)
+    {
+        var duration = _showOperationDurations
+            && OperationDurationFormatter.TryFormat(failed.ElapsedMilliseconds, out var formatted)
+                ? $" after {formatted}"
+                : string.Empty;
+        return $"Semantic model refresh failed ({failed.FailureKind}){duration}: "
+            + failed.SafeReason
+            + Environment.NewLine;
+    }
+
+    private void TrackRenderedSemanticRefreshStart(SemanticRefreshId refreshId)
+    {
+        if (_renderedSemanticRefreshStarts.ContainsKey(refreshId))
+        {
+            return;
+        }
+
+        var node = _renderedSemanticRefreshStartOrder.AddLast(refreshId);
+        _renderedSemanticRefreshStarts.Add(refreshId, node);
+        if (_renderedSemanticRefreshStarts.Count <= MaximumTrackedSemanticRefreshStarts)
+        {
+            return;
+        }
+
+        var oldest = _renderedSemanticRefreshStartOrder.First;
+        if (oldest is not null)
+        {
+            _renderedSemanticRefreshStartOrder.RemoveFirst();
+            _renderedSemanticRefreshStarts.Remove(oldest.Value);
+        }
+    }
+
+    private bool RemoveRenderedSemanticRefreshStart(SemanticRefreshId refreshId)
+    {
+        if (!_renderedSemanticRefreshStarts.Remove(refreshId, out var node))
+        {
+            return false;
+        }
+
+        _renderedSemanticRefreshStartOrder.Remove(node);
+        return true;
     }
 
     private void RemovePendingSemanticChecks(RunId runId)

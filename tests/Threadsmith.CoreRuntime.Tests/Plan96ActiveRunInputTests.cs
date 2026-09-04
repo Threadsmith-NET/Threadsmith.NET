@@ -122,6 +122,60 @@ public static class Plan96ActiveRunInputTests
         inner.AllowReadToReturn.Dispose();
     }
 
+    /// <summary>An empty prompt yields for output without consuming a simultaneously queued user key.</summary>
+    [Fact]
+    public static async Task PromptOutput_EmptyComposer_YieldsAndPreservesPhysicalInput()
+    {
+        var expected = CreateKey('a', ConsoleKey.A);
+        var inner = new QueueConsole([expected]);
+        var console = new BufferedPromptConsole(inner);
+        console.BeginPromptRead();
+        var output = console.RegisterPromptOutput();
+
+        var yielded = console.ReadKey(intercept: true);
+
+        Assert.Equal(ConsoleKey.F24, yielded.Key);
+        Assert.Equal(
+            ConsoleModifiers.Control | ConsoleModifiers.Alt | ConsoleModifiers.Shift,
+            yielded.Modifiers);
+        Assert.False(console.KeyAvailable);
+        Assert.True(inner.KeyAvailable);
+        console.ObservePromptText(string.Empty);
+        Assert.True(console.TryAcknowledgeIdlePromptYield(string.Empty));
+        var completion = console.EndPromptRead();
+        Assert.True(completion.WasYieldedForIdleOutput);
+        Assert.False(completion.OutputDrained.IsCompleted);
+
+        output.Dispose();
+        await completion.OutputDrained.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(expected, console.ReadKey(intercept: true));
+    }
+
+    /// <summary>Queued output waits for a draft and yields as soon as the draft becomes empty.</summary>
+    [Fact]
+    public static async Task PromptOutput_ClearedDraft_YieldsWithoutSubmission()
+    {
+        var typed = CreateKey(' ', ConsoleKey.Spacebar);
+        var backspace = CreateKey('\b', ConsoleKey.Backspace);
+        var inner = new QueueConsole([typed]);
+        var console = new BufferedPromptConsole(inner);
+        console.BeginPromptRead();
+        Assert.Equal(typed, console.ReadKey(intercept: true));
+        console.ObservePromptText(" ");
+        var output = console.RegisterPromptOutput();
+        inner.Enqueue(backspace);
+
+        Assert.Equal(backspace, console.ReadKey(intercept: true));
+        console.ObservePromptText(string.Empty);
+        Assert.Equal(ConsoleKey.F24, console.ReadKey(intercept: true).Key);
+        Assert.True(console.TryAcknowledgeIdlePromptYield(string.Empty));
+        var completion = console.EndPromptRead();
+
+        output.Dispose();
+        await completion.OutputDrained.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(completion.WasYieldedForIdleOutput);
+    }
+
     private static ConsoleKeyInfo CreateKey(char character, ConsoleKey key)
     {
         return new ConsoleKeyInfo(character, key, shift: false, alt: false, control: false);

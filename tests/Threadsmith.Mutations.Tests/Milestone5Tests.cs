@@ -85,6 +85,79 @@ public static class Milestone5Tests
         Assert.True(projection?.Mutation?.IsRolledBack);
     }
 
+    /// <summary>Rollback attributes restored and removed endpoints to the host mutation.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_Rollback_RegistersExactSemanticHostWrites()
+    {
+        const string original = "class Example { string Value = \"old\"; }\n";
+        const string replacement = "class Example { string Value = \"new\"; }\n";
+        const string created = "class Added { }\n";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/Example.cs"] = original,
+        });
+        await using var events = new DomainEventStream();
+        var attribution = new RecordingSemanticHostMutationAttribution();
+        await using var workspace = await TransactionalWorkspace.CreateAsync(
+            repository.Baseline,
+            events,
+            semanticMutationAttribution: attribution);
+        var replacementMutation = CreateReplacement(
+            repository,
+            "src/Example.cs",
+            0,
+            original,
+            replacement);
+        var createMutation = new Mutation
+        {
+            MutationId = MutationId.New(),
+            Type = MutationType.CreateFile,
+            RelativePath = "src/Added.cs",
+            ReplacementText = created,
+        };
+        var set = CreateMutationSet(repository, [replacementMutation, createMutation]);
+        var staged = await workspace.StageAsync(set);
+        _ = await workspace.CommitAsync(
+            set.MutationSetId,
+            new MutationApproval
+            {
+                Level = MutationApprovalLevel.EntireSet,
+                ApprovalId = staged.ApprovalId,
+            });
+
+        _ = await workspace.RollbackAsync(set.MutationSetId);
+
+        Assert.Equal(2, attribution.Registrations.Count);
+        var rollbackRegistration = attribution.Registrations[1];
+        Assert.Equal(repository.SessionId, rollbackRegistration.SessionId);
+        Assert.Equal(repository.WorkspaceId, rollbackRegistration.WorkspaceId);
+        Assert.Equal(set.MutationSetId, rollbackRegistration.MutationSetId);
+        var restoredWrite = Assert.Single(
+            rollbackRegistration.Writes,
+            write => write.RelativePath == "src/Example.cs");
+        Assert.Equal(CreateSemanticContentIdentity(original), restoredWrite.ContentIdentity);
+        Assert.False(restoredWrite.AllowMissingTransition);
+        Assert.Equal(
+            CreateSemanticContentIdentity(replacement),
+            restoredWrite.CompensationContentIdentity);
+        Assert.True(restoredWrite.ExistedBefore);
+        var removedWrite = Assert.Single(
+            rollbackRegistration.Writes,
+            write => write.RelativePath == "src/Added.cs");
+        Assert.Equal("missing", removedWrite.ContentIdentity);
+        Assert.False(removedWrite.AllowMissingTransition);
+        Assert.Equal(CreateSemanticContentIdentity(created), removedWrite.CompensationContentIdentity);
+        Assert.True(removedWrite.ExistedBefore);
+        Assert.Equal(2, attribution.Completions.Count);
+        var rollbackCompletion = attribution.Completions[1];
+        Assert.Equal(rollbackRegistration.Registration, rollbackCompletion.Registration);
+        Assert.Equal(2, rollbackCompletion.RelativePaths.Count);
+        Assert.Contains("src/Example.cs", rollbackCompletion.RelativePaths);
+        Assert.Contains("src/Added.cs", rollbackCompletion.RelativePaths);
+        Assert.Equal(original, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
+        Assert.False(File.Exists(repository.PathOf("src/Added.cs")));
+    }
+
     /// <summary>External edits block commit and rollback rather than overwriting newer user content.</summary>
     [Fact]
     public static async Task TransactionalWorkspace_ExternalChanges_BlockCommitAndRollback()
@@ -3616,6 +3689,11 @@ public static class Milestone5Tests
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identityInput)));
     }
 
+    private static string CreateSemanticContentIdentity(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
+
     private static async Task<bool> HasPlanPolicyGrantAsync(string userTrustPath, string repositoryIdentity)
     {
         if (!File.Exists(userTrustPath))
@@ -3777,6 +3855,56 @@ public static class Milestone5Tests
             throw new InvalidOperationException("The test semantic engine supports only rename.");
         }
     }
+
+    private sealed class RecordingSemanticHostMutationAttribution : ISemanticHostMutationAttribution
+    {
+        public List<SemanticAttributionCompletion> Completions { get; } = [];
+
+        public List<SemanticAttributionRegistration> Registrations { get; } = [];
+
+        public Task<SemanticHostMutationRegistration?> RegisterExpectedWritesAsync(
+            SessionId sessionId,
+            WorkspaceId workspaceId,
+            MutationSetId mutationSetId,
+            IReadOnlyList<SemanticHostWriteExpectation> writes,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SemanticHostMutationRegistration registration = new(
+                sessionId,
+                workspaceId,
+                mutationSetId,
+                Registrations.Count + 1);
+            Registrations.Add(new SemanticAttributionRegistration(
+                sessionId,
+                workspaceId,
+                mutationSetId,
+                [.. writes],
+                registration));
+            return Task.FromResult<SemanticHostMutationRegistration?>(registration);
+        }
+
+        public Task CompleteExpectedWritesAsync(
+            SemanticHostMutationRegistration registration,
+            IReadOnlyList<string> relativePaths,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Completions.Add(new SemanticAttributionCompletion(registration, [.. relativePaths]));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record SemanticAttributionRegistration(
+        SessionId SessionId,
+        WorkspaceId WorkspaceId,
+        MutationSetId MutationSetId,
+        IReadOnlyList<SemanticHostWriteExpectation> Writes,
+        SemanticHostMutationRegistration Registration);
+
+    private sealed record SemanticAttributionCompletion(
+        SemanticHostMutationRegistration Registration,
+        IReadOnlyList<string> RelativePaths);
 
     private sealed class TestRepository : IAsyncDisposable
     {

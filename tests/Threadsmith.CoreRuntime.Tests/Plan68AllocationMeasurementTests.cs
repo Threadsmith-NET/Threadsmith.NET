@@ -3,6 +3,7 @@ namespace Threadsmith.CoreRuntime.Tests;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Threadsmith.Interaction.Markdown;
 using Threadsmith.Telemetry;
 using Threadsmith.Tui;
 using Xunit;
@@ -90,7 +91,7 @@ public sealed class Plan68AllocationMeasurementTests
         Assert.True(spanBytes < baselineBytes, "span full-chunk path must allocate less than baseline.");
     }
 
-    private static long MeasureFormat(TuiMarkdownDocument document, int width)
+    private static long MeasureFormat(MarkdownDocument document, int width)
     {
         // Warm up JIT and caches.
         for (var i = 0; i < 64; i++)
@@ -235,38 +236,38 @@ public sealed class Plan68AllocationMeasurementTests
         return (after - before) / iterations;
     }
 
-    private static TuiMarkdownDocument BuildSmallDocument()
+    private static MarkdownDocument BuildSmallDocument()
     {
-        return new([new TuiMarkdownParagraph([new TuiMarkdownSpan("A short answer with a few words.")])]);
+        return new([new MarkdownParagraph([new MarkdownSpan("A short answer with a few words.")])]);
     }
 
-    private static TuiMarkdownDocument BuildTypicalDocument()
+    private static MarkdownDocument BuildTypicalDocument()
     {
         return new([
-                new TuiMarkdownHeading(1, [new TuiMarkdownSpan("Release notes")]),
-            new TuiMarkdownParagraph([
-                new TuiMarkdownSpan("This release adds "),
-                new TuiMarkdownSpan("parallel tools", TuiMarkdownSpanStyle.Strong),
-                new TuiMarkdownSpan(" and fixes several sanitizer edge cases."),
+                new MarkdownHeading(1, [new MarkdownSpan("Release notes")]),
+            new MarkdownParagraph([
+                new MarkdownSpan("This release adds "),
+                new MarkdownSpan("parallel tools", MarkdownSpanStyle.Strong),
+                new MarkdownSpan(" and fixes several sanitizer edge cases."),
             ]),
-            new TuiMarkdownList(false, 1, [
-                new TuiMarkdownListItem(false, [new TuiMarkdownParagraph([new TuiMarkdownSpan("Concurrent sibling execution.")])]),
-                new TuiMarkdownListItem(false, [new TuiMarkdownParagraph([new TuiMarkdownSpan("Stable canonical continuations.")])]),
-                new TuiMarkdownListItem(false, [new TuiMarkdownParagraph([new TuiMarkdownSpan("Bounded drain and kill timeouts.")])]),
+            new MarkdownList(false, 1, [
+                new MarkdownListItem(false, [new MarkdownParagraph([new MarkdownSpan("Concurrent sibling execution.")])]),
+                new MarkdownListItem(false, [new MarkdownParagraph([new MarkdownSpan("Stable canonical continuations.")])]),
+                new MarkdownListItem(false, [new MarkdownParagraph([new MarkdownSpan("Bounded drain and kill timeouts.")])]),
             ]),
-            new TuiMarkdownCodeBlock("Console.WriteLine(\"safe\");\nvar x = 1 + 2;\n", "csharp"),
+            new MarkdownCodeBlock("Console.WriteLine(\"safe\");\nvar x = 1 + 2;\n", "csharp"),
         ]);
     }
 
-    private static TuiMarkdownDocument BuildBoundedLargeDocument()
+    private static MarkdownDocument BuildBoundedLargeDocument()
     {
         // A long unbroken token (a 1200-char code run) forces many wrap iterations in
         // AppendWrappedSpans, plus a large code block with many lines.
         string longToken = new('x', 1200);
-        var paragraph = new TuiMarkdownParagraph([
-            new TuiMarkdownSpan("Prefix "),
-            new TuiMarkdownSpan(longToken),
-            new TuiMarkdownSpan(" suffix with more normal words that wrap across several lines."),
+        var paragraph = new MarkdownParagraph([
+            new MarkdownSpan("Prefix "),
+            new MarkdownSpan(longToken),
+            new MarkdownSpan(" suffix with more normal words that wrap across several lines."),
         ]);
         var codeLines = new StringBuilder();
         for (var i = 0; i < 200; i++)
@@ -274,7 +275,7 @@ public sealed class Plan68AllocationMeasurementTests
             codeLines.Append("var value").Append(i.ToString(CultureInfo.InvariantCulture)).Append(" = ").Append(i).Append(";\n");
         }
 
-        return new TuiMarkdownDocument([paragraph, new TuiMarkdownCodeBlock(codeLines.ToString(), "csharp")]);
+        return new MarkdownDocument([paragraph, new MarkdownCodeBlock(codeLines.ToString(), "csharp")]);
     }
 
     private static string BuildBoundedLargeSanitizerInput()

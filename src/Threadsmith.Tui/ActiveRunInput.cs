@@ -2,26 +2,7 @@ namespace Threadsmith.Tui;
 
 using System.Text;
 using PrettyPrompt.Consoles;
-
-/// <summary>Hot-key signals admitted while an active run owns the conversation.</summary>
-internal enum ActiveRunInputSignal
-{
-    /// <summary>The first Escape key armed the bounded cancellation chord.</summary>
-    CancellationArmed,
-
-    /// <summary>A second Escape key requested active-run cancellation.</summary>
-    CancellationRequested,
-
-    /// <summary>Enter requested one idempotent safe-boundary steering prompt.</summary>
-    SteeringRequested,
-}
-
-/// <summary>One exclusive active-run terminal input lease.</summary>
-internal interface IActiveRunInputSession : IAsyncDisposable
-{
-    /// <summary>Waits for the next admitted active-run hot key.</summary>
-    Task<ActiveRunInputSignal> ReadAsync(CancellationToken cancellationToken = default);
-}
+using Threadsmith.Interaction.Runs;
 
 /// <summary>Describes how one PrettyPrompt read ended and when its requested idle output drained.</summary>
 /// <param name="WasYieldedForIdleOutput">Whether host output interrupted an untouched empty composer.</param>
@@ -107,7 +88,7 @@ internal sealed class BufferedPromptConsole : IConsole
     }
 
     /// <summary>Begins an exclusive active-run lease when PrettyPrompt is inactive.</summary>
-    public IActiveRunInputSession? TryBeginActiveRunInput(TimeProvider timeProvider)
+    public IActiveRunInputLease? TryBeginActiveRunInput(TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(timeProvider);
         lock (_gate)
@@ -521,7 +502,7 @@ internal sealed class BufferedPromptConsole : IConsole
         }
     }
 
-    private sealed class ActiveRunInputSession : IActiveRunInputSession
+    private sealed class ActiveRunInputSession : IActiveRunInputLease
     {
         private static readonly TimeSpan EscapeChordWindow = TimeSpan.FromMilliseconds(850);
         private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);

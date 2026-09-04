@@ -1,4 +1,4 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Markdown;
 
 using System.Collections.Immutable;
 using System.Globalization;
@@ -11,14 +11,14 @@ using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 
 /// <summary>Host-owned parser boundary for complete untrusted model-answer blocks.</summary>
-internal interface ITuiMarkdownParser
+internal interface IMarkdownParser
 {
     /// <summary>Parses one complete answer or returns visibly escaped source on any failure.</summary>
-    TuiMarkdownParseResult Parse(string source);
+    MarkdownParseResult Parse(string source);
 }
 
 /// <summary>Adapts Markdig to Threadsmith's closed, bounded TUI document model.</summary>
-internal sealed class TuiMarkdownParser : ITuiMarkdownParser
+internal sealed class MarkdownParser : IMarkdownParser
 {
     /// <summary>Stable closed syntax-profile schema used by focused fixtures.</summary>
     internal const int SyntaxProfileVersion = 1;
@@ -59,13 +59,13 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         .Build();
 
     /// <summary>Parses one complete answer or returns visibly escaped source on any failure.</summary>
-    public TuiMarkdownParseResult Parse(string source)
+    public MarkdownParseResult Parse(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         var safeSource = TerminalControlEncoder.Encode(source);
         if (Encoding.UTF8.GetByteCount(source) > MaximumSourceBytes)
         {
-            return new TuiMarkdownParseResult(null, safeSource, "markdown source exceeded the rendering limit");
+            return new MarkdownParseResult(null, safeSource, "markdown source exceeded the rendering limit");
         }
 
         try
@@ -73,37 +73,37 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
             var state = new ParseState();
             var markdown = Markdown.Parse(source, Pipeline);
             var blocks = ParseBlocks(markdown, state, 0);
-            var document = new TuiMarkdownDocument(blocks);
-            TuiMarkdownValidator.Validate(document);
-            return new TuiMarkdownParseResult(document, safeSource, null);
+            var document = new MarkdownDocument(blocks);
+            MarkdownValidator.Validate(document);
+            return new MarkdownParseResult(document, safeSource, null);
         }
         catch (Exception exception) when (exception is ArgumentException
             or InvalidOperationException
             or OverflowException)
         {
-            return new TuiMarkdownParseResult(null, safeSource, "markdown could not be rendered safely");
+            return new MarkdownParseResult(null, safeSource, "markdown could not be rendered safely");
         }
     }
 
-    private static ImmutableArray<TuiMarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, int depth)
+    private static ImmutableArray<MarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, int depth)
     {
         state.CheckDepth(depth);
-        var blocks = ImmutableArray.CreateBuilder<TuiMarkdownBlock>();
+        var blocks = ImmutableArray.CreateBuilder<MarkdownBlock>();
         foreach (var block in container)
         {
             state.AddNode();
             switch (block)
             {
                 case ParagraphBlock paragraph:
-                    blocks.Add(new TuiMarkdownParagraph(ParseInlines(paragraph.Inline, state, depth + 1)));
+                    blocks.Add(new MarkdownParagraph(ParseInlines(paragraph.Inline, state, depth + 1)));
                     break;
                 case HeadingBlock heading:
-                    blocks.Add(new TuiMarkdownHeading(
+                    blocks.Add(new MarkdownHeading(
                         Math.Clamp(heading.Level, 1, 6),
                         ParseInlines(heading.Inline, state, depth + 1)));
                     break;
                 case QuoteBlock quote:
-                    blocks.Add(new TuiMarkdownQuote(ParseBlocks(quote, state, depth + 1)));
+                    blocks.Add(new MarkdownQuote(ParseBlocks(quote, state, depth + 1)));
                     break;
                 case ListBlock list:
                     blocks.Add(ParseList(list, state, depth + 1));
@@ -118,13 +118,13 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                     var language = code is FencedCodeBlock fenced
                         ? BoundLanguage(fenced.Info)
                         : null;
-                    blocks.Add(new TuiMarkdownCodeBlock(TerminalControlEncoder.Encode(codeText), language));
+                    blocks.Add(new MarkdownCodeBlock(TerminalControlEncoder.Encode(codeText), language));
                     break;
                 case Table table:
                     blocks.Add(ParseTable(table, state, depth + 1));
                     break;
                 case ThematicBreakBlock:
-                    blocks.Add(new TuiMarkdownThematicBreak());
+                    blocks.Add(new MarkdownThematicBreak());
                     break;
                 case LinkReferenceDefinitionGroup:
                     break;
@@ -136,7 +136,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         return blocks.ToImmutable();
     }
 
-    private static TuiMarkdownList ParseList(ListBlock list, ParseState state, int depth)
+    private static MarkdownList ParseList(ListBlock list, ParseState state, int depth)
     {
         state.CheckDepth(depth);
         if (list.Count > MaximumListItems)
@@ -144,7 +144,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
             throw new InvalidOperationException("List exceeded its item limit.");
         }
 
-        var items = ImmutableArray.CreateBuilder<TuiMarkdownListItem>(list.Count);
+        var items = ImmutableArray.CreateBuilder<MarkdownListItem>(list.Count);
         foreach (var child in list)
         {
             state.AddNode();
@@ -160,16 +160,16 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                 isChecked = task.Checked;
             }
 
-            items.Add(new TuiMarkdownListItem(isChecked, ParseBlocks(item, state, depth + 1)));
+            items.Add(new MarkdownListItem(isChecked, ParseBlocks(item, state, depth + 1)));
         }
 
         var start = int.TryParse(list.OrderedStart, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 1;
-        return new TuiMarkdownList(list.IsOrdered, start, items.ToImmutable());
+        return new MarkdownList(list.IsOrdered, start, items.ToImmutable());
     }
 
-    private static TuiMarkdownTable ParseTable(Table table, ParseState state, int depth)
+    private static MarkdownTable ParseTable(Table table, ParseState state, int depth)
     {
         state.CheckDepth(depth);
         if (table.Count > MaximumTableRows)
@@ -177,7 +177,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
             throw new InvalidOperationException("Table exceeded its row limit.");
         }
 
-        var rows = ImmutableArray.CreateBuilder<TuiMarkdownTableRow>(table.Count);
+        var rows = ImmutableArray.CreateBuilder<MarkdownTableRow>(table.Count);
         foreach (var child in table)
         {
             state.AddNode();
@@ -186,7 +186,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                 throw new InvalidOperationException("Table structure exceeded its limits.");
             }
 
-            var cells = ImmutableArray.CreateBuilder<ImmutableArray<TuiMarkdownSpan>>(row.Count);
+            var cells = ImmutableArray.CreateBuilder<ImmutableArray<MarkdownSpan>>(row.Count);
             foreach (var cellBlock in row)
             {
                 state.AddNode();
@@ -204,16 +204,16 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                 cells.Add(spans);
             }
 
-            rows.Add(new TuiMarkdownTableRow(row.IsHeader, cells.ToImmutable()));
+            rows.Add(new MarkdownTableRow(row.IsHeader, cells.ToImmutable()));
         }
 
-        return new TuiMarkdownTable(rows.ToImmutable());
+        return new MarkdownTable(rows.ToImmutable());
     }
 
-    private static ImmutableArray<TuiMarkdownSpan> ParseCell(TableCell cell, ParseState state, int depth)
+    private static ImmutableArray<MarkdownSpan> ParseCell(TableCell cell, ParseState state, int depth)
     {
         state.CheckDepth(depth);
-        var spans = ImmutableArray.CreateBuilder<TuiMarkdownSpan>();
+        var spans = ImmutableArray.CreateBuilder<MarkdownSpan>();
         foreach (var block in cell)
         {
             if (block is not ParagraphBlock paragraph)
@@ -223,7 +223,7 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
 
             if (spans.Count > 0)
             {
-                AddSpan(spans, state, new TuiMarkdownSpan(" "));
+                AddSpan(spans, state, new MarkdownSpan(" "));
             }
 
             spans.AddRange(ParseInlines(paragraph.Inline, state, depth + 1));
@@ -232,16 +232,16 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         return spans.ToImmutable();
     }
 
-    private static ImmutableArray<TuiMarkdownSpan> ParseInlines(
+    private static ImmutableArray<MarkdownSpan> ParseInlines(
         ContainerInline? container,
         ParseState state,
         int depth)
     {
         state.CheckDepth(depth);
-        var spans = ImmutableArray.CreateBuilder<TuiMarkdownSpan>();
+        var spans = ImmutableArray.CreateBuilder<MarkdownSpan>();
         if (container is not null)
         {
-            ParseInlineChildren(container, state, depth, TuiMarkdownSpanStyle.None, null, spans);
+            ParseInlineChildren(container, state, depth, MarkdownSpanStyle.None, null, spans);
         }
 
         return spans.ToImmutable();
@@ -251,9 +251,9 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         ContainerInline container,
         ParseState state,
         int depth,
-        TuiMarkdownSpanStyle inheritedStyle,
+        MarkdownSpanStyle inheritedStyle,
         Uri? inheritedLink,
-        ImmutableArray<TuiMarkdownSpan>.Builder spans)
+        ImmutableArray<MarkdownSpan>.Builder spans)
     {
         state.CheckDepth(depth);
         for (var inline = container.FirstChild; inline is not null; inline = inline.NextSibling)
@@ -262,26 +262,26 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
             switch (inline)
             {
                 case LiteralInline literal:
-                    AddSpan(spans, state, new TuiMarkdownSpan(
+                    AddSpan(spans, state, new MarkdownSpan(
                         TerminalControlEncoder.Encode(literal.Content.ToString()),
                         inheritedStyle,
                         inheritedLink));
                     break;
                 case CodeInline code:
-                    AddSpan(spans, state, new TuiMarkdownSpan(
+                    AddSpan(spans, state, new MarkdownSpan(
                         TerminalControlEncoder.Encode(code.Content),
-                        inheritedStyle | TuiMarkdownSpanStyle.Code,
+                        inheritedStyle | MarkdownSpanStyle.Code,
                         inheritedLink));
                     break;
                 case LineBreakInline lineBreak:
-                    AddSpan(spans, state, new TuiMarkdownSpan(
+                    AddSpan(spans, state, new MarkdownSpan(
                         lineBreak.IsHard ? "\n" : " ",
                         inheritedStyle,
                         inheritedLink,
                         lineBreak.IsHard));
                     break;
                 case HtmlEntityInline entity:
-                    AddSpan(spans, state, new TuiMarkdownSpan(
+                    AddSpan(spans, state, new MarkdownSpan(
                         TerminalControlEncoder.Encode(entity.Transcoded.ToString()),
                         inheritedStyle,
                         inheritedLink));
@@ -290,10 +290,10 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
                     break;
                 case EmphasisInline emphasis:
                     var emphasisStyle = emphasis.DelimiterChar == '~'
-                        ? TuiMarkdownSpanStyle.Strikethrough
+                        ? MarkdownSpanStyle.Strikethrough
                         : emphasis.DelimiterCount >= 2
-                            ? TuiMarkdownSpanStyle.Strong
-                            : TuiMarkdownSpanStyle.Emphasis;
+                            ? MarkdownSpanStyle.Strong
+                            : MarkdownSpanStyle.Emphasis;
                     ParseInlineChildren(
                         emphasis,
                         state,
@@ -318,25 +318,25 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
         LinkInline link,
         ParseState state,
         int depth,
-        TuiMarkdownSpanStyle inheritedStyle,
-        ImmutableArray<TuiMarkdownSpan>.Builder spans)
+        MarkdownSpanStyle inheritedStyle,
+        ImmutableArray<MarkdownSpan>.Builder spans)
     {
         var rawTarget = link.GetDynamicUrl?.Invoke() ?? link.Url;
         var target = TryCreateSafeLink(rawTarget);
         if (link.IsImage)
         {
-            AddSpan(spans, state, new TuiMarkdownSpan("[image: ", inheritedStyle));
+            AddSpan(spans, state, new MarkdownSpan("[image: ", inheritedStyle));
         }
 
         ParseInlineChildren(link, state, depth, inheritedStyle, target, spans);
         if (link.IsImage)
         {
-            AddSpan(spans, state, new TuiMarkdownSpan("]", inheritedStyle));
+            AddSpan(spans, state, new MarkdownSpan("]", inheritedStyle));
         }
 
         if (target is null && !string.IsNullOrWhiteSpace(rawTarget))
         {
-            AddSpan(spans, state, new TuiMarkdownSpan(
+            AddSpan(spans, state, new MarkdownSpan(
                 $" ({TerminalControlEncoder.Encode(rawTarget)})",
                 inheritedStyle));
         }
@@ -370,9 +370,9 @@ internal sealed class TuiMarkdownParser : ITuiMarkdownParser
     }
 
     private static void AddSpan(
-        ImmutableArray<TuiMarkdownSpan>.Builder spans,
+        ImmutableArray<MarkdownSpan>.Builder spans,
         ParseState state,
-        TuiMarkdownSpan span)
+        MarkdownSpan span)
     {
         state.AddNode();
         spans.Add(span);

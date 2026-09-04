@@ -23,7 +23,9 @@ namespace Threadsmith.Architecture.Tests;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Xml.Linq;
+using Threadsmith.Interaction.Contracts;
 using Xunit;
 
 /// <summary>
@@ -68,6 +70,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Hooks",
         "Threadsmith.Extensions.Abstractions",
         "Threadsmith.Extensions.Runtime",
+        "Threadsmith.Interaction",
         "Threadsmith.Tui",
         "Threadsmith.Cli",
         "Threadsmith.Mcp",
@@ -127,29 +130,87 @@ public static class DependencyDirectionTests
             $"{projectName} references forbidden package(s): {string.Join(", ", violations)}.");
     }
 
-    /// <summary>Markdig remains isolated to the replaceable TUI projection.</summary>
+    /// <summary>Markdig is isolated to shared Markdown generation, not a concrete frontend.</summary>
     [Fact]
-    public static void MarkdigPackageIsReferencedOnlyByTui()
+    public static void MarkdigPackageIsReferencedOnlyByInteraction()
     {
         string[] violations =
         [
             .. _productProjects
-                .Where(projectName => projectName != "Threadsmith.Tui")
+                .Where(projectName => projectName != "Threadsmith.Interaction")
                 .Where(projectName => GetPackageReferences(projectName).Contains("Markdig", StringComparer.Ordinal)),
         ];
         Assert.Empty(violations);
-        Assert.Contains("Markdig", GetPackageReferences("Threadsmith.Tui"));
+        Assert.Contains("Markdig", GetPackageReferences("Threadsmith.Interaction"));
     }
 
-    /// <summary>The host-owned semantic Markdown document contains no parser or terminal-backend types.</summary>
+    /// <summary>The shared semantic Markdown document contains no parser or terminal-backend types.</summary>
     [Fact]
-    public static void TuiMarkdownDocumentIsBackendNeutral()
+    public static void InteractionMarkdownDocumentIsBackendNeutral()
     {
-        var path = Path.Combine(RepoRoot, "src", "Threadsmith.Tui", "TuiMarkdownDocument.cs");
+        var path = Path.Combine(
+            RepoRoot,
+            "src",
+            "Threadsmith.Interaction",
+            "Markdown",
+            "MarkdownDocument.cs");
         var source = File.ReadAllText(path);
         Assert.DoesNotContain("Markdig", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Spectre", source, StringComparison.Ordinal);
         Assert.DoesNotContain("PrettyPrompt", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>Frontend and shared presentation packages stay on their owning side of the seam.</summary>
+    [Fact]
+    public static void InteractionAndTuiPackagesAreIsolated()
+    {
+        var interactionPackages = GetPackageReferences("Threadsmith.Interaction").ToHashSet(StringComparer.Ordinal);
+        var tuiPackages = GetPackageReferences("Threadsmith.Tui").ToHashSet(StringComparer.Ordinal);
+
+        Assert.DoesNotContain("PrettyPrompt", interactionPackages);
+        Assert.DoesNotContain("Spectre.Console", interactionPackages);
+        Assert.DoesNotContain("Markdig", tuiPackages);
+        Assert.Contains("PrettyPrompt", tuiPackages);
+        Assert.Contains("Spectre.Console", tuiPackages);
+    }
+
+    /// <summary>Public interaction signatures expose only Threadsmith and framework-owned types.</summary>
+    [Fact]
+    public static void InteractionPublicApiDoesNotExposeFrontendOrParserTypes()
+    {
+        var assembly = typeof(IInteractionSurface).Assembly;
+        string[] forbiddenAssemblies = ["Markdig", "PrettyPrompt", "Spectre.Console"];
+        var violations = assembly.ExportedTypes
+            .SelectMany(GetPublicSignatureTypes)
+            .Where(type => forbiddenAssemblies.Contains(type.Assembly.GetName().Name, StringComparer.Ordinal))
+            .Select(type => type.FullName ?? type.Name)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Empty(violations);
+    }
+
+    /// <summary>The current shell contains frontend adaptation and delegation, not shared workflows.</summary>
+    [Fact]
+    public static void ConversationalShellRemainsAThinFrontendFacade()
+    {
+        var path = Path.Combine(RepoRoot, "src", "Threadsmith.Tui", "ConversationalShell.cs");
+        var source = File.ReadAllText(path);
+        string[] forbiddenImplementations =
+        [
+            "InteractiveDecisionClassifier",
+            "InteractionEventDispatcher",
+            "InteractionInputReader.ReadSecondaryAsync",
+            "MarkdownParser",
+            "new ModelAnswerCollector(",
+            "ConversationTranscript",
+        ];
+
+        Assert.All(
+            forbiddenImplementations,
+            forbidden => Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal));
+        Assert.Contains("new InteractionCoordinator(", source, StringComparison.Ordinal);
     }
 
     /// <summary>The neutral model project contains no OpenAI-compatible implementation or wire protocol.</summary>
@@ -272,7 +333,8 @@ public static class DependencyDirectionTests
             ["Threadsmith.Skills"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Models", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Hooks"] = ["Threadsmith.Core", "Threadsmith.Tools"],
             ["Threadsmith.Extensions.Runtime"] = ["Threadsmith.Core", "Threadsmith.Extensions.Abstractions", "Threadsmith.Telemetry", "Threadsmith.Tools"],
-            ["Threadsmith.Tui"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution"],
+            ["Threadsmith.Interaction"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution"],
+            ["Threadsmith.Tui"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution", "Threadsmith.Interaction"],
             ["Threadsmith.Cli"] = ["Threadsmith.Core", "Threadsmith.Execution"],
             ["Threadsmith.Mcp"] = ["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Extensions.Abstractions"],
         };
@@ -284,7 +346,7 @@ public static class DependencyDirectionTests
             "Threadsmith.Models", "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCodex",
             "Threadsmith.Context", "Threadsmith.Tools",
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
-            "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime",
+            "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",
             "Threadsmith.Tui", "Threadsmith.Cli", "Threadsmith.Mcp",
             "Threadsmith.Scripting.Worker",
         ];
@@ -303,9 +365,74 @@ public static class DependencyDirectionTests
             ["Threadsmith.Skills"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Abstractions stays small + stable; references no host implementation (§8.1).
             ["Threadsmith.Extensions.Abstractions"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
+            // Interaction owns semantic coordination and Markdown generation, not terminal adaptation.
+            ["Threadsmith.Interaction"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Tui references no persistence implementations (§8.1).
             ["Threadsmith.Tui"] = ["Microsoft.Data.Sqlite"],
         };
         return graph;
+    }
+
+    private static IEnumerable<Type> GetPublicSignatureTypes(Type exportedType)
+    {
+        yield return exportedType;
+        const BindingFlags flags = BindingFlags.Public
+            | BindingFlags.Instance
+            | BindingFlags.Static
+            | BindingFlags.DeclaredOnly;
+        foreach (var constructor in exportedType.GetConstructors(flags))
+        {
+            foreach (var parameter in constructor.GetParameters())
+            {
+                foreach (var type in FlattenType(parameter.ParameterType))
+                {
+                    yield return type;
+                }
+            }
+        }
+
+        foreach (var method in exportedType.GetMethods(flags))
+        {
+            foreach (var type in FlattenType(method.ReturnType))
+            {
+                yield return type;
+            }
+
+            foreach (var parameter in method.GetParameters())
+            {
+                foreach (var type in FlattenType(parameter.ParameterType))
+                {
+                    yield return type;
+                }
+            }
+        }
+
+        foreach (var property in exportedType.GetProperties(flags))
+        {
+            foreach (var type in FlattenType(property.PropertyType))
+            {
+                yield return type;
+            }
+        }
+    }
+
+    private static IEnumerable<Type> FlattenType(Type type)
+    {
+        yield return type;
+        if (type.HasElementType && type.GetElementType() is { } elementType)
+        {
+            foreach (var nested in FlattenType(elementType))
+            {
+                yield return nested;
+            }
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            foreach (var nested in FlattenType(argument))
+            {
+                yield return nested;
+            }
+        }
     }
 }

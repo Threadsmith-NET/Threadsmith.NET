@@ -48,16 +48,17 @@ The tool is session-exclusive and returns only after the children join or termin
 Interactive commands:
 
 ```text
+/agents
 /agents <delegation-id>
 /agents <delegation-id> cancel
 /agents <delegation-id> cancel-child <assignment-id>
 ```
 
-Inspection reports the latest durable phase, generation, child status and bounded usage, current lifecycle reason, and next legal host action. It does not render checkpoint history or the joined result's omission details. Cancellation is cooperative and hierarchical. Cancelling a parent stops admission, cancels queued/running children, observes every task, and records the cancellation boundary. Cancelling one child affects only that child and dependencies selected by its frozen failure/dependency policy.
+After an accepted checkpoint is durably recorded, the TUI immediately prints the stable delegation ID and the matching inspection command. Bare `/agents` shows a bounded, active-first index of delegations observed in the current interactive session; assignment IDs appear as their lifecycle events arrive. This is a convenience index, not checkpoint history. `/agents <delegation-id>` remains the authoritative inspection path and reports the latest durable phase, generation, child status and bounded usage, current lifecycle reason, and next legal host action. It does not render checkpoint history or the joined result's omission details. Cancellation is cooperative and hierarchical. Cancelling a parent stops admission, cancels queued/running children, observes every task, and records the cancellation boundary. Cancelling one child affects only that child and dependencies selected by its frozen failure/dependency policy.
 
 While a conversation or delegation is active, the TUI shows `Running — Enter to steer; Esc Esc to stop.` Pressing Enter creates one idempotent request and immediately writes `Steering request received; waiting for the current model/tool boundary.` Repeated Enter presses while it is pending do not create more events, prompts, or steering messages.
 
-The current provider response or tool batch is allowed to finish. For `delegate_agents`, every still-running child then pauses before its next provider request (or becomes terminal), and the joined result cannot return to the parent. After all earlier output is flushed, the ordinary PrettyPrompt composer opens as `steer >`; the run remains paused, so the prompt cannot scroll away. Submit text to add lower-authority user context to the parent and eligible children, submit empty/cancel to resume unchanged, or use `/agents` to inspect/cancel the delegation while paused. Children that completed before submission are not reopened and appear in the joined delivered/undelivered steering accounting.
+The current provider response or tool batch is allowed to finish. For `delegate_agents`, every still-running child then pauses before its next provider request (or becomes terminal), and the joined result cannot return to the parent. After all earlier output is flushed, the ordinary PrettyPrompt composer opens as `steer >`; the run remains paused, so the prompt cannot scroll away. Submit text to add lower-authority user context to the parent and eligible children, submit empty/cancel to resume unchanged, or use bare `/agents` to recover the IDs before issuing an inspection or cancellation command while paused. Children that completed before submission are not reopened and appear in the joined delivered/undelivered steering accounting.
 
 Press unmodified Escape twice within 850 ms to cooperatively cancel the active conversation. `Ctrl+C` remains supported. Neither shortcut can suspend a provider stream or tool halfway through; cancellation latency still depends on the operation observing its token.
 

@@ -3,6 +3,7 @@ namespace Threadsmith.SessionStatus.Tests;
 using PrettyPrompt.Rendering;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Tui;
 using Xunit;
@@ -17,7 +18,7 @@ public static class SessionStatusTests
         var root = Path.GetPathRoot(Directory.GetCurrentDirectory())
             ?? throw new InvalidOperationException("The current directory has no filesystem root.");
 
-        var displayName = TuiSessionStatusFactory.GetRepositoryDisplayName(root);
+        var displayName = SessionStatusAssembler.GetRepositoryDisplayName(root);
 
         Assert.Equal(Path.TrimEndingDirectorySeparator(root), displayName);
     }
@@ -155,7 +156,7 @@ public static class SessionStatusTests
             TokenBudget = 32_000,
         };
 
-        var status = TuiSessionStatusFactory.Create(
+        var status = SessionStatusAssembler.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -181,7 +182,7 @@ public static class SessionStatusTests
             TokenBudget = 967_232,
         };
 
-        var status = TuiSessionStatusFactory.Create(
+        var status = SessionStatusAssembler.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -239,7 +240,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFormatter_WideUnicodeAndLongPath_AbbreviatesSafely()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\very-long-root-name\\very-long-parent-name\\工具箱\\src",
             "工具箱",
             "模型模型模型模型模型",
@@ -274,7 +275,7 @@ public static class SessionStatusTests
         };
     }
 
-    private static TuiSessionStatus CreateStatus(long? contextTokens, long? contextLimit)
+    private static SessionStatusSnapshot CreateStatus(long? contextTokens, long? contextLimit)
     {
         return new(
         "C:\\work\\Threadsmith\\src",

@@ -2,6 +2,7 @@ namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Text;
 using PrettyPrompt.Consoles;
+using Threadsmith.Interaction.Runs;
 using Threadsmith.Tui;
 using Xunit;
 
@@ -18,7 +19,7 @@ public static class Plan96ActiveRunInputTests
             CreateKey('\r', ConsoleKey.Enter),
         ]);
         var console = new BufferedPromptConsole(inner);
-        await using var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+        await using var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
 
         var signal = await session.ReadAsync().WaitAsync(TimeSpan.FromSeconds(2));
@@ -36,7 +37,7 @@ public static class Plan96ActiveRunInputTests
             CreateKey('\u001b', ConsoleKey.Escape),
         ]);
         var console = new BufferedPromptConsole(inner);
-        await using var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+        await using var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
 
         var signal = await session.ReadAsync().WaitAsync(TimeSpan.FromSeconds(2));
@@ -56,7 +57,7 @@ public static class Plan96ActiveRunInputTests
         ];
         var inner = new QueueConsole(expected);
         var console = new BufferedPromptConsole(inner);
-        var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+        var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var pendingSignal = session.ReadAsync(cancellation.Token);
@@ -80,7 +81,7 @@ public static class Plan96ActiveRunInputTests
         ];
         var inner = new QueueConsole([expected[0]]);
         var console = new BufferedPromptConsole(inner);
-        var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+        var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
         var pendingSignal = session.ReadAsync(cancellation.Token);
@@ -106,7 +107,7 @@ public static class Plan96ActiveRunInputTests
             AllowReadToReturn = new ManualResetEventSlim(initialState: false),
         };
         var console = new BufferedPromptConsole(inner);
-        var session = Assert.IsAssignableFrom<IActiveRunInputSession>(
+        var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
         var pendingSignal = session.ReadAsync();
         await inner.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));

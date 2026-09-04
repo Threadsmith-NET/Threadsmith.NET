@@ -3,6 +3,7 @@ namespace Threadsmith.CoreRuntime.Tests;
 using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Tui;
 using Xunit;
 

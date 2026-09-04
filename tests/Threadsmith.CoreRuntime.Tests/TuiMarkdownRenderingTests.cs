@@ -4,6 +4,9 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using PrettyPrompt.Consoles;
 using Spectre.Console;
+using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Markdown;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui;
 using Xunit;
 
@@ -33,18 +36,18 @@ public static class TuiMarkdownRenderingTests
             | one | two |
             """;
 
-        var result = new TuiMarkdownParser().Parse(source);
+        var result = new MarkdownParser().Parse(source);
 
         Assert.True(result.Succeeded);
-        var document = Assert.IsType<TuiMarkdownDocument>(result.Document);
-        Assert.Contains(document.Blocks, block => block is TuiMarkdownHeading { Level: 1 });
-        Assert.Contains(document.Blocks, block => block is TuiMarkdownQuote);
-        Assert.Contains(document.Blocks, block => block is TuiMarkdownCodeBlock { Language: "csharp" });
-        Assert.Contains(document.Blocks, block => block is TuiMarkdownTable);
-        var list = Assert.IsType<TuiMarkdownList>(document.Blocks.Single(block => block is TuiMarkdownList));
+        var document = Assert.IsType<MarkdownDocument>(result.Document);
+        Assert.Contains(document.Blocks, block => block is MarkdownHeading { Level: 1 });
+        Assert.Contains(document.Blocks, block => block is MarkdownQuote);
+        Assert.Contains(document.Blocks, block => block is MarkdownCodeBlock { Language: "csharp" });
+        Assert.Contains(document.Blocks, block => block is MarkdownTable);
+        var list = Assert.IsType<MarkdownList>(document.Blocks.Single(block => block is MarkdownList));
         Assert.Equal([true, false], list.Items.Select(item => item.IsChecked));
-        var paragraph = Assert.IsType<TuiMarkdownParagraph>(document.Blocks[1]);
-        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(TuiMarkdownSpanStyle.Strong));
+        var paragraph = Assert.IsType<MarkdownParagraph>(document.Blocks[1]);
+        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
         Assert.Contains(paragraph.Spans, span => span.LinkTarget?.Host == "example.com");
         var layout = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
         Assert.Contains("link (https://example.com/path)", layout, StringComparison.Ordinal);
@@ -54,11 +57,11 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Format_Headings_OmitsMarkdownDelimiters()
     {
-        var document = new TuiMarkdownDocument(
+        var document = new MarkdownDocument(
         [
-            new TuiMarkdownHeading(1, [new TuiMarkdownSpan("Primary")]),
-            new TuiMarkdownHeading(2, [new TuiMarkdownSpan("Secondary")]),
-            new TuiMarkdownHeading(6, [new TuiMarkdownSpan("Minor")]),
+            new MarkdownHeading(1, [new MarkdownSpan("Primary")]),
+            new MarkdownHeading(2, [new MarkdownSpan("Secondary")]),
+            new MarkdownHeading(6, [new MarkdownSpan("Minor")]),
         ]);
 
         var segments = TuiMarkdownLayout.Format(document, 120);
@@ -68,7 +71,7 @@ public static class TuiMarkdownRenderingTests
         Assert.DoesNotContain('#', visible);
         Assert.All(
             segments.Where(segment => !string.Equals(segment.Text, "\n", StringComparison.Ordinal)),
-            segment => Assert.Equal(TuiTextRole.MarkdownHeading, segment.Role));
+            segment => Assert.Equal(PresentationTextRole.MarkdownHeading, segment.Role));
     }
 
     /// <summary>Keeps HTML and unsafe link destinations inert and visibly recoverable.</summary>
@@ -77,10 +80,10 @@ public static class TuiMarkdownRenderingTests
     {
         const string source = "<script>bad()</script> [run](javascript:alert(1)) \u001b[31m";
 
-        var result = new TuiMarkdownParser().Parse(source);
+        var result = new MarkdownParser().Parse(source);
 
-        var document = Assert.IsType<TuiMarkdownDocument>(result.Document);
-        var paragraph = Assert.IsType<TuiMarkdownParagraph>(Assert.Single(document.Blocks));
+        var document = Assert.IsType<MarkdownDocument>(result.Document);
+        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(document.Blocks));
         var visible = string.Concat(paragraph.Spans.Select(span => span.Text));
         Assert.Contains("<script>bad()</script>", visible, StringComparison.Ordinal);
         Assert.Contains("javascript:alert(1)", visible, StringComparison.Ordinal);
@@ -97,16 +100,16 @@ public static class TuiMarkdownRenderingTests
         var encoded = TerminalControlEncoder.Encode(input);
 
         Assert.Equal("a\tb\n\\u000D\\u001B\\u0085\\uD800", encoded);
-        Assert.Equal(1, TuiMarkdownParser.SyntaxProfileVersion);
+        Assert.Equal(1, MarkdownParser.SyntaxProfileVersion);
     }
 
     /// <summary>Falls back to visibly escaped source when the configured source bound is exceeded.</summary>
     [Fact]
     public static void Parse_OversizedSource_FallsBackWithoutPartialDocument()
     {
-        var source = "\u001b" + new string('a', TuiMarkdownParser.MaximumSourceBytes + 1);
+        var source = "\u001b" + new string('a', MarkdownParser.MaximumSourceBytes + 1);
 
-        var result = new TuiMarkdownParser().Parse(source);
+        var result = new MarkdownParser().Parse(source);
 
         Assert.False(result.Succeeded);
         Assert.Null(result.Document);
@@ -118,18 +121,18 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Format_NarrowTable_UsesResponsiveKeyValueLayout()
     {
-        var table = new TuiMarkdownTable(
+        var table = new MarkdownTable(
         [
-            new TuiMarkdownTableRow(
+            new MarkdownTableRow(
                 true,
-                [[new TuiMarkdownSpan("Name")], [new TuiMarkdownSpan("Description")]]),
-            new TuiMarkdownTableRow(
+                [[new MarkdownSpan("Name")], [new MarkdownSpan("Description")]]),
+            new MarkdownTableRow(
                 false,
-                [[new TuiMarkdownSpan("one")], [new TuiMarkdownSpan(new string('x', 30))]]),
+                [[new MarkdownSpan("one")], [new MarkdownSpan(new string('x', 30))]]),
         ]);
 
         var segments = TuiMarkdownLayout.Format(
-            new TuiMarkdownDocument([table]),
+            new MarkdownDocument([table]),
             20);
         var visible = string.Concat(segments.Select(segment => segment.Text));
 
@@ -146,7 +149,7 @@ public static class TuiMarkdownRenderingTests
     public static void Format_TableLink_PreservesDestination()
     {
         const string source = "| Resource |\n| --- |\n| [docs](https://example.com/docs) |";
-        var document = Assert.IsType<TuiMarkdownDocument>(new TuiMarkdownParser().Parse(source).Document);
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
 
         var visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
 
@@ -157,14 +160,14 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Format_HeaderOnlyTable_WrapsAtTerminalWidth()
     {
-        var table = new TuiMarkdownTable(
+        var table = new MarkdownTable(
         [
-            new TuiMarkdownTableRow(
+            new MarkdownTableRow(
                 true,
-                [[new TuiMarkdownSpan(new string('x', 50))]]),
+                [[new MarkdownSpan(new string('x', 50))]]),
         ]);
 
-        var visible = string.Concat(TuiMarkdownLayout.Format(new TuiMarkdownDocument([table]), 20).Select(segment => segment.Text));
+        var visible = string.Concat(TuiMarkdownLayout.Format(new MarkdownDocument([table]), 20).Select(segment => segment.Text));
 
         Assert.All(
             visible.Split('\n', StringSplitOptions.RemoveEmptyEntries),
@@ -175,8 +178,8 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Parse_ZeroBasedOrderedList_PreservesStart()
     {
-        var document = Assert.IsType<TuiMarkdownDocument>(new TuiMarkdownParser().Parse("0. zero").Document);
-        var list = Assert.IsType<TuiMarkdownList>(Assert.Single(document.Blocks));
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse("0. zero").Document);
+        var list = Assert.IsType<MarkdownList>(Assert.Single(document.Blocks));
 
         Assert.Equal(0, list.Start);
         Assert.StartsWith(
@@ -189,14 +192,14 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Format_LongListAndQuote_UsesHangingIndentation()
     {
-        var document = new TuiMarkdownDocument(
+        var document = new MarkdownDocument(
         [
-            new TuiMarkdownList(
+            new MarkdownList(
                 false,
                 1,
-                [new TuiMarkdownListItem(null, [new TuiMarkdownParagraph([new TuiMarkdownSpan("one two three four five six")])])]),
-            new TuiMarkdownQuote(
-                [new TuiMarkdownParagraph([new TuiMarkdownSpan("quoted words continue across lines")])]),
+                [new MarkdownListItem(null, [new MarkdownParagraph([new MarkdownSpan("one two three four five six")])])]),
+            new MarkdownQuote(
+                [new MarkdownParagraph([new MarkdownSpan("quoted words continue across lines")])]),
         ]);
 
         var visible = string.Concat(TuiMarkdownLayout.Format(document, 20).Select(segment => segment.Text));
@@ -209,23 +212,23 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Collector_RenderedAndSourceModes_HonorTheirCadenceContracts()
     {
-        var rendered = new TuiModelAnswerCollector(renderMarkdown: true);
+        var rendered = new ModelAnswerCollector(renderMarkdown: true);
         Assert.Null(rendered.Append("**hel"));
         Assert.Null(rendered.Append("lo**"));
-        var renderedOutput = Assert.IsType<TuiMarkdownOutput>(rendered.Flush());
+        var renderedOutput = Assert.IsType<PresentationMarkdownItem>(rendered.Flush());
         Assert.True(renderedOutput.StartsAnswerBlock);
         Assert.Equal(
             "\n",
-            Assert.IsType<TuiTextSegment>(PrettyPromptConsoleSurface
+            Assert.IsType<PresentationTextSegment>(PrettyPromptConsoleSurface
                 .ProjectInteractiveOutputItem(renderedOutput, 120)[0])
                 .Text);
-        var paragraph = Assert.IsType<TuiMarkdownParagraph>(Assert.Single(renderedOutput.Document.Blocks));
+        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(renderedOutput.Document.Blocks));
         Assert.Equal("hello", string.Concat(paragraph.Spans.Select(span => span.Text)));
-        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(TuiMarkdownSpanStyle.Strong));
+        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
 
-        var source = new TuiModelAnswerCollector(renderMarkdown: false);
-        var first = Assert.IsType<TuiSourceOutput>(source.Append("a"));
-        var second = Assert.IsType<TuiSourceOutput>(source.Append("\u001bb"));
+        var source = new ModelAnswerCollector(renderMarkdown: false);
+        var first = Assert.IsType<PresentationSourceItem>(source.Append("a"));
+        var second = Assert.IsType<PresentationSourceItem>(source.Append("\u001bb"));
         Assert.Equal("a", first.SafeSource);
         Assert.Equal("\\u001Bb", second.SafeSource);
         Assert.True(first.StartsAnswerBlock);
@@ -237,7 +240,7 @@ public static class TuiMarkdownRenderingTests
             "\n",
             PrettyPromptConsoleSurface.ProjectInteractiveOutputItem(second, 120)[0].Text);
         Assert.Null(source.Flush());
-        var afterBoundary = Assert.IsType<TuiSourceOutput>(source.Append("next"));
+        var afterBoundary = Assert.IsType<PresentationSourceItem>(source.Append("next"));
         Assert.True(afterBoundary.StartsAnswerBlock);
     }
 
@@ -245,11 +248,11 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Collector_SourceModeEmptyDelta_DoesNotBecomeVisible()
     {
-        var source = new TuiModelAnswerCollector(renderMarkdown: false);
+        var source = new ModelAnswerCollector(renderMarkdown: false);
 
         Assert.Null(source.Append(string.Empty));
         Assert.Null(source.Flush());
-        var firstVisible = Assert.IsType<TuiSourceOutput>(source.Append("accepted"));
+        var firstVisible = Assert.IsType<PresentationSourceItem>(source.Append("accepted"));
 
         Assert.True(firstVisible.StartsAnswerBlock);
         Assert.Equal("accepted", firstVisible.SafeSource);
@@ -259,12 +262,12 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Collector_OversizedRenderedAnswer_SourceFallbackStartsAnswerBlock()
     {
-        var collector = new TuiModelAnswerCollector(renderMarkdown: true);
-        string buffered = new('a', TuiMarkdownParser.MaximumSourceBytes);
+        var collector = new ModelAnswerCollector(renderMarkdown: true);
+        string buffered = new('a', MarkdownParser.MaximumSourceBytes);
 
         Assert.Null(collector.Append(buffered));
-        var fallback = Assert.IsType<TuiSourceOutput>(collector.Append("b"));
-        var continuation = Assert.IsType<TuiSourceOutput>(collector.Append("c"));
+        var fallback = Assert.IsType<PresentationSourceItem>(collector.Append("b"));
+        var continuation = Assert.IsType<PresentationSourceItem>(collector.Append("c"));
 
         Assert.True(fallback.StartsAnswerBlock);
         Assert.Equal(buffered + "b", fallback.SafeSource);
@@ -282,10 +285,10 @@ public static class TuiMarkdownRenderingTests
     public static async Task WriteOutput_Redirected_PreservesSourceMarkersExactly()
     {
         const string source = "# Heading\n\nA **strong** [link](https://example.com).\u0085\ud800";
-        var collector = new TuiModelAnswerCollector(renderMarkdown: true);
+        var collector = new ModelAnswerCollector(renderMarkdown: true);
         Assert.Null(collector.Append(source));
-        var output = Assert.IsType<TuiMarkdownOutput>(collector.Flush());
-        var rawOutput = Assert.IsType<TuiRawSourceOutput>(
+        var output = Assert.IsType<PresentationMarkdownItem>(collector.Flush());
+        var rawOutput = Assert.IsType<PresentationRawSourceItem>(
             PrettyPromptConsoleSurface.ProjectOutputItem(output, isOutputRedirected: true));
         using var writer = new StringWriter();
 
@@ -316,7 +319,7 @@ public static class TuiMarkdownRenderingTests
 
         await surface.WriteAsync(
             "Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n",
-            TuiTextRole.Status,
+            PresentationTextRole.Status,
             TestContext.Current.CancellationToken);
 
         Assert.True(writer.WasFlushed);
@@ -345,20 +348,58 @@ public static class TuiMarkdownRenderingTests
 
         var write = surface.WriteAsync(
             "External changes detected; updating semantic model...\n",
-            TuiTextRole.Status,
+            PresentationTextRole.Status,
             cancellation.Token);
 
         await write.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Contains("External changes detected", writer.ToString(), StringComparison.Ordinal);
         var yielded = await read.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.False(yielded.IsSubmitted);
-        Assert.Equal(ConsoleInputKind.IdleOutputYield, yielded.Kind);
+        Assert.Equal(InteractionInputKind.IdleOutputYield, yielded.Kind);
 
         var resumedRead = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
         await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
         var input = await resumedRead.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(input.IsSubmitted);
         Assert.Empty(input.Text);
+    }
+
+    /// <summary>Repeated semantic composer reads retain PrettyPrompt's Up-arrow history.</summary>
+    [Fact]
+    public static async Task ReadComposer_RepeatedPrompt_RetainsHistory()
+    {
+        using var writer = new StringWriter();
+        var ansiConsole = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(writer),
+        });
+        var promptConsole = new QueuePromptConsole();
+        IInteractionSurface surface = new PrettyPromptConsoleSurface(
+            isOutputRedirected: false,
+            ansiConsole: ansiConsole,
+            promptConsole: promptConsole);
+        var request = new ComposerRequest("threadsmith > ", ComposerPurpose.Conversation);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var firstRead = Task.Run(
+            () => surface.ReadComposerAsync(request, cancellation.Token),
+            cancellation.Token);
+        await promptConsole.EnqueueAsync(CreateKey('h', ConsoleKey.H));
+        await promptConsole.EnqueueAsync(CreateKey('i', ConsoleKey.I));
+        await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
+        var first = await firstRead.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("hi", first.Text);
+
+        var historyRead = Task.Run(
+            () => surface.ReadComposerAsync(request, cancellation.Token),
+            cancellation.Token);
+        await promptConsole.EnqueueAsync(CreateKey('\0', ConsoleKey.UpArrow));
+        await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
+        var recalled = await historyRead.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("hi", recalled.Text);
     }
 
     /// <summary>A draft holds background output until deleting its last character makes the composer empty.</summary>
@@ -384,7 +425,7 @@ public static class TuiMarkdownRenderingTests
 
         var write = surface.WriteAsync(
             "Semantic model updated (1 file).\n",
-            TuiTextRole.Status,
+            PresentationTextRole.Status,
             cancellation.Token);
         Assert.False(write.IsCompleted);
         await promptConsole.EnqueueAsync(CreateKey('\b', ConsoleKey.Backspace));
@@ -393,7 +434,7 @@ public static class TuiMarkdownRenderingTests
         Assert.Contains("Semantic model updated", writer.ToString(), StringComparison.Ordinal);
         var yielded = await read.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.False(yielded.IsSubmitted);
-        Assert.Equal(ConsoleInputKind.IdleOutputYield, yielded.Kind);
+        Assert.Equal(InteractionInputKind.IdleOutputYield, yielded.Kind);
 
         var resumedRead = Task.Run(() => surface.ReadAsync(cancellation.Token), cancellation.Token);
         await promptConsole.EnqueueAsync(CreateKey('\r', ConsoleKey.Enter));
@@ -406,10 +447,10 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void FlushFinalAnswerForShutdown_IncompleteMarkdown_UsesSourceFallback()
     {
-        var collector = new TuiModelAnswerCollector(renderMarkdown: true);
+        var collector = new ModelAnswerCollector(renderMarkdown: true);
         Assert.Null(collector.Append("**partial"));
 
-        var output = Assert.IsType<TuiSourceOutput>(
+        var output = Assert.IsType<PresentationSourceItem>(
             ConversationalShell.FlushFinalAnswerForShutdown(collector));
 
         Assert.Equal("**partial", output.SafeSource);
@@ -420,9 +461,9 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static async Task WriteOutput_CancelledAdmission_TerminalizesBufferedSource()
     {
-        var collector = new TuiModelAnswerCollector(renderMarkdown: true);
+        var collector = new ModelAnswerCollector(renderMarkdown: true);
         Assert.Null(collector.Append("**buffered**\u001b"));
-        var markdown = Assert.IsType<TuiMarkdownOutput>(collector.Flush());
+        var markdown = Assert.IsType<PresentationMarkdownItem>(collector.Flush());
         var surface = new CancellationRejectingSurface();
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
@@ -434,7 +475,7 @@ public static class TuiMarkdownRenderingTests
                 cancellation.Token));
 
         Assert.Equal(2, surface.Attempts);
-        var source = Assert.IsType<TuiSourceOutput>(Assert.Single(surface.WrittenItems));
+        var source = Assert.IsType<PresentationSourceItem>(Assert.Single(surface.WrittenItems));
         Assert.Equal("**buffered**\u001b", source.RawSource);
         Assert.Equal("**buffered**\\u001B", source.SafeSource);
     }
@@ -443,22 +484,22 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void Collector_ParserFailureOrCancellation_FallsBackExactlyOnce()
     {
-        var failing = new TuiModelAnswerCollector(renderMarkdown: true, new FailingParser());
+        var failing = new ModelAnswerCollector(renderMarkdown: true, new FailingParser());
         Assert.Null(failing.Append("a\u001bb"));
-        var failure = Assert.IsType<TuiSourceOutput>(failing.Flush());
+        var failure = Assert.IsType<PresentationSourceItem>(failing.Flush());
         Assert.Equal("a\\u001Bb", failure.SafeSource);
         Assert.Null(failing.Flush());
 
-        var unsafeDocument = new TuiModelAnswerCollector(renderMarkdown: true, new UnsafeDocumentParser());
+        var unsafeDocument = new ModelAnswerCollector(renderMarkdown: true, new UnsafeDocumentParser());
         Assert.Null(unsafeDocument.Append("accepted"));
-        var unsafeFallback = Assert.IsType<TuiSourceOutput>(unsafeDocument.Flush());
+        var unsafeFallback = Assert.IsType<PresentationSourceItem>(unsafeDocument.Flush());
         Assert.Equal("accepted", unsafeFallback.SafeSource);
 
-        var cancelled = new TuiModelAnswerCollector(renderMarkdown: true);
+        var cancelled = new ModelAnswerCollector(renderMarkdown: true);
         Assert.Null(cancelled.Append("**partial"));
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        var cancellationOutput = Assert.IsType<TuiSourceOutput>(cancelled.Flush(cancellation.Token));
+        var cancellationOutput = Assert.IsType<PresentationSourceItem>(cancelled.Flush(cancellation.Token));
         Assert.Equal("**partial", cancellationOutput.SafeSource);
     }
 
@@ -469,22 +510,22 @@ public static class TuiMarkdownRenderingTests
         foreach (var configured in BuiltInThemes.Create())
         {
             var resolver = new TuiThemeResolver(configured.Theme);
-            Assert.True(resolver.Resolve(TuiTextRole.MarkdownHeading).Decorations?.HasFlag(TuiTextDecoration.Bold));
-            Assert.True(resolver.Resolve(TuiTextRole.MarkdownEmphasis).Decorations?.HasFlag(TuiTextDecoration.Italic));
+            Assert.True(resolver.Resolve(PresentationTextRole.MarkdownHeading).Decorations?.HasFlag(TuiTextDecoration.Bold));
+            Assert.True(resolver.Resolve(PresentationTextRole.MarkdownEmphasis).Decorations?.HasFlag(TuiTextDecoration.Italic));
         }
 
         var customTheme = new TuiTheme(
             "custom",
             [KeyValuePair.Create(
-                TuiTextRole.Default,
+                PresentationTextRole.Default,
                 new TuiTextStyle(Decorations: TuiTextDecoration.None))]);
         var customResolver = new TuiThemeResolver(customTheme);
         Assert.True(customResolver
-            .Resolve(TuiTextRole.MarkdownHeading)
+            .Resolve(PresentationTextRole.MarkdownHeading)
             .Decorations?.HasFlag(TuiTextDecoration.Bold));
 
         var suppressed = new TuiThemeResolver(BuiltInThemes.Create()[1].Theme, suppressStyles: true);
-        Assert.Equal(new TuiTextStyle(), suppressed.Resolve(TuiTextRole.MarkdownHeading));
+        Assert.Equal(new TuiTextStyle(), suppressed.Resolve(PresentationTextRole.MarkdownHeading));
     }
 
     /// <summary>Loads markdown rendering through normal layered configuration with safe malformed-value recovery.</summary>
@@ -510,14 +551,14 @@ public static class TuiMarkdownRenderingTests
     {
         internal int Attempts { get; private set; }
 
-        internal IReadOnlyList<TuiOutputItem> WrittenItems { get; private set; } = [];
+        internal IReadOnlyList<PresentationItem> WrittenItems { get; private set; } = [];
 
         public Task SetPromptAsync(string prompt, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }
 
-        public Task<ConsoleInput> ReadAsync(CancellationToken cancellationToken = default)
+        public Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }
@@ -540,14 +581,14 @@ public static class TuiMarkdownRenderingTests
 
         public Task WriteAsync(
             string text,
-            TuiTextRole role = TuiTextRole.Default,
+            PresentationTextRole role = PresentationTextRole.Default,
             CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }
 
         public Task WriteOutputAsync(
-            IReadOnlyList<TuiOutputItem> items,
+            IReadOnlyList<PresentationItem> items,
             CancellationToken cancellationToken = default)
         {
             Attempts++;
@@ -705,23 +746,23 @@ public static class TuiMarkdownRenderingTests
         }
     }
 
-    private sealed class FailingParser : ITuiMarkdownParser
+    private sealed class FailingParser : IMarkdownParser
     {
         /// <inheritdoc />
-        public TuiMarkdownParseResult Parse(string source)
+        public MarkdownParseResult Parse(string source)
         {
             throw new InvalidOperationException("Injected parser failure.");
         }
     }
 
-    private sealed class UnsafeDocumentParser : ITuiMarkdownParser
+    private sealed class UnsafeDocumentParser : IMarkdownParser
     {
         /// <inheritdoc />
-        public TuiMarkdownParseResult Parse(string source)
+        public MarkdownParseResult Parse(string source)
         {
             return new(
-                        new TuiMarkdownDocument(
-                            [new TuiMarkdownParagraph([new TuiMarkdownSpan("unsafe\u001b")])]),
+                        new MarkdownDocument(
+                            [new MarkdownParagraph([new MarkdownSpan("unsafe\u001b")])]),
                         source,
                         null);
         }

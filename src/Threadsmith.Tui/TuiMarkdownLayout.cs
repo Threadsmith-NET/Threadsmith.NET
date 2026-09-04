@@ -4,22 +4,24 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using PrettyPrompt.Rendering;
+using Threadsmith.Interaction.Markdown;
+using Threadsmith.Interaction.Presentation;
 
 /// <summary>Deterministic terminal-neutral layout for semantic markdown documents.</summary>
 internal static class TuiMarkdownLayout
 {
     /// <summary>Formats a document into themed semantic segments for the active terminal width.</summary>
-    internal static IReadOnlyList<TuiTextSegment> Format(TuiMarkdownDocument document, int width)
+    internal static IReadOnlyList<PresentationTextSegment> Format(MarkdownDocument document, int width)
     {
         ArgumentNullException.ThrowIfNull(document);
-        TuiMarkdownValidator.Validate(document);
-        var segments = new List<TuiTextSegment>();
+        MarkdownValidator.Validate(document);
+        var segments = new List<PresentationTextSegment>();
         var safeWidth = Math.Max(20, width);
         for (var index = 0; index < document.Blocks.Length; index++)
         {
             if (index > 0)
             {
-                segments.Add(new TuiTextSegment("\n", TuiTextRole.Default));
+                segments.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
             }
 
             AppendBlock(segments, document.Blocks[index], safeWidth, string.Empty);
@@ -27,65 +29,65 @@ internal static class TuiMarkdownLayout
 
         if (segments.Count > 0 && !segments[^1].Text.EndsWith('\n'))
         {
-            segments.Add(new TuiTextSegment("\n", TuiTextRole.Default));
+            segments.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
         }
 
         return segments;
     }
 
     private static void AppendBlock(
-        List<TuiTextSegment> segments,
-        TuiMarkdownBlock block,
+        List<PresentationTextSegment> segments,
+        MarkdownBlock block,
         int width,
         string prefix)
     {
         switch (block)
         {
-            case TuiMarkdownParagraph paragraph:
+            case MarkdownParagraph paragraph:
                 AppendWrappedSpans(
                     segments,
                     paragraph.Spans,
                     width,
                     prefix,
                     prefix,
-                    TuiTextRole.MarkdownQuote);
+                    PresentationTextRole.MarkdownQuote);
                 break;
-            case TuiMarkdownHeading heading:
+            case MarkdownHeading heading:
                 AppendWrappedSpans(
                     segments,
                     heading.Spans,
                     width,
                     prefix,
                     prefix,
-                    TuiTextRole.MarkdownHeading,
-                    TuiTextRole.MarkdownHeading);
+                    PresentationTextRole.MarkdownHeading,
+                    PresentationTextRole.MarkdownHeading);
                 AppendHeadingUnderline(segments, heading, width, prefix);
                 break;
-            case TuiMarkdownQuote quote:
+            case MarkdownQuote quote:
                 foreach (var child in quote.Blocks)
                 {
                     AppendBlock(segments, child, width, prefix + "> ");
                 }
 
                 break;
-            case TuiMarkdownList list:
+            case MarkdownList list:
                 AppendList(segments, list, width, prefix);
                 break;
-            case TuiMarkdownCodeBlock code:
+            case MarkdownCodeBlock code:
                 var language = code.Language is null ? string.Empty : code.Language;
-                segments.Add(new TuiTextSegment($"{prefix}```{language}\n", TuiTextRole.MarkdownCode));
+                segments.Add(new PresentationTextSegment($"{prefix}```{language}\n", PresentationTextRole.MarkdownCode));
                 foreach (var line in code.Code.Split('\n'))
                 {
-                    segments.Add(new TuiTextSegment($"{prefix}{line}\n", TuiTextRole.MarkdownCode));
+                    segments.Add(new PresentationTextSegment($"{prefix}{line}\n", PresentationTextRole.MarkdownCode));
                 }
 
-                segments.Add(new TuiTextSegment($"{prefix}```\n", TuiTextRole.MarkdownCode));
+                segments.Add(new PresentationTextSegment($"{prefix}```\n", PresentationTextRole.MarkdownCode));
                 break;
-            case TuiMarkdownTable table:
+            case MarkdownTable table:
                 AppendTable(segments, table, width, prefix);
                 break;
-            case TuiMarkdownThematicBreak:
-                segments.Add(new TuiTextSegment($"{prefix}---\n", TuiTextRole.MarkdownTableBorder));
+            case MarkdownThematicBreak:
+                segments.Add(new PresentationTextSegment($"{prefix}---\n", PresentationTextRole.MarkdownTableBorder));
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported semantic markdown block '{block.GetType().Name}'.");
@@ -93,8 +95,8 @@ internal static class TuiMarkdownLayout
     }
 
     private static void AppendHeadingUnderline(
-        List<TuiTextSegment> segments,
-        TuiMarkdownHeading heading,
+        List<PresentationTextSegment> segments,
+        MarkdownHeading heading,
         int width,
         string prefix)
     {
@@ -108,14 +110,14 @@ internal static class TuiMarkdownLayout
         var headingWidth = heading.Spans.Sum(span => GetWidth(span.Text));
         var underlineWidth = Math.Min(availableWidth, Math.Max(3, headingWidth));
         var underline = heading.Level == 1 ? '═' : '─';
-        segments.Add(new TuiTextSegment(
+        segments.Add(new PresentationTextSegment(
             boundedPrefix + new string(underline, underlineWidth) + "\n",
-            TuiTextRole.MarkdownHeading));
+            PresentationTextRole.MarkdownHeading));
     }
 
     private static void AppendList(
-        List<TuiTextSegment> segments,
-        TuiMarkdownList list,
+        List<PresentationTextSegment> segments,
+        MarkdownList list,
         int width,
         string prefix)
     {
@@ -134,7 +136,7 @@ internal static class TuiMarkdownLayout
             var itemPrefix = prefix + marker + task;
             if (item.Blocks.Length == 0)
             {
-                segments.Add(new TuiTextSegment(itemPrefix + "\n", TuiTextRole.MarkdownListMarker));
+                segments.Add(new PresentationTextSegment(itemPrefix + "\n", PresentationTextRole.MarkdownListMarker));
                 continue;
             }
 
@@ -148,13 +150,13 @@ internal static class TuiMarkdownLayout
     }
 
     private static void AppendListFirstBlock(
-        List<TuiTextSegment> segments,
-        TuiMarkdownBlock block,
+        List<PresentationTextSegment> segments,
+        MarkdownBlock block,
         int width,
         string prefix,
         string continuationPrefix)
     {
-        if (block is TuiMarkdownParagraph paragraph)
+        if (block is MarkdownParagraph paragraph)
         {
             AppendWrappedSpans(
                 segments,
@@ -162,7 +164,7 @@ internal static class TuiMarkdownLayout
                 width,
                 prefix,
                 continuationPrefix,
-                TuiTextRole.MarkdownListMarker);
+                PresentationTextRole.MarkdownListMarker);
             return;
         }
 
@@ -170,8 +172,8 @@ internal static class TuiMarkdownLayout
     }
 
     private static void AppendTable(
-        List<TuiTextSegment> segments,
-        TuiMarkdownTable table,
+        List<PresentationTextSegment> segments,
+        MarkdownTable table,
         int width,
         string prefix)
     {
@@ -198,20 +200,20 @@ internal static class TuiMarkdownLayout
         {
             for (var rowIndex = 0; rowIndex < textRows.Length; rowIndex++)
             {
-                segments.Add(new TuiTextSegment(prefix + "| ", TuiTextRole.MarkdownTableBorder));
+                segments.Add(new PresentationTextSegment(prefix + "| ", PresentationTextRole.MarkdownTableBorder));
                 for (var column = 0; column < columns; column++)
                 {
-                    segments.Add(new TuiTextSegment(
+                    segments.Add(new PresentationTextSegment(
                         Pad(textRows[rowIndex][column], columnWidths[column]),
-                        table.Rows[rowIndex].IsHeader ? TuiTextRole.MarkdownStrong : TuiTextRole.Default));
-                    segments.Add(new TuiTextSegment(" | ", TuiTextRole.MarkdownTableBorder));
+                        table.Rows[rowIndex].IsHeader ? PresentationTextRole.MarkdownStrong : PresentationTextRole.Default));
+                    segments.Add(new PresentationTextSegment(" | ", PresentationTextRole.MarkdownTableBorder));
                 }
 
-                segments.Add(new TuiTextSegment("\n", TuiTextRole.Default));
+                segments.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
                 if (table.Rows[rowIndex].IsHeader)
                 {
                     var separator = prefix + "|" + string.Join("|", columnWidths.Select(value => new string('-', value + 2))) + "|\n";
-                    segments.Add(new TuiTextSegment(separator, TuiTextRole.MarkdownTableBorder));
+                    segments.Add(new PresentationTextSegment(separator, PresentationTextRole.MarkdownTableBorder));
                 }
             }
 
@@ -227,11 +229,11 @@ internal static class TuiMarkdownLayout
                 var continuationPrefix = prefix + new string(' ', GetWidth($"- Column {column + 1}: "));
                 AppendWrappedSpans(
                     segments,
-                    [new TuiMarkdownSpan(headers[column])],
+                    [new MarkdownSpan(headers[column])],
                     width,
                     valuePrefix,
                     continuationPrefix,
-                    TuiTextRole.MarkdownTableBorder);
+                    PresentationTextRole.MarkdownTableBorder);
             }
 
             return;
@@ -249,33 +251,33 @@ internal static class TuiMarkdownLayout
                 var continuationPrefix = prefix + new string(' ', GetWidth($"- {label}: "));
                 AppendWrappedSpans(
                     segments,
-                    [new TuiMarkdownSpan(textRows[rowIndex][column])],
+                    [new MarkdownSpan(textRows[rowIndex][column])],
                     width,
                     valuePrefix,
                     continuationPrefix,
-                    TuiTextRole.MarkdownTableBorder);
+                    PresentationTextRole.MarkdownTableBorder);
             }
 
             if (rowIndex + 1 < textRows.Length)
             {
-                segments.Add(new TuiTextSegment("\n", TuiTextRole.Default));
+                segments.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
             }
         }
     }
 
     private static void AppendWrappedSpans(
-        List<TuiTextSegment> output,
-        ImmutableArray<TuiMarkdownSpan> spans,
+        List<PresentationTextSegment> output,
+        ImmutableArray<MarkdownSpan> spans,
         int width,
         string firstPrefix,
         string continuationPrefix,
-        TuiTextRole prefixRole,
-        TuiTextRole? forcedRole = null)
+        PresentationTextRole prefixRole,
+        PresentationTextRole? forcedRole = null)
     {
         firstPrefix = BoundPrefix(firstPrefix, width);
         continuationPrefix = BoundPrefix(continuationPrefix, width);
         var inlineSegments = CreateInlineSegments(spans, forcedRole);
-        output.Add(new TuiTextSegment(firstPrefix, prefixRole));
+        output.Add(new PresentationTextSegment(firstPrefix, prefixRole));
         var column = GetWidth(firstPrefix);
         var pendingWhitespace = string.Empty;
         foreach (var segment in inlineSegments)
@@ -286,7 +288,7 @@ internal static class TuiMarkdownLayout
                 if (segment.Text[index] == '\n')
                 {
                     pendingWhitespace = string.Empty;
-                    output.Add(new TuiTextSegment("\n" + continuationPrefix, prefixRole));
+                    output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                     column = GetWidth(continuationPrefix);
                     index++;
                     continue;
@@ -314,13 +316,13 @@ internal static class TuiMarkdownLayout
                 var whitespaceWidth = GetWidth(pendingWhitespace);
                 if (column > continuationWidth && column + whitespaceWidth + tokenWidth > width)
                 {
-                    output.Add(new TuiTextSegment("\n" + continuationPrefix, prefixRole));
+                    output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                     column = continuationWidth;
                     pendingWhitespace = string.Empty;
                 }
                 else if (pendingWhitespace.Length > 0 && column > continuationWidth)
                 {
-                    output.Add(new TuiTextSegment(pendingWhitespace, TuiTextRole.Default));
+                    output.Add(new PresentationTextSegment(pendingWhitespace, PresentationTextRole.Default));
                     column += whitespaceWidth;
                     pendingWhitespace = string.Empty;
                 }
@@ -337,25 +339,25 @@ internal static class TuiMarkdownLayout
                         : 0;
                     if (length == 0)
                     {
-                        output.Add(new TuiTextSegment("\n" + continuationPrefix, prefixRole));
+                        output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                         column = continuationWidth;
                         continue;
                     }
 
                     var fitted = token[..length];
-                    output.Add(new TuiTextSegment(fitted, segment.Role, segment.LinkTarget));
+                    output.Add(new PresentationTextSegment(fitted, segment.Role, segment.LinkTarget));
                     token = token[length..];
                     column += GetWidth(fitted);
                     if (token.Length > 0)
                     {
-                        output.Add(new TuiTextSegment("\n" + continuationPrefix, prefixRole));
+                        output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                         column = continuationWidth;
                     }
                 }
 
                 if (token.Length > 0)
                 {
-                    output.Add(new TuiTextSegment(token, segment.Role, segment.LinkTarget));
+                    output.Add(new PresentationTextSegment(token, segment.Role, segment.LinkTarget));
                     column += GetWidth(token);
                 }
 
@@ -363,14 +365,14 @@ internal static class TuiMarkdownLayout
             }
         }
 
-        output.Add(new TuiTextSegment("\n", TuiTextRole.Default));
+        output.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
     }
 
-    private static IReadOnlyList<TuiTextSegment> CreateInlineSegments(
-        ImmutableArray<TuiMarkdownSpan> spans,
-        TuiTextRole? forcedRole)
+    private static IReadOnlyList<PresentationTextSegment> CreateInlineSegments(
+        ImmutableArray<MarkdownSpan> spans,
+        PresentationTextRole? forcedRole)
     {
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
         Uri? previousLink = null;
         foreach (var span in spans)
         {
@@ -380,7 +382,7 @@ internal static class TuiMarkdownLayout
             }
 
             var role = forcedRole ?? GetRole(span);
-            segments.Add(new TuiTextSegment(span.Text, role, span.LinkTarget));
+            segments.Add(new PresentationTextSegment(span.Text, role, span.LinkTarget));
             previousLink = span.LinkTarget;
         }
 
@@ -392,27 +394,27 @@ internal static class TuiMarkdownLayout
         return segments;
     }
 
-    private static void AppendLinkDestination(List<TuiTextSegment> segments, Uri link)
+    private static void AppendLinkDestination(List<PresentationTextSegment> segments, Uri link)
     {
-        segments.Add(new TuiTextSegment($" ({link.AbsoluteUri})", TuiTextRole.Hyperlink, link));
+        segments.Add(new PresentationTextSegment($" ({link.AbsoluteUri})", PresentationTextRole.Hyperlink, link));
     }
 
-    private static TuiTextRole GetRole(TuiMarkdownSpan span)
+    private static PresentationTextRole GetRole(MarkdownSpan span)
     {
         return span.LinkTarget is not null
-                ? TuiTextRole.Hyperlink
-                : span.Style.HasFlag(TuiMarkdownSpanStyle.Code)
-                    ? TuiTextRole.MarkdownCode
-                    : span.Style.HasFlag(TuiMarkdownSpanStyle.Strong)
-                        ? TuiTextRole.MarkdownStrong
-                        : span.Style.HasFlag(TuiMarkdownSpanStyle.Strikethrough)
-                            ? TuiTextRole.MarkdownStrikethrough
-                            : span.Style.HasFlag(TuiMarkdownSpanStyle.Emphasis)
-                                ? TuiTextRole.MarkdownEmphasis
-                                : TuiTextRole.Default;
+                ? PresentationTextRole.Hyperlink
+                : span.Style.HasFlag(MarkdownSpanStyle.Code)
+                    ? PresentationTextRole.MarkdownCode
+                    : span.Style.HasFlag(MarkdownSpanStyle.Strong)
+                        ? PresentationTextRole.MarkdownStrong
+                        : span.Style.HasFlag(MarkdownSpanStyle.Strikethrough)
+                            ? PresentationTextRole.MarkdownStrikethrough
+                            : span.Style.HasFlag(MarkdownSpanStyle.Emphasis)
+                                ? PresentationTextRole.MarkdownEmphasis
+                                : PresentationTextRole.Default;
     }
 
-    private static string Flatten(ImmutableArray<TuiMarkdownSpan> spans)
+    private static string Flatten(ImmutableArray<MarkdownSpan> spans)
     {
         var builder = new StringBuilder();
         Uri? previousLink = null;
@@ -451,131 +453,5 @@ internal static class TuiMarkdownLayout
     {
         var padding = width - GetWidth(value);
         return padding > 0 ? value + new string(' ', padding) : value;
-    }
-}
-
-/// <summary>One serialized output operation accepted by a console surface.</summary>
-internal abstract record TuiOutputItem;
-
-/// <summary>Already projected semantic text segments.</summary>
-internal sealed record TuiSegmentOutput(IReadOnlyList<TuiTextSegment> Segments) : TuiOutputItem;
-
-/// <summary>Exact model source paired with its terminal-safe presentation copy.</summary>
-internal sealed record TuiSourceOutput(
-    string RawSource,
-    string SafeSource,
-    bool StartsAnswerBlock) : TuiOutputItem;
-
-/// <summary>Validated semantic markdown retaining exact and terminal-safe source representations.</summary>
-internal sealed record TuiMarkdownOutput(
-    TuiMarkdownDocument Document,
-    string RawSource,
-    string SafeSource,
-    bool StartsAnswerBlock) : TuiOutputItem;
-
-/// <summary>Capability-gated exact source admitted only by a redirected console surface.</summary>
-internal sealed record TuiRawSourceOutput(string RawSource) : TuiOutputItem;
-
-/// <summary>Collects one answer until an ordered visible-state boundary.</summary>
-internal sealed class TuiModelAnswerCollector
-{
-    private readonly bool _renderMarkdown;
-    private readonly ITuiMarkdownParser _parser;
-    private readonly StringBuilder _source = new();
-    private long _sourceBytes;
-    private bool _answerVisible;
-    private bool _sourceStreaming;
-
-    /// <summary>Initializes a new instance of the <see cref="TuiModelAnswerCollector"/> class.</summary>
-    internal TuiModelAnswerCollector(bool renderMarkdown, ITuiMarkdownParser? parser = null)
-    {
-        _renderMarkdown = renderMarkdown;
-        _parser = parser ?? new TuiMarkdownParser();
-    }
-
-    /// <summary>Appends a model delta and returns immediate safe-source output only in source mode.</summary>
-    internal TuiOutputItem? Append(string delta)
-    {
-        ArgumentNullException.ThrowIfNull(delta);
-        if (delta.Length == 0)
-        {
-            return null;
-        }
-
-        if (!_renderMarkdown || _sourceStreaming)
-        {
-            var startsSourceBlock = !_answerVisible;
-            _answerVisible = true;
-            return CreateSourceOutput(delta, startsSourceBlock);
-        }
-
-        _source.Append(delta);
-        _sourceBytes += Encoding.UTF8.GetByteCount(delta);
-        if (_sourceBytes <= TuiMarkdownParser.MaximumSourceBytes)
-        {
-            return null;
-        }
-
-        _sourceStreaming = true;
-        var source = _source.ToString();
-        _source.Clear();
-        _sourceBytes = 0;
-        var startsAnswerBlock = !_answerVisible;
-        _answerVisible = true;
-        return CreateSourceOutput(source, startsAnswerBlock);
-    }
-
-    /// <summary>Closes the current answer before the next ordered boundary.</summary>
-    internal TuiOutputItem? Flush(CancellationToken cancellationToken = default)
-    {
-        if (_sourceStreaming)
-        {
-            _answerVisible = false;
-            _sourceStreaming = false;
-            return null;
-        }
-
-        if (_source.Length == 0)
-        {
-            _answerVisible = false;
-            return null;
-        }
-
-        var source = _source.ToString();
-        _answerVisible = false;
-        _source.Clear();
-        _sourceBytes = 0;
-        if (!_renderMarkdown || cancellationToken.IsCancellationRequested)
-        {
-            return CreateSourceOutput(source, startsAnswerBlock: true);
-        }
-
-        try
-        {
-            var parsed = _parser.Parse(source);
-            if (parsed.Document is { } document)
-            {
-                TuiMarkdownValidator.Validate(document);
-                return new TuiMarkdownOutput(
-                    document,
-                    source,
-                    TerminalControlEncoder.Encode(source),
-                    StartsAnswerBlock: true);
-            }
-
-            return new TuiSourceOutput(
-                source,
-                TerminalControlEncoder.Encode(parsed.SafeSource),
-                StartsAnswerBlock: true);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return CreateSourceOutput(source, startsAnswerBlock: true);
-        }
-    }
-
-    private static TuiSourceOutput CreateSourceOutput(string source, bool startsAnswerBlock)
-    {
-        return new(source, TerminalControlEncoder.Encode(source), startsAnswerBlock);
     }
 }

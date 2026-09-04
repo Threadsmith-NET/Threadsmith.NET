@@ -28,6 +28,7 @@
     <ProjectReference Include="..\Threadsmith.Workspaces\Threadsmith.Workspaces.csproj" />
     <ProjectReference Include="..\Threadsmith.Validation\Threadsmith.Validation.csproj" />
     <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+    <ProjectReference Include="..\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
     <ProjectReference Include="..\Threadsmith.Extensions.Runtime\Threadsmith.Extensions.Runtime.csproj" />
     <ProjectReference Include="..\Threadsmith.Tui\Threadsmith.Tui.csproj" />

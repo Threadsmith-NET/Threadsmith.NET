@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Interaction</RootNamespace>
+    <Description>Frontend-neutral interactive command, review, run, status, event, and Markdown coordination.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+    <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.Tui" />
+    <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.RepositoryLifecycle.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.SessionStatus.Tests" />
+  </ItemGroup>
+
+</Project>

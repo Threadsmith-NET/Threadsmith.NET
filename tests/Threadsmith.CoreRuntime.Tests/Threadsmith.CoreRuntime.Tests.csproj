@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Cli\Threadsmith.Cli.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tui\Threadsmith.Tui.csproj" />

@@ -33,9 +33,14 @@ internal sealed class InteractionSessionSurface
     /// <summary>Reads the current composer request.</summary>
     internal Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
     {
-        var purpose = string.Equals(_prompt, "steer > ", StringComparison.Ordinal)
-            ? ComposerPurpose.Steering
-            : ComposerPurpose.Conversation;
+        return ReadAsync(ComposerPurpose.Conversation, cancellationToken);
+    }
+
+    /// <summary>Reads a composer request for an explicit semantic purpose.</summary>
+    internal Task<InteractionInput> ReadAsync(
+        ComposerPurpose purpose,
+        CancellationToken cancellationToken = default)
+    {
         return _surface.ReadComposerAsync(new ComposerRequest(_prompt, purpose), cancellationToken);
     }
 
@@ -64,9 +69,19 @@ internal sealed class InteractionSessionSurface
         var result = await _surface.SelectAsync(
             new InteractionSelectionRequest(title, options),
             cancellationToken);
-        if (result.IsCancelled || result.SelectedOptionId is null)
+        if (result.IsCancelled)
         {
-            throw new OperationCanceledException("The interaction selection was cancelled.", cancellationToken);
+            if (result.SelectedOptionId is null)
+            {
+                return -1;
+            }
+
+            throw new InvalidOperationException("The cancelled interaction selection included an identity.");
+        }
+
+        if (result.SelectedOptionId is null)
+        {
+            throw new InvalidOperationException("The interaction surface returned no selection identity.");
         }
 
         if (!int.TryParse(
@@ -151,6 +166,7 @@ internal static class InteractionInputReader
         InteractionSessionSurface surface,
         string? prompt,
         PresentationTextRole promptRole,
+        ComposerPurpose purpose,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(surface);
@@ -161,7 +177,7 @@ internal static class InteractionInputReader
                 await surface.WriteAsync(prompt, promptRole, cancellationToken);
             }
 
-            var input = await surface.ReadAsync(cancellationToken);
+            var input = await surface.ReadAsync(purpose, cancellationToken);
             if (input.Kind != InteractionInputKind.IdleOutputYield)
             {
                 return input;

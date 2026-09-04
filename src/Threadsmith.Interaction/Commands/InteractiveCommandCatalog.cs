@@ -53,8 +53,10 @@ public static class InteractiveCommandCatalog
     private static readonly FrozenDictionary<string, InteractiveCommandDescriptor> ByName = Entries
         .ToFrozenDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
 
+    private static readonly IReadOnlyList<InteractiveCommandDescriptor> ReadOnlyEntries = Array.AsReadOnly(Entries);
+
     /// <summary>Gets the ordered immutable command descriptors.</summary>
-    public static IReadOnlyList<InteractiveCommandDescriptor> All => Entries;
+    public static IReadOnlyList<InteractiveCommandDescriptor> All => ReadOnlyEntries;
 
     /// <summary>Finds a command by canonical name.</summary>
     /// <param name="name">Slash-command name.</param>

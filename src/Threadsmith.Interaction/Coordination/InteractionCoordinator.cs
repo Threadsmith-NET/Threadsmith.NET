@@ -912,6 +912,11 @@ public sealed class InteractionCoordinator
                             "Resume session",
                             labels,
                             lifetime.Token);
+                        if (selected < 0)
+                        {
+                            continue;
+                        }
+
                         target = sessions[selected].SessionId;
                     }
                     else if (Guid.TryParse(argument, out var parsedSessionId))
@@ -1134,6 +1139,7 @@ public sealed class InteractionCoordinator
                             _surface,
                             "Repository path:\n",
                             PresentationTextRole.Status,
+                            ComposerPurpose.Secondary,
                             lifetime.Token);
                         openPath = pathInput.IsSubmitted ? pathInput.Text.Trim() : string.Empty;
                     }
@@ -1349,6 +1355,7 @@ public sealed class InteractionCoordinator
                                                 _surface,
                                                 null,
                                                 PresentationTextRole.Status,
+                                                ComposerPurpose.Steering,
                                                 operation.Token);
                                             if (!steeringInput.IsSubmitted)
                                             {
@@ -4264,6 +4271,7 @@ public sealed class InteractionCoordinator
                 _surface,
                 "Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n",
                 PresentationTextRole.Status,
+                ComposerPurpose.Secondary,
                 cancellationToken);
             switch (input.IsSubmitted ? input.Text.Trim() : "4")
             {
@@ -4277,6 +4285,7 @@ public sealed class InteractionCoordinator
                         _surface,
                         "Rejection reason:\n",
                         PresentationTextRole.Status,
+                        ComposerPurpose.Secondary,
                         cancellationToken);
                     _ = reason.IsSubmitted && !string.IsNullOrWhiteSpace(reason.Text)
                         ? await controller.RejectActivePlanAsync(reason.Text, cancellationToken)
@@ -4289,6 +4298,7 @@ public sealed class InteractionCoordinator
                         _surface,
                         "Revision instructions:\n",
                         PresentationTextRole.Status,
+                        ComposerPurpose.Secondary,
                         cancellationToken);
                     if (revision.IsSubmitted && !string.IsNullOrWhiteSpace(revision.Text))
                     {
@@ -4345,6 +4355,7 @@ public sealed class InteractionCoordinator
             _surface,
             "Mutation review: 1 apply approved set, 2 discard\n",
             PresentationTextRole.Status,
+            ComposerPurpose.Secondary,
             cancellationToken);
         if (mutationInput.IsSubmitted && mutationInput.Text.Trim() == "1")
         {

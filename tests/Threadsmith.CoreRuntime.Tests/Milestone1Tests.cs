@@ -14,6 +14,7 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Hooks;
+using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Markdown;
@@ -32,6 +33,34 @@ public static class Milestone1Tests
 {
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
     public static TheoryData<RunPhase[]> LegalTransitionPaths => [.. GetLegalTransitionPaths()];
+
+    /// <summary>A cancelled semantic selection maps to the coordinator's negative sentinel.</summary>
+    [Fact]
+    public static async Task InteractionSessionSurface_CancelledSelection_ReturnsNegativeSentinel()
+    {
+        var surface = new RecordingInteractionSurface(
+            [],
+            new InteractionSelectionResult(null, IsCancelled: true));
+
+        var selected = await new InteractionSessionSurface(surface).SelectAsync(
+            "Choose",
+            ["First"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(-1, selected);
+    }
+
+    /// <summary>The public command list cannot be cast back to and mutate its backing array.</summary>
+    [Fact]
+    public static void InteractiveCommandCatalog_All_DoesNotExposeMutableBackingArray()
+    {
+        var commands = InteractiveCommandCatalog.All;
+
+        Assert.IsNotType<InteractiveCommandDescriptor[]>(commands);
+        var collection = Assert.IsAssignableFrom<ICollection<InteractiveCommandDescriptor>>(commands);
+        Assert.True(collection.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() => collection[0] = commands[^1]);
+    }
 
     /// <summary>Every declared legal transition path succeeds and emits one event per edge.</summary>
     [Theory]
@@ -1227,12 +1256,14 @@ public static class Milestone1Tests
             new InteractionSessionSurface(surface),
             prompt,
             PresentationTextRole.Status,
+            ComposerPurpose.Secondary,
             TestContext.Current.CancellationToken);
 
         Assert.True(input.IsSubmitted);
         Assert.Equal(response, input.Text);
         Assert.Equal(2, surface.Writes.Count(write => string.Equals(write, prompt, StringComparison.Ordinal)));
         Assert.Equal(["read", "read"], surface.Operations);
+        Assert.All(surface.ComposerRequests, request => Assert.Equal(ComposerPurpose.Secondary, request.Purpose));
     }
 
     /// <summary>The inline shell routes lifecycle-hook management locally through /hooks.</summary>
@@ -4683,13 +4714,17 @@ public static class Milestone1Tests
     private sealed class RecordingInteractionSurface : IInteractionSurface
     {
         private readonly Queue<InteractionInput> _inputs;
+        private readonly InteractionSelectionResult? _selectionResult;
 
-        internal RecordingInteractionSurface(IEnumerable<string> inputs)
+        internal RecordingInteractionSurface(
+            IEnumerable<string> inputs,
+            InteractionSelectionResult? selectionResult = null)
         {
             _inputs = new Queue<InteractionInput>(inputs.Select(text => new InteractionInput(
                 true,
                 text,
                 CancellationToken.None)));
+            _selectionResult = selectionResult;
         }
 
         public InteractionSurfaceCapabilities Capabilities { get; } = new();
@@ -4713,7 +4748,9 @@ public static class Milestone1Tests
             InteractionSelectionRequest request,
             CancellationToken cancellationToken = default)
         {
-            throw new InvalidOperationException("The scripted interaction does not request a selection.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_selectionResult
+                ?? throw new InvalidOperationException("The scripted interaction does not request a selection."));
         }
 
         public Task PresentAsync(

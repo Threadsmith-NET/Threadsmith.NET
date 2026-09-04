@@ -630,6 +630,41 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.True(execution.IsTruncated);
     }
 
+    /// <summary>The production envelope retains every status at the maximum eight-agent boundary.</summary>
+    [Fact]
+    public async Task ExecuteAsync_ProductionEnvelope_RetainsStatusesAndBoundsStructuredResult()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var options = new DelegateAgentsOptions
+        {
+            MaximumAgents = 8,
+            MaximumSummaryCharacters = 4_096,
+        };
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new ProductionEnvelopeRunner()),
+            options);
+
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(8), fixture.Context);
+        var structuredBytes = JsonSerializer.SerializeToUtf8Bytes(execution.Value).Length;
+
+        // Assert
+        Assert.True(structuredBytes <= DelegateAgentsContract.MaximumStructuredResultBytes);
+        Assert.Equal(8, execution.Value.Children.Count);
+        Assert.All(execution.Value.Children, child =>
+        {
+            Assert.Equal("Completed", child.Status);
+            Assert.Contains(child.AssignmentId, execution.ModelResultContent, StringComparison.Ordinal);
+            Assert.Contains(child.Omissions, omission => omission.Contains("retained", StringComparison.Ordinal));
+        });
+        Assert.True(execution.IsTruncated);
+    }
+
     /// <summary>Verifies clipping a retained finding field is reflected in truncation metadata.</summary>
     [Fact]
     public async Task ExecuteAsync_OversizedFindingField_ReportsStructuredTruncation()
@@ -1350,6 +1385,52 @@ public sealed class DelegateAgentsToolExecutionTests
                     Findings = findings,
                     UnresolvedQuestions = ["Question one."],
                     CoverageNotes = ["Coverage one."],
+                },
+            });
+        }
+    }
+
+    private sealed class ProductionEnvelopeRunner : IAgentAssignmentRunner
+    {
+        public Task<AgentRunOutcome> RunAsync(
+            DelegationPlan plan,
+            AgentAssignment assignment,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var text = new string('\u0800', 4_096);
+            AgentFinding[] findings =
+            [
+                .. Enumerable.Range(0, 64).Select(index => new AgentFinding
+                {
+                    FindingId = Guid.NewGuid(),
+                    Category = "behavior",
+                    Summary = $"{index:D2}:{text}",
+                    EvidenceIds = Enumerable.Range(0, 32).Select(_ => EvidenceId.New()).ToArray(),
+                    Locations = [$"src/{text}"],
+                    Symbols = [$"Symbol.{text}"],
+                    Confidence = 0.9,
+                    Uncertainty = text,
+                }),
+            ];
+            return Task.FromResult(new AgentRunOutcome
+            {
+                AssignmentId = assignment.AssignmentId,
+                ChildRunId = assignment.ChildRunId,
+                Role = assignment.Role,
+                Generation = plan.Provenance.Generation,
+                Status = AgentRunStatus.Completed,
+                Usage = new AgentResourceUsage { ModelTokens = 16_000, ToolCalls = 12 },
+                Reason = "bounded production-envelope result",
+                Findings = new AgentFindingSet
+                {
+                    AssignmentId = assignment.AssignmentId,
+                    ChildRunId = assignment.ChildRunId,
+                    Generation = plan.Provenance.Generation,
+                    Summary = text,
+                    Findings = findings,
+                    UnresolvedQuestions = Enumerable.Repeat(text, 32).ToArray(),
+                    CoverageNotes = Enumerable.Repeat(text, 32).ToArray(),
                 },
             });
         }

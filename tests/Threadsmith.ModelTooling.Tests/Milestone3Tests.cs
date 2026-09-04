@@ -2770,7 +2770,27 @@ public static class Milestone3Tests
 
         internal static string CopyToTemporaryRoot(string prefix)
         {
-            var destinationRoot = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+            ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+            if (!string.Equals(prefix, Path.GetFileName(prefix), StringComparison.Ordinal)
+                || Path.IsPathRooted(prefix))
+            {
+                throw new ArgumentException("The fixture prefix must be one path segment.", nameof(prefix));
+            }
+
+            var fixtureId = Guid.NewGuid();
+            var temporaryParent = Path.GetFullPath(Path.GetTempPath());
+            var expectedName = $"{prefix}-{fixtureId:N}";
+            var destinationRoot = Path.GetFullPath(Path.Combine(temporaryParent, expectedName));
+            var destinationParent = Path.GetDirectoryName(destinationRoot);
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!string.Equals(destinationParent, Path.TrimEndingDirectorySeparator(temporaryParent), pathComparison)
+                || !string.Equals(Path.GetFileName(destinationRoot), expectedName, pathComparison))
+            {
+                throw new InvalidOperationException("The fixture root is not the exact owned temporary child.");
+            }
+
             Directory.CreateDirectory(destinationRoot);
             try
             {

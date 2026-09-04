@@ -26,7 +26,7 @@ before the first public binary release.
 | Evidence | What was checked |
 |---|---|
 | `Directory.Packages.props` | Central Package Management and transitive pinning are enabled; declared versions are centrally pinned. |
-| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | Restored dependency graph for the 44-project solution. The machine-readable snapshot is retained beside this report as `dotnet-package-graph.json`. |
+| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | Restored dependency graph for the 45-project solution. The machine-readable snapshot is retained beside this report as `dotnet-package-graph.json`. |
 | `obj/project.assets.json` and cached `.nuspec` metadata | Resolved package scope and license expressions. |
 | `eng/release/ripgrep-assets.json` and `Stage-Ripgrep.ps1` | Ripgrep source, hash, license selection, and staged legal material. |
 | `.NET runtime` package legal files | `microsoft.netcore.app.runtime.win-x64/10.0.10/LICENSE.TXT` and `THIRD-PARTY-NOTICES.TXT`. |

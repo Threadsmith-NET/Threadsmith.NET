@@ -160,6 +160,15 @@ public readonly record struct WorkspaceId(Guid Value) : IStableIdentifier
     }
 }
 
+/// <summary>Identifies one coalesced semantic refresh lifecycle.</summary>
+public readonly record struct SemanticRefreshId(Guid Value) : IStableIdentifier
+{ /// <summary>Creates an identifier.</summary>
+    public static SemanticRefreshId New()
+    {
+        return new(Guid.NewGuid());
+    }
+}
+
 /// <summary>Identifies one bounded delegation.</summary>
 public readonly record struct DelegationId(Guid Value) : IStableIdentifier
 { /// <summary>Creates an identifier.</summary>

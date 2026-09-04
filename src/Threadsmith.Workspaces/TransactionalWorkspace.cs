@@ -33,6 +33,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private readonly StringComparison _pathComparison;
     private readonly StringComparer _pathComparer;
     private readonly IMutationApprovalPolicy _mutationApprovalPolicy;
+    private readonly ISemanticHostMutationAttribution? _semanticMutationAttribution;
     private readonly Dictionary<MutationSetId, StagingState> _staging = [];
     private readonly IMutationTransactionObserver _transactionObserver;
     private bool _disposed;
@@ -44,7 +45,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         ILogger<TransactionalWorkspace>? logger = null,
         long maximumBaselineContentBytes = _defaultMaximumBaselineContentBytes,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
-        IMutationTransactionObserver? transactionObserver = null)
+        IMutationTransactionObserver? transactionObserver = null,
+        ISemanticHostMutationAttribution? semanticMutationAttribution = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(events);
@@ -70,6 +72,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase;
         _mutationApprovalPolicy = mutationApprovalPolicy ?? new MutationApprovalPolicyService();
+        _semanticMutationAttribution = semanticMutationAttribution;
         _transactionObserver = transactionObserver ?? NullMutationTransactionObserver.Instance;
         Isolation = isolation ?? new WorkspaceIsolation(
             WorkspaceIsolationMode.TrackedInPlace,
@@ -86,6 +89,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         ILogger<TransactionalWorkspace>? logger = null,
         long maximumBaselineContentBytes = _defaultMaximumBaselineContentBytes,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
+        ISemanticHostMutationAttribution? semanticMutationAttribution = null,
         CancellationToken cancellationToken = default)
     {
         var workspace = new TransactionalWorkspace(
@@ -94,7 +98,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             isolation,
             logger,
             maximumBaselineContentBytes,
-            mutationApprovalPolicy);
+            mutationApprovalPolicy,
+            semanticMutationAttribution: semanticMutationAttribution);
         await workspace.CaptureBaselineAsync(cancellationToken);
         return workspace;
     }
@@ -289,6 +294,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 : BuildStagedFiles(approved);
             var temporaryFiles = new Dictionary<string, string>(_pathComparer);
             var changed = new List<string>();
+            SemanticHostMutationRegistration? semanticAttributionRegistration = null;
             state.CommitAttempted = true;
             try
             {
@@ -314,6 +320,18 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     await _transactionObserver.ObserveAsync(
                         MutationTransactionPoint.AfterTemporaryWrite,
                         file.RelativePath,
+                        cancellationToken);
+                }
+
+                if (_semanticMutationAttribution is not null)
+                {
+                    SemanticHostWriteExpectation[] writes =
+                        [.. files.Values.Select(CreateCommitSemanticWriteExpectation)];
+                    semanticAttributionRegistration = await _semanticMutationAttribution.RegisterExpectedWritesAsync(
+                        state.MutationSet.SessionId,
+                        Baseline.WorkspaceId,
+                        mutationSetId,
+                        writes,
                         cancellationToken);
                 }
 
@@ -450,6 +468,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 {
                     File.Delete(temporaryPath);
                 }
+
+                await CompleteSemanticWriteAttributionAsync(
+                    semanticAttributionRegistration,
+                    [.. files.Keys],
+                    mutationSetId);
             }
 
             state.IsCommitted = true;
@@ -643,25 +666,48 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
 
             var restored = new List<string>();
-            foreach (var file in state.Files.Values.Where(item => item.Original is null))
+            SemanticHostMutationRegistration? semanticAttributionRegistration = null;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
-                restored.Add(file.RelativePath);
-            }
+                if (_semanticMutationAttribution is not null)
+                {
+                    SemanticHostWriteExpectation[] writes =
+                        [.. state.Files.Values.Select(CreateRollbackSemanticWriteExpectation)];
+                    semanticAttributionRegistration = await _semanticMutationAttribution.RegisterExpectedWritesAsync(
+                        state.MutationSet.SessionId,
+                        Baseline.WorkspaceId,
+                        mutationSetId,
+                        writes,
+                        cancellationToken);
+                }
 
-            foreach (var file in state.Files.Values.Where(item => item.Original is not null))
+                foreach (var file in state.Files.Values.Where(item => item.Original is null))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
+                    restored.Add(file.RelativePath);
+                }
+
+                foreach (var file in state.Files.Values.Where(item => item.Original is not null))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var fullPath = ResolveConfinedPath(file.RelativePath, mustExist: false);
+                    var directory = Path.GetDirectoryName(fullPath)
+                        ?? throw new InvalidOperationException("A rollback target has no parent directory.");
+                    Directory.CreateDirectory(directory);
+                    await File.WriteAllBytesAsync(
+                        fullPath,
+                        file.Original?.Bytes ?? [],
+                        cancellationToken);
+                    restored.Add(file.RelativePath);
+                }
+            }
+            finally
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var fullPath = ResolveConfinedPath(file.RelativePath, mustExist: false);
-                var directory = Path.GetDirectoryName(fullPath)
-                    ?? throw new InvalidOperationException("A rollback target has no parent directory.");
-                Directory.CreateDirectory(directory);
-                await File.WriteAllBytesAsync(
-                    fullPath,
-                    file.Original?.Bytes ?? [],
-                    cancellationToken);
-                restored.Add(file.RelativePath);
+                await CompleteSemanticWriteAttributionAsync(
+                    semanticAttributionRegistration,
+                    [.. state.Files.Keys],
+                    mutationSetId);
             }
 
             _staging.Remove(mutationSetId);
@@ -1609,6 +1655,81 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         return Hash(Encoding.UTF8.GetBytes(value));
     }
 
+    private static string GetSemanticContentIdentity(StagedFile file)
+    {
+        if (file.FinalText is null)
+        {
+            return "missing";
+        }
+
+        using var stream = new MemoryStream(file.EncodeFinal(), writable: false);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true);
+        var text = reader.ReadToEnd();
+        return GetSemanticContentIdentity(text);
+    }
+
+    private static string GetSemanticContentIdentity(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
+
+    private static SemanticHostWriteExpectation CreateCommitSemanticWriteExpectation(StagedFile file)
+    {
+        var allowMissingTransition = file.Original is not null
+            && file.FinalText is not null;
+        var compensationIdentity = file.Original?.Text is { } originalText
+            ? GetSemanticContentIdentity(originalText)
+            : null;
+        return new SemanticHostWriteExpectation(
+            file.RelativePath,
+            GetSemanticContentIdentity(file),
+            allowMissingTransition,
+            compensationIdentity,
+            file.Original is not null);
+    }
+
+    private static SemanticHostWriteExpectation CreateRollbackSemanticWriteExpectation(StagedFile file)
+    {
+        var originalIdentity = file.Original?.Text is { } originalText
+            ? GetSemanticContentIdentity(originalText)
+            : "missing";
+        return new SemanticHostWriteExpectation(
+            file.RelativePath,
+            originalIdentity,
+            AllowMissingTransition: false,
+            CompensationContentIdentity: GetSemanticContentIdentity(file),
+            ExistedBefore: file.FinalText is not null);
+    }
+
+    private async Task CompleteSemanticWriteAttributionAsync(
+        SemanticHostMutationRegistration? registration,
+        IReadOnlyList<string> relativePaths,
+        MutationSetId mutationSetId)
+    {
+        if (registration is null || _semanticMutationAttribution is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _semanticMutationAttribution.CompleteExpectedWritesAsync(
+                registration,
+                relativePaths,
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Semantic host-write reconciliation failed for mutation set {MutationSetId}",
+                mutationSetId);
+        }
+    }
+
     private sealed class StagingState
     {
         public StagingState(
@@ -1833,6 +1954,7 @@ public sealed class TransactionalWorkspaceCoordinator :
     private readonly IHookCoordinator? _hooks;
     private readonly long _maximumBaselineContentBytes;
     private readonly IMutationApprovalPolicy _mutationApprovalPolicy;
+    private readonly ISemanticHostMutationAttribution? _semanticMutationAttribution;
     private readonly Lock _registrationGate = new();
     private readonly ConcurrentDictionary<WorkspaceId, TransactionalWorkspace> _workspaces = new();
     private readonly ConcurrentDictionary<MutationSetId, MutationOwner> _mutationWorkspaces = new();
@@ -1842,7 +1964,8 @@ public sealed class TransactionalWorkspaceCoordinator :
         IDomainEventStream events,
         long maximumBaselineContentBytes = 256L * 1024 * 1024,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
-        IHookCoordinator? hooks = null)
+        IHookCoordinator? hooks = null,
+        ISemanticHostMutationAttribution? semanticMutationAttribution = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         if (maximumBaselineContentBytes <= 0)
@@ -1854,6 +1977,7 @@ public sealed class TransactionalWorkspaceCoordinator :
         _hooks = hooks;
         _maximumBaselineContentBytes = maximumBaselineContentBytes;
         _mutationApprovalPolicy = mutationApprovalPolicy ?? new MutationApprovalPolicyService();
+        _semanticMutationAttribution = semanticMutationAttribution;
     }
 
     /// <summary>Registers a newly captured immutable baseline for mutation staging.</summary>
@@ -1870,6 +1994,7 @@ public sealed class TransactionalWorkspaceCoordinator :
             isolation,
             maximumBaselineContentBytes: _maximumBaselineContentBytes,
             mutationApprovalPolicy: _mutationApprovalPolicy,
+            semanticMutationAttribution: _semanticMutationAttribution,
             cancellationToken: cancellationToken);
         TransactionalWorkspace? previous;
         lock (_registrationGate)

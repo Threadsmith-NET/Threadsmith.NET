@@ -2,70 +2,7 @@ namespace Threadsmith.Tui;
 
 using System.Collections.Frozen;
 using System.Globalization;
-
-/// <summary>Identifies the semantic purpose of text rendered by the interactive terminal.</summary>
-internal enum TuiTextRole
-{
-    Default,
-    Brand,
-    Muted,
-    Status,
-    SessionStatus,
-    Hyperlink,
-    ToolSuccess,
-    ToolFailure,
-    SelectionPrompt,
-    SelectionItem,
-    SelectionHighlight,
-    Success,
-    Warning,
-    Error,
-    UserPrompt,
-    ComposerPrompt,
-    ThinkingIndicator,
-    Reasoning,
-    DiffAdded,
-    DiffRemoved,
-    DiffContext,
-    MarkdownHeading,
-    MarkdownStrong,
-    MarkdownEmphasis,
-    MarkdownStrikethrough,
-    MarkdownCode,
-    MarkdownQuote,
-    MarkdownListMarker,
-    MarkdownTableBorder,
-}
-
-/// <summary>Represents one terminal-neutral text fragment and its semantic rendering role.</summary>
-/// <param name="Text">Visible text.</param>
-/// <param name="Role">Semantic role.</param>
-/// <param name="LinkTarget">Optional validated target for host-owned hyperlink text.</param>
-internal sealed record TuiTextSegment(string Text, TuiTextRole Role, Uri? LinkTarget = null)
-{
-    private const int MaximumLinkLength = 2048;
-
-    /// <summary>Validates text and any optional hyperlink metadata.</summary>
-    /// <exception cref="ArgumentException">The hyperlink target is unsafe or unbounded.</exception>
-    internal void Validate()
-    {
-        ArgumentNullException.ThrowIfNull(Text);
-        if (LinkTarget is null)
-        {
-            return;
-        }
-
-        var target = LinkTarget.OriginalString;
-        if (!LinkTarget.IsAbsoluteUri
-            || target.Length > MaximumLinkLength
-            || target.Any(char.IsControl)
-            || Uri.UnescapeDataString(target).Any(char.IsControl)
-            || LinkTarget.Scheme is not "file" and not "http" and not "https")
-        {
-            throw new ArgumentException("Hyperlink targets must be bounded absolute file, HTTP, or HTTPS URIs.", nameof(LinkTarget));
-        }
-    }
-}
+using Threadsmith.Interaction.Presentation;
 
 /// <summary>Identifies terminal decorations that a theme may request.</summary>
 [Flags]
@@ -162,7 +99,7 @@ internal sealed record TuiTheme
     /// <summary>Initializes a new instance of the <see cref="TuiTheme"/> class.</summary>
     /// <param name="id">Stable theme identifier.</param>
     /// <param name="styles">Role styles. Duplicate keys must have been rejected by the configuration parser.</param>
-    internal TuiTheme(string id, IEnumerable<KeyValuePair<TuiTextRole, TuiTextStyle>> styles)
+    internal TuiTheme(string id, IEnumerable<KeyValuePair<PresentationTextRole, TuiTextStyle>> styles)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentNullException.ThrowIfNull(styles);
@@ -171,7 +108,7 @@ internal sealed record TuiTheme
             throw new ArgumentException("Theme ids may contain only letters, digits, '-' and '_'.", nameof(id));
         }
 
-        var copiedStyles = new Dictionary<TuiTextRole, TuiTextStyle>();
+        var copiedStyles = new Dictionary<PresentationTextRole, TuiTextStyle>();
         foreach ((var role, var style) in styles)
         {
             ArgumentNullException.ThrowIfNull(style);
@@ -190,24 +127,24 @@ internal sealed record TuiTheme
     internal string Id { get; }
 
     /// <summary>Gets the immutable role-style map.</summary>
-    internal IReadOnlyDictionary<TuiTextRole, TuiTextStyle> Styles { get; }
+    internal IReadOnlyDictionary<PresentationTextRole, TuiTextStyle> Styles { get; }
 
     /// <summary>Gets the terminal-native compiled theme.</summary>
     internal static TuiTheme System { get; } = new(
         "system",
-        Enum.GetValues<TuiTextRole>()
+        Enum.GetValues<PresentationTextRole>()
             .Select(role => KeyValuePair.Create(role, GetSystemStyle(role))));
 
-    private static TuiTextStyle GetSystemStyle(TuiTextRole role)
+    private static TuiTextStyle GetSystemStyle(PresentationTextRole role)
     {
         return role switch
         {
-            TuiTextRole.SessionStatus => new TuiTextStyle(Decorations: TuiTextDecoration.Invert),
-            TuiTextRole.MarkdownHeading or TuiTextRole.MarkdownStrong or TuiTextRole.MarkdownListMarker
+            PresentationTextRole.SessionStatus => new TuiTextStyle(Decorations: TuiTextDecoration.Invert),
+            PresentationTextRole.MarkdownHeading or PresentationTextRole.MarkdownStrong or PresentationTextRole.MarkdownListMarker
                 => new TuiTextStyle(Decorations: TuiTextDecoration.Bold),
-            TuiTextRole.MarkdownEmphasis => new TuiTextStyle(Decorations: TuiTextDecoration.Italic),
-            TuiTextRole.MarkdownStrikethrough => new TuiTextStyle(Decorations: TuiTextDecoration.Strikethrough),
-            TuiTextRole.MarkdownQuote or TuiTextRole.MarkdownTableBorder
+            PresentationTextRole.MarkdownEmphasis => new TuiTextStyle(Decorations: TuiTextDecoration.Italic),
+            PresentationTextRole.MarkdownStrikethrough => new TuiTextStyle(Decorations: TuiTextDecoration.Strikethrough),
+            PresentationTextRole.MarkdownQuote or PresentationTextRole.MarkdownTableBorder
                 => new TuiTextStyle(Decorations: TuiTextDecoration.Dim),
             _ => new TuiTextStyle(),
         };
@@ -259,11 +196,11 @@ internal sealed class TuiThemeResolver
     /// <summary>Resolves a semantic role without introducing terminal-library types.</summary>
     /// <param name="role">Role to resolve.</param>
     /// <returns>The resolved style.</returns>
-    internal TuiTextStyle Resolve(TuiTextRole role)
+    internal TuiTextStyle Resolve(PresentationTextRole role)
     {
         if (!Enum.IsDefined(role))
         {
-            role = TuiTextRole.Default;
+            role = PresentationTextRole.Default;
         }
 
         if (_suppressStyles)
@@ -271,9 +208,9 @@ internal sealed class TuiThemeResolver
             return new TuiTextStyle();
         }
 
-        _theme.Styles.TryGetValue(TuiTextRole.Default, out var themeDefault);
+        _theme.Styles.TryGetValue(PresentationTextRole.Default, out var themeDefault);
         _theme.Styles.TryGetValue(role, out var requested);
-        var systemDefault = TuiTheme.System.Styles[TuiTextRole.Default];
+        var systemDefault = TuiTheme.System.Styles[PresentationTextRole.Default];
         var systemRole = TuiTheme.System.Styles.TryGetValue(role, out var value)
             ? value
             : systemDefault;

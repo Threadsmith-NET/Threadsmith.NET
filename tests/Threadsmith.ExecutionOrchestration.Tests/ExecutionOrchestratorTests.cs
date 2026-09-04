@@ -76,11 +76,15 @@ public sealed class ExecutionOrchestratorTests
         await fixture.ProposalHandler.FirstHandleEntered.WaitAsync(TimeSpan.FromSeconds(5));
         var applyTask = fixture.Orchestrator.HandleAsync(
             new ApplyExecutionMutationCommand(CreateContinuation(fixture, fixture.Staged)));
+        try
+        {
+            Assert.False(applyTask.IsCompleted);
+        }
+        finally
+        {
+            fixture.ProposalHandler.ReleaseFirstHandle();
+        }
 
-        await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-        Assert.False(applyTask.IsCompleted);
-
-        fixture.ProposalHandler.ReleaseFirstHandle();
         var pending = await startTask.WaitAsync(TimeSpan.FromSeconds(5));
         var applied = await applyTask.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -491,11 +495,17 @@ public sealed class ExecutionOrchestratorTests
             CreateContinuation(fixture, fixture.Staged));
         await fixture.CommitHandler.Entered.WaitAsync(TimeSpan.FromSeconds(5));
         var resume = AssertResumeRejectedAsync(fixture);
-        await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
         // Assert
-        Assert.False(resume.IsCompleted);
-        fixture.CommitHandler.Release();
+        try
+        {
+            Assert.False(resume.IsCompleted);
+        }
+        finally
+        {
+            fixture.CommitHandler.Release();
+        }
+
         _ = await continuation;
         await resume;
         Assert.Single(fixture.CommitHandler.Commands);
@@ -581,9 +591,16 @@ public sealed class ExecutionOrchestratorTests
         var fixture = CreateFixture();
         await using var events = fixture.Events;
         var observed = new List<IDomainEvent>();
+        var planProposed = new TaskCompletionSource<PlanProposed>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = events.Subscribe((item, _) =>
         {
             observed.Add(item);
+            if (item is PlanProposed proposed)
+            {
+                planProposed.TrySetResult(proposed);
+            }
+
             return Task.CompletedTask;
         });
         var application = new SessionApplication(
@@ -615,10 +632,8 @@ public sealed class ExecutionOrchestratorTests
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("startup failure"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change example"));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!observed.OfType<PlanProposed>().Any(item => item.RunId == runId))
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-        }
+        var proposed = await planProposed.Task.WaitAsync(timeout.Token);
+        Assert.Equal(runId, proposed.RunId);
 
         // Act / Assert
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -714,7 +729,6 @@ public sealed class ExecutionOrchestratorTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token));
-        await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
 
         // Assert
         Assert.Single(observed.OfType<RunCompleted>(), item => item.RunId == runId);

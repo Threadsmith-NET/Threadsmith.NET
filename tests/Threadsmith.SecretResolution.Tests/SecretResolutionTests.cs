@@ -197,6 +197,7 @@ public sealed class SecretResolutionTests
         }
 
         using var fixture = new SecretFixture();
+        fixture.InitializeGitRepository();
         var storePath = Path.Combine(fixture.RepositoryRoot, ".threadsmith", "secrets", "config.json");
         Directory.CreateDirectory(Path.GetDirectoryName(storePath) ?? fixture.RepositoryRoot);
         Assert.Equal(0, CreateFifoUnix(storePath, 0x180));
@@ -507,6 +508,8 @@ public sealed class SecretResolutionTests
 
     private sealed class SecretFixture : IDisposable
     {
+        private bool _gitInitialized;
+
         internal SecretFixture()
         {
             Root = Path.Combine(Path.GetTempPath(), "Threadsmith", "secret-tests", Guid.NewGuid().ToString("N"));
@@ -514,7 +517,6 @@ public sealed class SecretResolutionTests
             UserStorePath = Path.Combine(Root, "user", "secrets", "config.json");
             Id = "key" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(RepositoryRoot);
-            Git("init", "--quiet");
         }
 
         internal string Id { get; }
@@ -527,16 +529,30 @@ public sealed class SecretResolutionTests
 
         public void Dispose()
         {
-            try
+            var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root));
+            var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(
+                Path.GetTempPath(),
+                "Threadsmith",
+                "secret-tests")));
+            if (!string.Equals(
+                    Path.GetDirectoryName(normalizedRoot),
+                    normalizedParent,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                || !Guid.TryParseExact(Path.GetFileName(normalizedRoot), "N", out _))
             {
-                Directory.Delete(Root, recursive: true);
+                throw new InvalidOperationException("Refusing to delete an unowned secret-test directory.");
             }
-            catch (IOException)
+
+            foreach (var path in Directory.EnumerateFileSystemEntries(
+                         normalizedRoot,
+                         "*",
+                         SearchOption.AllDirectories))
             {
+                File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
             }
-            catch (UnauthorizedAccessException)
-            {
-            }
+
+            File.SetAttributes(normalizedRoot, File.GetAttributes(normalizedRoot) & ~FileAttributes.ReadOnly);
+            Directory.Delete(normalizedRoot, recursive: true);
         }
 
         internal SecretResolutionRequest CreateRequest(
@@ -564,25 +580,19 @@ public sealed class SecretResolutionTests
 
         internal void Git(params string[] arguments)
         {
-            using var process = new Process
+            InitializeGitRepository();
+            RunGit(arguments);
+        }
+
+        internal void InitializeGitRepository()
+        {
+            if (_gitInitialized)
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "git",
-                    WorkingDirectory = RepositoryRoot,
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                },
-            };
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
+                return;
             }
 
-            Assert.True(process.Start());
-            Assert.True(process.WaitForExit(5000));
-            Assert.Equal(0, process.ExitCode);
+            RunGit("init", "--quiet");
+            _gitInitialized = true;
         }
 
         internal void SecureUserStore()
@@ -621,6 +631,7 @@ public sealed class SecretResolutionTests
 
         internal void WriteRepository(string value, bool ignored)
         {
+            InitializeGitRepository();
             var store = Path.Combine(RepositoryRoot, ".threadsmith", "secrets", "config.json");
             Directory.CreateDirectory(Path.GetDirectoryName(store) ?? RepositoryRoot);
             File.WriteAllText(store, Json(value), new UTF8Encoding(false));
@@ -638,6 +649,29 @@ public sealed class SecretResolutionTests
             Directory.CreateDirectory(Path.GetDirectoryName(UserStorePath) ?? Root);
             File.WriteAllText(UserStorePath, Json(value), new UTF8Encoding(false));
             SecureUserStore();
+        }
+
+        private void RunGit(params string[] arguments)
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "git",
+                    WorkingDirectory = RepositoryRoot,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                },
+            };
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
+
+            Assert.True(process.Start());
+            Assert.True(process.WaitForExit(5000));
+            Assert.Equal(0, process.ExitCode);
         }
 
         private string Json(string value)

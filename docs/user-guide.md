@@ -10,6 +10,7 @@ This guide documents the currently implemented user-facing behavior. Features de
 2. [Starting Threadsmith](#starting-threadsmith)
    - [Customizing deployed prompts](#customizing-deployed-prompts)
 3. [Opening and initializing a repository](#opening-and-initializing-a-repository)
+   - [Keeping the semantic workspace current](#keeping-the-semantic-workspace-current)
 4. [Trust levels](#trust-levels)
 5. [Using the interactive terminal](#using-the-interactive-terminal)
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
@@ -179,6 +180,20 @@ Initialization creates a minimal UTF-8 `.threadsmith/config.json` containing neu
 
 Declining leaves the repository unchanged.
 
+### Keeping the semantic workspace current
+
+After a solution or supported project is loaded, Threadsmith monitors relevant files beneath the active repository. A short bounded settling interval coalesces editor save bursts before one workspace-scoped refresh begins. An edit to an existing loaded C# document is applied incrementally when its settled path still exists and its identity and project membership remain stable, including editors that save by atomically replacing the same file. Actual document membership changes, project/solution files, build props and targets, analyzer configuration, uncertain changes, and watcher recovery use a complete semantic reload.
+
+An externally attributed cycle prints `External changes detected; updating semantic model...` once, followed by one completion or actionable failure. Watcher recovery instead starts with `External changes require semantic recovery; updating semantic model...` and uses the same single terminal projection. The refresh uses the same serialized console boundary as the composer, so background output does not submit, clear, or discard a draft. Compiler diagnostics may reduce the resulting semantic confidence without making refresh infrastructure fail.
+
+The semantic update itself runs without waiting for Threadsmith to regain focus or for composer input. When the composer is empty, refresh lifecycle output automatically closes and reopens that empty prompt, so the update appears without a keypress or other console interaction. Once any draft text exists, including whitespace, lifecycle output waits until the draft is submitted, cancelled, or cleared back to empty; the refresh never submits, clears, or discards the draft. Focusing the window alone does not trigger or release semantic work. A submitted model request still waits for the already-running refresh before a run is created.
+
+A model request submitted while relevant changes are settling or refreshing waits for the same single-flight refresh before a run identity, budget, conversation entry, model call, or tool call is created. A refresh failure leaves the workspace dirty and rejects new model requests until a later change, retry, or manual refresh establishes current state. Non-model commands such as `/help`, `/quit`, and `/semantic_refresh` remain local.
+
+Run `/semantic_refresh` to force and await one complete refresh even when the workspace appears clean. It reports the changed-file count, duration, and resulting confidence, creates no model run, and returns a clear error if no repository and solution are bound. Cancelling the waiter does not corrupt or cancel refresh work already shared with another trigger.
+
+See [Semantic refresh](operations/semantic-refresh.md) for the full command behavior and the exact external-edit trigger and ignore rules.
+
 ## Trust levels
 
 Trust controls what the host may inspect or execute. It is separate from model capability, tool availability, and per-invocation approval.
@@ -207,35 +222,36 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 | Command | Purpose |
 |---|---|
-| `/open [path]` | Open or switch repositories. |
-| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
-| `/tools` | Browse and toggle non-essential repository tools. |
-| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/clone` | Create and activate an independent governed copy of the current session. |
 | `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
+| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
+| `/context mode` | Report the effective cross-turn conversation mode. |
+| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
+| `/extensions` | Browse, load, and unload discovered extensions. |
+| `/help` | Display available commands. |
+| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
+| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
+| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
+| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
+| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
+| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
+| `/models` | Select and persist the active repository provider/model. |
+| `/new` | Checkpoint the current session and activate a fresh empty session. |
+| `/open [path]` | Open or switch repositories. |
 | `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
 | `/policy [name|current]` | Select or report the mutation approval policy for exact staged diffs. |
-| `/extensions` | Browse, load, and unload discovered extensions. |
-| `/new` | Checkpoint the current session and activate a fresh empty session. |
-| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
-| `/clone` | Create and activate an independent governed copy of the current session. |
-| `/models` | Select and persist the active repository provider/model. |
+| `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
-| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
+| `/semantic_refresh` | Force and await a complete semantic refresh without creating a model run. |
 | `/theme` | Select a theme. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
-| `/context mode` | Report the effective cross-turn conversation mode. |
-| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
-| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
-| `/context compact` | Request bounded compaction at a safe turn boundary. |
-| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
-| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
-| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
-| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
-| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
-| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
-| `/help` | Display available commands. |
-| `/quit` | Exit cleanly. |
+| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/tools` | Browse and toggle non-essential repository tools. |
+| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
 
 
 ### Durable session lifecycle
@@ -567,11 +583,11 @@ Implementation workers require an approved Plan-37 plan and host-proven non-over
 
 Worker results are frozen structured change sets, not branches to merge. Before selected changes enter the primary worktree, Threadsmith rejects incomplete or stale packages, out-of-scope paths, worker overlap, and changed parent baselines. The parent converts and restages selected changes through the existing transactional workspace, presents one fresh aggregate diff under the current mutation policy, and reruns aggregate affected builds/tests. Threadsmith does not merge, commit, rebase, cherry-pick, push, or resolve conflicts automatically.
 
-Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative scheduler admission limits under `agents` as documented in `.threadsmith/config.example`; trusted machine/user `agents:delegation` settings remain separately bounded by compiled ceilings. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
+When an accepted checkpoint is durably recorded, the TUI immediately prints the stable delegation ID. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative scheduler admission limits under `agents` as documented in `.threadsmith/config.example`; trusted machine/user `agents:delegation` settings remain separately bounded by compiled ceilings. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
 
 During an active conversation, the TUI shows `Running — Enter to steer; Esc Esc to stop.` Enter creates one idempotent request and immediately acknowledges that Threadsmith is waiting for the current model/tool boundary. Pressing Enter again while the request is pending has no additional effect.
 
-Threadsmith finishes the in-flight provider response or tool batch before opening the ordinary PrettyPrompt composer as `steer >`. During a delegation, every still-running child first pauses before its next provider request or becomes terminal. The parent run remains paused while the composer is displayed, so further tool/model output cannot scroll it away. Submitted text becomes sanitized lower-authority user context for the parent and eligible children; empty/cancel resumes unchanged. `/agents` inspection and cancellation remain available from the steering prompt. Completed children are not reopened and are counted as undelivered in the joined steering summary.
+Threadsmith finishes the in-flight provider response or tool batch before opening the ordinary PrettyPrompt composer as `steer >`. During a delegation, every still-running child first pauses before its next provider request or becomes terminal. The parent run remains paused while the composer is displayed, so further tool/model output cannot scroll it away. Submitted text becomes sanitized lower-authority user context for the parent and eligible children; empty/cancel resumes unchanged. Bare `/agents` can recover delegation and assignment IDs from the steering prompt before a detailed inspection or cancellation command. Completed children are not reopened and are counted as undelivered in the joined steering summary.
 
 Press unmodified Escape twice within 850 ms to cooperatively cancel the active run. `Ctrl+C` remains supported. An in-flight provider or tool must still observe cancellation normally; neither shortcut fabricates mid-operation suspension. Ordinary non-hot-key typing and multi-key paste bursts received during a run are buffered for the next PrettyPrompt composer.
 
@@ -1344,7 +1360,7 @@ The complete manifest must still declare and hash every referenced asset and sat
 1. `/skills use` runs the bounded `scope` procedure with the selected skill model.
 2. The workflow pauses and displays the complete typed `ProposeDelegation` payload.
 3. The host validates that request against Plan 38: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
-4. Only an accepted host request creates a delegation ID. Inspect it with `/agents <delegation-id>` and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
+4. Only an accepted host request creates a delegation ID, which the TUI prints immediately. Use bare `/agents` to list observed delegation and assignment IDs, inspect with `/agents <delegation-id>`, and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
 5. After the delegation reaches its authoritative structured join, the adapter supplies that real result through `/skills continue <invocation-id> <delegation-result-json>`. The next workflow step receives only the schema-valid structured result—not raw child transcripts or hidden reasoning.
 
 Model selection is hierarchical. The skill model selected above prepares the proposal; each accepted child receives a host-selected model/reasoning choice constrained by the parent, repository policy, role template, sensitivity, and remaining aggregate budget. A package preference can narrow candidates but cannot force an incompatible model, elevate a child, or bypass the parent ledger. Implementation agents additionally require an approved plan, host-proven non-overlapping ownership, isolated worktrees, parent restaging, a fresh aggregate diff decision, and aggregate validation.
@@ -1396,7 +1412,7 @@ See [Lifecycle hook operations](operations/lifecycle-hooks.md), [hook authoring]
 
 ## Headless and automated use
 
-The headless adapter uses the same command dispatcher and policy path as the TUI. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
+The headless adapter uses the same command dispatcher and policy path as the TUI. `ForceSemanticRefreshAsync` dispatches `ForceSemanticRefreshCommand` and returns the same structured refresh result as `/semantic_refresh`; it does not create a model run. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
 
 Headless mode writes model/tool activity to standard output and uses these primary exit codes:
 
@@ -1575,6 +1591,10 @@ Pass `--solution <repository-relative-path>`. A successful selection is remember
 
 Confirm the file still exists beneath the repository and that `.threadsmith/config.json` contains nested `solution.path`. Missing entries are cleared automatically; escaping, prohibited, or linked paths are rejected.
 
+### Semantic refresh failed or requests remain blocked
+
+Run `/semantic_refresh` after confirming the selected solution still exists and the repository remains readable at its current trust level. The command forces a complete reload and reports bounded failure detail without exposing source or exception dumps. Compiler errors can yield a successful reduced-confidence refresh; repeated infrastructure failure leaves the workspace dirty so a model request cannot start from known-stale semantics. Reopen the repository when its root or selected solution changed.
+
 ### A tool is missing
 
 Check, in order:
@@ -1627,6 +1647,7 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 ## Further reference
 
 - [Opening a repository](operations/opening-a-repository.md)
+- [Semantic refresh](operations/semantic-refresh.md)
 - [Session lifecycle, resume, and clone](operations/session-lifecycle.md)
 - [Interactive commands and keys](operations/keyboard-shortcuts.md)
 - [Tool runtime operations](operations/tools.md)

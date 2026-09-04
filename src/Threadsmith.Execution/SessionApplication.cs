@@ -3,6 +3,7 @@ namespace Threadsmith.Execution;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -25,7 +26,8 @@ public sealed partial class SessionApplication :
     ICommandHandler<RejectPlanCommand, bool>,
     ICommandHandler<RevisePlanCommand, bool>,
     ICommandHandler<SetConversationContextModeCommand, bool>,
-    ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>
+    ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>,
+    ISemanticRefreshPublicationGate
 {
     private const string ProposePlanToolName = "propose_plan";
     private const string ProposePlanArgumentsSchema = """
@@ -71,6 +73,11 @@ public sealed partial class SessionApplication :
         }
         """;
 
+    private static readonly Meter _meter = new("Threadsmith.Execution");
+    private static readonly Histogram<double> _semanticAdmissionWait = _meter.CreateHistogram<double>(
+        "threadsmith.semantic.refresh.admission_wait.duration",
+        "ms");
+
     private readonly Func<IBudget> _budgetFactory;
     private readonly IContextAssembler? _contextAssembler;
     private readonly IConversationCompactor? _conversationCompactor;
@@ -87,6 +94,7 @@ public sealed partial class SessionApplication :
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IPlanSanityChecker? _planSanityChecker;
     private readonly IRepositoryMemoryGovernor? _repositoryMemoryGovernor;
+    private readonly ISemanticRefreshCoordinator? _semanticRefreshCoordinator;
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
 
@@ -101,6 +109,7 @@ public sealed partial class SessionApplication :
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
+    private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
     private readonly RunSteeringCoordinator _steering;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ConcurrentDictionary<SessionId, byte> _sessions = new();
@@ -137,6 +146,48 @@ public sealed partial class SessionApplication :
         }
 
         _sessions.TryAdd(sessionId, 0);
+    }
+
+    /// <inheritdoc />
+    public async Task<TResult> PublishAsync<TResult>(
+        SessionId sessionId,
+        WorkspaceId workspaceId,
+        Func<CancellationToken, Task<TResult>> publication,
+        CancellationToken cancellationToken = default)
+    {
+        if (sessionId == default)
+        {
+            throw new ArgumentException("The session id cannot be default.", nameof(sessionId));
+        }
+
+        ArgumentNullException.ThrowIfNull(publication);
+        var admissionGate = _semanticAdmissionGates.GetOrAdd(
+            SemanticAdmissionKey.Create(sessionId, workspaceId),
+            static _ => new SemaphoreSlim(1, 1));
+        await admissionGate.WaitAsync(cancellationToken);
+        try
+        {
+            // These completion tasks are the intentional cross-command terminal signals owned by each run.
+#pragma warning disable VSTHRD003
+            var activeRuns = _runs.Values
+                .Where(registration => workspaceId == default
+                    ? registration.WorkspaceId == default && registration.SessionId == sessionId
+                    : registration.WorkspaceId == workspaceId)
+                .Where(registration => !registration.Completion.Task.IsCompleted)
+                .Select(registration => registration.Completion.Task)
+                .ToArray();
+#pragma warning restore VSTHRD003
+            foreach (var activeRun in activeRuns)
+            {
+                await WaitForTerminalStateAsync(activeRun, cancellationToken);
+            }
+
+            return await publication(cancellationToken);
+        }
+        finally
+        {
+            admissionGate.Release();
+        }
     }
 
     /// <summary>Initializes a new instance of the <see cref="SessionApplication"/> class.</summary>
@@ -179,7 +230,8 @@ public sealed partial class SessionApplication :
         IConversationToolSnapshotStore? conversationToolSnapshots = null,
         RunSteeringCoordinator? steering = null,
         CorrectiveMessageFactory? correctiveMessages = null,
-        IPromptLoader? prompts = null)
+        IPromptLoader? prompts = null,
+        ISemanticRefreshCoordinator? semanticRefreshCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -236,6 +288,7 @@ public sealed partial class SessionApplication :
         _steering = steering ?? new RunSteeringCoordinator();
         _correctiveMessages = correctiveMessages;
         _prompts = prompts;
+        _semanticRefreshCoordinator = semanticRefreshCoordinator;
         if (!Enum.IsDefined(defaultConversationMode))
         {
             throw new ArgumentOutOfRangeException(nameof(defaultConversationMode));
@@ -268,7 +321,7 @@ public sealed partial class SessionApplication :
     }
 
     /// <inheritdoc />
-    public Task<RunId> HandleAsync(
+    public async Task<RunId> HandleAsync(
         SubmitRequestCommand command,
         CancellationToken cancellationToken = default)
     {
@@ -279,33 +332,66 @@ public sealed partial class SessionApplication :
             throw new InvalidOperationException($"Session {command.SessionId.Value:D} does not exist.");
         }
 
-        var runId = RunId.New();
-        var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var criteria = command.AcceptanceCriteria?.Select(criterion =>
+        if (_semanticRefreshCoordinator is null)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(criterion.Description);
-            return criterion with
-            {
-                Description = _sanitizer.Sanitize(criterion.Description),
-            };
-        }).ToArray() ?? [];
-        var task = new TaskSpecification(
-            _sanitizer.Sanitize(command.Request),
-            criteria);
-        var machine = new RunStateMachine(command.SessionId, runId, _events);
-        var runBudget = _budgetFactory()
-            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
-        var registration = new RunRegistration(command.SessionId, linkedSource, task, machine, runBudget);
-        if (!_runs.TryAdd(runId, registration))
-        {
-            linkedSource.Dispose();
-            throw new InvalidOperationException("The run identifier already exists.");
+            return AdmitRun(command, default, cancellationToken);
         }
 
-        _steering.RegisterRun(command.SessionId, runId);
+        var admissionStarted = Stopwatch.GetTimestamp();
+        try
+        {
+            while (true)
+            {
+                var refreshResult = await _semanticRefreshCoordinator.EnsureCurrentAsync(
+                    command.SessionId,
+                    SemanticRefreshReason.UserAdmission,
+                    cancellationToken);
 
-        _ = ExecuteRunAsync(command, runId, registration);
-        return Task.FromResult(runId);
+                var expectedWorkspaceId = refreshResult.WorkspaceId;
+                var admissionGate = _semanticAdmissionGates.GetOrAdd(
+                    SemanticAdmissionKey.Create(command.SessionId, expectedWorkspaceId),
+                    static _ => new SemaphoreSlim(1, 1));
+                var runId = default(RunId);
+                RunRegistration? registration = null;
+                var admitted = false;
+                await admissionGate.WaitAsync(cancellationToken);
+                try
+                {
+                    admitted = _semanticRefreshCoordinator.TryAdmitCurrent(
+                        command.SessionId,
+                        expectedWorkspaceId,
+                        () => TryRegisterRun(
+                            command,
+                            expectedWorkspaceId,
+                            cancellationToken,
+                            out runId,
+                            out registration));
+                }
+                finally
+                {
+                    admissionGate.Release();
+                }
+
+                if (!admitted)
+                {
+                    continue;
+                }
+
+                if (registration is null)
+                {
+                    throw new InvalidOperationException(
+                        "Semantic admission completed without registering a run.");
+                }
+
+                _ = ExecuteRunAsync(command, runId, registration);
+                return runId;
+            }
+        }
+        finally
+        {
+            _semanticAdmissionWait.Record(
+                Stopwatch.GetElapsedTime(admissionStarted).TotalMilliseconds);
+        }
     }
 
     /// <inheritdoc />
@@ -681,6 +767,78 @@ public sealed partial class SessionApplication :
     private IPromptLoader RequirePrompts()
     {
         return _prompts;
+    }
+
+    private static async Task WaitForTerminalStateAsync(
+        Task<bool> activeRun,
+        CancellationToken cancellationToken)
+    {
+        // Run failure and cancellation are already projected by ExecuteRunAsync. Publication needs only
+        // the terminal boundary, while cancellation of this waiter must remain observable to its caller.
+        await ((Task)activeRun)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private RunId AdmitRun(
+        SubmitRequestCommand command,
+        WorkspaceId workspaceId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryRegisterRun(
+            command,
+            workspaceId,
+            cancellationToken,
+            out var runId,
+            out var registration))
+        {
+            throw new InvalidOperationException("The run identifier already exists.");
+        }
+
+        _ = ExecuteRunAsync(command, runId, registration);
+        return runId;
+    }
+
+    private bool TryRegisterRun(
+        SubmitRequestCommand command,
+        WorkspaceId workspaceId,
+        CancellationToken cancellationToken,
+        out RunId runId,
+        [NotNullWhen(true)] out RunRegistration? registration)
+    {
+        runId = RunId.New();
+        var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var criteria = command.AcceptanceCriteria?.Select(criterion =>
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(criterion.Description);
+            return criterion with
+            {
+                Description = _sanitizer.Sanitize(criterion.Description),
+            };
+        }).ToArray() ?? [];
+        var task = new TaskSpecification(
+            _sanitizer.Sanitize(command.Request),
+            criteria);
+        var machine = new RunStateMachine(command.SessionId, runId, _events);
+        var runBudget = _budgetFactory()
+            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
+        registration = new RunRegistration(
+            command.SessionId,
+            workspaceId,
+            linkedSource,
+            task,
+            machine,
+            runBudget);
+        if (!_runs.TryAdd(runId, registration))
+        {
+            linkedSource.Dispose();
+            registration = null;
+            return false;
+        }
+
+        _steering.RegisterRun(command.SessionId, runId);
+        return true;
     }
 
     private async Task ExecuteRunAsync(
@@ -1896,16 +2054,30 @@ public sealed partial class SessionApplication :
         PlanSanityCheckResult Result,
         bool CanAutoApprove);
 
+    private readonly record struct SemanticAdmissionKey(
+        WorkspaceId WorkspaceId,
+        SessionId SessionId)
+    {
+        public static SemanticAdmissionKey Create(SessionId sessionId, WorkspaceId workspaceId)
+        {
+            return workspaceId == default
+                ? new SemanticAdmissionKey(default, sessionId)
+                : new SemanticAdmissionKey(workspaceId, default);
+        }
+    }
+
     private sealed class RunRegistration
     {
         public RunRegistration(
             SessionId sessionId,
+            WorkspaceId workspaceId,
             CancellationTokenSource cancellation,
             TaskSpecification task,
             RunStateMachine machine,
             IBudget budget)
         {
             SessionId = sessionId;
+            WorkspaceId = workspaceId;
             Cancellation = cancellation;
             Task = task;
             Machine = machine;
@@ -1946,6 +2118,8 @@ public sealed partial class SessionApplication :
         public ConversationMessage? SourceMessage { get; set; }
 
         public TaskSpecification Task { get; set; }
+
+        public WorkspaceId WorkspaceId { get; }
     }
 }
 

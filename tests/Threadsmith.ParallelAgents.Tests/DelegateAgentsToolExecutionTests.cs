@@ -11,6 +11,24 @@ using Xunit;
 /// <summary>Verifies the Plan 91 public tool definition and durable fork/join behavior.</summary>
 public sealed class DelegateAgentsToolExecutionTests
 {
+    /// <summary>The projector and tool definitions retain their exact production byte bounds.</summary>
+    [Fact]
+    public void DelegateAgentsProjectionLimits_Production_PreservesExactDefaults()
+    {
+        Assert.Equal(192 * 1024, DelegateAgentsContract.MaximumStructuredResultBytes);
+        Assert.Equal(256 * 1024, DelegateAgentsContract.MaximumOutputBytes);
+        Assert.Equal(
+            DelegateAgentsContract.MaximumStructuredResultBytes,
+            DelegateAgentsProjectionLimits.Production.MaximumStructuredResultBytes);
+    }
+
+    /// <summary>An invalid structured-result projection bound fails immediately.</summary>
+    [Fact]
+    public void DelegateAgentsProjectionLimits_NonPositiveValue_FailsFast()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DelegateAgentsProjectionLimits(0));
+    }
+
     /// <summary>Verifies the model-facing contract exposes only bounded v1 arguments and exact result shape.</summary>
     [Fact]
     public async Task Definition_UsesStrictBoundedWorkflowContract()
@@ -571,9 +589,50 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Single(execution.Value.Disagreements);
     }
 
-    /// <summary>Verifies maximum configured child payloads remain below the tool envelope byte limit.</summary>
+    /// <summary>A small structured bound retains child statuses while omitting excess deterministic detail.</summary>
     [Fact]
-    public async Task ExecuteAsync_MaximumPayload_RetainsStatusesAndBoundsStructuredResult()
+    public async Task ExecuteAsync_SmallStructuredLimit_RetainsStatusesAndBoundsStructuredResult()
+    {
+        // Arrange
+        var projectionLimits = new DelegateAgentsProjectionLimits(maximumStructuredResultBytes: 1_200);
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var options = new DelegateAgentsOptions
+        {
+            MaximumAgents = 2,
+            MaximumSummaryCharacters = 128,
+        };
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new SmallProjectionRunner()),
+            options,
+            projectionLimits: projectionLimits);
+
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(2), fixture.Context);
+        var structuredJson = JsonSerializer.SerializeToUtf8Bytes(execution.Value);
+
+        // Assert
+        Assert.True(structuredJson.Length <= projectionLimits.MaximumStructuredResultBytes);
+        Assert.Equal(2, execution.Value.Children.Count);
+        Assert.All(execution.Value.Children, child =>
+        {
+            Assert.Equal("Completed", child.Status);
+            Assert.Contains(child.AssignmentId, execution.ModelResultContent, StringComparison.Ordinal);
+        });
+        using var parsed = JsonDocument.Parse(structuredJson);
+        Assert.Equal("Completed", parsed.RootElement.GetProperty("status").GetString());
+        Assert.Contains(
+            execution.Value.Children,
+            child => child.Omissions.Any(omission => omission.Contains("retained", StringComparison.Ordinal)));
+        Assert.True(execution.IsTruncated);
+    }
+
+    /// <summary>The production envelope retains every status at the maximum eight-agent boundary.</summary>
+    [Fact]
+    public async Task ExecuteAsync_ProductionEnvelope_RetainsStatusesAndBoundsStructuredResult()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -587,7 +646,7 @@ public sealed class DelegateAgentsToolExecutionTests
         };
         var fixture = CreateTool(
             coordinator,
-            new FixedRunnerFactory(new LargeFindingRunner()),
+            new FixedRunnerFactory(new ProductionEnvelopeRunner()),
             options);
 
         // Act
@@ -657,43 +716,6 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Contains(child.Omissions, omission => omission.Contains(
             "finding fields were truncated",
             StringComparison.Ordinal));
-    }
-
-    /// <summary>Verifies model projection truncation reserves room for a complete footer.</summary>
-    [Fact]
-    public async Task ExecuteAsync_AsciiHeavyProjection_PreservesStatusesAndTruncationFooter()
-    {
-        // Arrange
-        const int maximumModelProjectionCharacters = 48 * 1024;
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var options = new DelegateAgentsOptions
-        {
-            MaximumAgents = 8,
-            MaximumSummaryCharacters = 4_096,
-        };
-        var fixture = CreateTool(
-            coordinator,
-            new FixedRunnerFactory(new LargeFindingRunner('x')),
-            options);
-
-        // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(8), fixture.Context);
-
-        // Assert
-        var modelContent = Assert.IsType<string>(execution.ModelResultContent);
-        Assert.True(execution.IsTruncated);
-        Assert.True(modelContent.Length <= maximumModelProjectionCharacters);
-        Assert.All(execution.Value.Children, child => Assert.Contains(
-            child.AssignmentId,
-            modelContent,
-            StringComparison.Ordinal));
-        Assert.Contains(
-            "complete detail block(s) omitted by the model projection bound",
-            modelContent,
-            StringComparison.Ordinal);
     }
 
     /// <summary>Enlarged editable blocks cannot bypass the model projection bound or hide truncation.</summary>
@@ -833,7 +855,8 @@ public sealed class DelegateAgentsToolExecutionTests
         IDelegationCoordinator coordinator,
         IExplorerAssignmentRunnerFactory runners,
         DelegateAgentsOptions? configuredOptions = null,
-        IPromptLoader? prompts = null)
+        IPromptLoader? prompts = null,
+        DelegateAgentsProjectionLimits? projectionLimits = null)
     {
         var workspaceId = WorkspaceId.New();
         var baseline = new WorkspaceBaseline(
@@ -874,7 +897,9 @@ public sealed class DelegateAgentsToolExecutionTests
                 runners,
                 coordinator,
                 options,
-                prompts ?? TestPromptLoader.Instance),
+                prompts ?? TestPromptLoader.Instance,
+                steering: null,
+                projectionLimits: projectionLimits ?? DelegateAgentsProjectionLimits.Production),
             context,
             plans);
     }
@@ -1317,7 +1342,7 @@ public sealed class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class LargeFindingRunner(char character = '\u0800') : IAgentAssignmentRunner
+    private sealed class SmallProjectionRunner : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -1325,7 +1350,55 @@ public sealed class DelegateAgentsToolExecutionTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var text = new string(character, 4_096);
+            AgentFinding[] findings =
+            [
+                .. Enumerable.Range(1, 3).Select(index => new AgentFinding
+                {
+                    FindingId = Guid.Parse($"10000000-0000-0000-0000-{index:D12}"),
+                    Category = "behavior",
+                    Summary = $"Finding {index}: deterministic projection detail.",
+                    EvidenceIds =
+                    [
+                        new EvidenceId(Guid.Parse($"20000000-0000-0000-0000-{index:D12}")),
+                    ],
+                    Locations = [$"src/File{index}.cs"],
+                    Symbols = [$"Sample.Symbol{index}"],
+                    Confidence = 0.9,
+                    Uncertainty = $"Uncertainty {index}.",
+                }),
+            ];
+            return Task.FromResult(new AgentRunOutcome
+            {
+                AssignmentId = assignment.AssignmentId,
+                ChildRunId = assignment.ChildRunId,
+                Role = assignment.Role,
+                Generation = plan.Provenance.Generation,
+                Status = AgentRunStatus.Completed,
+                Usage = new AgentResourceUsage { ModelTokens = 30, ToolCalls = 1 },
+                Reason = "bounded deterministic result",
+                Findings = new AgentFindingSet
+                {
+                    AssignmentId = assignment.AssignmentId,
+                    ChildRunId = assignment.ChildRunId,
+                    Generation = plan.Provenance.Generation,
+                    Summary = "Three deterministic findings.",
+                    Findings = findings,
+                    UnresolvedQuestions = ["Question one."],
+                    CoverageNotes = ["Coverage one."],
+                },
+            });
+        }
+    }
+
+    private sealed class ProductionEnvelopeRunner : IAgentAssignmentRunner
+    {
+        public Task<AgentRunOutcome> RunAsync(
+            DelegationPlan plan,
+            AgentAssignment assignment,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var text = new string('\u0800', 4_096);
             AgentFinding[] findings =
             [
                 .. Enumerable.Range(0, 64).Select(index => new AgentFinding
@@ -1348,7 +1421,7 @@ public sealed class DelegateAgentsToolExecutionTests
                 Generation = plan.Provenance.Generation,
                 Status = AgentRunStatus.Completed,
                 Usage = new AgentResourceUsage { ModelTokens = 16_000, ToolCalls = 12 },
-                Reason = "bounded large result",
+                Reason = "bounded production-envelope result",
                 Findings = new AgentFindingSet
                 {
                     AssignmentId = assignment.AssignmentId,

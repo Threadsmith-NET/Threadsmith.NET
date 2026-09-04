@@ -3,6 +3,7 @@ namespace Threadsmith.SessionStatus.Tests;
 using PrettyPrompt.Rendering;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Tui;
 using Xunit;
@@ -17,7 +18,7 @@ public static class SessionStatusTests
         var root = Path.GetPathRoot(Directory.GetCurrentDirectory())
             ?? throw new InvalidOperationException("The current directory has no filesystem root.");
 
-        var displayName = TuiSessionStatusFactory.GetRepositoryDisplayName(root);
+        var displayName = SessionStatusAssembler.GetRepositoryDisplayName(root);
 
         Assert.Equal(Path.TrimEndingDirectorySeparator(root), displayName);
     }
@@ -106,18 +107,47 @@ public static class SessionStatusTests
 
     /// <summary>Concurrent provider completions preserve every distinct invocation.</summary>
     [Fact]
-    public static void UsageProjection_ConcurrentObservations_PreserveTotals()
+    public static async Task UsageProjection_ConcurrentObservations_PreserveTotals()
     {
         var projection = new SessionUsageProjection();
         var sessionId = SessionId.New();
         var runId = RunId.New();
+        const int observerCount = 6;
+        var observersEntered = 0;
+        var allObserversEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseObservers = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Parallel.For(0, 100, round => projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", round, Guid.NewGuid()),
-            new ModelUsage(1, 2)));
+        var observers = Enumerable.Range(0, observerCount).Select(round => Task.Run(async () =>
+        {
+            if (Interlocked.Increment(ref observersEntered) == observerCount)
+            {
+                allObserversEntered.TrySetResult();
+            }
 
-        Assert.Equal(new SessionUsageSnapshot(100, 200, false), projection.GetSnapshot(sessionId));
+            await releaseObservers.Task.WaitAsync(TestContext.Current.CancellationToken);
+            projection.Observe(
+                sessionId,
+                new ModelRequestUsageId(
+                    runId,
+                    "conversation",
+                    round,
+                    new Guid(round + 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+                new ModelUsage(1, 2));
+        })).ToArray();
+        try
+        {
+            await allObserversEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseObservers.TrySetResult();
+        }
+
+        await Task.WhenAll(observers).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(new SessionUsageSnapshot(6, 12, false), projection.GetSnapshot(sessionId));
     }
 
     /// <summary>Overflowing provider totals saturate instead of wrapping.</summary>
@@ -155,7 +185,7 @@ public static class SessionStatusTests
             TokenBudget = 32_000,
         };
 
-        var status = TuiSessionStatusFactory.Create(
+        var status = SessionStatusAssembler.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -181,7 +211,7 @@ public static class SessionStatusTests
             TokenBudget = 967_232,
         };
 
-        var status = TuiSessionStatusFactory.Create(
+        var status = SessionStatusAssembler.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -239,7 +269,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFormatter_WideUnicodeAndLongPath_AbbreviatesSafely()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\very-long-root-name\\very-long-parent-name\\工具箱\\src",
             "工具箱",
             "模型模型模型模型模型",
@@ -274,7 +304,7 @@ public static class SessionStatusTests
         };
     }
 
-    private static TuiSessionStatus CreateStatus(long? contextTokens, long? contextLimit)
+    private static SessionStatusSnapshot CreateStatus(long? contextTokens, long? contextLimit)
     {
         return new(
         "C:\\work\\Threadsmith\\src",

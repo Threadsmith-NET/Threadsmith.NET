@@ -225,28 +225,35 @@ internal sealed class CodeExploreMarkdownRenderer
             return markdown;
         }
 
+        var contentMaximumBytes = GetModelBudgetContentMaximumBytes(maximumBytes);
+        if (contentMaximumBytes <= 0)
+        {
+            return AppendModelBudgetOmission(string.Empty, maximumBytes);
+        }
+
         if (projected.AssociatedArtifacts is { Count: > 0 })
         {
             projected = RemoveArtifactsWithContinuations(projected);
             markdown = RenderUnbounded(projected, query);
         }
 
-        if (Encoding.UTF8.GetByteCount(markdown) > maximumBytes)
+        if (Encoding.UTF8.GetByteCount(markdown) > contentMaximumBytes)
         {
             projected = CompactSecondaryEvidenceForMarkdown(projected);
             markdown = RenderUnbounded(projected, query);
         }
 
-        if (Encoding.UTF8.GetByteCount(markdown) > maximumBytes
+        if (Encoding.UTF8.GetByteCount(markdown) > contentMaximumBytes
             && projected.FileSections.Count > 0)
         {
-            projected = FitSourceSections(projected, query, maximumBytes);
+            projected = FitSourceSections(projected, query, contentMaximumBytes);
             markdown = RenderWithCompactContinuationFooter(projected, query);
         }
 
-        return Encoding.UTF8.GetByteCount(markdown) > maximumBytes
-            ? BoundMarkdownPreservingContinuations(projected, query, maximumBytes)
-            : AppendModelBudgetOmission(markdown, maximumBytes);
+        var boundedContent = Encoding.UTF8.GetByteCount(markdown) > contentMaximumBytes
+            ? BoundMarkdownPreservingContinuations(projected, query, contentMaximumBytes)
+            : markdown;
+        return AppendModelBudgetOmission(boundedContent, maximumBytes);
     }
 
     /// <summary>Bounds Markdown by complete UTF-8 lines while preserving fence balance.</summary>
@@ -414,7 +421,7 @@ internal sealed class CodeExploreMarkdownRenderer
         var continuationMarkdown = CreateBoundedContinuationMarkdown(result, query, maximumBytes);
         if (continuationMarkdown.Length == 0)
         {
-            return BoundMarkdownToUtf8Bytes(RenderUnbounded(result, query), maximumBytes);
+            return BoundMarkdownContentToUtf8Bytes(RenderUnbounded(result, query), maximumBytes);
         }
 
         var continuationBytes = Encoding.UTF8.GetByteCount(continuationMarkdown);
@@ -427,7 +434,9 @@ internal sealed class CodeExploreMarkdownRenderer
         }
 
         var resultWithoutContinuations = RemoveContinuationTargets(result);
-        var body = BoundMarkdownToUtf8Bytes(RenderUnbounded(resultWithoutContinuations, query), bodyBudget);
+        var body = BoundMarkdownContentToUtf8Bytes(
+            RenderUnbounded(resultWithoutContinuations, query),
+            bodyBudget);
         return CombineMarkdownBodyAndContinuations(body, continuationMarkdown, separator);
     }
 
@@ -517,7 +526,7 @@ internal sealed class CodeExploreMarkdownRenderer
             }
         }
 
-        return BoundTextToUtf8Bytes(GetModelBudgetOmission(), maximumBytes);
+        return string.Empty;
     }
 
     private static string ContinuationIdentity(CodeExploreContinuationTarget target)
@@ -532,15 +541,30 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private string BoundMarkdownToUtf8BytesCore(string markdown, int maximumBytes)
     {
+        return BoundMarkdownToUtf8BytesCore(markdown, maximumBytes, GetModelBudgetOmission());
+    }
+
+    private static string BoundMarkdownContentToUtf8Bytes(string markdown, int maximumBytes)
+    {
+        return BoundMarkdownToUtf8BytesCore(markdown, maximumBytes, modelBudgetOmission: null);
+    }
+
+    private static string BoundMarkdownToUtf8BytesCore(
+        string markdown,
+        int maximumBytes,
+        string? modelBudgetOmission)
+    {
         if (Encoding.UTF8.GetByteCount(markdown) <= maximumBytes)
         {
             return markdown;
         }
 
         var newline = Environment.NewLine;
-        var modelBudgetOmission = GetModelBudgetOmission();
-        var omission = modelBudgetOmission + newline;
-        if (Encoding.UTF8.GetByteCount(omission) > maximumBytes)
+        var omission = modelBudgetOmission is null
+            ? string.Empty
+            : modelBudgetOmission + newline;
+        if (modelBudgetOmission is not null
+            && Encoding.UTF8.GetByteCount(omission) > maximumBytes)
         {
             return BoundTextToUtf8Bytes(modelBudgetOmission, maximumBytes);
         }
@@ -612,14 +636,38 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private string AppendModelBudgetOmission(string markdown, int maximumBytes)
     {
-        var withOmission = markdown.TrimEnd()
-            + Environment.NewLine
-            + Environment.NewLine
-            + GetModelBudgetOmission()
-            + Environment.NewLine;
-        return Encoding.UTF8.GetByteCount(withOmission) <= maximumBytes
-            ? withOmission
-            : markdown;
+        var newline = Environment.NewLine;
+        var omission = GetModelBudgetOmission();
+        var omissionLine = omission + newline;
+        if (Encoding.UTF8.GetByteCount(omissionLine) > maximumBytes)
+        {
+            return BoundTextToUtf8Bytes(omission, maximumBytes);
+        }
+
+        var trimmedMarkdown = markdown.TrimEnd();
+        if (trimmedMarkdown.Length == 0)
+        {
+            return omissionLine;
+        }
+
+        var separator = newline + newline;
+        var contentMaximumBytes = maximumBytes
+            - Encoding.UTF8.GetByteCount(separator)
+            - Encoding.UTF8.GetByteCount(omissionLine);
+        var boundedMarkdown = Encoding.UTF8.GetByteCount(trimmedMarkdown) <= contentMaximumBytes
+            ? trimmedMarkdown
+            : BoundMarkdownContentToUtf8Bytes(trimmedMarkdown, contentMaximumBytes).TrimEnd();
+        return boundedMarkdown.Length == 0
+            ? omissionLine
+            : boundedMarkdown + separator + omissionLine;
+    }
+
+    private int GetModelBudgetContentMaximumBytes(int maximumBytes)
+    {
+        var newline = Environment.NewLine;
+        return maximumBytes
+            - Encoding.UTF8.GetByteCount(newline + newline)
+            - Encoding.UTF8.GetByteCount(GetModelBudgetOmission() + newline);
     }
 
     private static string? GetOpenFenceAfterLine(string line, string? openFence)

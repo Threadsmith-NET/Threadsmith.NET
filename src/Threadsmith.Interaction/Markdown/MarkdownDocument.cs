@@ -1,56 +1,65 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Markdown;
 
 using System.Collections.Immutable;
 
 /// <summary>Closed terminal-neutral semantic document produced from one model answer.</summary>
 /// <param name="Blocks">Validated top-level blocks in source order.</param>
-internal sealed record TuiMarkdownDocument(ImmutableArray<TuiMarkdownBlock> Blocks);
+public sealed record MarkdownDocument(ImmutableArray<MarkdownBlock> Blocks);
 
 /// <summary>Base type for the bounded markdown block vocabulary owned by the TUI.</summary>
-internal abstract record TuiMarkdownBlock;
+public abstract record MarkdownBlock;
 
 /// <summary>Ordinary paragraph content.</summary>
-internal sealed record TuiMarkdownParagraph(ImmutableArray<TuiMarkdownSpan> Spans) : TuiMarkdownBlock;
+public sealed record MarkdownParagraph(ImmutableArray<MarkdownSpan> Spans) : MarkdownBlock;
 
 /// <summary>Heading content and CommonMark level.</summary>
-internal sealed record TuiMarkdownHeading(int Level, ImmutableArray<TuiMarkdownSpan> Spans) : TuiMarkdownBlock;
+public sealed record MarkdownHeading(int Level, ImmutableArray<MarkdownSpan> Spans) : MarkdownBlock;
 
 /// <summary>Quoted child blocks.</summary>
-internal sealed record TuiMarkdownQuote(ImmutableArray<TuiMarkdownBlock> Blocks) : TuiMarkdownBlock;
+public sealed record MarkdownQuote(ImmutableArray<MarkdownBlock> Blocks) : MarkdownBlock;
 
 /// <summary>Ordered or unordered list with immutable items.</summary>
-internal sealed record TuiMarkdownList(
+public sealed record MarkdownList(
     bool IsOrdered,
     int Start,
-    ImmutableArray<TuiMarkdownListItem> Items) : TuiMarkdownBlock;
+    ImmutableArray<MarkdownListItem> Items) : MarkdownBlock;
 
 /// <summary>One list item, optionally carrying task-list state.</summary>
-internal sealed record TuiMarkdownListItem(
+public sealed record MarkdownListItem(
     bool? IsChecked,
-    ImmutableArray<TuiMarkdownBlock> Blocks);
+    ImmutableArray<MarkdownBlock> Blocks);
 
 /// <summary>Literal fenced or indented code.</summary>
-internal sealed record TuiMarkdownCodeBlock(string Code, string? Language) : TuiMarkdownBlock;
+public sealed record MarkdownCodeBlock(string Code, string? Language) : MarkdownBlock;
 
 /// <summary>Bounded table rows and cells.</summary>
-internal sealed record TuiMarkdownTable(ImmutableArray<TuiMarkdownTableRow> Rows) : TuiMarkdownBlock;
+public sealed record MarkdownTable(ImmutableArray<MarkdownTableRow> Rows) : MarkdownBlock;
 
 /// <summary>One table row.</summary>
-internal sealed record TuiMarkdownTableRow(
+public sealed record MarkdownTableRow(
     bool IsHeader,
-    ImmutableArray<ImmutableArray<TuiMarkdownSpan>> Cells);
+    ImmutableArray<ImmutableArray<MarkdownSpan>> Cells);
 
 /// <summary>Horizontal separator.</summary>
-internal sealed record TuiMarkdownThematicBreak : TuiMarkdownBlock;
+public sealed record MarkdownThematicBreak : MarkdownBlock;
 
 /// <summary>Closed inline styling vocabulary.</summary>
 [Flags]
-internal enum TuiMarkdownSpanStyle
+public enum MarkdownSpanStyle
 {
+    /// <summary>No inline style.</summary>
     None = 0,
+
+    /// <summary>Emphasized text.</summary>
     Emphasis = 1,
+
+    /// <summary>Strong text.</summary>
     Strong = 2,
+
+    /// <summary>Struck-through text.</summary>
     Strikethrough = 4,
+
+    /// <summary>Code text.</summary>
     Code = 8,
 }
 
@@ -59,15 +68,15 @@ internal enum TuiMarkdownSpanStyle
 /// <param name="Style">Semantic inline styles.</param>
 /// <param name="LinkTarget">Validated HTTP(S) link target, when present.</param>
 /// <param name="IsHardBreak">Whether the span represents an explicit line break.</param>
-internal sealed record TuiMarkdownSpan(
+public sealed record MarkdownSpan(
     string Text,
-    TuiMarkdownSpanStyle Style = TuiMarkdownSpanStyle.None,
+    MarkdownSpanStyle Style = MarkdownSpanStyle.None,
     Uri? LinkTarget = null,
     bool IsHardBreak = false);
 
 /// <summary>Success or safe-source fallback from bounded markdown parsing.</summary>
-internal sealed record TuiMarkdownParseResult(
-    TuiMarkdownDocument? Document,
+internal sealed record MarkdownParseResult(
+    MarkdownDocument? Document,
     string SafeSource,
     string? FallbackReason)
 {

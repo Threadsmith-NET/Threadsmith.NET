@@ -2,26 +2,14 @@ namespace Threadsmith.Tui;
 
 using System.Text;
 using PrettyPrompt.Consoles;
+using Threadsmith.Interaction.Runs;
 
-/// <summary>Hot-key signals admitted while an active run owns the conversation.</summary>
-internal enum ActiveRunInputSignal
-{
-    /// <summary>The first Escape key armed the bounded cancellation chord.</summary>
-    CancellationArmed,
-
-    /// <summary>A second Escape key requested active-run cancellation.</summary>
-    CancellationRequested,
-
-    /// <summary>Enter requested one idempotent safe-boundary steering prompt.</summary>
-    SteeringRequested,
-}
-
-/// <summary>One exclusive active-run terminal input lease.</summary>
-internal interface IActiveRunInputSession : IAsyncDisposable
-{
-    /// <summary>Waits for the next admitted active-run hot key.</summary>
-    Task<ActiveRunInputSignal> ReadAsync(CancellationToken cancellationToken = default);
-}
+/// <summary>Describes how one PrettyPrompt read ended and when its requested idle output drained.</summary>
+/// <param name="WasYieldedForIdleOutput">Whether host output interrupted an untouched empty composer.</param>
+/// <param name="OutputDrained">Completes after every output request that caused the yield releases the console gate.</param>
+internal sealed record PromptReadCompletion(
+    bool WasYieldedForIdleOutput,
+    Task OutputDrained);
 
 /// <summary>
 /// Serializes active-run hot keys with PrettyPrompt while replaying all non-hot-key input to the composer.
@@ -29,10 +17,21 @@ internal interface IActiveRunInputSession : IAsyncDisposable
 internal sealed class BufferedPromptConsole : IConsole
 {
     private const int MaximumBufferedKeys = 100_000;
+    private static readonly TimeSpan IdlePromptPollInterval = TimeSpan.FromMilliseconds(10);
+    private static readonly ConsoleKeyInfo IdleOutputYieldKey = new(
+        '\0',
+        ConsoleKey.F24,
+        shift: true,
+        alt: true,
+        control: true);
+
     private readonly Lock _gate = new();
     private readonly IConsole _inner;
     private readonly Queue<ConsoleKeyInfo> _replay = [];
     private ActiveRunInputSession? _activeLease;
+    private TaskCompletionSource _idleOutputDrained = CreateCompletedSource();
+    private int _pendingOutputWriters;
+    private PromptReadState? _promptRead;
 
     /// <summary>Initializes a new instance of the <see cref="BufferedPromptConsole"/> class.</summary>
     public BufferedPromptConsole(IConsole inner)
@@ -60,6 +59,12 @@ internal sealed class BufferedPromptConsole : IConsole
         {
             lock (_gate)
             {
+                if (_promptRead is { SuppressKeyAvailableOnce: true } promptRead)
+                {
+                    promptRead.SuppressKeyAvailableOnce = false;
+                    return false;
+                }
+
                 return _replay.Count > 0 || _inner.KeyAvailable;
             }
         }
@@ -83,7 +88,7 @@ internal sealed class BufferedPromptConsole : IConsole
     }
 
     /// <summary>Begins an exclusive active-run lease when PrettyPrompt is inactive.</summary>
-    public IActiveRunInputSession? TryBeginActiveRunInput(TimeProvider timeProvider)
+    public IActiveRunInputLease? TryBeginActiveRunInput(TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(timeProvider);
         lock (_gate)
@@ -99,6 +104,107 @@ internal sealed class BufferedPromptConsole : IConsole
         }
     }
 
+    /// <summary>Waits for output that yielded the preceding empty composer before another read begins.</summary>
+    public Task WaitForIdleOutputDrainAsync(CancellationToken cancellationToken)
+    {
+        Task drain;
+        lock (_gate)
+        {
+            drain = _idleOutputDrained.Task;
+        }
+
+        return drain.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>Marks the beginning of one exclusive PrettyPrompt read.</summary>
+    public void BeginPromptRead()
+    {
+        lock (_gate)
+        {
+            if (_activeLease is not null || _promptRead is not null)
+            {
+                throw new InvalidOperationException("A console input owner is already active.");
+            }
+
+            _promptRead = new PromptReadState
+            {
+                YieldRequested = _pendingOutputWriters > 0,
+            };
+        }
+    }
+
+    /// <summary>Ends the active PrettyPrompt read and returns its idle-output coordination state.</summary>
+    public PromptReadCompletion EndPromptRead()
+    {
+        lock (_gate)
+        {
+            var state = _promptRead
+                ?? throw new InvalidOperationException("No PrettyPrompt read is active.");
+            _promptRead = null;
+            state.YieldRequested = false;
+            return new PromptReadCompletion(state.YieldAcknowledged, _idleOutputDrained.Task);
+        }
+    }
+
+    /// <summary>
+    /// Registers output before it waits for the serialized console and requests an empty-composer yield.
+    /// </summary>
+    /// <returns>A lease released after the requesting output releases the console gate.</returns>
+    public IDisposable RegisterPromptOutput()
+    {
+        lock (_gate)
+        {
+            if (_pendingOutputWriters == 0)
+            {
+                _idleOutputDrained = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            _pendingOutputWriters++;
+            if (_promptRead is { HasDraft: false, InputUpdatePending: false } state)
+            {
+                state.YieldRequested = true;
+            }
+
+            return new IdlePromptOutputLease(this);
+        }
+    }
+
+    /// <summary>Records PrettyPrompt's authoritative text after it processes an input key.</summary>
+    public void ObservePromptText(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        lock (_gate)
+        {
+            if (_promptRead is not { } state)
+            {
+                return;
+            }
+
+            state.InputUpdatePending = false;
+            state.HasDraft = text.Length > 0;
+            state.YieldRequested = !state.HasDraft && _pendingOutputWriters > 0;
+        }
+    }
+
+    /// <summary>Confirms that PrettyPrompt received this console's private empty-composer yield key.</summary>
+    public bool TryAcknowledgeIdlePromptYield(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        lock (_gate)
+        {
+            if (_promptRead is not { YieldDelivered: true } state
+                || text.Length > 0
+                || _pendingOutputWriters == 0)
+            {
+                return false;
+            }
+
+            state.YieldAcknowledged = true;
+            return true;
+        }
+    }
+
     /// <inheritdoc />
     public void Clear()
     {
@@ -108,15 +214,51 @@ internal sealed class BufferedPromptConsole : IConsole
     /// <inheritdoc />
     public ConsoleKeyInfo ReadKey(bool intercept)
     {
-        lock (_gate)
+        while (true)
         {
-            if (_activeLease is not null)
+            lock (_gate)
             {
-                throw new InvalidOperationException(
-                    "PrettyPrompt cannot read while the active-run input lease is held.");
+                if (_activeLease is not null)
+                {
+                    throw new InvalidOperationException(
+                        "PrettyPrompt cannot read while the active-run input lease is held.");
+                }
+
+                if (_promptRead is not { } promptRead)
+                {
+                    if (_replay.Count > 0)
+                    {
+                        return _replay.Dequeue();
+                    }
+
+                    return _inner.ReadKey(intercept);
+                }
+
+                if (promptRead.YieldRequested
+                    && !promptRead.HasDraft
+                    && !promptRead.InputUpdatePending
+                    && _pendingOutputWriters > 0)
+                {
+                    promptRead.YieldRequested = false;
+                    promptRead.YieldDelivered = true;
+                    promptRead.SuppressKeyAvailableOnce = true;
+                    return IdleOutputYieldKey;
+                }
+
+                if (_replay.Count > 0)
+                {
+                    promptRead.MarkInputUpdatePending();
+                    return _replay.Dequeue();
+                }
+
+                if (TryGetKeyAvailable())
+                {
+                    promptRead.MarkInputUpdatePending();
+                    return _inner.ReadKey(intercept);
+                }
             }
 
-            return _replay.Count > 0 ? _replay.Dequeue() : _inner.ReadKey(intercept);
+            Thread.Sleep(IdlePromptPollInterval);
         }
     }
 
@@ -300,7 +442,67 @@ internal sealed class BufferedPromptConsole : IConsole
         }
     }
 
-    private sealed class ActiveRunInputSession : IActiveRunInputSession
+    private void CompleteIdlePromptOutput()
+    {
+        lock (_gate)
+        {
+            if (_pendingOutputWriters <= 0)
+            {
+                return;
+            }
+
+            _pendingOutputWriters--;
+            if (_pendingOutputWriters == 0)
+            {
+                if (_promptRead is { } state)
+                {
+                    state.YieldRequested = false;
+                }
+
+                _idleOutputDrained.TrySetResult();
+            }
+        }
+    }
+
+    private static TaskCompletionSource CreateCompletedSource()
+    {
+        var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.SetResult();
+        return source;
+    }
+
+    private sealed class PromptReadState
+    {
+        public bool HasDraft { get; set; }
+
+        public bool InputUpdatePending { get; set; }
+
+        public bool SuppressKeyAvailableOnce { get; set; }
+
+        public bool YieldAcknowledged { get; set; }
+
+        public bool YieldDelivered { get; set; }
+
+        public bool YieldRequested { get; set; }
+
+        public void MarkInputUpdatePending()
+        {
+            InputUpdatePending = true;
+            YieldRequested = false;
+        }
+    }
+
+    private sealed class IdlePromptOutputLease(BufferedPromptConsole owner) : IDisposable
+    {
+        private BufferedPromptConsole? _owner = owner;
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _owner, null)?.CompleteIdlePromptOutput();
+        }
+    }
+
+    private sealed class ActiveRunInputSession : IActiveRunInputLease
     {
         private static readonly TimeSpan EscapeChordWindow = TimeSpan.FromMilliseconds(850);
         private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);
@@ -365,7 +567,7 @@ internal sealed class BufferedPromptConsole : IConsole
             await _disposed.CancelAsync();
             if (Volatile.Read(ref _readCompletion) is { } completion)
             {
-#pragma warning disable VSTHRD003 // This session creates and owns the active-read completion task.
+#pragma warning disable VSTHRD003 // The lease created this completion and waits for its owned read to release the shared console owner.
                 await completion.Task;
 #pragma warning restore VSTHRD003
             }

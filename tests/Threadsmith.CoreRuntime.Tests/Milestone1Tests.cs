@@ -14,6 +14,13 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Hooks;
+using Threadsmith.Interaction.Commands;
+using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
+using Threadsmith.Interaction.Markdown;
+using Threadsmith.Interaction.Presentation;
+using Threadsmith.Interaction.Runs;
+using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
@@ -26,6 +33,34 @@ public static class Milestone1Tests
 {
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
     public static TheoryData<RunPhase[]> LegalTransitionPaths => [.. GetLegalTransitionPaths()];
+
+    /// <summary>A cancelled semantic selection maps to the coordinator's negative sentinel.</summary>
+    [Fact]
+    public static async Task InteractionSessionSurface_CancelledSelection_ReturnsNegativeSentinel()
+    {
+        var surface = new RecordingInteractionSurface(
+            [],
+            new InteractionSelectionResult(null, IsCancelled: true));
+
+        var selected = await new InteractionSessionSurface(surface).SelectAsync(
+            "Choose",
+            ["First"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(-1, selected);
+    }
+
+    /// <summary>The public command list cannot be cast back to and mutate its backing array.</summary>
+    [Fact]
+    public static void InteractiveCommandCatalog_All_DoesNotExposeMutableBackingArray()
+    {
+        var commands = InteractiveCommandCatalog.All;
+
+        Assert.IsNotType<InteractiveCommandDescriptor[]>(commands);
+        var collection = Assert.IsAssignableFrom<ICollection<InteractiveCommandDescriptor>>(commands);
+        Assert.True(collection.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() => collection[0] = commands[^1]);
+    }
 
     /// <summary>Every declared legal transition path succeeds and emits one event per edge.</summary>
     [Theory]
@@ -242,40 +277,69 @@ public static class Milestone1Tests
     public static async Task DomainEventStream_FansOut_WithBoundedBackpressure()
     {
         await using var stream = new DomainEventStream();
-        var first = new ConcurrentBag<Guid>();
-        var second = new ConcurrentBag<Guid>();
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = SessionId.New();
+        IDomainEvent[] expected =
+        [
+            new SessionCreated(sessionId, DateTimeOffset.UtcNow, "test"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "first"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "second"),
+        ];
+        var first = new List<IDomainEvent>();
+        var second = new List<IDomainEvent>();
+        var firstReceivedAll = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecond = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var firstSubscription = stream.Subscribe(
             (domainEvent, _) =>
             {
-                first.Add(domainEvent.SessionId.Value);
+                first.Add(domainEvent);
+                if (first.Count == expected.Length)
+                {
+                    firstReceivedAll.TrySetResult();
+                }
+
                 return Task.CompletedTask;
             },
             2);
         await using var secondSubscription = stream.Subscribe(
             async (domainEvent, cancellationToken) =>
             {
-                await release.Task.WaitAsync(cancellationToken);
-                second.Add(domainEvent.SessionId.Value);
+                if (second.Count == 0)
+                {
+                    secondEntered.TrySetResult();
+                    await releaseSecond.Task.WaitAsync(cancellationToken);
+                }
+
+                second.Add(domainEvent);
             },
             2);
-        var sessionId = SessionId.New();
 
-        var publish = stream.PublishAsync(
-            new SessionCreated(sessionId, DateTimeOffset.UtcNow, "test"));
-        await Task.Delay(20);
-        Assert.False(publish.IsCompleted);
-        release.TrySetResult();
-        await publish;
-
-        for (var index = 0; index < 2048; index++)
+        var firstPublish = stream.PublishAsync(expected[0]);
+        try
         {
-            await stream.PublishAsync(
-                new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, index.ToString()));
+            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var secondPublish = stream.PublishAsync(expected[1]);
+            var thirdPublish = stream.PublishAsync(expected[2]);
+            await firstReceivedAll.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(firstPublish.IsCompleted);
+            Assert.False(secondPublish.IsCompleted);
+            Assert.False(thirdPublish.IsCompleted);
+            Assert.Equal(expected, first);
+
+            releaseSecond.TrySetResult();
+            await Task.WhenAll(firstPublish, secondPublish, thirdPublish)
+                .WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseSecond.TrySetResult();
         }
 
-        Assert.Equal(2049, first.Count);
-        Assert.Equal(2049, second.Count);
+        Assert.Equal(expected, second);
     }
 
     /// <summary>Projection reads are detached and completed runs reach the completion phase.</summary>
@@ -852,10 +916,10 @@ public static class Milestone1Tests
             " (1.7s)");
 
         Assert.Equal("Validation failed (1.7s); mutation was not accepted.\n", failedMessage);
-        Assert.Equal(TuiTextRole.Error, failedRole);
+        Assert.Equal(PresentationTextRole.Error, failedRole);
         Assert.DoesNotContain("completed", failedMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Validation completed (1.7s).\n", completedMessage);
-        Assert.Equal(TuiTextRole.Status, completedRole);
+        Assert.Equal(PresentationTextRole.Status, completedRole);
     }
 
     /// <summary>Post-apply validation start remains visible when no semantic-check activity will follow.</summary>
@@ -887,12 +951,12 @@ public static class Milestone1Tests
             segment =>
             {
                 Assert.Equal(" MUTATION: Validating applied mutation" + Environment.NewLine, segment.Text);
-                Assert.Equal(TuiTextRole.Status, segment.Role);
+                Assert.Equal(PresentationTextRole.Status, segment.Role);
             },
             segment =>
             {
                 Assert.Equal(" \u2514 Stages: compile, diagnostics, tests" + Environment.NewLine, segment.Text);
-                Assert.Equal(TuiTextRole.Muted, segment.Role);
+                Assert.Equal(PresentationTextRole.Muted, segment.Role);
             });
     }
 
@@ -1008,6 +1072,198 @@ public static class Milestone1Tests
         Assert.Contains("Session status: Composer-adjacent", surface.Output, StringComparison.Ordinal);
         Assert.Single(surface.SessionStatuses);
         Assert.Equal(["status", "read"], surface.Operations);
+    }
+
+    /// <summary>A terminal-library-free surface can drive the shared command loop end to end.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_HelpAndQuit_UsesOnlySemanticSurfaceContracts()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new RecordingInteractionSurface(["/help", "/quit"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, surface.ComposerRequests.Count);
+        Assert.Equal(2, surface.SessionStatuses.Count);
+        Assert.Contains(
+            surface.Batches
+                .SelectMany(batch => batch.Items)
+                .OfType<PresentationTextItem>()
+                .SelectMany(item => item.Segments),
+            segment => segment.Text.Contains("/help", StringComparison.Ordinal));
+    }
+
+    /// <summary>The delegation index exposes only current-session stable IDs and rejects stale revisions.</summary>
+    [Fact]
+    public static void DelegationActivityRegistry_ListsCurrentSessionStableIdentities()
+    {
+        var sessionId = SessionId.New();
+        var otherSessionId = SessionId.New();
+        var delegationId = DelegationId.New();
+        var joinedDelegationId = DelegationId.New();
+        var otherDelegationId = DelegationId.New();
+        var assignmentId = AgentAssignmentId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var registry = new DelegationActivityRegistry();
+
+        Assert.Contains(
+            "No delegations have been observed for this session.",
+            registry.FormatSummary(sessionId),
+            StringComparison.Ordinal);
+
+        registry.Observe(new DelegationCheckpointWritten(
+            sessionId,
+            occurredAt,
+            delegationId,
+            RunId.New(),
+            DelegationCheckpointPhase.Accepted,
+            1,
+            "queue children",
+            Revision: 1));
+        registry.Observe(new DelegationCheckpointWritten(
+            sessionId,
+            occurredAt.AddMilliseconds(1),
+            delegationId,
+            RunId.New(),
+            DelegationCheckpointPhase.ChildrenRunning,
+            1,
+            "await children",
+            Revision: 2));
+        registry.Observe(new AgentRunLifecycleObserved(
+            sessionId,
+            occurredAt.AddMilliseconds(2),
+            delegationId,
+            assignmentId,
+            RunId.New(),
+            AgentRole.Explorer,
+            AgentRunStatus.Running,
+            1,
+            "running",
+            Revision: 1));
+        registry.Observe(new DelegationCheckpointWritten(
+            sessionId,
+            occurredAt.AddMilliseconds(3),
+            delegationId,
+            RunId.New(),
+            DelegationCheckpointPhase.Accepted,
+            1,
+            "stale",
+            Revision: 1));
+        registry.Observe(new DelegationCheckpointWritten(
+            sessionId,
+            occurredAt.AddMilliseconds(4),
+            joinedDelegationId,
+            RunId.New(),
+            DelegationCheckpointPhase.ResearchJoined,
+            1,
+            "synthesize findings",
+            Revision: 1));
+        registry.Observe(new DelegationCheckpointWritten(
+            otherSessionId,
+            occurredAt,
+            otherDelegationId,
+            RunId.New(),
+            DelegationCheckpointPhase.Accepted,
+            1,
+            "queue children",
+            Revision: 1));
+
+        var summary = registry.FormatSummary(sessionId);
+        Assert.Contains(delegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
+        Assert.Contains(assignmentId.Value.ToString("D"), summary, StringComparison.Ordinal);
+        Assert.Contains("ChildrenRunning; generation 1; next: await children", summary, StringComparison.Ordinal);
+        Assert.Contains("Explorer Running", summary, StringComparison.Ordinal);
+        Assert.Contains(joinedDelegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
+        Assert.True(
+            summary.IndexOf(delegationId.Value.ToString("D"), StringComparison.Ordinal)
+            < summary.IndexOf(joinedDelegationId.Value.ToString("D"), StringComparison.Ordinal));
+        Assert.DoesNotContain(otherDelegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("stale", summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>An accepted durable checkpoint immediately announces the delegation's stable identity.</summary>
+    [Fact]
+    public static void InteractionEventSegments_AcceptedDelegation_AnnouncesStableIdentity()
+    {
+        var delegationId = DelegationId.New();
+        var segments = new List<PresentationTextSegment>();
+
+        InteractionEventSegments.Append(
+            segments,
+            new DelegationCheckpointWritten(
+                SessionId.New(),
+                DateTimeOffset.UtcNow,
+                delegationId,
+                RunId.New(),
+                DelegationCheckpointPhase.Accepted,
+                1,
+                "queue children"),
+            string.Empty);
+
+        Assert.Equal(
+            $"Delegation started: {delegationId.Value:D}\n"
+            + $"  Inspect or cancel: /agents {delegationId.Value:D}\n",
+            string.Concat(segments.Select(segment => segment.Text)));
+        Assert.All(segments, segment => Assert.Equal(PresentationTextRole.Status, segment.Role));
+    }
+
+    /// <summary>An empty-composer output yield rebuilds status before the shell reads the composer again.</summary>
+    [Fact]
+    public static async Task ConversationalShell_IdleOutputYield_RendersStatusBeforeNextComposer()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(
+            ["/quit"],
+            initialInput: new InteractionInput(
+                false,
+                string.Empty,
+                CancellationToken.None,
+                InteractionInputKind.IdleOutputYield));
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, surface.SessionStatuses.Count);
+        Assert.Equal(["status", "read", "status", "read"], surface.Operations);
+        Assert.DoesNotContain("Input cancelled", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Presentation-only yields cannot cancel or choose a plan or mutation review action.</summary>
+    /// <param name="prompt">Review prompt that must be presented again after background output.</param>
+    /// <param name="response">User response returned after the presentation-only yield.</param>
+    [Theory]
+    [InlineData("Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n", "1")]
+    [InlineData("Mutation review: 1 apply approved set, 2 discard\n", "2")]
+    public static async Task ConversationalShell_SecondaryReviewYield_RetriesWithoutChoosing(
+        string prompt,
+        string response)
+    {
+        var surface = new FakeConsoleSurface(
+            [response],
+            initialInput: new InteractionInput(
+                false,
+                string.Empty,
+                CancellationToken.None,
+                InteractionInputKind.IdleOutputYield));
+        var input = await InteractionInputReader.ReadSecondaryAsync(
+            new InteractionSessionSurface(surface),
+            prompt,
+            PresentationTextRole.Status,
+            ComposerPurpose.Secondary,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(input.IsSubmitted);
+        Assert.Equal(response, input.Text);
+        Assert.Equal(2, surface.Writes.Count(write => string.Equals(write, prompt, StringComparison.Ordinal)));
+        Assert.Equal(["read", "read"], surface.Operations);
+        Assert.All(surface.ComposerRequests, request => Assert.Equal(ComposerPurpose.Secondary, request.Purpose));
     }
 
     /// <summary>The inline shell routes lifecycle-hook management locally through /hooks.</summary>
@@ -1184,14 +1440,14 @@ public static class Milestone1Tests
         Assert.Contains("amber reply", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain(
             surface.Segments,
-            segment => segment.Role == TuiTextRole.UserPrompt);
+            segment => segment.Role == PresentationTextRole.UserPrompt);
         var defaultText = string.Concat(
             surface.Segments
-                .Where(segment => segment.Role == TuiTextRole.Default)
+                .Where(segment => segment.Role == PresentationTextRole.Default)
                 .Select(segment => segment.Text));
         Assert.Contains("amber reply", defaultText, StringComparison.Ordinal);
-        var markdown = Assert.Single(surface.OutputItems.OfType<TuiMarkdownOutput>());
-        var paragraph = Assert.IsType<TuiMarkdownParagraph>(Assert.Single(markdown.Document.Blocks));
+        var markdown = Assert.Single(surface.OutputItems.OfType<PresentationMarkdownItem>());
+        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(markdown.Document.Blocks));
         Assert.Equal("amber reply", string.Concat(paragraph.Spans.Select(span => span.Text)));
         var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
         var answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
@@ -1519,7 +1775,7 @@ public static class Milestone1Tests
 
         string[] expectedCommands =
         [
-            "/agents <id> [cancel|cancel-child <id>]",
+            "/agents [<id> [cancel|cancel-child <id>]]",
             "/auth openai-codex [login|status|logout]",
             "/clone",
             "/code_explore_inspect {on|off}",
@@ -1539,6 +1795,7 @@ public static class Milestone1Tests
             "/quit",
             "/reasoning [level]",
             "/resume [id]",
+            "/semantic_refresh",
             "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]",
             "/theme [id|current]",
             "/thinking [on|off]",
@@ -1661,7 +1918,7 @@ public static class Milestone1Tests
     [Fact]
     public static void TuiSessionStatusFormatter_NarrowWidth_PreservesPriorityWithoutWrapping()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\source\\repos\\a-very-long-working-folder",
             "a-very-long-repository-name",
             "Configured model with a long display name/model-id",
@@ -1707,7 +1964,7 @@ public static class Milestone1Tests
 
     /// <summary>The status factory selects the stricter model and governed context limit.</summary>
     [Fact]
-    public static void TuiSessionStatusFactory_ConfiguredProfile_UsesEffectiveContextLimit()
+    public static void SessionStatusAssembler_ConfiguredProfile_UsesEffectiveContextLimit()
     {
         var profile = CreateReasoningProfile(
             new ModelProfileId(Guid.NewGuid()),
@@ -1723,7 +1980,7 @@ public static class Milestone1Tests
             TokenBudget = 32_000,
         };
 
-        var status = TuiSessionStatusFactory.Create(
+        var status = SessionStatusAssembler.Create(
             "C:\\source",
             "Threadsmith",
             "fallback",
@@ -1741,7 +1998,7 @@ public static class Milestone1Tests
     [Fact]
     public static void TuiSessionStatusFormatter_UnknownContext_ShowsUnknownMarker()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\source",
             "Threadsmith",
             "model",
@@ -1765,7 +2022,7 @@ public static class Milestone1Tests
     [InlineData(200)]
     public static void TuiSessionStatusFormatter_CompatibilityWidths_NeverWrapOrOverflow(int width)
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\work\\Threadsmith\\src",
             "Threadsmith",
             "Long configured model/model-id",
@@ -1789,7 +2046,7 @@ public static class Milestone1Tests
     [Fact]
     public static void TuiSessionStatusFormatter_LongPath_AbbreviatesSafely()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\a-very-long-root-name\\a-very-long-parent-name\\Threadsmith\\src",
             "Threadsmith",
             "model",
@@ -1808,7 +2065,7 @@ public static class Milestone1Tests
     [Fact]
     public static void TuiSessionStatusFormatter_WideUnicode_DoesNotExceedTerminalWidth()
     {
-        var status = new TuiSessionStatus(
+        var status = new SessionStatusSnapshot(
             "C:\\source\\リポジトリ",
             "工具箱",
             "模型模型模型模型模型",
@@ -1831,7 +2088,7 @@ public static class Milestone1Tests
     {
         var resolver = new TuiThemeResolver(TuiTheme.System);
 
-        foreach (var role in Enum.GetValues<TuiTextRole>())
+        foreach (var role in Enum.GetValues<PresentationTextRole>())
         {
             var style = resolver.Resolve(role);
             Assert.Null(style.Foreground);
@@ -1840,7 +2097,7 @@ public static class Milestone1Tests
 
         Assert.Equal(
             TuiTextDecoration.Invert,
-            resolver.Resolve(TuiTextRole.SessionStatus).Decorations);
+            resolver.Resolve(PresentationTextRole.SessionStatus).Decorations);
     }
 
     /// <summary>Partial role styles independently inherit unspecified values from the default role.</summary>
@@ -1850,14 +2107,14 @@ public static class Milestone1Tests
         var theme = new TuiTheme(
             "test",
             [
-                new(TuiTextRole.Default, new TuiTextStyle(
+                new(PresentationTextRole.Default, new TuiTextStyle(
                     TuiColor.Parse("white"),
                     TuiColor.Parse("#102030"))),
-                new(TuiTextRole.Error, new TuiTextStyle(TuiColor.Parse("red"))),
+                new(PresentationTextRole.Error, new TuiTextStyle(TuiColor.Parse("red"))),
             ]);
         var resolver = new TuiThemeResolver(theme);
 
-        var result = resolver.Resolve(TuiTextRole.Error);
+        var result = resolver.Resolve(PresentationTextRole.Error);
 
         Assert.Equal("red", result.Foreground?.Value);
         Assert.Equal("#102030", result.Background?.Value);
@@ -1870,13 +2127,13 @@ public static class Milestone1Tests
         var theme = new TuiTheme(
             "decorations",
             [
-                new(TuiTextRole.Default, new TuiTextStyle(Decorations: TuiTextDecoration.Bold)),
-                new(TuiTextRole.Error, new TuiTextStyle(Decorations: TuiTextDecoration.None)),
+                new(PresentationTextRole.Default, new TuiTextStyle(Decorations: TuiTextDecoration.Bold)),
+                new(PresentationTextRole.Error, new TuiTextStyle(Decorations: TuiTextDecoration.None)),
             ]);
         var resolver = new TuiThemeResolver(theme);
 
-        Assert.Equal(TuiTextDecoration.Bold, resolver.Resolve(TuiTextRole.Status).Decorations);
-        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(TuiTextRole.Error).Decorations);
+        Assert.Equal(TuiTextDecoration.Bold, resolver.Resolve(PresentationTextRole.Status).Decorations);
+        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.Error).Decorations);
     }
 
     /// <summary>NO_COLOR-style suppression removes presentation without changing semantic text ownership.</summary>
@@ -1886,17 +2143,17 @@ public static class Milestone1Tests
         var theme = new TuiTheme(
             "test",
             [
-                new(TuiTextRole.Default, new TuiTextStyle(
+                new(PresentationTextRole.Default, new TuiTextStyle(
                     TuiColor.Parse("cyan"),
                     TuiColor.Parse("black"),
                     TuiTextDecoration.Bold | TuiTextDecoration.Underline)),
             ]);
         var resolver = new TuiThemeResolver(theme, suppressStyles: true);
 
-        var result = resolver.Resolve(TuiTextRole.Hyperlink);
+        var result = resolver.Resolve(PresentationTextRole.Hyperlink);
 
         Assert.Equal(new TuiTextStyle(), result);
-        Assert.Equal(new TuiTextStyle(), resolver.Resolve(TuiTextRole.SessionStatus));
+        Assert.Equal(new TuiTextStyle(), resolver.Resolve(PresentationTextRole.SessionStatus));
     }
 
     /// <summary>Untrusted colors, ids, duplicate roles, and unknown decoration bits fail locally.</summary>
@@ -1909,21 +2166,21 @@ public static class Milestone1Tests
         Assert.Throws<ArgumentException>(() => new TuiTheme(
             "duplicate",
             [
-                new(TuiTextRole.Default, new TuiTextStyle()),
-                new(TuiTextRole.Default, new TuiTextStyle()),
+                new(PresentationTextRole.Default, new TuiTextStyle()),
+                new(PresentationTextRole.Default, new TuiTextStyle()),
             ]));
         Assert.Throws<ArgumentOutOfRangeException>(() => new TuiTheme(
             "decoration",
-            [new(TuiTextRole.Default, new TuiTextStyle(Decorations: (TuiTextDecoration)64))]));
+            [new(PresentationTextRole.Default, new TuiTextStyle(Decorations: (TuiTextDecoration)64))]));
     }
 
     /// <summary>Every semantic role supports independent foreground, background, and validated decorations.</summary>
     [Fact]
     public static void TuiTheme_AllRoles_ResolveIndependentStyleValues()
     {
-        KeyValuePair<TuiTextRole, TuiTextStyle>[] styles =
+        KeyValuePair<PresentationTextRole, TuiTextStyle>[] styles =
         [
-            .. Enum.GetValues<TuiTextRole>().Select(role => new KeyValuePair<TuiTextRole, TuiTextStyle>(
+            .. Enum.GetValues<PresentationTextRole>().Select(role => new KeyValuePair<PresentationTextRole, TuiTextStyle>(
                 role,
                 new TuiTextStyle(
                     TuiColor.Parse("#102030"),
@@ -1932,7 +2189,7 @@ public static class Milestone1Tests
         ];
         var resolver = new TuiThemeResolver(new TuiTheme("complete", styles));
 
-        Assert.All(Enum.GetValues<TuiTextRole>(), role =>
+        Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
         {
             var resolved = resolver.Resolve(role);
             Assert.Equal("#102030", resolved.Foreground?.Value);
@@ -1948,7 +2205,7 @@ public static class Milestone1Tests
         var themes = BuiltInThemes.Create();
 
         Assert.Equal(["system", "forge-dark", "ocean", "high-contrast"], themes.Select(theme => theme.Theme.Id));
-        Assert.All(Enum.GetValues<TuiTextRole>(), role =>
+        Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
         {
             var style = new TuiThemeResolver(themes[0].Theme).Resolve(role);
             Assert.Null(style.Foreground);
@@ -1957,25 +2214,25 @@ public static class Milestone1Tests
         foreach (var theme in themes.Skip(1))
         {
             var resolver = new TuiThemeResolver(theme.Theme);
-            Assert.Null(resolver.Resolve(TuiTextRole.Default).Background);
-            Assert.Null(resolver.Resolve(TuiTextRole.ComposerPrompt).Background);
-            Assert.Null(resolver.Resolve(TuiTextRole.ThinkingIndicator).Background);
-            Assert.NotNull(resolver.Resolve(TuiTextRole.ComposerPrompt).Foreground);
-            Assert.NotNull(resolver.Resolve(TuiTextRole.ThinkingIndicator).Foreground);
+            Assert.Null(resolver.Resolve(PresentationTextRole.Default).Background);
+            Assert.Null(resolver.Resolve(PresentationTextRole.ComposerPrompt).Background);
+            Assert.Null(resolver.Resolve(PresentationTextRole.ThinkingIndicator).Background);
+            Assert.NotNull(resolver.Resolve(PresentationTextRole.ComposerPrompt).Foreground);
+            Assert.NotNull(resolver.Resolve(PresentationTextRole.ThinkingIndicator).Foreground);
             Assert.NotEqual(
-                resolver.Resolve(TuiTextRole.Default).Foreground,
-                resolver.Resolve(TuiTextRole.ComposerPrompt).Foreground);
+                resolver.Resolve(PresentationTextRole.Default).Foreground,
+                resolver.Resolve(PresentationTextRole.ComposerPrompt).Foreground);
             Assert.NotEqual(
-                resolver.Resolve(TuiTextRole.Default).Foreground,
-                resolver.Resolve(TuiTextRole.ThinkingIndicator).Foreground);
-            Assert.NotNull(resolver.Resolve(TuiTextRole.SelectionHighlight).Background);
+                resolver.Resolve(PresentationTextRole.Default).Foreground,
+                resolver.Resolve(PresentationTextRole.ThinkingIndicator).Foreground);
+            Assert.NotNull(resolver.Resolve(PresentationTextRole.SelectionHighlight).Background);
         }
 
         Assert.All(themes, theme => Assert.True(
             new TuiThemeResolver(theme.Theme)
-                .Resolve(TuiTextRole.SessionStatus)
+                .Resolve(PresentationTextRole.SessionStatus)
                 .Decorations?.HasFlag(TuiTextDecoration.Invert)));
-        Assert.True(new TuiThemeResolver(themes[3].Theme).Resolve(TuiTextRole.Error).Decorations?.HasFlag(TuiTextDecoration.Underline));
+        Assert.True(new TuiThemeResolver(themes[3].Theme).Resolve(PresentationTextRole.Error).Decorations?.HasFlag(TuiTextDecoration.Underline));
     }
 
     /// <summary>Configured themes append in order and replace matching built-ins as whole entries.</summary>
@@ -2026,8 +2283,8 @@ public static class Milestone1Tests
         var userTheme = Assert.Single(catalog.Themes, theme => theme.Theme.Id == "user-theme");
         var repositoryTheme = Assert.Single(catalog.Themes, theme => theme.Theme.Id == "repository-theme");
 
-        Assert.Equal(TuiColor.Parse("magenta"), userTheme.Theme.Styles[TuiTextRole.Error].Foreground);
-        Assert.False(repositoryTheme.Theme.Styles.ContainsKey(TuiTextRole.Error));
+        Assert.Equal(TuiColor.Parse("magenta"), userTheme.Theme.Styles[PresentationTextRole.Error].Foreground);
+        Assert.False(repositoryTheme.Theme.Styles.ContainsKey(PresentationTextRole.Error));
     }
 
     /// <summary>Invalid configured themes fall back to system and report a sanitized startup warning.</summary>
@@ -2344,34 +2601,34 @@ public static class Milestone1Tests
 
     /// <summary>Mixed event output retains exact text while assigning tool, link, validation, and diff roles.</summary>
     [Fact]
-    public static void TuiEventSegments_MixedOutput_PreservesPlainTextAndSemanticRoles()
+    public static void InteractionEventSegments_MixedOutput_PreservesPlainTextAndSemanticRoles()
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
-        var segments = new List<TuiTextSegment>();
-        TuiEventSegments.Append(
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
             segments,
             new ToolInvocationCompleted(sessionId, occurredAt, ToolInvocationId.New(), true),
             " TOOLS: read - completed"
                 + Environment.NewLine
                 + "   \u2514 read_file path src/Program.cs"
                 + Environment.NewLine);
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new ToolInvocationCompleted(sessionId, occurredAt, ToolInvocationId.New(), false),
             " TOOLS: build - failed"
                 + Environment.NewLine
                 + "   \u2514 dotnet build failed"
                 + Environment.NewLine);
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new RepositoryOpened(sessionId, occurredAt, "C:\\source\\repo"),
             $"Threadsmith: Repository opened.{Environment.NewLine}Repository: C:\\source\\repo{Environment.NewLine}");
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new MutationSetProposed(sessionId, occurredAt, MutationSetId.New()),
             $"@@ -1 +1 @@{Environment.NewLine}{Environment.NewLine}-old{Environment.NewLine}+new{Environment.NewLine}");
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new TestRunCompleted(sessionId, occurredAt, 4, 0),
             string.Empty);
@@ -2389,22 +2646,22 @@ public static class Milestone1Tests
             + $"@@ -1 +1 @@{Environment.NewLine}{Environment.NewLine}-old{Environment.NewLine}+new{Environment.NewLine}"
             + $"Tests: 4 passed, 0 failed, 0 skipped{Environment.NewLine}",
             string.Concat(segments.Select(segment => segment.Text)));
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.ToolSuccess);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.ToolFailure);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.Hyperlink);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.DiffAdded);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.DiffRemoved);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.DiffContext);
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.Muted && segment.Text.Contains("read_file", StringComparison.Ordinal));
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.Success);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.ToolSuccess);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.ToolFailure);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.Hyperlink);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.DiffAdded);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.DiffRemoved);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.DiffContext);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.Muted && segment.Text.Contains("read_file", StringComparison.Ordinal));
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.Success);
     }
 
     /// <summary>Leading presentation-boundary spacing does not demote the completed-tool header.</summary>
     [Fact]
-    public static void TuiEventSegments_ToolCompletionAfterBoundary_KeepsHeaderOutcomeRole()
+    public static void InteractionEventSegments_ToolCompletionAfterBoundary_KeepsHeaderOutcomeRole()
     {
-        var segments = new List<TuiTextSegment>();
-        TuiEventSegments.Append(
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
             segments,
             new ToolInvocationCompleted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), true),
             Environment.NewLine
@@ -2422,25 +2679,25 @@ public static class Milestone1Tests
             string.Concat(segments.Select(segment => segment.Text)));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.ToolSuccess
+            segment => segment.Role == PresentationTextRole.ToolSuccess
                 && segment.Text.Contains(" TOOLS: read - completed", StringComparison.Ordinal));
         Assert.DoesNotContain(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains(" TOOLS: read - completed", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("read_file path src/Program.cs", StringComparison.Ordinal));
     }
 
     /// <summary>Plan lifecycle blocks keep status headers and muted guided body/detail roles.</summary>
     [Fact]
-    public static void TuiEventSegments_PlanLifecycleBlocks_UseHeaderAndMutedBodyRoles()
+    public static void InteractionEventSegments_PlanLifecycleBlocks_UseHeaderAndMutedBodyRoles()
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
         var proposedText = " PLAN: revision 1"
             + Environment.NewLine
             + " \u2502 Update the formatter."
@@ -2458,11 +2715,11 @@ public static class Milestone1Tests
             + " \u2514 Reason: Policy ReviewRisky approved the plan."
             + Environment.NewLine;
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new PlanProposed(sessionId, occurredAt, "Update the formatter."),
             proposedText);
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new PlanAutoApproved(
                 sessionId,
@@ -2478,29 +2735,29 @@ public static class Milestone1Tests
         Assert.Equal(proposedText + approvedText, string.Concat(segments.Select(segment => segment.Text)));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Status
+            segment => segment.Role == PresentationTextRole.Status
                 && segment.Text.Contains(" PLAN: revision 1", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Success
+            segment => segment.Role == PresentationTextRole.Success
                 && segment.Text.Contains(" PLAN: auto-approved", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains(" \u2502 Steps:", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("Reason: Policy ReviewRisky", StringComparison.Ordinal));
     }
 
     /// <summary>Mutation lifecycle blocks keep success headers and muted guided body/detail roles.</summary>
     [Fact]
-    public static void TuiEventSegments_MutationLifecycleBlock_UsesHeaderAndMutedDetailRoles()
+    public static void InteractionEventSegments_MutationLifecycleBlock_UsesHeaderAndMutedDetailRoles()
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
         var text = " MUTATION: Applied under the active approval policy"
             + Environment.NewLine
             + " \u2502 Mutation applied: src/File.cs"
@@ -2508,7 +2765,7 @@ public static class Milestone1Tests
             + " \u2514 The expression uses the approved value."
             + Environment.NewLine;
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new MutationApplied(sessionId, occurredAt, MutationId.New()),
             text);
@@ -2516,26 +2773,26 @@ public static class Milestone1Tests
         Assert.Equal(text, string.Concat(segments.Select(segment => segment.Text)));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Success
+            segment => segment.Role == PresentationTextRole.Success
                 && segment.Text.Contains(" MUTATION: Applied under the active approval policy", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("Mutation applied: src/File.cs", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("The expression uses the approved value.", StringComparison.Ordinal));
     }
 
     /// <summary>Mutation preparation lifecycle blocks keep status/warning headers and muted guided rows.</summary>
     [Fact]
-    public static void TuiEventSegments_MutationPreparationBlocks_UseHeaderAndMutedDetailRoles()
+    public static void InteractionEventSegments_MutationPreparationBlocks_UseHeaderAndMutedDetailRoles()
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
         var runId = RunId.New();
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
         var startedText = " MUTATION: Preparing preview"
             + Environment.NewLine
             + " \u2514 Attempt: 1/2"
@@ -2547,11 +2804,11 @@ public static class Milestone1Tests
             + " \u2514 Reason: ReplaceText expectedText was not found in 'src/File.cs'."
             + Environment.NewLine;
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new MutationProposalStarted(sessionId, occurredAt, runId, AttemptNumber: 1, MaximumAttempts: 2),
             startedText);
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new MutationProposalRepairAttempted(
                 sessionId,
@@ -2565,43 +2822,43 @@ public static class Milestone1Tests
         Assert.Equal(startedText + repairText, string.Concat(segments.Select(segment => segment.Text)));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Status
+            segment => segment.Role == PresentationTextRole.Status
                 && segment.Text.Contains(" MUTATION: Preparing preview", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Warning
+            segment => segment.Role == PresentationTextRole.Warning
                 && segment.Text.Contains(" MUTATION: Retrying proposal", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("Attempt: 2/2", StringComparison.Ordinal));
         Assert.Contains(
             segments,
-            segment => segment.Role == TuiTextRole.Muted
+            segment => segment.Role == PresentationTextRole.Muted
                 && segment.Text.Contains("Reason: ReplaceText expectedText", StringComparison.Ordinal));
     }
 
     /// <summary>Model-authored THINKING text remains ordinary visible answer content.</summary>
     [Fact]
-    public static void TuiEventSegments_ModelAuthoredThinking_UsesDefaultRole()
+    public static void InteractionEventSegments_ModelAuthoredThinking_UsesDefaultRole()
     {
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new ModelOutputObserved(SessionId.New(), DateTimeOffset.UtcNow, "answer"),
             $"THINKING{Environment.NewLine}answer{Environment.NewLine}");
 
-        Assert.Contains(segments, segment => segment.Role == TuiTextRole.Default && segment.Text.Contains("THINKING", StringComparison.Ordinal));
-        Assert.DoesNotContain(segments, segment => segment.Role == TuiTextRole.ThinkingIndicator);
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.Default && segment.Text.Contains("THINKING", StringComparison.Ordinal));
+        Assert.DoesNotContain(segments, segment => segment.Role == PresentationTextRole.ThinkingIndicator);
     }
 
     /// <summary>Structured compiler diagnostics use the semantic role matching their severity.</summary>
     [Theory]
-    [InlineData(DiagnosticSeverity.Info, nameof(TuiTextRole.Status))]
-    [InlineData(DiagnosticSeverity.Warning, nameof(TuiTextRole.Warning))]
-    [InlineData(DiagnosticSeverity.Error, nameof(TuiTextRole.Error))]
-    public static void TuiEventSegments_StructuredDiagnostic_UsesSeverityRole(
+    [InlineData(DiagnosticSeverity.Info, nameof(PresentationTextRole.Status))]
+    [InlineData(DiagnosticSeverity.Warning, nameof(PresentationTextRole.Warning))]
+    [InlineData(DiagnosticSeverity.Error, nameof(PresentationTextRole.Error))]
+    public static void InteractionEventSegments_StructuredDiagnostic_UsesSeverityRole(
         DiagnosticSeverity severity,
         string expectedRoleName)
     {
@@ -2615,47 +2872,47 @@ public static class Milestone1Tests
             Message = "message",
             Confidence = SemanticConfidenceLevel.FullSemantic,
         };
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, diagnostic.Code, diagnostic.Message, diagnostic),
             string.Empty);
 
         var segment = Assert.Single(segments);
-        Assert.Equal(Enum.Parse<TuiTextRole>(expectedRoleName), segment.Role);
+        Assert.Equal(Enum.Parse<PresentationTextRole>(expectedRoleName), segment.Role);
     }
 
     /// <summary>An incomplete structured test run is rendered as an error even when no failures were counted.</summary>
     [Fact]
-    public static void TuiEventSegments_IncompleteTestRun_UsesErrorRole()
+    public static void InteractionEventSegments_IncompleteTestRun_UsesErrorRole()
     {
         var validation = new TestValidationResult
         {
             Selection = new TestSelection(),
             Completed = false,
         };
-        var segments = new List<TuiTextSegment>();
+        var segments = new List<PresentationTextSegment>();
 
-        TuiEventSegments.Append(
+        InteractionEventSegments.Append(
             segments,
             new TestRunCompleted(SessionId.New(), DateTimeOffset.UtcNow, 0, 0, StructuredResult: validation),
             string.Empty);
 
         var segment = Assert.Single(segments);
-        Assert.Equal(TuiTextRole.Error, segment.Role);
+        Assert.Equal(PresentationTextRole.Error, segment.Role);
     }
 
     /// <summary>Hyperlink metadata rejects control characters, relative targets, and unsupported schemes.</summary>
     [Fact]
-    public static void TuiTextSegment_UnsafeHyperlinks_AreRejected()
+    public static void PresentationTextSegment_UnsafeHyperlinks_AreRejected()
     {
         Assert.Throws<ArgumentException>(() =>
-            new TuiTextSegment("relative", TuiTextRole.Hyperlink, new Uri("relative", UriKind.Relative)).Validate());
+            new PresentationTextSegment("relative", PresentationTextRole.Hyperlink, new Uri("relative", UriKind.Relative)).Validate());
         Assert.Throws<ArgumentException>(() =>
-            new TuiTextSegment("script", TuiTextRole.Hyperlink, new Uri("javascript:alert(1)")).Validate());
+            new PresentationTextSegment("script", PresentationTextRole.Hyperlink, new Uri("javascript:alert(1)")).Validate());
         Assert.Throws<ArgumentException>(() =>
-            new TuiTextSegment("control", TuiTextRole.Hyperlink, new Uri("https://example.test/%1B")).Validate());
+            new PresentationTextSegment("control", PresentationTextRole.Hyperlink, new Uri("https://example.test/%1B")).Validate());
     }
 
     /// <summary>Redirected, NO_COLOR, and capability-limited terminals use the plain-text fallback.</summary>
@@ -2678,10 +2935,10 @@ public static class Milestone1Tests
     {
         var theme = new TuiTheme(
             "fallback",
-            [new(TuiTextRole.Default, new TuiTextStyle(TuiColor.Parse("cyan")))]);
+            [new(PresentationTextRole.Default, new TuiTextStyle(TuiColor.Parse("cyan")))]);
         var resolver = new TuiThemeResolver(theme);
 
-        var result = resolver.Resolve((TuiTextRole)int.MaxValue);
+        var result = resolver.Resolve((PresentationTextRole)int.MaxValue);
 
         Assert.Equal("cyan", result.Foreground?.Value);
         Assert.Null(result.Background);
@@ -2718,7 +2975,7 @@ public static class Milestone1Tests
         Assert.DoesNotContain("</thinking>", surface.Output, StringComparison.Ordinal);
         Assert.Contains(
             surface.Segments,
-            segment => segment.Role == TuiTextRole.Reasoning
+            segment => segment.Role == PresentationTextRole.Reasoning
                 && string.Equals(segment.Text, "Consider the greeting.", StringComparison.Ordinal));
         Assert.DoesNotContain("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("// reasoning:", surface.Output, StringComparison.Ordinal);
@@ -2754,10 +3011,12 @@ public static class Milestone1Tests
                 "activity-start:THINKING",
                 StringComparison.Ordinal)));
         var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
-        var reasoningWritten = surface.Lifecycle.ToList().IndexOf("output:segments");
-        Assert.True(thinkingEnded >= 0 && thinkingEnded < reasoningWritten);
+        var reasoningWritten = surface.Lifecycle.ToList().IndexOf("output:reasoning");
+        Assert.True(
+            thinkingEnded >= 0 && thinkingEnded < reasoningWritten,
+            string.Join(" | ", surface.Lifecycle));
         var streamedReasoning = string.Concat(surface.Segments
-            .Where(segment => segment.Role == TuiTextRole.Reasoning)
+            .Where(segment => segment.Role == PresentationTextRole.Reasoning)
             .Select(segment => segment.Text));
         Assert.StartsWith(
             $"{Environment.NewLine}Inspect the repository.",
@@ -3630,24 +3889,33 @@ public static class Milestone1Tests
     [Fact]
     public static async Task UiEventDispatcher_Flooding_CoalescesWithoutLoss()
     {
-        var dispatcher = new UiEventDispatcher(32);
-        var rendered = 0;
+        var dispatcher = new UiEventDispatcher(2);
+        var sessionId = SessionId.New();
+        IDomainEvent[] expected =
+        [
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "first"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "second"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "third"),
+        ];
+        var batches = new List<IReadOnlyList<IDomainEvent>>();
+
+        await dispatcher.QueueAsync(expected[0]);
+        await dispatcher.QueueAsync(expected[1]);
+        var thirdQueue = dispatcher.QueueAsync(expected[2]);
+        Assert.False(thirdQueue.IsCompleted);
+
         var drain = dispatcher.DrainAsync((batch, _) =>
         {
-            rendered += batch.Count;
+            batches.Add(batch);
             return Task.CompletedTask;
         });
-        var sessionId = SessionId.New();
-
-        for (var index = 0; index < 5000; index++)
-        {
-            await dispatcher.QueueAsync(
-                new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "x"));
-        }
+        await thirdQueue.WaitAsync(TimeSpan.FromSeconds(2));
 
         dispatcher.Complete();
-        await drain;
-        Assert.Equal(5000, rendered);
+        await drain.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(batches[0].Count >= 2);
+        Assert.Equal(expected, batches.SelectMany(batch => batch));
     }
 
     /// <summary>TUI and CLI drive the same handlers and render identical activity.</summary>
@@ -4108,15 +4376,15 @@ public static class Milestone1Tests
     private sealed class FakeConsoleSurface : IConsoleSurface
     {
         private readonly Lock _gate = new();
-        private readonly Queue<ConsoleInput> _inputs;
+        private readonly Queue<InteractionInput> _inputs;
         private readonly StringBuilder _output = new();
         private readonly Queue<int> _selections = [];
         private readonly List<string> _statuses = [];
         private readonly List<string> _activeStatuses = [];
-        private readonly List<TuiTextSegment> _segments = [];
+        private readonly List<PresentationTextSegment> _segments = [];
         private readonly List<string> _lifecycle = [];
         private readonly List<string> _operations = [];
-        private readonly List<TuiOutputItem> _outputItems = [];
+        private readonly List<PresentationItem> _outputItems = [];
         private readonly List<string> _sessionStatuses = [];
         private readonly List<string> _writes = [];
         private readonly int _statusWidth;
@@ -4132,15 +4400,26 @@ public static class Milestone1Tests
             IEnumerable<int>? selections = null,
             int statusWidth = 120,
             bool suppressSessionStatus = false,
-            Exception? statusFailure = null)
+            Exception? statusFailure = null,
+            InteractionInput? initialInput = null)
         {
             _statusWidth = statusWidth;
             _suppressSessionStatus = suppressSessionStatus;
             _statusFailure = statusFailure;
-            _inputs = new Queue<ConsoleInput>(inputs.Select(text => new ConsoleInput(
+            _inputs = new Queue<InteractionInput>();
+            if (initialInput is not null)
+            {
+                _inputs.Enqueue(initialInput);
+            }
+
+            foreach (var input in inputs.Select(text => new InteractionInput(
                 true,
                 text,
-                CancellationToken.None)));
+                CancellationToken.None)))
+            {
+                _inputs.Enqueue(input);
+            }
+
             if (selections is not null)
             {
                 foreach (var selection in selections)
@@ -4196,7 +4475,7 @@ public static class Milestone1Tests
             }
         }
 
-        public IReadOnlyList<TuiOutputItem> OutputItems
+        public IReadOnlyList<PresentationItem> OutputItems
         {
             get
             {
@@ -4253,7 +4532,7 @@ public static class Milestone1Tests
             }
         }
 
-        public IReadOnlyList<TuiTextSegment> Segments
+        public IReadOnlyList<PresentationTextSegment> Segments
         {
             get
             {
@@ -4283,7 +4562,7 @@ public static class Milestone1Tests
 
         /// <inheritdoc />
         public Task ShowSessionStatusAsync(
-            TuiSessionStatus status,
+            SessionStatusSnapshot status,
             string separator,
             CancellationToken cancellationToken = default)
         {
@@ -4312,7 +4591,7 @@ public static class Milestone1Tests
         }
 
         /// <inheritdoc />
-        public Task<ConsoleInput> ReadAsync(CancellationToken cancellationToken = default)
+        public Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
@@ -4320,7 +4599,7 @@ public static class Milestone1Tests
                 _operations.Add("read");
                 return Task.FromResult(_inputs.Count > 0
                     ? _inputs.Dequeue()
-                    : new ConsoleInput(false, string.Empty, CancellationToken.None));
+                    : new InteractionInput(false, string.Empty, CancellationToken.None));
             }
         }
 
@@ -4384,7 +4663,7 @@ public static class Milestone1Tests
 
         /// <inheritdoc />
         public async Task WriteOutputAsync(
-            IReadOnlyList<TuiOutputItem> items,
+            IReadOnlyList<PresentationItem> items,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -4393,7 +4672,13 @@ public static class Milestone1Tests
                 _outputItems.AddRange(items);
                 foreach (var item in items)
                 {
-                    _lifecycle.Add(item is TuiMarkdownOutput ? "output:markdown" : "output:segments");
+                    _lifecycle.Add(item switch
+                    {
+                        PresentationMarkdownItem => "output:markdown",
+                        PresentationTextItem textItem when textItem.Segments.Any(
+                            segment => segment.Role == PresentationTextRole.Reasoning) => "output:reasoning",
+                        _ => "output:segments",
+                    });
                 }
             }
 
@@ -4411,18 +4696,87 @@ public static class Milestone1Tests
         /// <inheritdoc />
         public Task WriteAsync(
             string text,
-            TuiTextRole role = TuiTextRole.Default,
+            PresentationTextRole role = PresentationTextRole.Default,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
                 _writes.Add(text);
-                _segments.Add(new TuiTextSegment(text, role));
+                _segments.Add(new PresentationTextSegment(text, role));
                 _output.Append(text);
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingInteractionSurface : IInteractionSurface
+    {
+        private readonly Queue<InteractionInput> _inputs;
+        private readonly InteractionSelectionResult? _selectionResult;
+
+        internal RecordingInteractionSurface(
+            IEnumerable<string> inputs,
+            InteractionSelectionResult? selectionResult = null)
+        {
+            _inputs = new Queue<InteractionInput>(inputs.Select(text => new InteractionInput(
+                true,
+                text,
+                CancellationToken.None)));
+            _selectionResult = selectionResult;
+        }
+
+        public InteractionSurfaceCapabilities Capabilities { get; } = new();
+
+        internal List<PresentationBatch> Batches { get; } = [];
+
+        internal List<ComposerRequest> ComposerRequests { get; } = [];
+
+        internal List<SessionStatusSnapshot> SessionStatuses { get; } = [];
+
+        public Task<InteractionInput> ReadComposerAsync(
+            ComposerRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ComposerRequests.Add(request);
+            return Task.FromResult(_inputs.Dequeue());
+        }
+
+        public Task<InteractionSelectionResult> SelectAsync(
+            InteractionSelectionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_selectionResult
+                ?? throw new InvalidOperationException("The scripted interaction does not request a selection."));
+        }
+
+        public Task PresentAsync(
+            PresentationBatch batch,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Batches.Add(batch);
+            return Task.CompletedTask;
+        }
+
+        public Task PresentSessionStatusAsync(
+            SessionStatusSnapshot status,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SessionStatuses.Add(status);
+            return Task.CompletedTask;
+        }
+
+        public Task PresentActivityUntilAsync(
+            InteractionActivity activity,
+            Task operation,
+            CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException("The scripted interaction does not present activity.");
         }
     }
 
@@ -4582,6 +4936,40 @@ public static class Milestone1Tests
             new ExtensionUnloadFailed(sessionId, occurredAt, ExtensionId.New(), "reason"),
             new SemanticConfidenceChanged(sessionId, occurredAt, "FullSemantic"),
             new SemanticLoadCompleted(sessionId, occurredAt, WorkspaceId.New(), "FullSemantic"),
+            new SemanticRefreshStarted(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.ExternalChange,
+                SemanticRefreshMode.Incremental,
+                ChangedFileCount: 1,
+                DirtyVersion: 2),
+            new SemanticRefreshCompleted(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.Manual,
+                SemanticRefreshMode.Full,
+                ChangedFileCount: 1,
+                DirtyVersion: 2,
+                AppliedVersion: 2,
+                SemanticConfidenceLevel.FullSemantic,
+                ElapsedMilliseconds: 12),
+            new SemanticRefreshFailed(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.Recovery,
+                SemanticRefreshMode.Full,
+                ChangedFileCount: 1,
+                DirtyVersion: 3,
+                AppliedVersion: 2,
+                SemanticRefreshFailureKind.Infrastructure,
+                "safe reason",
+                ElapsedMilliseconds: 12),
             new RunTransitioned(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.EvidenceCollection),
             new RunTransitionFailed(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.Testing, "reason"),
             new ModelOutputObserved(sessionId, occurredAt, "text"),

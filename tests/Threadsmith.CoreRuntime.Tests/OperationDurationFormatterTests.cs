@@ -4,6 +4,8 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Coordination;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui;
 using Xunit;
 
@@ -94,7 +96,7 @@ public static class OperationDurationFormatterTests
     {
         var operation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
-        var activity = new TuiActivity(
+        var activity = new InteractionActivity(
             "TOOLS: pending",
             TimeProvider.System.GetTimestamp(),
             ShowDuration: true,
@@ -629,14 +631,14 @@ public static class OperationDurationFormatterTests
 
     /// <summary>Unified diff display adds presentation-owned spacing after hunk headers.</summary>
     [Fact]
-    public static void TuiPresentationFormatter_DiffDisplay_AddsBlankLineAfterHunkHeader()
+    public static void InteractionPresentationFormatter_DiffDisplay_AddsBlankLineAfterHunkHeader()
     {
         var raw = "diff --git a/file.txt b/file.txt\n"
             + "@@ -1 +1 @@\n"
             + "-old\n"
             + "+new\n";
 
-        var display = TuiPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
+        var display = InteractionPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
 
         Assert.Contains("@@ -1 +1 @@\n\n-old", display, StringComparison.Ordinal);
         Assert.DoesNotContain("@@ -1 +1 @@\n\n\n-old", display, StringComparison.Ordinal);
@@ -644,7 +646,7 @@ public static class OperationDurationFormatterTests
 
     /// <summary>Unified diff display collapses unchanged hunk lines while preserving changed lines.</summary>
     [Fact]
-    public static void TuiPresentationFormatter_DiffDisplay_CollapsesUnchangedHunkContext()
+    public static void InteractionPresentationFormatter_DiffDisplay_CollapsesUnchangedHunkContext()
     {
         var raw = "diff --git a/file.txt b/file.txt\n"
             + "--- a/file.txt\n"
@@ -662,7 +664,7 @@ public static class OperationDurationFormatterTests
             + " line 8\n"
             + " line 9\n";
 
-        var display = TuiPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
+        var display = InteractionPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
 
         Assert.Contains("@@ -1,10 +1,10 @@\n\n", display, StringComparison.Ordinal);
         Assert.Contains("  ... 3 unchanged lines hidden ...\n", display, StringComparison.Ordinal);
@@ -681,7 +683,7 @@ public static class OperationDurationFormatterTests
 
     /// <summary>Unified diff display keeps file headers for concatenated multi-file previews.</summary>
     [Fact]
-    public static void TuiPresentationFormatter_DiffDisplay_StopsCompactionAtNextFileHeader()
+    public static void InteractionPresentationFormatter_DiffDisplay_StopsCompactionAtNextFileHeader()
     {
         var raw = "--- a/One.cs\n"
             + "+++ b/One.cs\n"
@@ -700,7 +702,7 @@ public static class OperationDurationFormatterTests
             + "-old two\n"
             + "+new two\n";
 
-        var display = TuiPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
+        var display = InteractionPresentationFormatter.FormatUnifiedDiffForDisplay(raw).Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
 
         Assert.Contains("--- a/One.cs\n+++ b/One.cs\n@@ -1,8 +1,8 @@\n\n", display, StringComparison.Ordinal);
         Assert.Contains("--- a/Two.cs\n+++ b/Two.cs\n@@ -1 +1 @@\n\n", display, StringComparison.Ordinal);

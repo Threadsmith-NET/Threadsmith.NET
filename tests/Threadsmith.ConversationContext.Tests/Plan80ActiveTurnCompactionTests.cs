@@ -145,31 +145,23 @@ public static class Plan80ActiveTurnCompactionTests
     [Fact]
     public static void Candidate_size_validation_uses_actual_next_summary_version()
     {
+        const int knownVersionBoundarySummaryLength = 2;
         var group = CreateGroup(1);
-        (string Text, int VersionNineTokens)? boundary = null;
-        for (var length = 1; length <= 4_000; length++)
-        {
-            var text = new string('x', length);
-            var versionNine = ModelWireEstimator.Estimate(
-                [ActiveTurnSummaryFormatter.CreateMessage(9, text, TestPromptLoader.Instance)],
-                [],
-                ToolTransportMode.Native,
-                0,
-                0).WireInputTokens;
-            var versionTen = ModelWireEstimator.Estimate(
-                [ActiveTurnSummaryFormatter.CreateMessage(10, text, TestPromptLoader.Instance)],
-                [],
-                ToolTransportMode.Native,
-                0,
-                0).WireInputTokens;
-            if (versionTen > versionNine)
-            {
-                boundary = (text, versionNine);
-                break;
-            }
-        }
-
-        var selected = Assert.IsType<(string Text, int VersionNineTokens)>(boundary);
+        var boundaryText = new string('x', knownVersionBoundarySummaryLength);
+        var versionNineTokens = ModelWireEstimator.Estimate(
+            [ActiveTurnSummaryFormatter.CreateMessage(9, boundaryText, TestPromptLoader.Instance)],
+            [],
+            ToolTransportMode.Native,
+            0,
+            0).WireInputTokens;
+        var versionTenTokens = ModelWireEstimator.Estimate(
+            [ActiveTurnSummaryFormatter.CreateMessage(10, boundaryText, TestPromptLoader.Instance)],
+            [],
+            ToolTransportMode.Native,
+            0,
+            0).WireInputTokens;
+        Assert.Equal(32, versionNineTokens);
+        Assert.Equal(33, versionTenTokens);
         var prior = new ActiveTurnCompactionSummary
         {
             Version = 9,
@@ -184,11 +176,11 @@ public static class Plan80ActiveTurnCompactionTests
             priorSummaryVersion: 9,
             coveredGroups: [1],
             throughGroupSequence: 1,
-            summaryText: selected.Text,
+            summaryText: boundaryText,
             filesRead: [],
             filesChanged: []);
         var validator = new ActiveTurnCompactionValidator(
-            new ActiveTurnCompactionPolicy { SummaryBudgetTokens = selected.VersionNineTokens },
+            new ActiveTurnCompactionPolicy { SummaryBudgetTokens = versionNineTokens },
             new SecretOutputSanitizer(),
             TestPromptLoader.Instance);
 

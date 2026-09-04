@@ -10,6 +10,27 @@ using Xunit;
 /// <summary>Plan 90 deployed prompt loader, cache, and template acceptance coverage.</summary>
 public sealed class DeployedPromptLoaderTests
 {
+    /// <summary>The internal production limits retain the public deployed prompt byte contracts.</summary>
+    [Fact]
+    public void DeployedPromptLoadLimits_Production_PreservesExactDefaults()
+    {
+        var limits = DeployedPromptLoadLimits.Production;
+
+        Assert.Equal(128 * 1024, DeployedPromptLoader.MaximumFileBytes);
+        Assert.Equal(4 * 1024 * 1024, DeployedPromptLoader.MaximumCatalogBytes);
+        Assert.Equal(DeployedPromptLoader.MaximumFileBytes, limits.MaximumFileBytes);
+        Assert.Equal(DeployedPromptLoader.MaximumCatalogBytes, limits.MaximumCatalogBytes);
+    }
+
+    /// <summary>Invalid prompt load limits fail before any filesystem access.</summary>
+    [Fact]
+    public void DeployedPromptLoadLimits_InvalidValues_FailFast()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DeployedPromptLoadLimits(0, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DeployedPromptLoadLimits(1, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DeployedPromptLoadLimits(2, 1));
+    }
+
     /// <summary>The shared in-memory consumer fixture preserves production one-pass token semantics.</summary>
     [Fact]
     public void TestPromptLoader_Render_DoesNotRecursivelyInterpretTokenValues()
@@ -57,7 +78,7 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_CompleteCatalog_PreservesExactBytesAndDigests()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
+        using var catalog = TemporaryPromptCatalog.CreateCompleteCatalog();
         const string exactContent = "first line\r\nsecond line\n{ordinary-braces}";
         catalog.WriteText(PromptFileNames.SystemSystemPrompt, exactContent);
 
@@ -83,22 +104,45 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task GetAndRender_AfterInitialization_UseOnlyImmutableCache()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.ToolRunProcessDescription);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         var original = TemporaryPromptCatalog.CreateValidContent(definition);
         var values = CreateRequiredValues(definition, "cached-{{ShellLanguage}}-value");
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        var loader = await catalog.LoadAsync();
         var expectedRendered = ReplaceMarkersOnce(original, values);
 
         catalog.WriteText(definition.FileName, "changed-on-disk");
         Directory.Delete(catalog.PromptRoot, recursive: true);
 
-        var tasks = Enumerable.Range(0, 128)
-            .Select(index => Task.Run(() => index % 2 == 0
-                ? loader.Get(definition.FileName)
-                : loader.Render(definition.FileName, values)))
+        const int readerCount = 6;
+        var readersEntered = 0;
+        var allReadersEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReaders = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = Enumerable.Range(0, readerCount)
+            .Select(async index =>
+            {
+                if (Interlocked.Increment(ref readersEntered) == readerCount)
+                {
+                    allReadersEntered.TrySetResult();
+                }
+
+                await releaseReaders.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                return index % 2 == 0
+                    ? loader.Get(definition.FileName)
+                    : loader.Render(definition.FileName, values);
+            })
             .ToArray();
-        var results = await Task.WhenAll(tasks);
+
+        try
+        {
+            await allReadersEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseReaders.TrySetResult();
+        }
+
+        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.All(
             results.Where((_, index) => index % 2 == 0),
@@ -112,12 +156,12 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task Render_RequiredTokens_AreStrictAndNonRecursive()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.ToolRunProcessDescription);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         catalog.WriteText(
             definition.FileName,
             "before {ordinary} {{ShellLanguage}} after {{ShellLanguage}}");
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        var loader = await catalog.LoadAsync();
 
         var missing = Assert.Throws<ArgumentException>(() =>
             loader.Render(definition.FileName, new Dictionary<string, string>(StringComparer.Ordinal)));
@@ -138,15 +182,15 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task Render_OptionalTokens_MayBeOmittedOrSupplied()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.ToolDelegateAgentsFinding);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         Assert.Equal(
             ["FilePathBlock", "SymbolBlock", "UncertaintyBlock"],
             definition.OptionalTokens.Order(StringComparer.Ordinal));
         catalog.WriteText(
             definition.FileName,
             "{{AssignmentId}}{{FilePathBlock}}{{SymbolBlock}}{{Title}}{{Evidence}}{{Confidence}}{{UncertaintyBlock}}");
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        var loader = await catalog.LoadAsync();
         var required = CreateRequiredValues(definition, "required");
 
         var omitted = loader.Render(definition.FileName, required);
@@ -165,9 +209,9 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task Render_UnknownToken_RejectsWithoutValueDisclosure()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.ToolRunProcessDescription);
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
+        var loader = await catalog.LoadAsync();
         var tokens = CreateRequiredValues(definition, "ordinary");
         tokens["UnexpectedToken"] = "secret-token-value";
 
@@ -186,13 +230,13 @@ public sealed class DeployedPromptLoaderTests
         string marker,
         string expectedCategory)
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         const string secretBody = "secret-body-value";
         catalog.WriteText(definition.FileName, secretBody + marker);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains(expectedCategory, exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(secretBody, exception.ToString(), StringComparison.Ordinal);
@@ -202,12 +246,12 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_MissingRequiredMarker_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.ToolRunProcessDescription);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         catalog.WriteText(definition.FileName, "no declared marker appears here");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("token-contract", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("no declared marker appears here", exception.ToString(), StringComparison.Ordinal);
@@ -218,9 +262,13 @@ public sealed class DeployedPromptLoaderTests
     public async Task LoadAsync_MissingRoot_FailsSafely()
     {
         using var directory = TemporaryDirectory.Create();
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(directory.Path));
+            DeployedPromptLoader.LoadAsync(
+                directory.Path,
+                [definition],
+                DeployedPromptLoadLimits.Production));
 
         Assert.Contains("directory is missing", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(directory.Path, exception.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -230,12 +278,12 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_MissingFile_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
-        var definition = PromptAssetCatalog.All[0];
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         File.Delete(catalog.GetAssetPath(definition.FileName));
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("(missing)", exception.Message, StringComparison.Ordinal);
         Assert.Contains(definition.FileName, exception.Message, StringComparison.Ordinal);
@@ -250,8 +298,8 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_UnreadableFile_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
-        var definition = PromptAssetCatalog.All[0];
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         await using var exclusive = new FileStream(
             catalog.GetAssetPath(definition.FileName),
             FileMode.Open,
@@ -259,7 +307,7 @@ public sealed class DeployedPromptLoaderTests
             FileShare.None);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("(unreadable)", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(catalog.BaseDirectory, exception.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -273,12 +321,12 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_InvalidUtf8_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         catalog.WriteBytes(definition.FileName, [0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0xc3, 0x28]);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("(invalid-utf8)", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("secret", exception.ToString(), StringComparison.Ordinal);
@@ -288,13 +336,13 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_NulContent_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         const string secretBody = "secret-before\0secret-after";
         catalog.WriteText(definition.FileName, secretBody);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("(nul-content)", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("secret-before", exception.ToString(), StringComparison.Ordinal);
@@ -304,12 +352,13 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_PerFileOverflow_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
-        catalog.WriteBytes(definition.FileName, new byte[DeployedPromptLoader.MaximumFileBytes + 1]);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
+        var limits = new DeployedPromptLoadLimits(maximumFileBytes: 16, maximumCatalogBytes: 32);
+        catalog.WriteBytes(definition.FileName, new byte[limits.MaximumFileBytes + 1]);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync(limits));
 
         Assert.Contains("(file-size-limit)", exception.Message, StringComparison.Ordinal);
     }
@@ -318,17 +367,28 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_AggregateOverflow_FailsSafely()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
-        var minimumBytesPerFile = (DeployedPromptLoader.MaximumCatalogBytes / PromptAssetCatalog.All.Count) + 1;
-        foreach (var definition in PromptAssetCatalog.All)
+        PromptAssetDefinition[] definitions =
+        [
+            PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt),
+            PromptAssetCatalog.Get(PromptFileNames.SystemPhaseEvidenceCollection),
+        ];
+        Assert.All(definitions, definition =>
         {
-            var markers = TemporaryPromptCatalog.CreateRequiredMarkers(definition);
-            var padding = new string('x', minimumBytesPerFile);
-            catalog.WriteText(definition.FileName, padding + markers);
-        }
+            Assert.Empty(definition.RequiredTokens);
+            Assert.Empty(definition.OptionalTokens);
+        });
+        using var catalog = TemporaryPromptCatalog.Create(definitions);
+        catalog.WriteText(definitions[0].FileName, "first-small-prompt");
+        catalog.WriteText(definitions[1].FileName, "second-small-prompt");
+        var fileBytes = definitions
+            .Select(definition => checked((int)new FileInfo(catalog.GetAssetPath(definition.FileName)).Length))
+            .ToArray();
+        var limits = new DeployedPromptLoadLimits(
+            maximumFileBytes: fileBytes.Max(),
+            maximumCatalogBytes: fileBytes.Sum() - 1);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync(limits));
 
         Assert.Contains("(catalog-size-limit)", exception.Message, StringComparison.Ordinal);
     }
@@ -342,12 +402,12 @@ public sealed class DeployedPromptLoaderTests
             Assert.Skip("The host filesystem does not support distinct case-only names.");
         }
 
-        using var catalog = TemporaryPromptCatalog.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         catalog.WriteText(definition.FileName.ToUpperInvariant(), "collision");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("case-insensitive filename collision", exception.Message, StringComparison.Ordinal);
     }
@@ -356,14 +416,15 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_UnknownExtraFile_IgnoresAndCannotAddressIt()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         const string unknownName = "Unknown-Extra.md";
         catalog.WriteText(unknownName, "unknown-extra-body");
 
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        var loader = await catalog.LoadAsync();
         var exception = Assert.Throws<ArgumentException>(() => loader.Get(unknownName));
 
-        Assert.Equal(PromptAssetCatalog.All.Count, loader.Assets.Count);
+        Assert.Single(loader.Assets);
         Assert.DoesNotContain(loader.Assets, asset =>
             string.Equals(asset.FileName, unknownName, StringComparison.OrdinalIgnoreCase));
         Assert.Contains("not declared", exception.Message, StringComparison.Ordinal);
@@ -374,8 +435,9 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task Get_UnknownNameAfterRootRemoval_RejectsWithoutFileSystemProbe()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
+        var loader = await catalog.LoadAsync();
         Directory.Delete(catalog.PromptRoot, recursive: true);
 
         var exception = Assert.Throws<ArgumentException>(() => loader.Get("Unknown-Lookup.md"));
@@ -387,24 +449,25 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_Cancelled_DoesNotPublishPartialCatalog()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory, cancellation.Token));
-        var loader = await DeployedPromptLoader.LoadAsync(catalog.BaseDirectory);
+            catalog.LoadAsync(cancellationToken: cancellation.Token));
+        var loader = await catalog.LoadAsync();
 
-        Assert.Equal(PromptAssetCatalog.All.Count, loader.Assets.Count);
+        Assert.Single(loader.Assets);
     }
 
     /// <summary>A linked prompt file is rejected before its external target can be read.</summary>
     [Fact]
     public async Task LoadAsync_SymbolicLinkFile_FailsSafelyWhenSupported()
     {
-        using var catalog = TemporaryPromptCatalog.Create();
-        using var outside = TemporaryDirectory.Create();
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var catalog = TemporaryPromptCatalog.Create(definition);
+        using var outside = TemporaryDirectory.Create();
         var linkPath = catalog.GetAssetPath(definition.FileName);
         var targetPath = Path.Combine(outside.Path, "external.md");
         await File.WriteAllTextAsync(targetPath, "external-secret", Utf8WithoutBom);
@@ -420,7 +483,7 @@ public sealed class DeployedPromptLoaderTests
         }
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DeployedPromptLoader.LoadAsync(catalog.BaseDirectory));
+            catalog.LoadAsync());
 
         Assert.Contains("(non-ordinary-file)", failure.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("external-secret", failure.ToString(), StringComparison.Ordinal);
@@ -431,7 +494,8 @@ public sealed class DeployedPromptLoaderTests
     public async Task LoadAsync_SymbolicLinkRoot_FailsSafelyWhenSupported()
     {
         using var baseDirectory = TemporaryDirectory.Create();
-        using var externalCatalog = TemporaryPromptCatalog.Create();
+        var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
+        using var externalCatalog = TemporaryPromptCatalog.Create(definition);
         var linkPath = Path.Combine(baseDirectory.Path, "prompts");
         try
         {
@@ -446,7 +510,10 @@ public sealed class DeployedPromptLoaderTests
         try
         {
             var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                DeployedPromptLoader.LoadAsync(baseDirectory.Path));
+                DeployedPromptLoader.LoadAsync(
+                    baseDirectory.Path,
+                    [definition],
+                    DeployedPromptLoadLimits.Production));
             Assert.Contains("cannot be a reparse point", failure.Message, StringComparison.Ordinal);
             Assert.DoesNotContain(baseDirectory.Path, failure.ToString(), StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(externalCatalog.PromptRoot, failure.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -529,11 +596,15 @@ public sealed class DeployedPromptLoaderTests
 
     private sealed class TemporaryPromptCatalog : IDisposable
     {
+        private readonly IReadOnlyList<PromptAssetDefinition> _definitions;
         private readonly TemporaryDirectory _directory;
 
-        private TemporaryPromptCatalog(TemporaryDirectory directory)
+        private TemporaryPromptCatalog(
+            TemporaryDirectory directory,
+            IReadOnlyList<PromptAssetDefinition> definitions)
         {
             _directory = directory;
+            _definitions = definitions;
             PromptRoot = Path.Combine(directory.Path, "prompts");
             Directory.CreateDirectory(PromptRoot);
         }
@@ -542,18 +613,24 @@ public sealed class DeployedPromptLoaderTests
 
         public string PromptRoot { get; }
 
-        public long TotalBytes => PromptAssetCatalog.All.Sum(definition =>
+        public long TotalBytes => _definitions.Sum(definition =>
             new FileInfo(GetAssetPath(definition.FileName)).Length);
 
-        public static TemporaryPromptCatalog Create()
+        public static TemporaryPromptCatalog Create(params PromptAssetDefinition[] definitions)
         {
-            var catalog = new TemporaryPromptCatalog(TemporaryDirectory.Create());
-            foreach (var definition in PromptAssetCatalog.All)
+            ArgumentNullException.ThrowIfNull(definitions);
+            var catalog = new TemporaryPromptCatalog(TemporaryDirectory.Create(), [.. definitions]);
+            foreach (var definition in definitions)
             {
                 catalog.WriteText(definition.FileName, CreateValidContent(definition));
             }
 
             return catalog;
+        }
+
+        public static TemporaryPromptCatalog CreateCompleteCatalog()
+        {
+            return Create([.. PromptAssetCatalog.All]);
         }
 
         public static string CreateRequiredMarkers(PromptAssetDefinition definition)
@@ -572,6 +649,17 @@ public sealed class DeployedPromptLoaderTests
         public string GetAssetPath(string fileName)
         {
             return Path.Combine(PromptRoot, fileName);
+        }
+
+        public Task<DeployedPromptLoader> LoadAsync(
+            DeployedPromptLoadLimits? limits = null,
+            CancellationToken cancellationToken = default)
+        {
+            return DeployedPromptLoader.LoadAsync(
+                BaseDirectory,
+                _definitions,
+                limits ?? DeployedPromptLoadLimits.Production,
+                cancellationToken);
         }
 
         public void WriteBytes(string fileName, byte[] content)

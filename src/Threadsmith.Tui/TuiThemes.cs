@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Interaction.Presentation;
 
 /// <summary>Validated theme-owned UI presentation settings.</summary>
 /// <param name="Spinner">Validated spinner id.</param>
@@ -644,7 +645,7 @@ internal static class TuiThemeConfigurationLoader
         var id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
         var name = section["name"] ?? id;
         ValidateText(name, MaximumNameLength, "Theme names");
-        var styles = new List<KeyValuePair<TuiTextRole, TuiTextStyle>>();
+        var styles = new List<KeyValuePair<PresentationTextRole, TuiTextStyle>>();
         foreach (var styleSection in section.GetSection("styles").GetChildren())
         {
             string[] supportedStyleSettings =
@@ -658,7 +659,7 @@ internal static class TuiThemeConfigurationLoader
                 throw new InvalidOperationException($"Unsupported theme style setting '{SafeId(unknownStyleSetting)}'.");
             }
 
-            if (!Enum.TryParse(styleSection.Key, ignoreCase: true, out TuiTextRole role)
+            if (!Enum.TryParse(styleSection.Key, ignoreCase: true, out PresentationTextRole role)
                 || !Enum.IsDefined(role))
             {
                 throw new InvalidOperationException($"Unknown semantic theme role '{SafeId(styleSection.Key)}'.");
@@ -674,7 +675,7 @@ internal static class TuiThemeConfigurationLoader
                 }
             }
 
-            styles.Add(new KeyValuePair<TuiTextRole, TuiTextStyle>(
+            styles.Add(new KeyValuePair<PresentationTextRole, TuiTextStyle>(
                 role,
                 new TuiTextStyle(
                     ParseOptionalColor(styleSection["foreground"]),
@@ -765,23 +766,23 @@ internal static class BuiltInThemes
         bool accessible = false)
     {
         var emphasis = accessible ? TuiTextDecoration.Bold | TuiTextDecoration.Underline : TuiTextDecoration.Bold;
-        KeyValuePair<TuiTextRole, TuiTextStyle>[] styles =
+        KeyValuePair<PresentationTextRole, TuiTextStyle>[] styles =
         [
-            new(TuiTextRole.Default, new TuiTextStyle(TuiColor.Parse(foreground))),
-            new(TuiTextRole.Brand, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Bold)),
-            new(TuiTextRole.Hyperlink, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Underline)),
-            new(TuiTextRole.ComposerPrompt, new TuiTextStyle(TuiColor.Parse(composerPrompt), Decorations: TuiTextDecoration.Bold)),
-            new(TuiTextRole.ThinkingIndicator, new TuiTextStyle(TuiColor.Parse(thinking), Decorations: emphasis)),
-            new(TuiTextRole.SessionStatus, new TuiTextStyle(Decorations: TuiTextDecoration.Invert)),
-            new(TuiTextRole.SelectionHighlight, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse(accent), emphasis)),
-            new(TuiTextRole.Success, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
-            new(TuiTextRole.ToolSuccess, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
-            new(TuiTextRole.Error, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
-            new(TuiTextRole.ToolFailure, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
-            new(TuiTextRole.Warning, new TuiTextStyle(TuiColor.Parse("brightyellow"), Decorations: emphasis)),
-            new(TuiTextRole.DiffAdded, new TuiTextStyle(TuiColor.Parse(success))),
-            new(TuiTextRole.DiffRemoved, new TuiTextStyle(TuiColor.Parse(failure))),
-            new(TuiTextRole.DiffContext, new TuiTextStyle(TuiColor.Parse(foreground))),
+            new(PresentationTextRole.Default, new TuiTextStyle(TuiColor.Parse(foreground))),
+            new(PresentationTextRole.Brand, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.Hyperlink, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Underline)),
+            new(PresentationTextRole.ComposerPrompt, new TuiTextStyle(TuiColor.Parse(composerPrompt), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.ThinkingIndicator, new TuiTextStyle(TuiColor.Parse(thinking), Decorations: emphasis)),
+            new(PresentationTextRole.SessionStatus, new TuiTextStyle(Decorations: TuiTextDecoration.Invert)),
+            new(PresentationTextRole.SelectionHighlight, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse(accent), emphasis)),
+            new(PresentationTextRole.Success, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
+            new(PresentationTextRole.ToolSuccess, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
+            new(PresentationTextRole.Error, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
+            new(PresentationTextRole.ToolFailure, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
+            new(PresentationTextRole.Warning, new TuiTextStyle(TuiColor.Parse("brightyellow"), Decorations: emphasis)),
+            new(PresentationTextRole.DiffAdded, new TuiTextStyle(TuiColor.Parse(success))),
+            new(PresentationTextRole.DiffRemoved, new TuiTextStyle(TuiColor.Parse(failure))),
+            new(PresentationTextRole.DiffContext, new TuiTextStyle(TuiColor.Parse(foreground))),
         ];
         return new ConfiguredTheme(name, new TuiTheme(id, styles), TuiThemeUi.Default, true);
     }

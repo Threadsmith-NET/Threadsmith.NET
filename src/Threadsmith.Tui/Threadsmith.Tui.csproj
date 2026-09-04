@@ -7,7 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Markdig" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="PrettyPrompt" />
     <PackageReference Include="Spectre.Console" />
@@ -15,6 +14,7 @@
     <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+    <ProjectReference Include="..\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
   </ItemGroup>
 
   <ItemGroup>

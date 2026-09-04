@@ -1,9 +1,10 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Presentation;
 
 using Threadsmith.Core;
+using Threadsmith.Interaction.Coordination;
 
 /// <summary>Maps live host events and their terminal-neutral transcript deltas to semantic segments.</summary>
-internal static class TuiEventSegments
+internal static class InteractionEventSegments
 {
     /// <summary>Adds the visible output owned by one event without changing its text.</summary>
     /// <param name="segments">Destination segment list.</param>
@@ -11,7 +12,7 @@ internal static class TuiEventSegments
     /// <param name="transcriptDelta">Text appended through the conversation transcript boundary.</param>
     /// <param name="showOperationDurations">Whether authoritative completion duration is displayed.</param>
     internal static void Append(
-        IList<TuiTextSegment> segments,
+        IList<PresentationTextSegment> segments,
         IDomainEvent domainEvent,
         string transcriptDelta,
         bool showOperationDurations = true)
@@ -27,18 +28,24 @@ internal static class TuiEventSegments
 
         switch (domainEvent)
         {
+            case DelegationCheckpointWritten { Phase: DelegationCheckpointPhase.Accepted } accepted:
+                Add(
+                    segments,
+                    DelegationActivityRegistry.FormatAccepted(accepted),
+                    PresentationTextRole.Status);
+                break;
             case ActiveTurnCompactionCompleted completed:
                 var compactionRole = completed.Status switch
                 {
-                    ActiveTurnCompactionInspectionStatus.Completed => TuiTextRole.Success,
+                    ActiveTurnCompactionInspectionStatus.Completed => PresentationTextRole.Success,
                     ActiveTurnCompactionInspectionStatus.ProviderFailure
                         or ActiveTurnCompactionInspectionStatus.Cancelled
-                        or ActiveTurnCompactionInspectionStatus.CapacityExceeded => TuiTextRole.Error,
-                    _ => TuiTextRole.Warning,
+                        or ActiveTurnCompactionInspectionStatus.CapacityExceeded => PresentationTextRole.Error,
+                    _ => PresentationTextRole.Warning,
                 };
                 Add(
                     segments,
-                    ConversationalShell.FormatActiveTurnCompactionCompletion(
+                    InteractionCoordinator.FormatActiveTurnCompactionCompletion(
                         completed,
                         showOperationDurations),
                     compactionRole);
@@ -46,18 +53,18 @@ internal static class TuiEventSegments
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {
-                    DiagnosticSeverity.Error => TuiTextRole.Error,
-                    DiagnosticSeverity.Warning => TuiTextRole.Warning,
-                    null => TuiTextRole.Warning,
-                    _ => TuiTextRole.Status,
+                    DiagnosticSeverity.Error => PresentationTextRole.Error,
+                    DiagnosticSeverity.Warning => PresentationTextRole.Warning,
+                    null => PresentationTextRole.Warning,
+                    _ => PresentationTextRole.Status,
                 };
                 Add(segments, $"[{diagnostic.Code}] {diagnostic.Message}{Environment.NewLine}", diagnosticRole);
                 break;
             case TestRunCompleted tests:
                 var outcomeRole = tests.Failed == 0
                     && tests.StructuredResult is not { Completed: false }
-                        ? TuiTextRole.Success
-                        : TuiTextRole.Error;
+                        ? PresentationTextRole.Success
+                        : PresentationTextRole.Error;
                 Add(
                     segments,
                     $"Tests: {tests.Passed} passed, {tests.Failed} failed, {tests.Skipped} skipped{Environment.NewLine}",
@@ -66,7 +73,7 @@ internal static class TuiEventSegments
                 {
                     foreach (var reason in validation.Selection.Rationale)
                     {
-                        Add(segments, $"Selection: {reason}{Environment.NewLine}", TuiTextRole.Muted);
+                        Add(segments, $"Selection: {reason}{Environment.NewLine}", PresentationTextRole.Muted);
                     }
                 }
 
@@ -79,9 +86,9 @@ internal static class TuiEventSegments
     /// <param name="text">Lifecycle block text.</param>
     /// <param name="summaryRole">Role for the first non-blank summary line.</param>
     internal static void AppendLifecycleBlock(
-        IList<TuiTextSegment> segments,
+        IList<PresentationTextSegment> segments,
         string text,
-        TuiTextRole summaryRole)
+        PresentationTextRole summaryRole)
     {
         ArgumentNullException.ThrowIfNull(segments);
         ArgumentNullException.ThrowIfNull(text);
@@ -103,12 +110,12 @@ internal static class TuiEventSegments
                     return summaryRole;
                 }
 
-                return TuiTextRole.Muted;
+                return PresentationTextRole.Muted;
             });
     }
 
     private static void AppendTranscriptDelta(
-        IList<TuiTextSegment> segments,
+        IList<PresentationTextSegment> segments,
         IDomainEvent domainEvent,
         string text)
     {
@@ -127,65 +134,65 @@ internal static class TuiEventSegments
                     GetSemanticCheckRole(completed.Outcome));
                 return;
             case PlanProposed:
-                AppendLifecycleBlock(segments, text, TuiTextRole.Status);
+                AppendLifecycleBlock(segments, text, PresentationTextRole.Status);
                 return;
             case PlanAutoApproved:
-                AppendLifecycleBlock(segments, text, TuiTextRole.Success);
+                AppendLifecycleBlock(segments, text, PresentationTextRole.Success);
                 return;
             case MutationProposalStarted:
-                AppendLifecycleBlock(segments, text, TuiTextRole.Status);
+                AppendLifecycleBlock(segments, text, PresentationTextRole.Status);
                 return;
             case MutationProposalRepairAttempted or ModelCorrectionAttempted:
-                AppendLifecycleBlock(segments, text, TuiTextRole.Warning);
+                AppendLifecycleBlock(segments, text, PresentationTextRole.Warning);
                 return;
             case MutationApplied:
-                AppendLifecycleBlock(segments, text, TuiTextRole.Success);
+                AppendLifecycleBlock(segments, text, PresentationTextRole.Success);
                 return;
             case ModelFallbackSelected:
-                Add(segments, text, TuiTextRole.Warning);
+                Add(segments, text, PresentationTextRole.Warning);
                 return;
             case TaskIntentRecorded:
-                Add(segments, text, TuiTextRole.UserPrompt);
+                Add(segments, text, PresentationTextRole.UserPrompt);
                 return;
             case ModelReasoningObserved:
-                Add(segments, text, TuiTextRole.Reasoning);
+                Add(segments, text, PresentationTextRole.Reasoning);
                 return;
             case ModelOutputObserved:
-                Add(segments, text, TuiTextRole.Default);
+                Add(segments, text, PresentationTextRole.Default);
                 return;
             case ToolInvocationStarted:
-                Add(segments, text, TuiTextRole.Reasoning);
+                Add(segments, text, PresentationTextRole.Reasoning);
                 return;
             case MutationSetProposed:
                 AppendLines(segments, text, static line =>
                     line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal)
-                        ? TuiTextRole.DiffAdded
+                        ? PresentationTextRole.DiffAdded
                         : line.StartsWith('-') && !line.StartsWith("---", StringComparison.Ordinal)
-                            ? TuiTextRole.DiffRemoved
+                            ? PresentationTextRole.DiffRemoved
                             : IsDiffContextLine(line)
-                                ? TuiTextRole.DiffContext
-                                : TuiTextRole.Default);
+                                ? PresentationTextRole.DiffContext
+                                : PresentationTextRole.Default);
                 return;
             case RepositoryOpened or SolutionLoaded:
                 AppendLines(segments, text, static line =>
                     line.StartsWith("Repository: ", StringComparison.Ordinal)
                         || line.StartsWith("Solution: ", StringComparison.Ordinal)
-                        ? TuiTextRole.Hyperlink
-                        : TuiTextRole.Status);
+                        ? PresentationTextRole.Hyperlink
+                        : PresentationTextRole.Status);
                 return;
             case MutationSetRolledBack:
-                Add(segments, text, TuiTextRole.Success);
+                Add(segments, text, PresentationTextRole.Success);
                 return;
             default:
-                Add(segments, text, TuiTextRole.Status);
+                Add(segments, text, PresentationTextRole.Status);
                 return;
         }
     }
 
     private static void AppendLines(
-        IList<TuiTextSegment> segments,
+        IList<PresentationTextSegment> segments,
         string text,
-        Func<string, TuiTextRole> selectRole,
+        Func<string, PresentationTextRole> selectRole,
         Action? afterLine = null)
     {
         var start = 0;
@@ -201,24 +208,24 @@ internal static class TuiEventSegments
         }
     }
 
-    private static TuiTextRole GetToolCompletionRole(ToolInvocationCompleted completed)
+    private static PresentationTextRole GetToolCompletionRole(ToolInvocationCompleted completed)
     {
         return completed.Outcome switch
         {
-            OperationActivityOutcome.Completed => TuiTextRole.ToolSuccess,
-            OperationActivityOutcome.Failed or OperationActivityOutcome.Cancelled or OperationActivityOutcome.TimedOut => TuiTextRole.ToolFailure,
-            _ => completed.Succeeded ? TuiTextRole.ToolSuccess : TuiTextRole.ToolFailure,
+            OperationActivityOutcome.Completed => PresentationTextRole.ToolSuccess,
+            OperationActivityOutcome.Failed or OperationActivityOutcome.Cancelled or OperationActivityOutcome.TimedOut => PresentationTextRole.ToolFailure,
+            _ => completed.Succeeded ? PresentationTextRole.ToolSuccess : PresentationTextRole.ToolFailure,
         };
     }
 
-    private static TuiTextRole GetSemanticCheckRole(SemanticCheckOutcome outcome)
+    private static PresentationTextRole GetSemanticCheckRole(SemanticCheckOutcome outcome)
     {
         return outcome switch
         {
-            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => TuiTextRole.ToolSuccess,
-            SemanticCheckOutcome.Degraded => TuiTextRole.Warning,
-            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => TuiTextRole.ToolFailure,
-            _ => TuiTextRole.Status,
+            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => PresentationTextRole.ToolSuccess,
+            SemanticCheckOutcome.Degraded => PresentationTextRole.Warning,
+            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => PresentationTextRole.ToolFailure,
+            _ => PresentationTextRole.Status,
         };
     }
 
@@ -233,7 +240,7 @@ internal static class TuiEventSegments
             || line.StartsWith(' ');
     }
 
-    private static void Add(IList<TuiTextSegment> segments, string text, TuiTextRole role)
+    private static void Add(IList<PresentationTextSegment> segments, string text, PresentationTextRole role)
     {
         if (text.Length == 0)
         {
@@ -248,6 +255,6 @@ internal static class TuiEventSegments
             return;
         }
 
-        segments.Add(new TuiTextSegment(text, role));
+        segments.Add(new PresentationTextSegment(text, role));
     }
 }

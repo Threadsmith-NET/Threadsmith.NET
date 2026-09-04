@@ -2,6 +2,7 @@ namespace Threadsmith.DotNet;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.Build.Locator;
@@ -90,9 +91,25 @@ public sealed class SemanticEngine : ISemanticEngine
     }
 
     /// <inheritdoc />
-    public async Task<SemanticLoadResult> LoadAsync(
+    public Task<SemanticLoadResult> LoadAsync(
         SemanticLoadRequest request,
         CancellationToken cancellationToken = default)
+    {
+        return LoadCoreAsync(
+            request,
+            publishLoadCompleted: true,
+            publishConfidenceChanged: true,
+            allowTextFallback: true,
+            cancellationToken);
+    }
+
+    /// <summary>Loads semantic state with explicit initial-load lifecycle publication control.</summary>
+    public async Task<SemanticLoadResult> LoadCoreAsync(
+        SemanticLoadRequest request,
+        bool publishLoadCompleted,
+        bool publishConfidenceChanged,
+        bool allowTextFallback,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
@@ -157,11 +174,6 @@ public sealed class SemanticEngine : ISemanticEngine
             RepositoryPath = repositoryPath,
             SolutionPath = solutionPath,
         };
-        lock (_gate)
-        {
-            _lastRequest = normalizedRequest;
-        }
-
         if (request.TrustLevel < RepositoryTrustLevel.TrustedBuild)
         {
             SemanticProjectInfo[] textOnly = [.. metadata.Select(project => project with { Confidence = SemanticConfidenceLevel.TextOnly })];
@@ -174,8 +186,9 @@ public sealed class SemanticEngine : ISemanticEngine
                 compiledProjects: [],
                 projects: textOnly,
                 confidence: textConfidence,
-                request.SessionId,
-                request.WorkspaceId,
+                normalizedRequest,
+                publishLoadCompleted,
+                publishConfidenceChanged,
                 cancellationToken);
             return new SemanticLoadResult(
                 request.WorkspaceId,
@@ -246,6 +259,13 @@ public sealed class SemanticEngine : ISemanticEngine
                 exception,
                 "Semantic MSBuild loading failed for solution {SolutionPath}; using text metadata",
                 solutionPath);
+            if (!allowTextFallback)
+            {
+                throw new InvalidOperationException(
+                    "Semantic MSBuild refresh failed.",
+                    exception);
+            }
+
             diagnostics.Enqueue($"MSBuild load failed: {exception.Message}");
             SemanticProjectInfo[] degradedProjects = [.. metadata.Select(project => project with { Confidence = SemanticConfidenceLevel.TextOnly })];
             var degradedConfidence = degradedProjects.Length == 0
@@ -257,8 +277,9 @@ public sealed class SemanticEngine : ISemanticEngine
                 compiledProjects: [],
                 projects: degradedProjects,
                 confidence: degradedConfidence,
-                request.SessionId,
-                request.WorkspaceId,
+                normalizedRequest,
+                publishLoadCompleted,
+                publishConfidenceChanged,
                 cancellationToken);
             return new SemanticLoadResult(
                 request.WorkspaceId,
@@ -280,14 +301,37 @@ public sealed class SemanticEngine : ISemanticEngine
             }
 
             foreach (var document in project.Documents
-                .Where(document => document.FilePath is null
-                    || !IsPathWithinRoot(document.FilePath, repositoryPath))
+                .Where(document => !IsSemanticInputPathAllowed(document.FilePath, normalizedRequest))
                 .ToArray())
             {
                 diagnostics.Enqueue(
-                    $"Document '{document.Name}' was excluded because it is outside the repository root.");
+                    $"Document '{document.Name}' was excluded by repository path policy.");
                 Interlocked.Increment(ref workspaceFailureCount);
                 confinedSolution = confinedSolution.RemoveDocument(document.Id);
+            }
+
+            foreach (var document in project.AdditionalDocuments
+                .Where(document => IsRepositoryLocalSemanticInputRejected(
+                    document.FilePath,
+                    normalizedRequest))
+                .ToArray())
+            {
+                diagnostics.Enqueue(
+                    $"Additional document '{document.Name}' was excluded by repository path policy.");
+                Interlocked.Increment(ref workspaceFailureCount);
+                confinedSolution = confinedSolution.RemoveAdditionalDocument(document.Id);
+            }
+
+            foreach (var document in project.AnalyzerConfigDocuments
+                .Where(document => IsRepositoryLocalSemanticInputRejected(
+                    document.FilePath,
+                    normalizedRequest))
+                .ToArray())
+            {
+                diagnostics.Enqueue(
+                    $"Analyzer config '{document.Name}' was excluded by repository path policy.");
+                Interlocked.Increment(ref workspaceFailureCount);
+                confinedSolution = confinedSolution.RemoveAnalyzerConfigDocument(document.Id);
             }
         }
 
@@ -383,8 +427,9 @@ public sealed class SemanticEngine : ISemanticEngine
             compiledProjects,
             loadedProjects,
             aggregate,
-            request.SessionId,
-            request.WorkspaceId,
+            normalizedRequest,
+            publishLoadCompleted,
+            publishConfidenceChanged,
             cancellationToken);
         return new SemanticLoadResult(
             request.WorkspaceId,
@@ -681,6 +726,190 @@ public sealed class SemanticEngine : ISemanticEngine
         }
 
         return LoadAsync(request, cancellationToken);
+    }
+
+    /// <summary>Reloads the last semantic selection without publishing an initial-load completion.</summary>
+    public Task<SemanticLoadResult> RefreshFullAsync(CancellationToken cancellationToken = default)
+    {
+        SemanticLoadRequest request;
+        lock (_gate)
+        {
+            request = _lastRequest
+                ?? throw new InvalidOperationException("No semantic solution has been loaded.");
+        }
+
+        return LoadCoreAsync(
+            request,
+            publishLoadCompleted: false,
+            publishConfidenceChanged: true,
+            allowTextFallback: false,
+            cancellationToken);
+    }
+
+    /// <summary>Atomically publishes replacement text for proven existing loaded documents.</summary>
+    public async Task<SemanticLoadResult> RefreshDocumentsAsync(
+        IReadOnlyList<SemanticDocumentRefresh> documents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        cancellationToken.ThrowIfCancellationRequested();
+        Solution solution;
+        HashSet<ProjectId> compiledProjects;
+        IReadOnlyList<SemanticProjectInfo> projects;
+        SemanticLoadRequest request;
+        SemanticConfidenceLevel confidence;
+        long generation;
+        lock (_gate)
+        {
+            solution = _solution
+                ?? throw new InvalidOperationException("No compiler-aware semantic solution has been loaded.");
+            compiledProjects = [.. _compiledProjects];
+            projects = _projects.ToArray();
+            request = _lastRequest
+                ?? throw new InvalidOperationException("No semantic solution has been loaded.");
+            confidence = _confidence;
+            generation = _generation;
+        }
+
+        var documentsByPath = CreateDocumentsByPath(solution);
+        var replacement = solution;
+        var affectedProjects = new HashSet<ProjectId>();
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(document.Path);
+            if (!IsPathWithinRoot(fullPath, request.RepositoryPath)
+                || !IsCSharpSourcePath(fullPath)
+                || !documentsByPath.TryGetValue(fullPath, out var documentIds))
+            {
+                throw new InvalidOperationException(
+                    "Incremental semantic refresh requires an existing loaded C# document.");
+            }
+
+            foreach (var documentId in documentIds)
+            {
+                replacement = replacement.WithDocumentText(
+                    documentId,
+                    SourceText.From(document.Text, Encoding.UTF8),
+                    PreservationMode.PreserveIdentity);
+                affectedProjects.Add(documentId.ProjectId);
+            }
+        }
+
+        foreach (var projectId in affectedProjects.Where(compiledProjects.Contains))
+        {
+            var project = replacement.GetProject(projectId);
+            if (project is null
+                || await RunNonCooperativeAsync<Compilation?>(
+                    project.GetCompilationAsync,
+                    cancellationToken) is null)
+            {
+                throw new InvalidOperationException(
+                    "Incremental semantic refresh could not prepare an affected compilation.");
+            }
+        }
+
+        lock (_gate)
+        {
+            if (_generation != generation
+                || _lastRequest?.WorkspaceId != request.WorkspaceId)
+            {
+                throw new InvalidOperationException(
+                    "The semantic workspace changed while refresh was being prepared.");
+            }
+
+            _solution = replacement;
+            _generation++;
+        }
+
+        return new SemanticLoadResult(request.WorkspaceId, confidence, projects, []);
+    }
+
+    /// <summary>Gets normalized paths for the currently loaded source documents.</summary>
+    public IReadOnlySet<string> GetLoadedDocumentPaths()
+    {
+        lock (_gate)
+        {
+            if (_solution is null || _lastRequest is null)
+            {
+                return new HashSet<string>(StringComparerForCurrentPlatform());
+            }
+
+            return GetTextDocumentPaths(
+                _solution.Projects.SelectMany(project => project.Documents),
+                _lastRequest);
+        }
+    }
+
+    /// <summary>Gets the exact Roslyn document inventory used for refresh classification.</summary>
+    public SemanticRefreshInventory GetRefreshInventory()
+    {
+        lock (_gate)
+        {
+            if (_solution is null || _lastRequest is null)
+            {
+                var comparer = StringComparerForCurrentPlatform();
+                return new SemanticRefreshInventory(
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer));
+            }
+
+            return new SemanticRefreshInventory(
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.Documents),
+                    _lastRequest),
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.AdditionalDocuments),
+                    _lastRequest),
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments),
+                    _lastRequest),
+                GetReferencePaths(_solution, _lastRequest));
+        }
+    }
+
+    /// <summary>Captures current loaded source text identities for refresh no-op suppression.</summary>
+    public async Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        Solution? solution;
+        SemanticLoadRequest? request;
+        lock (_gate)
+        {
+            solution = _solution;
+            request = _lastRequest;
+        }
+
+        if (solution is null || request is null)
+        {
+            return [];
+        }
+
+        var documents = new List<SemanticDocumentRefresh>();
+        foreach (var document in solution.Projects
+            .SelectMany(project => project.Documents
+                .Cast<TextDocument>()
+                .Concat(project.AdditionalDocuments)
+            .Concat(project.AnalyzerConfigDocuments))
+            .Where(document => IsSemanticInputPathAllowed(document.FilePath, request))
+            .GroupBy(
+                document => Path.GetFullPath(document.FilePath ?? string.Empty),
+                StringComparerForCurrentPlatform())
+            .Select(group => group.First()))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var text = await document.GetTextAsync(cancellationToken);
+            var content = text.ToString();
+            var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+            documents.Add(new SemanticDocumentRefresh(
+                Path.GetFullPath(document.FilePath ?? string.Empty),
+                content,
+                identity));
+        }
+
+        return documents;
     }
 
     /// <summary>Gets fast compiler diagnostics from the loaded Roslyn solution.</summary>
@@ -1208,6 +1437,32 @@ public sealed class SemanticEngine : ISemanticEngine
         return $"{fileCount} files, {diagnosticCount} diagnostics, {blockingDiagnosticCount} blocking, {omissionCount} omissions";
     }
 
+    private static IReadOnlySet<string> GetTextDocumentPaths(
+        IEnumerable<TextDocument> documents,
+        SemanticLoadRequest request)
+    {
+        return documents
+            .Select(document => document.FilePath)
+            .Where(path => IsSemanticInputPathAllowed(path, request))
+            .Select(path => Path.GetFullPath(path ?? string.Empty))
+            .ToHashSet(StringComparerForCurrentPlatform());
+    }
+
+    private static IReadOnlySet<string> GetReferencePaths(
+        Solution solution,
+        SemanticLoadRequest request)
+    {
+        return solution.Projects
+            .SelectMany(project => project.AnalyzerReferences
+                .Select(reference => reference.FullPath)
+                .Concat(project.MetadataReferences
+                    .OfType<PortableExecutableReference>()
+                    .Select(reference => reference.FilePath)))
+            .Where(path => IsSemanticInputPathAllowed(path, request))
+            .Select(path => Path.GetFullPath(path ?? string.Empty))
+            .ToHashSet(StringComparerForCurrentPlatform());
+    }
+
     private static long? ToElapsedMilliseconds(TimeSpan elapsed)
     {
         if (elapsed < TimeSpan.Zero || elapsed.TotalMilliseconds > long.MaxValue)
@@ -1511,6 +1766,67 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         return path.Equals(root, PathComparison)
                 || path.StartsWith(root + Path.DirectorySeparatorChar, PathComparison);
+    }
+
+    private static bool IsRepositoryLocalSemanticInputRejected(
+        string? path,
+        SemanticLoadRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            return IsPathWithinRoot(fullPath, request.RepositoryPath)
+                && !IsSemanticInputPathAllowed(fullPath, request);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsSemanticInputPathAllowed(
+        string? path,
+        SemanticLoadRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return false;
+        }
+
+        if (!IsPathWithinRoot(fullPath, request.RepositoryPath))
+        {
+            return false;
+        }
+
+        if (SemanticPathSafety.HasReparseComponent(request.RepositoryPath, fullPath))
+        {
+            return false;
+        }
+
+        var relativePath = Path.GetRelativePath(request.RepositoryPath, fullPath)
+            .Replace(Path.DirectorySeparatorChar, '/');
+        return !RepositoryPathPolicy.IsProhibited(
+            relativePath,
+            request.ProhibitedPaths ?? []);
     }
 
     private static SemanticProjectInfo ReadProjectInfo(string projectPath)
@@ -1841,10 +2157,12 @@ public sealed class SemanticEngine : ISemanticEngine
         HashSet<ProjectId> compiledProjects,
         IReadOnlyList<SemanticProjectInfo> projects,
         SemanticConfidenceLevel confidence,
-        SessionId sessionId,
-        WorkspaceId workspaceId,
+        SemanticLoadRequest request,
+        bool publishLoadCompleted,
+        bool publishConfidenceChanged,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         MSBuildWorkspace? previousWorkspace;
         SemanticConfidenceLevel previousConfidence;
         lock (_gate)
@@ -1856,6 +2174,7 @@ public sealed class SemanticEngine : ISemanticEngine
             _compiledProjects = compiledProjects;
             _projects = projects;
             _confidence = confidence;
+            _lastRequest = request;
             _generation++;
         }
 
@@ -1864,23 +2183,26 @@ public sealed class SemanticEngine : ISemanticEngine
             previousWorkspace?.Dispose();
         }
 
-        if (previousConfidence != confidence)
+        if (publishConfidenceChanged && previousConfidence != confidence)
         {
             await _events.PublishAsync(
                 new SemanticConfidenceChanged(
-                    sessionId,
+                    request.SessionId,
                     DateTimeOffset.UtcNow,
                     confidence.ToString()),
                 cancellationToken);
         }
 
-        await _events.PublishAsync(
-            new SemanticLoadCompleted(
-                sessionId,
-                DateTimeOffset.UtcNow,
-                workspaceId,
-                confidence.ToString()),
-            cancellationToken);
+        if (publishLoadCompleted)
+        {
+            await _events.PublishAsync(
+                new SemanticLoadCompleted(
+                    request.SessionId,
+                    DateTimeOffset.UtcNow,
+                    request.WorkspaceId,
+                    confidence.ToString()),
+                cancellationToken);
+        }
     }
 
     private async Task<T> RunNonCooperativeAsync<T>(
@@ -1934,3 +2256,6 @@ public sealed class SemanticEngine : ISemanticEngine
         IReadOnlyDictionary<string, int> DocumentCounts,
         IReadOnlyDictionary<string, string> TargetFrameworks);
 }
+
+/// <summary>Prepared current text for one existing loaded semantic document.</summary>
+public sealed record SemanticDocumentRefresh(string Path, string Text, string ContentIdentity);

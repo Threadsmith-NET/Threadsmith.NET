@@ -7,6 +7,24 @@ using Threadsmith.Core;
 /// <summary>One bounded result plus exact structured-projection truncation state.</summary>
 internal sealed record DelegateAgentsProjection(DelegateAgentsResult Result, bool IsTruncated);
 
+/// <summary>Immutable host-owned byte bound for delegated structured-result projection.</summary>
+internal sealed record DelegateAgentsProjectionLimits
+{
+    /// <summary>Initializes a new instance of the <see cref="DelegateAgentsProjectionLimits"/> class.</summary>
+    public DelegateAgentsProjectionLimits(int maximumStructuredResultBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumStructuredResultBytes);
+        MaximumStructuredResultBytes = maximumStructuredResultBytes;
+    }
+
+    /// <summary>Gets the maximum serialized structured-result byte count.</summary>
+    public int MaximumStructuredResultBytes { get; }
+
+    /// <summary>Gets the production structured-result projection limit.</summary>
+    public static DelegateAgentsProjectionLimits Production { get; } = new(
+        DelegateAgentsContract.MaximumStructuredResultBytes);
+}
+
 /// <summary>Projects joined child outcomes into a bounded structured result.</summary>
 internal sealed class DelegateAgentsResultProjector
 {
@@ -16,13 +34,24 @@ internal sealed class DelegateAgentsResultProjector
     private const int MaximumOmissionCharacters = 512;
     private const int MaximumProjectedSummaryCharacters = 1_024;
     private const int MaximumSymbolCharacters = 1_024;
+    private readonly DelegateAgentsProjectionLimits _limits;
     private readonly DelegateAgentsOptions _options;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultProjector"/> class.</summary>
     public DelegateAgentsResultProjector(DelegateAgentsOptions options)
+        : this(options, DelegateAgentsProjectionLimits.Production)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultProjector"/> class under explicit immutable host bounds.</summary>
+    internal DelegateAgentsResultProjector(
+        DelegateAgentsOptions options,
+        DelegateAgentsProjectionLimits limits)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(limits);
         _options = options;
+        _limits = limits;
     }
 
     /// <summary>Creates the complete bounded host result.</summary>
@@ -316,7 +345,7 @@ internal sealed class DelegateAgentsResultProjector
         };
     }
 
-    private static bool Fits(
+    private bool Fits(
         DelegateAgentsResult result,
         ArrayBufferWriter<byte> buffer)
     {
@@ -324,7 +353,7 @@ internal sealed class DelegateAgentsResultProjector
         using var writer = new Utf8JsonWriter(buffer);
         JsonSerializer.Serialize(writer, result);
         writer.Flush();
-        return buffer.WrittenCount <= DelegateAgentsContract.MaximumStructuredResultBytes;
+        return buffer.WrittenCount <= _limits.MaximumStructuredResultBytes;
     }
 
     private static TextProjection ProjectText(string value, int maximumCharacters)

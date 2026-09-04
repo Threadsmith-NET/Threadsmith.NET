@@ -247,6 +247,7 @@ Threadsmith/
 │   ├── Threadsmith.Validation/            # build, diagnostic, and test validation
 │   ├── Threadsmith.Persistence/           # durable events, facts, artifacts, and migrations
 │   ├── Threadsmith.Telemetry/             # metrics, tracing, logging, and diagnostics
+│   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination and presentation
 │   ├── Threadsmith.Tui/                   # conversation-first terminal adapter
 │   ├── Threadsmith.Cli/                   # headless command adapter
 │   ├── Threadsmith.Mcp/                   # host-owned MCP boundary

@@ -1,11 +1,12 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Presentation;
 
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Markdown;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
-internal static class TuiPresentationFormatter
+internal static class InteractionPresentationFormatter
 {
     private const int MaximumToolDetailLength = 240;
     private const int MaximumToolInspectionCharacters = 96 * 1024;
@@ -29,13 +30,13 @@ internal static class TuiPresentationFormatter
         string Title,
         string? Outcome,
         string? ElapsedText,
-        TuiTextRole Role,
-        TuiTextRole OutcomeRole);
+        PresentationTextRole Role,
+        PresentationTextRole OutcomeRole);
 
     private sealed record TuiBlockLine(
         TuiBlockLineKind Kind,
         string Text,
-        TuiTextRole Role,
+        PresentationTextRole Role,
         bool PreserveText = false);
 
     /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
@@ -56,17 +57,17 @@ internal static class TuiPresentationFormatter
         var source = completed.Source ?? started.Source;
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), TuiTextRole.Muted),
+            new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
         };
         if (ShouldInspectCodeExploreOutput(started, completed, inspectCodeExploreOutput))
         {
-            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, "Output:", TuiTextRole.Muted));
+            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, "Output:", PresentationTextRole.Muted));
             lines.Add(new TuiBlockLine(
                 TuiBlockLineKind.Body,
                 PrepareInspectionOutput(
                     completed.ModelResultContent ?? completed.ResultJson ?? string.Empty,
                     completed.ModelResultContent is null),
-                TuiTextRole.Muted,
+                PresentationTextRole.Muted,
                 PreserveText: true));
         }
 
@@ -76,7 +77,7 @@ internal static class TuiPresentationFormatter
                 GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
                 GetOutcomeText(completed),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
-                TuiTextRole.ToolSuccess,
+                PresentationTextRole.ToolSuccess,
                 GetToolOutcomeRole(completed)),
             lines,
             ChildIndent: "  ");
@@ -108,7 +109,7 @@ internal static class TuiPresentationFormatter
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 GetSemanticOutcomeRole(completed.Outcome),
                 GetSemanticOutcomeRole(completed.Outcome)),
-            [new TuiBlockLine(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), TuiTextRole.Muted)],
+            [new TuiBlockLine(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)],
             ChildIndent: "  ");
 
         return FormatBlock(block);
@@ -124,14 +125,14 @@ internal static class TuiPresentationFormatter
 
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Body, proposed.Plan.Summary, TuiTextRole.Muted),
-            new(TuiBlockLineKind.Body, string.Empty, TuiTextRole.Muted),
-            new(TuiBlockLineKind.Body, "Steps:", TuiTextRole.Muted),
+            new(TuiBlockLineKind.Body, proposed.Plan.Summary, PresentationTextRole.Muted),
+            new(TuiBlockLineKind.Body, string.Empty, PresentationTextRole.Muted),
+            new(TuiBlockLineKind.Body, "Steps:", PresentationTextRole.Muted),
         };
         lines.AddRange(proposed.Plan.Steps.Select((step, index) => new TuiBlockLine(
             TuiBlockLineKind.Item,
             $"{index + 1}. {step.Title} - {step.ExpectedOutcome}",
-            TuiTextRole.Muted)));
+            PresentationTextRole.Muted)));
 
         return FormatBlock(new TuiBlockPresentation(
             new TuiBlockHeader(
@@ -139,8 +140,8 @@ internal static class TuiPresentationFormatter
                 $"revision {proposed.Plan.Revision}",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Status,
-                TuiTextRole.Status),
+                PresentationTextRole.Status,
+                PresentationTextRole.Status),
             lines));
     }
 
@@ -154,16 +155,16 @@ internal static class TuiPresentationFormatter
 
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Body, $"Revision: {approved.Revision}", TuiTextRole.Muted),
-            new(TuiBlockLineKind.Body, $"Risk: {approved.Risk}", TuiTextRole.Muted),
+            new(TuiBlockLineKind.Body, $"Revision: {approved.Revision}", PresentationTextRole.Muted),
+            new(TuiBlockLineKind.Body, $"Risk: {approved.Risk}", PresentationTextRole.Muted),
         };
         if (!string.IsNullOrWhiteSpace(riskBasis))
         {
-            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, $"Risk basis: {riskBasis}", TuiTextRole.Muted));
+            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, $"Risk basis: {riskBasis}", PresentationTextRole.Muted));
         }
 
-        lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, $"Policy: {approved.Policy}", TuiTextRole.Muted));
-        lines.Add(new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {approved.Reason}", TuiTextRole.Muted));
+        lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, $"Policy: {approved.Policy}", PresentationTextRole.Muted));
+        lines.Add(new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {approved.Reason}", PresentationTextRole.Muted));
 
         return FormatBlock(new TuiBlockPresentation(
             new TuiBlockHeader(
@@ -171,8 +172,8 @@ internal static class TuiPresentationFormatter
                 "auto-approved",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Success,
-                TuiTextRole.Success),
+                PresentationTextRole.Success,
+                PresentationTextRole.Success),
             lines));
     }
 
@@ -189,9 +190,9 @@ internal static class TuiPresentationFormatter
                 "Preparing preview",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Status,
-                TuiTextRole.Status),
-            [new TuiBlockLine(TuiBlockLineKind.Item, FormatAttempt(started.AttemptNumber, started.MaximumAttempts), TuiTextRole.Muted)]));
+                PresentationTextRole.Status,
+                PresentationTextRole.Status),
+            [new TuiBlockLine(TuiBlockLineKind.Item, FormatAttempt(started.AttemptNumber, started.MaximumAttempts), PresentationTextRole.Muted)]));
     }
 
     /// <summary>Formats one mutation proposal repair attempt event as a guided interactive lifecycle block.</summary>
@@ -207,11 +208,11 @@ internal static class TuiPresentationFormatter
                 "Retrying proposal with correction evidence",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Warning,
-                TuiTextRole.Warning),
+                PresentationTextRole.Warning,
+                PresentationTextRole.Warning),
             [
-                new TuiBlockLine(TuiBlockLineKind.Body, FormatAttempt(repair.AttemptNumber, repair.MaximumAttempts), TuiTextRole.Muted),
-                new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {repair.Reason}", TuiTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Body, FormatAttempt(repair.AttemptNumber, repair.MaximumAttempts), PresentationTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {repair.Reason}", PresentationTextRole.Muted),
             ]));
     }
 
@@ -228,12 +229,12 @@ internal static class TuiPresentationFormatter
                 "Retrying model request",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Warning,
-                TuiTextRole.Warning),
+                PresentationTextRole.Warning,
+                PresentationTextRole.Warning),
             [
-                new TuiBlockLine(TuiBlockLineKind.Body, FormatAttempt(correction.AttemptNumber, correction.MaximumAttempts), TuiTextRole.Muted),
-                new TuiBlockLine(TuiBlockLineKind.Item, $"Category: {correction.Category}", TuiTextRole.Muted),
-                new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {correction.SafeReason}", TuiTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Body, FormatAttempt(correction.AttemptNumber, correction.MaximumAttempts), PresentationTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Item, $"Category: {correction.Category}", PresentationTextRole.Muted),
+                new TuiBlockLine(TuiBlockLineKind.Item, $"Reason: {correction.SafeReason}", PresentationTextRole.Muted),
             ]));
     }
 
@@ -253,9 +254,9 @@ internal static class TuiPresentationFormatter
                 "Validating applied mutation",
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Status,
-                TuiTextRole.Status),
-            [new TuiBlockLine(TuiBlockLineKind.Item, $"Stages: {stageList}", TuiTextRole.Muted)]));
+                PresentationTextRole.Status,
+                PresentationTextRole.Status),
+            [new TuiBlockLine(TuiBlockLineKind.Item, $"Stages: {stageList}", PresentationTextRole.Muted)]));
     }
 
     /// <summary>Formats one applied mutation as a guided interactive lifecycle block.</summary>
@@ -276,11 +277,11 @@ internal static class TuiPresentationFormatter
             : "Applied";
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Body, $"Mutation applied: {path}", TuiTextRole.Muted),
+            new(TuiBlockLineKind.Body, $"Mutation applied: {path}", PresentationTextRole.Muted),
         };
         if (!string.IsNullOrWhiteSpace(detail))
         {
-            lines.Add(new TuiBlockLine(TuiBlockLineKind.Item, detail, TuiTextRole.Muted));
+            lines.Add(new TuiBlockLine(TuiBlockLineKind.Item, detail, PresentationTextRole.Muted));
         }
 
         return FormatBlock(new TuiBlockPresentation(
@@ -289,8 +290,8 @@ internal static class TuiPresentationFormatter
                 title,
                 Outcome: null,
                 ElapsedText: null,
-                TuiTextRole.Success,
-                TuiTextRole.Success),
+                PresentationTextRole.Success,
+                PresentationTextRole.Success),
             lines));
     }
 
@@ -663,13 +664,13 @@ internal static class TuiPresentationFormatter
                 : null;
     }
 
-    private static TuiTextRole GetToolOutcomeRole(ToolInvocationCompleted completed)
+    private static PresentationTextRole GetToolOutcomeRole(ToolInvocationCompleted completed)
     {
         return completed.Outcome switch
         {
-            OperationActivityOutcome.Completed => TuiTextRole.ToolSuccess,
-            OperationActivityOutcome.Failed or OperationActivityOutcome.Cancelled or OperationActivityOutcome.TimedOut => TuiTextRole.ToolFailure,
-            _ => completed.Succeeded ? TuiTextRole.ToolSuccess : TuiTextRole.ToolFailure,
+            OperationActivityOutcome.Completed => PresentationTextRole.ToolSuccess,
+            OperationActivityOutcome.Failed or OperationActivityOutcome.Cancelled or OperationActivityOutcome.TimedOut => PresentationTextRole.ToolFailure,
+            _ => completed.Succeeded ? PresentationTextRole.ToolSuccess : PresentationTextRole.ToolFailure,
         };
     }
 
@@ -757,14 +758,14 @@ internal static class TuiPresentationFormatter
         };
     }
 
-    private static TuiTextRole GetSemanticOutcomeRole(SemanticCheckOutcome outcome)
+    private static PresentationTextRole GetSemanticOutcomeRole(SemanticCheckOutcome outcome)
     {
         return outcome switch
         {
-            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => TuiTextRole.ToolSuccess,
-            SemanticCheckOutcome.Degraded => TuiTextRole.Warning,
-            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => TuiTextRole.ToolFailure,
-            _ => TuiTextRole.Status,
+            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => PresentationTextRole.ToolSuccess,
+            SemanticCheckOutcome.Degraded => PresentationTextRole.Warning,
+            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => PresentationTextRole.ToolFailure,
+            _ => PresentationTextRole.Status,
         };
     }
 

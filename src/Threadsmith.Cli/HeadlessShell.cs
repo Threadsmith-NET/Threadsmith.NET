@@ -95,6 +95,16 @@ public sealed class HeadlessShell
         return _dispatcher.DispatchAsync(new GetActiveSessionCommand(), cancellationToken);
     }
 
+    /// <summary>Forces and waits for one complete semantic refresh without creating a model run.</summary>
+    public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
+        SessionId sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new ForceSemanticRefreshCommand(sessionId),
+            cancellationToken);
+    }
+
     /// <summary>Gets the current plan approval policy through the shared host command boundary.</summary>
     public Task<PlanApprovalPolicy> GetPlanApprovalPolicyAsync(CancellationToken cancellationToken = default)
     {

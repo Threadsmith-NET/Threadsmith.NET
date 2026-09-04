@@ -1,4 +1,4 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Presentation;
 
 using System.Globalization;
 

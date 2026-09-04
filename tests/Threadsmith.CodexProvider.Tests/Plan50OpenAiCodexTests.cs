@@ -548,12 +548,22 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task Provider_OversizedCompleteRequest_FailsBeforeNetwork()
     {
+        const int testContextWindow = 12;
         var handler = new RecordingHandler(_ => StreamingResponse());
-        var provider = await CreateProviderAsync(handler, "token");
-        var request = WithCapacity(CreateStreamRequest() with
-        {
-            Input = new string('x', 400_000),
-        });
+        var provider = await CreateProviderAsync(
+            handler,
+            "token",
+            contextWindow: testContextWindow);
+        var request = WithCapacity(
+            new ModelStreamRequest
+            {
+                RunId = RunId.New(),
+                Input = new string('x', testContextWindow + 1),
+                ReasoningLevel = ReasoningLevel.Medium,
+                MaximumOutputTokens = 1,
+            },
+            "i");
+        Assert.True(request.WireEstimate?.TotalCapacityTokens > testContextWindow);
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(
@@ -568,16 +578,22 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task Provider_OversizedProviderInstructions_FailsBeforeNetwork()
     {
+        const int testContextWindow = 12;
         var handler = new RecordingHandler(_ => StreamingResponse());
-        var provider = await CreateProviderAsync(handler, "token");
+        var provider = await CreateProviderAsync(
+            handler,
+            "token",
+            contextWindow: testContextWindow);
         var request = WithCapacity(
             new ModelStreamRequest
             {
                 RunId = RunId.New(),
                 Input = "hello",
                 ReasoningLevel = ReasoningLevel.Medium,
+                MaximumOutputTokens = 1,
             },
-            new string('i', 400_000));
+            new string('i', testContextWindow + 1));
+        Assert.True(request.WireEstimate?.TotalCapacityTokens > testContextWindow);
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(
@@ -610,11 +626,23 @@ public sealed class Plan50OpenAiCodexTests
     private static async Task<IModelProvider> CreateProviderAsync(
         HttpMessageHandler handler,
         string accessToken,
-        Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync = null)
+        Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync = null,
+        int contextWindow = 128_000)
     {
+        var catalogJson = JsonSerializer.Serialize(new
+        {
+            models = new[]
+            {
+                new
+                {
+                    slug = "dynamic",
+                    display_name = "Dynamic",
+                    context_window = contextWindow,
+                },
+            },
+        });
         var configuration = await new OpenAiCodexCatalogClient(
-            new HttpClient(new RecordingHandler(_ => JsonResponse(
-                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}"))))
+            new HttpClient(new RecordingHandler(_ => JsonResponse(catalogJson))))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
         var registration = new OpenAiCodexProviderRegistration();
         var profile = Assert.Single(registration.CreateProfiles(configuration)) with

@@ -1,10 +1,10 @@
 # AGENTS.md — src/ (Product Source)
 
-> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 21 product projects and their dependency graph.
+> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 22 product projects and their dependency graph.
 
 ## Purpose
 
-Host the 21 Threadsmith.NET product projects implementing a .NET-native coding harness. The solution file is `src/Threadsmith.sln`; all test projects are grouped under its `Tests` solution folder.
+Host the 22 Threadsmith.NET product projects implementing a .NET-native coding harness. The solution file is `src/Threadsmith.sln`; all test projects are grouped under its `Tests` solution folder.
 
 ## Ownership
 
@@ -13,6 +13,7 @@ Host the 21 Threadsmith.NET product projects implementing a .NET-native coding h
 - `Threadsmith.Core`, `Threadsmith.Extensions.Abstractions`, and the isolated `Threadsmith.Scripting.Worker` reference no other `Threadsmith.*` project.
 - `Threadsmith.Core` owns the filesystem-neutral prompt loader/catalog contracts; `Threadsmith.Context` owns deployed loading; owning consumers keep source Markdown under their own `Prompts/` directories; `Threadsmith.App` composes one loader and flattens the complete catalog into application output.
 - `Threadsmith.Execution/Prompts/` owns planning/mutation/delegation descriptions, corrections, delegated-child request guidance, active-run steering framing, and joined-delegation result prose; execution policy and schemas remain in C#.
+- `Threadsmith.Interaction` owns frontend-neutral commands, coordination, status assembly, semantic presentation, and bounded Markdown generation; concrete frontends own input mechanics, layout, and rendering.
 
 ## Local Contracts
 
@@ -25,13 +26,15 @@ Projects are organized in dependency layers. A project may only reference projec
 - **Layer 2:** `Threadsmith.Persistence`, `Threadsmith.Context`, `Threadsmith.Models.OpenAiCompatible`, `Threadsmith.Models.OpenAiCodex` — reference Core + Layer 1. Concrete model-provider projects depend one-way on neutral Models and isolate protocol/SDK/OAuth types.
 - **Layer 3:** `Threadsmith.Tools`, `Threadsmith.DotNet`, `Threadsmith.Workspaces` — reference Core + Layer 2.
 - **Layer 4:** `Threadsmith.Validation`, `Threadsmith.Execution`, `Threadsmith.Skills`, `Threadsmith.Extensions.Runtime` — reference Core + layers 1–3. Skills may reference neutral Context/Models/Telemetry/Tools but never Execution, Workspaces, Validation, MCP, terminal adapters, or provider/persistence implementations; it returns only Core host-action proposals and checkpoints.
-- **Layer 5:** `Threadsmith.Tui`, `Threadsmith.Cli`, `Threadsmith.Mcp`, `Threadsmith.Hooks` — reference Core + layers 1–4. Hooks owns adapter-neutral policy/coordination and references only Core + Tools; TUI/CLI consume host-owned commands/results.
-- **Layer 6 (composition root):** `Threadsmith.App` — references all product projects.
+- **Layer 5:** `Threadsmith.Interaction`, `Threadsmith.Cli`, `Threadsmith.Mcp`, `Threadsmith.Hooks` — reference Core + layers 1–4. Interaction coordinates existing commands/projections without owning authority; Hooks references only Core + Tools.
+- **Layer 6:** `Threadsmith.Tui` — references Interaction and lower layers to adapt shared semantics to PrettyPrompt/Spectre.Console while retaining compatibility facades.
+- **Layer 7 (composition root):** `Threadsmith.App` — references all product projects.
 
 ### Forbidden package references (§8.1)
 
 - `Threadsmith.Core`: no terminal UI libraries, `Microsoft.CodeAnalysis`, `OpenAI`, or `System.Net.Http`.
 - `Threadsmith.Extensions.Abstractions`: no terminal UI libraries, `Microsoft.CodeAnalysis`, `OpenAI`, or `Microsoft.Data.Sqlite`.
+- `Threadsmith.Interaction`: no terminal UI libraries, Roslyn, provider SDKs, or `Microsoft.Data.Sqlite`; Markdig is its only presentation parser package.
 - `Threadsmith.Tui`: no `Microsoft.Data.Sqlite`.
 - `Threadsmith.Skills`: no terminal libraries, Roslyn, provider SDKs, `Microsoft.Data.Sqlite`, or executable package activation.
 - `Threadsmith.Scripting.Worker`: Roslyn scripting only; no `Threadsmith.*` project references.
@@ -112,7 +115,8 @@ Projects are organized in dependency layers. A project may only reference projec
 | `Threadsmith.DotNet/AGENTS.md` | MSBuild/Roslyn discovery, confidence lifecycle, pre-mutation analysis, and semantic mutations |
 | `Threadsmith.Tools/AGENTS.md` | Tool contracts, policy pipeline, built-ins, secrets, and process lifecycle |
 | `Threadsmith.Mcp/AGENTS.md` | SDK-isolated transports, lifecycle authority, bounded capability mapping, OAuth identity, and imported tools |
-| `Threadsmith.Tui/AGENTS.md` | Inline conversation lifecycle, native transcript behavior, input, rendering, and review prompts |
+| `Threadsmith.Interaction/AGENTS.md` | Frontend-neutral commands, coordination, status, semantic presentation, and Markdown generation |
+| `Threadsmith.Tui/AGENTS.md` | PrettyPrompt input, Spectre rendering, terminal layout, themes, and compatibility facades |
 | `Threadsmith.Workspaces/AGENTS.md` | Repository lifecycle, immutable baselines, transactional mutation, and Git-worktree isolation |
 | `Threadsmith.Validation/AGENTS.md` | Trusted builds, normalized diagnostics, confidence classification, correlation, correction bounds, and gates |
 | `Threadsmith.Hooks/AGENTS.md` | Lifecycle hook authority, policy, adapters, bounds, audit, and recursion |

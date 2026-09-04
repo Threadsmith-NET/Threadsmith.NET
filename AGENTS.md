@@ -45,6 +45,7 @@ Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (
 - `Threadsmith.Core` references no UI, no Roslyn, no terminal libraries, no model-provider SDK, and no extension implementations.
 - `Threadsmith.Extensions.Abstractions` stays small + stable; references no host implementation.
 - Extension implementations reference `Threadsmith.Extensions.Abstractions`, **not** `Threadsmith.Extensions.Runtime`.
+- `Threadsmith.Interaction` owns frontend-neutral interactive coordination and references no terminal library; concrete frontends depend on it, never the reverse.
 - `Threadsmith.Tui` references no persistence implementations.
 - External SDKs are isolated behind internal adapters.
 - Terminal-library types never appear in core interfaces; Roslyn types don't leak across boundaries unless the consumer is explicitly compiler-aware.
@@ -75,7 +76,7 @@ Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (
 
 | Child | Scope |
 |---|---|
-| `src/AGENTS.md` | 21 product projects, dependency layers, adding new projects |
+| `src/AGENTS.md` | 22 product projects, dependency layers, adding new projects |
 | `tests/AGENTS.md` | Architecture and scope-focused verification suites |
 | `docs/AGENTS.md` | User guide, operations, ADRs, guardrails, testing docs, and implementation plans |
 | `eng/AGENTS.md` | Repository build, development-tool staging, and release automation |

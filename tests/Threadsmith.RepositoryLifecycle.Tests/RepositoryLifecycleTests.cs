@@ -9,6 +9,8 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Persistence;
 using Threadsmith.Tui;
 using Threadsmith.Workspaces;
@@ -945,7 +947,7 @@ public static class RepositoryLifecycleTests
 
     private sealed class RepositoryConsoleSurface : IConsoleSurface
     {
-        private readonly Queue<ConsoleInput> _inputs;
+        private readonly Queue<InteractionInput> _inputs;
         private readonly Queue<int> _selections;
         private readonly StringBuilder _output = new();
         private readonly List<string> _transientStatuses = [];
@@ -954,7 +956,7 @@ public static class RepositoryLifecycleTests
             IEnumerable<string> inputs,
             IEnumerable<int>? selections = null)
         {
-            _inputs = new Queue<ConsoleInput>(inputs.Select(text => new ConsoleInput(
+            _inputs = new Queue<InteractionInput>(inputs.Select(text => new InteractionInput(
                 true,
                 text,
                 CancellationToken.None)));
@@ -978,7 +980,7 @@ public static class RepositoryLifecycleTests
         }
 
         /// <inheritdoc />
-        public Task<ConsoleInput> ReadAsync(CancellationToken cancellationToken = default)
+        public Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_inputs.Dequeue());
@@ -1013,7 +1015,7 @@ public static class RepositoryLifecycleTests
         /// <inheritdoc />
         public Task WriteAsync(
             string text,
-            TuiTextRole role = TuiTextRole.Default,
+            PresentationTextRole role = PresentationTextRole.Default,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();

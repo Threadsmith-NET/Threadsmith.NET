@@ -133,6 +133,9 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 95 | `plan-95-subagent-efficiency-code-explore-role-model-routing.md` | Subagent efficiency, residual code explore precision, and role-specific provider/model routing |
 | 96 | `plan-96-active-run-steering-and-double-escape.md` | Serialized active-run steering and double-Escape cancellation |
 | 97 | `plan-97-external-semantic-refresh.md` | Background external-change semantic refresh, stale-request admission, and manual recovery |
+| 98 | `plan-98-frontend-neutral-interaction-coordination.md` | Frontend-neutral interaction coordination and Markdown presentation extraction |
+| 99 | `plan-99-test-fixture-scope-determinism-cleanup.md` | Proportionate deterministic test fixtures and resource hygiene |
+| 100 | `plan-100-tuikit-alternate-interactive-frontend.md` | Selectable TUIKit full-screen frontend with fixed session status |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

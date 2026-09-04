@@ -1,6 +1,7 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Core;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui;
 using Xunit;
 
@@ -52,8 +53,8 @@ public static class Plan80ActiveTurnInspectionTests
     [Fact]
     public static void Active_turn_completion_event_renders_one_success_segment()
     {
-        var segments = new List<TuiTextSegment>();
-        TuiEventSegments.Append(
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
             segments,
             new ActiveTurnCompactionCompleted(
                 SessionId.New(),
@@ -67,7 +68,7 @@ public static class Plan80ActiveTurnInspectionTests
             string.Empty);
 
         var segment = Assert.Single(segments);
-        Assert.Equal(TuiTextRole.Success, segment.Role);
+        Assert.Equal(PresentationTextRole.Success, segment.Role);
         Assert.Contains("10,000 → 5,000", segment.Text, StringComparison.Ordinal);
     }
 

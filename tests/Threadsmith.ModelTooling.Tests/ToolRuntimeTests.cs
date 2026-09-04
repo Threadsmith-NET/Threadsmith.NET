@@ -616,35 +616,26 @@ public static class ToolRuntimeTests
     [Fact]
     public static async Task CodeExploreOutputFormattingTool_ModelBudget_BoundsRenderedMarkdown()
     {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            const int effectiveInputTokens = 400;
-            const int maximumResultBytes = effectiveInputTokens * 3;
-            var tool = new CodeExploreOutputFormattingTool(
-                new StaticCodeExploreResultTool(CreateRichCodeExploreResult()),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
-                TestPromptLoader.Instance);
-            var execution = await tool.ExecuteAsync(
-                new CodeExploreInput { Query = "inspect source" },
-                CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: effectiveInputTokens));
-            var markdown = execution.ModelResultContent
-                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
+        const int effectiveInputTokens = 400;
+        const int maximumResultBytes = effectiveInputTokens * 3;
+        var tool = new CodeExploreOutputFormattingTool(
+            new StaticCodeExploreResultTool(CreateModelBudgetOverflowCodeExploreResult()),
+            new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+            ModelBudgetPromptLoader.Instance);
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = "inspect source" },
+            CreateCodeExploreExecutionContext(
+                AppContext.BaseDirectory,
+                modelEffectiveInputBudgetTokens: effectiveInputTokens));
+        var markdown = execution.ModelResultContent
+            ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
 
-            Assert.True(
-                Encoding.UTF8.GetByteCount(markdown) <= maximumResultBytes,
-                "The rendered Markdown exceeded the selected-model result ceiling.");
-            Assert.Contains(
-                "additional Markdown was omitted to fit the selected model input budget",
-                markdown,
-                StringComparison.Ordinal);
-            Assert.Equal(0, CountFenceLines(markdown) % 2);
-            Assert.True(execution.IsTruncated);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
+        Assert.True(
+            Encoding.UTF8.GetByteCount(markdown) <= maximumResultBytes,
+            "The rendered Markdown exceeded the selected-model result ceiling.");
+        Assert.Equal(1, CountOccurrences(markdown, ModelBudgetPromptLoader.Omission));
+        Assert.Equal(0, CountFenceLines(markdown) % 2);
+        Assert.True(execution.IsTruncated);
     }
 
     /// <summary>The production pipeline reapplies code-explore bounds after output sanitization expands content.</summary>
@@ -934,61 +925,6 @@ public static class ToolRuntimeTests
             Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
             Assert.Equal("prompts/worker.md", Assert.Single(
                 artifactService.Request?.AssociatedArtifactPathAnchors ?? []).Path);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>Markdown keeps many follow-up targets readable by bounding embedded retry cursors.</summary>
-    [Fact]
-    public static async Task CodeExploreOutputFormattingTool_ManyContinuations_BoundsRetryCursorNoise()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var formattingTool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(
-                    new ManyContinuationCodeExploreService(),
-                    TestPromptLoader.Instance),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
-                TestPromptLoader.Instance);
-            var input = (CodeExploreInput)formattingTool.DeserializeInput("{\"query\":\"inspect more source\"}");
-            var execution = await formattingTool.ExecuteAsync(
-                input,
-                CreateCodeExploreExecutionContext(repository));
-            var markdown = execution.ModelResultContent
-                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
-
-            Assert.Contains("**Follow-up targets**", markdown, StringComparison.Ordinal);
-            Assert.Contains("src/WorkerExtra1.cs", markdown, StringComparison.Ordinal);
-            Assert.DoesNotContain("src/WorkerExtra2.cs", markdown, StringComparison.Ordinal);
-            Assert.Equal(3, CountOccurrences(markdown, "Retry query:"));
-            Assert.Contains("1 retry query cursor omitted", markdown, StringComparison.Ordinal);
-            Assert.Contains("4 follow-up targets not shown", markdown, StringComparison.Ordinal);
-
-            var sourceCursor = ExtractContinuationCursor(markdown, "Source");
-            var impactCursor = ExtractContinuationCursor(markdown, "Impact");
-            var artifactCursor = ExtractContinuationCursor(markdown, "Artifact");
-
-            var sourceService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(sourceService, TestPromptLoader.Instance).ExecuteAsync(
-                new CodeExploreInput { Query = sourceCursor },
-                CreateCodeExploreExecutionContext(repository));
-            Assert.Equal("src/WorkerExtra0.cs", Assert.Single(sourceService.Request?.PathAnchors ?? []).Path);
-
-            var impactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(impactService, TestPromptLoader.Instance).ExecuteAsync(
-                new CodeExploreInput { Query = impactCursor },
-                CreateCodeExploreExecutionContext(repository));
-            Assert.Equal(CodeExploreMode.Impact, impactService.Request?.Mode);
-
-            var artifactService = new CapturingCodeExploreService();
-            _ = await new CodeExploreTool(artifactService, TestPromptLoader.Instance).ExecuteAsync(
-                new CodeExploreInput { Query = artifactCursor },
-                CreateCodeExploreExecutionContext(repository));
-            Assert.Equal(CodeExploreAssociatedArtifactsMode.Enabled, artifactService.Request?.AssociatedArtifacts);
         }
         finally
         {
@@ -3473,9 +3409,21 @@ public static class ToolRuntimeTests
 
     private sealed class StaticCodeExploreResultTool : Tool<CodeExploreInput, CodeExploreResult>
     {
-        private static readonly ToolDefinition _definition = new CodeExploreTool(
-            new NoopCodeExploreService(),
-            TestPromptLoader.Instance).Definition;
+        private static readonly ToolDefinition _definition = new()
+        {
+            Id = "code_explore",
+            Version = "test",
+            Description = "Returns one in-memory code exploration result.",
+            Category = ToolCategory.SemanticSearch,
+            InputSchema = new(nameof(CodeExploreInput), 1, "{}"),
+            OutputSchema = new(nameof(CodeExploreResult), 1, "{}"),
+            RequiredTrust = RepositoryTrustLevel.TrustedBuild,
+            RequiredApproval = ApprovalLevel.None,
+            SideEffect = ToolSideEffect.ReadOnly,
+            Timeout = TimeSpan.FromSeconds(1),
+            MaximumOutputBytes = 1024 * 1024,
+            PreferStrictArguments = true,
+        };
 
         private readonly CodeExploreResult _result;
 
@@ -3503,6 +3451,32 @@ public static class ToolRuntimeTests
         }
     }
 
+    private sealed class ModelBudgetPromptLoader : IPromptLoader
+    {
+        internal const string Omission = "_Output note: additional Markdown was omitted to fit the selected model input budget._";
+
+        internal static ModelBudgetPromptLoader Instance { get; } = new();
+
+        public string Get(string promptFileName)
+        {
+            return promptFileName switch
+            {
+                PromptFileNames.ToolCodeExploreResultHeader => "**Exploration:** `{{DisplayQuery}}`",
+                PromptFileNames.ToolCodeExploreModelBudgetOmission => Omission,
+                _ => promptFileName,
+            };
+        }
+
+        public string Render(
+            string promptFileName,
+            IReadOnlyDictionary<string, string> tokens)
+        {
+            return tokens.TryGetValue("Items", out var items)
+                ? items
+                : string.Join(' ', tokens.Values);
+        }
+    }
+
     private sealed class LongQueryResultCodeExploreService : ICodeExploreService
     {
         public Task<CodeExploreResult> QueryCodeExploreAsync(
@@ -3526,20 +3500,6 @@ public static class ToolRuntimeTests
                 Omissions = [request.Query],
             };
             return Task.FromResult(result);
-        }
-    }
-
-    private sealed class ManyContinuationCodeExploreService : ICodeExploreService
-    {
-        public Task<CodeExploreResult> QueryCodeExploreAsync(
-            WorkspaceId workspaceId,
-            CodeExploreRequest request,
-            ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(CreateManyContinuationCodeExploreResult());
         }
     }
 
@@ -3788,6 +3748,49 @@ public static class ToolRuntimeTests
                     "Retry with this explicit associated artifact path anchor and digest to continue omitted artifact content.")]));
     }
 
+    private static CodeExploreResult CreateModelBudgetOverflowCodeExploreResult()
+    {
+        const string filePath = "src/Worker.cs";
+        var digest = new string('a', 64);
+        var sourceLines = Enumerable.Range(1, 20)
+            .Select(line => $"{line}: {new string('x', 96)}")
+            .ToArray();
+        var symbol = new SemanticSymbolIdentity("symbol:worker", "Worker", "class");
+        return new CodeExploreResult(
+            1,
+            SemanticConfidenceLevel.FullSemantic,
+            [],
+            [new CodeExploreFileSection(
+                filePath,
+                "Example.Project",
+                "net10.0",
+                [symbol],
+                new CodeExploreSourceRange(
+                    new SourceRange(1, 1, 20, 100),
+                    sourceLines,
+                    digest,
+                    digest,
+                    CodeExploreSourceCompleteness.Partial,
+                    ["L21-L24 omitted."],
+                    filePath),
+                IsGenerated: false,
+                IsLinked: false,
+                "Selected exact declaration.")],
+            new CodeExploreCoverage(true, true, false, false, []),
+            [],
+            [new CodeExploreContinuationTarget(
+                CodeExploreAnchorKind.Path,
+                filePath,
+                filePath,
+                21,
+                24,
+                false,
+                CodeExplorePathSelectionMode.ExactLineRange,
+                digest,
+                1,
+                "Continue the omitted source range.")]);
+    }
+
     private static CodeExploreResult CreateSanitizerExpansionCodeExploreResult()
     {
         var symbol = new SemanticSymbolIdentity("symbol:example.worker", "Worker", "class");
@@ -3831,26 +3834,6 @@ public static class ToolRuntimeTests
             new CodeExploreCoverage(true, true, true, true, []),
             [],
             []);
-    }
-
-    private static CodeExploreResult CreateManyContinuationCodeExploreResult()
-    {
-        var result = CreateRichCodeExploreResult();
-        var continuationDigest = new string('a', 64);
-        var continuations = Enumerable.Range(0, 6)
-            .Select(index => new CodeExploreContinuationTarget(
-                CodeExploreAnchorKind.Path,
-                $"src/WorkerExtra{index}.cs",
-                $"src/WorkerExtra{index}.cs",
-                index + 1,
-                index + 3,
-                false,
-                CodeExplorePathSelectionMode.ExactLineRange,
-                continuationDigest,
-                1,
-                $"Retry with Worker extra source range {index}."))
-            .ToArray();
-        return result with { ContinuationTargets = continuations };
     }
 
     private static CodeExploreResult CreateManyImpactCodeExploreResult()

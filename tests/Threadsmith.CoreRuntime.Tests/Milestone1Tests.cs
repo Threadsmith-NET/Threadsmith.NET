@@ -248,40 +248,69 @@ public static class Milestone1Tests
     public static async Task DomainEventStream_FansOut_WithBoundedBackpressure()
     {
         await using var stream = new DomainEventStream();
-        var first = new ConcurrentBag<Guid>();
-        var second = new ConcurrentBag<Guid>();
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = SessionId.New();
+        IDomainEvent[] expected =
+        [
+            new SessionCreated(sessionId, DateTimeOffset.UtcNow, "test"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "first"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "second"),
+        ];
+        var first = new List<IDomainEvent>();
+        var second = new List<IDomainEvent>();
+        var firstReceivedAll = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecond = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var firstSubscription = stream.Subscribe(
             (domainEvent, _) =>
             {
-                first.Add(domainEvent.SessionId.Value);
+                first.Add(domainEvent);
+                if (first.Count == expected.Length)
+                {
+                    firstReceivedAll.TrySetResult();
+                }
+
                 return Task.CompletedTask;
             },
             2);
         await using var secondSubscription = stream.Subscribe(
             async (domainEvent, cancellationToken) =>
             {
-                await release.Task.WaitAsync(cancellationToken);
-                second.Add(domainEvent.SessionId.Value);
+                if (second.Count == 0)
+                {
+                    secondEntered.TrySetResult();
+                    await releaseSecond.Task.WaitAsync(cancellationToken);
+                }
+
+                second.Add(domainEvent);
             },
             2);
-        var sessionId = SessionId.New();
 
-        var publish = stream.PublishAsync(
-            new SessionCreated(sessionId, DateTimeOffset.UtcNow, "test"));
-        await Task.Delay(20);
-        Assert.False(publish.IsCompleted);
-        release.TrySetResult();
-        await publish;
-
-        for (var index = 0; index < 2048; index++)
+        var firstPublish = stream.PublishAsync(expected[0]);
+        try
         {
-            await stream.PublishAsync(
-                new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, index.ToString()));
+            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var secondPublish = stream.PublishAsync(expected[1]);
+            var thirdPublish = stream.PublishAsync(expected[2]);
+            await firstReceivedAll.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(firstPublish.IsCompleted);
+            Assert.False(secondPublish.IsCompleted);
+            Assert.False(thirdPublish.IsCompleted);
+            Assert.Equal(expected, first);
+
+            releaseSecond.TrySetResult();
+            await Task.WhenAll(firstPublish, secondPublish, thirdPublish)
+                .WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseSecond.TrySetResult();
         }
 
-        Assert.Equal(2049, first.Count);
-        Assert.Equal(2049, second.Count);
+        Assert.Equal(expected, second);
     }
 
     /// <summary>Projection reads are detached and completed runs reach the completion phase.</summary>
@@ -3829,24 +3858,33 @@ public static class Milestone1Tests
     [Fact]
     public static async Task UiEventDispatcher_Flooding_CoalescesWithoutLoss()
     {
-        var dispatcher = new UiEventDispatcher(32);
-        var rendered = 0;
+        var dispatcher = new UiEventDispatcher(2);
+        var sessionId = SessionId.New();
+        IDomainEvent[] expected =
+        [
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "first"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "second"),
+            new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "third"),
+        ];
+        var batches = new List<IReadOnlyList<IDomainEvent>>();
+
+        await dispatcher.QueueAsync(expected[0]);
+        await dispatcher.QueueAsync(expected[1]);
+        var thirdQueue = dispatcher.QueueAsync(expected[2]);
+        Assert.False(thirdQueue.IsCompleted);
+
         var drain = dispatcher.DrainAsync((batch, _) =>
         {
-            rendered += batch.Count;
+            batches.Add(batch);
             return Task.CompletedTask;
         });
-        var sessionId = SessionId.New();
-
-        for (var index = 0; index < 5000; index++)
-        {
-            await dispatcher.QueueAsync(
-                new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "x"));
-        }
+        await thirdQueue.WaitAsync(TimeSpan.FromSeconds(2));
 
         dispatcher.Complete();
-        await drain;
-        Assert.Equal(5000, rendered);
+        await drain.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(batches[0].Count >= 2);
+        Assert.Equal(expected, batches.SelectMany(batch => batch));
     }
 
     /// <summary>TUI and CLI drive the same handlers and render identical activity.</summary>

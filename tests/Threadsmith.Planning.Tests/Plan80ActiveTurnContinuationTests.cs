@@ -21,12 +21,6 @@ public static class Plan80ActiveTurnContinuationTests
         Directory.CreateDirectory(root);
         try
         {
-            for (var index = 0; index < 280; index++)
-            {
-                var fileName = $"evidence-{index:D4}-{new string('x', 32)}.txt";
-                await File.WriteAllTextAsync(Path.Combine(root, fileName), "evidence");
-            }
-
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
@@ -35,7 +29,7 @@ public static class Plan80ActiveTurnContinuationTests
                 1_000_000,
                 100,
                 TimeSpan.FromMinutes(2)));
-            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(new string('x', 256))]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -53,12 +47,14 @@ public static class Plan80ActiveTurnContinuationTests
             var policy = new ActiveTurnCompactionPolicy
             {
                 PressureTargetPercent = 1,
-                OutputReserveTokens = 500,
-                SummaryBudgetTokens = 500,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
                 MinimumSavingsTokens = 1,
-                RetainedRecentTokens = 1_000,
+                RetainedRecentTokens = 64,
             };
-            var candidateProvider = new RequestCandidateProvider(TimeSpan.FromMilliseconds(500));
+            var timeProvider = new ManualTimeProvider();
+            var candidateDuration = TimeSpan.FromMilliseconds(500);
+            var candidateProvider = new RequestCandidateProvider(timeProvider, candidateDuration);
             var compactionProfileId = ModelProfileId.New();
             var compactionProfile = CreateCompactionCandidateProfile(compactionProfileId);
             var activityEvents = new List<IDomainEvent>();
@@ -76,7 +72,8 @@ public static class Plan80ActiveTurnContinuationTests
                 candidateProvider,
                 new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
                 policy,
-                TestPromptLoader.Instance);
+                TestPromptLoader.Instance,
+                timeProvider);
             var hooks = new RecordingHookCoordinator();
             var usage = new SessionUsageProjection();
             var application = new SessionApplication(
@@ -119,8 +116,8 @@ public static class Plan80ActiveTurnContinuationTests
             var compactionRequest = candidateProvider.Requests[0];
             Assert.Equal("Inspect the repository thoroughly.", compactionRequest.TaskObjective);
             Assert.Empty(compactionRequest.AcceptanceIntent);
-            Assert.Equal(16_000, compactionRequest.ProfileContextWindowTokens);
-            Assert.Equal(500, compactionRequest.ProfileOutputReserveTokens);
+            Assert.Equal(4_096, compactionRequest.ProfileContextWindowTokens);
+            Assert.Equal(128, compactionRequest.ProfileOutputReserveTokens);
             Assert.Equal(2, compactionRequest.ToolContinuationRound);
             var compactedGroup = Assert.Single(compactionRequest.EligiblePrefix);
             Assert.True(compactedGroup.WasDeliveredVerbatim);
@@ -215,7 +212,7 @@ public static class Plan80ActiveTurnContinuationTests
                 && delta.WallClock > TimeSpan.Zero);
             Assert.Single(
                 operationBudget.Accruals,
-                delta => delta.WallClock >= TimeSpan.FromMilliseconds(400));
+                delta => delta.WallClock == candidateDuration);
         }
         finally
         {
@@ -231,12 +228,6 @@ public static class Plan80ActiveTurnContinuationTests
         Directory.CreateDirectory(root);
         try
         {
-            for (var index = 0; index < 280; index++)
-            {
-                var fileName = $"evidence-{index:D4}-{new string('x', 32)}.txt";
-                await File.WriteAllTextAsync(Path.Combine(root, fileName), "evidence");
-            }
-
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
@@ -244,7 +235,7 @@ public static class Plan80ActiveTurnContinuationTests
                 1_000_000,
                 100,
                 TimeSpan.FromMinutes(2)));
-            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(new string('x', 256))]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -261,11 +252,11 @@ public static class Plan80ActiveTurnContinuationTests
             var model = new TwoToolsThenTextProvider();
             var policy = new ActiveTurnCompactionPolicy
             {
-                PressureTargetPercent = 75,
-                OutputReserveTokens = 500,
-                SummaryBudgetTokens = 500,
-                MinimumSavingsTokens = 100,
-                RetainedRecentTokens = 1_000,
+                PressureTargetPercent = 1,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
+                MinimumSavingsTokens = 1,
+                RetainedRecentTokens = 64,
             };
             var candidateProvider = new RequestCandidateProvider();
             var activityEvents = new List<IDomainEvent>();
@@ -459,8 +450,8 @@ public static class Plan80ActiveTurnContinuationTests
         return new ActiveTurnCompactionCandidateProfile
         {
             ProfileId = profileId,
-            ContextWindowTokens = 8_000,
-            OutputReserveTokens = 500,
+            ContextWindowTokens = 2_048,
+            OutputReserveTokens = 128,
             ReasoningLevel = ReasoningLevel.None,
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             Cost = new ModelCostMetadata(),
@@ -476,9 +467,9 @@ public static class Plan80ActiveTurnContinuationTests
             Provider = "openai-compatible",
             Endpoint = new Uri("https://plan80.example.test/v1/chat/completions"),
             ModelId = "plan-80-test",
-            ContextWindow = 16_000,
-            MaximumOutputTokens = 16_000,
-            RequestOutputTokenReserve = 500,
+            ContextWindow = 4_096,
+            MaximumOutputTokens = 4_096,
+            RequestOutputTokenReserve = 128,
             Capabilities = new ModelCapabilitySet
             {
                 Streaming = true,
@@ -492,16 +483,19 @@ public static class Plan80ActiveTurnContinuationTests
 
     private sealed class RequestCandidateProvider : IActiveTurnCompactionCandidateProvider
     {
-        private readonly TimeSpan _delay;
+        private readonly TimeSpan _elapsed;
+        private readonly ManualTimeProvider? _timeProvider;
 
-        public RequestCandidateProvider(TimeSpan delay = default)
+        public RequestCandidateProvider()
         {
-            if (delay < TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(nameof(delay));
-            }
+        }
 
-            _delay = delay;
+        public RequestCandidateProvider(ManualTimeProvider timeProvider, TimeSpan elapsed)
+        {
+            ArgumentNullException.ThrowIfNull(timeProvider);
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(elapsed, TimeSpan.Zero);
+            _timeProvider = timeProvider;
+            _elapsed = elapsed;
         }
 
         public List<ActiveTurnCompactionRequest> Requests { get; } = [];
@@ -527,14 +521,11 @@ public static class Plan80ActiveTurnContinuationTests
 
             public ModelUsage? ObservedUsage => null;
 
-            public async Task<ActiveTurnCandidateGeneration> ExecuteAsync(
+            public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
                 CancellationToken cancellationToken = default)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (_owner._delay > TimeSpan.Zero)
-                {
-                    await Task.Delay(_owner._delay, cancellationToken);
-                }
+                _owner._timeProvider?.Advance(_owner._elapsed);
 
                 _owner.Requests.Add(_request);
                 var covered = (_request.PriorSummary?.CoveredGroupSequences ?? [])
@@ -557,8 +548,30 @@ public static class Plan80ActiveTurnContinuationTests
                     FilesRead = filesRead,
                     FilesChanged = filesChanged,
                 };
-                return new ActiveTurnCandidateGeneration(candidate, null);
+                return Task.FromResult(new ActiveTurnCandidateGeneration(candidate, null));
             }
+        }
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp()
+        {
+            return Interlocked.Read(ref _timestamp);
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(elapsed));
+            }
+
+            _ = Interlocked.Add(ref _timestamp, elapsed.Ticks);
         }
     }
 
@@ -720,12 +733,11 @@ public static class Plan80ActiveTurnContinuationTests
             await Task.Yield();
             if (Requests.Count <= 2)
             {
-                var maximumEntries = Requests.Count == 1 ? 280 : 279;
                 yield return new ModelChunk
                 {
                     Output = new ToolRequestModelOutput(
-                        "list_files",
-                        $"{{\"path\":\".\",\"maximumEntries\":{maximumEntries}}}"),
+                        "deterministic_output",
+                        $"{{\"sequence\":{Requests.Count}}}"),
                     Usage = new ModelUsage(10, 5),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };

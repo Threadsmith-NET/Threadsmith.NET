@@ -2670,18 +2670,12 @@ public static class Milestone4Tests
         Directory.CreateDirectory(root);
         try
         {
-            foreach (var index in Enumerable.Range(0, 200))
-            {
-                await File.WriteAllTextAsync(
-                    Path.Combine(root, $"long-result-file-{index:D3}-{new string('x', 30)}.txt"),
-                    "sample");
-            }
-
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
+            var registry = new ToolRegistry(
+                [new TestDeterministicOutputTool("oversized-result:" + new string('x', 256))]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2690,8 +2684,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new ToolThenTextModelProvider(
-                "{\"path\":\".\",\"maximumEntries\":200}");
+            var model = new ToolThenTextModelProvider("{\"sequence\":1}");
             var assembler = CreateAssembler(events, evidence, maximumTokens: 1800);
             var application = new SessionApplication(
                 events,
@@ -2721,7 +2714,7 @@ public static class Milestone4Tests
             Assert.Contains("Tool continuation requires", exception.Message, StringComparison.Ordinal);
             Assert.Single(model.Requests);
             var fullEvidence = Assert.Single(evidence.Snapshot(sessionId));
-            Assert.Contains("long-result-file", fullEvidence.Content, StringComparison.Ordinal);
+            Assert.Contains("oversized-result", fullEvidence.Content, StringComparison.Ordinal);
             Assert.Equal(
                 ActiveTurnCompactionInspectionStatus.CapacityExceeded,
                 assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
@@ -5033,7 +5026,7 @@ public static class Milestone4Tests
             {
                 yield return new ModelChunk
                 {
-                    Output = new ToolRequestModelOutput("list_files", _argumentsJson),
+                    Output = new ToolRequestModelOutput("deterministic_output", _argumentsJson),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;

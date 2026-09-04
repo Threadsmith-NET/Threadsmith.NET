@@ -107,18 +107,47 @@ public static class SessionStatusTests
 
     /// <summary>Concurrent provider completions preserve every distinct invocation.</summary>
     [Fact]
-    public static void UsageProjection_ConcurrentObservations_PreserveTotals()
+    public static async Task UsageProjection_ConcurrentObservations_PreserveTotals()
     {
         var projection = new SessionUsageProjection();
         var sessionId = SessionId.New();
         var runId = RunId.New();
+        const int observerCount = 6;
+        var observersEntered = 0;
+        var allObserversEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseObservers = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Parallel.For(0, 100, round => projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", round, Guid.NewGuid()),
-            new ModelUsage(1, 2)));
+        var observers = Enumerable.Range(0, observerCount).Select(round => Task.Run(async () =>
+        {
+            if (Interlocked.Increment(ref observersEntered) == observerCount)
+            {
+                allObserversEntered.TrySetResult();
+            }
 
-        Assert.Equal(new SessionUsageSnapshot(100, 200, false), projection.GetSnapshot(sessionId));
+            await releaseObservers.Task.WaitAsync(TestContext.Current.CancellationToken);
+            projection.Observe(
+                sessionId,
+                new ModelRequestUsageId(
+                    runId,
+                    "conversation",
+                    round,
+                    new Guid(round + 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+                new ModelUsage(1, 2));
+        })).ToArray();
+        try
+        {
+            await allObserversEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseObservers.TrySetResult();
+        }
+
+        await Task.WhenAll(observers).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(new SessionUsageSnapshot(6, 12, false), projection.GetSnapshot(sessionId));
     }
 
     /// <summary>Overflowing provider totals saturate instead of wrapping.</summary>

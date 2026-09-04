@@ -191,8 +191,8 @@ public static class AppBootstrapTests
     [Fact]
     public static void ConfigurationBootstrap_CommandLineOverride_WinsOverCompiledDefault()
     {
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
-        var paths = CreatePaths(root);
+        using var temporary = new TemporaryDirectory("bootstrap");
+        var paths = CreatePaths(temporary.Root);
 
         var configuration = ConfigurationBootstrap.Build(
             ["--set:model:http:maxConnectionsPerServer=24"],
@@ -206,14 +206,14 @@ public static class AppBootstrapTests
     [Fact]
     public static void ConfigurationBootstrap_OperationDuration_UsesStandardLayering()
     {
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
-        var paths = CreatePaths(root);
+        using var temporary = new TemporaryDirectory("bootstrap");
+        var paths = CreatePaths(temporary.Root);
         Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
         File.WriteAllText(paths.UserConfiguration, "{\"tui\":{\"showOperationDurations\":false}}");
         File.WriteAllText(paths.RepositoryConfiguration, "{\"tui\":{\"showOperationDurations\":true}}");
 
         var layered = ConfigurationBootstrap.Build([], paths);
-        var defaults = ConfigurationBootstrap.Build([], CreatePaths(root + "-defaults"));
+        var defaults = ConfigurationBootstrap.Build([], CreatePaths(temporary.GetPath("defaults")));
 
         Assert.True(layered.GetValue("tui:showOperationDurations", false));
         Assert.True(defaults.GetValue("tui:showOperationDurations", false));
@@ -223,8 +223,8 @@ public static class AppBootstrapTests
     [Fact]
     public static void ConfigurationBootstrap_TrustedView_ExcludesRepositoryOverrides()
     {
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + Guid.NewGuid().ToString("N"));
-        var paths = CreatePaths(root);
+        using var temporary = new TemporaryDirectory("bootstrap");
+        var paths = CreatePaths(temporary.Root);
         Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
         File.WriteAllText(
             paths.RepositoryConfiguration,
@@ -242,6 +242,7 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task ConfigurationBootstrap_EnvironmentSecrets_StayOutsideOrdinaryConfiguration()
     {
+        using var temporary = new TemporaryDirectory("bootstrap");
         var id = "key" + Guid.NewGuid().ToString("N");
         var ordinaryVariable = "THREADSMITH_bootstrap__" + id;
         var secretVariable = "THREADSMITH_secrets__bootstrap__" + id;
@@ -249,7 +250,7 @@ public static class AppBootstrapTests
         Environment.SetEnvironmentVariable(secretVariable, "canary-secret");
         try
         {
-            var paths = CreatePaths(Path.Combine(Path.GetTempPath(), "threadsmith-bootstrap-" + id));
+            var paths = CreatePaths(temporary.Root);
             var effective = ConfigurationBootstrap.Build([], paths);
             var trusted = ConfigurationBootstrap.BuildTrusted(paths);
             var request = new SecretResolutionRequest
@@ -375,12 +376,12 @@ public static class AppBootstrapTests
                 ["model:profiles:1:intendedWorkloadClasses:0"] = "codeEdit",
             })
             .Build();
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-model-startup-" + Guid.NewGuid().ToString("N"));
+        using var temporary = new TemporaryDirectory("model-startup");
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         using var models = await ModelComposition.CreateAsync(
             configuration,
-            CreatePaths(root),
+            CreatePaths(temporary.Root),
             new ConfigurationSecretStore(configuration),
             loggerFactory);
 
@@ -549,23 +550,47 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task JsonlModelExchangeLog_ConcurrentAppends_WriteCompleteLines()
     {
-        var path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-concurrent-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        using var temporary = new TemporaryDirectory("model-log");
+        var path = temporary.GetPath("concurrent.jsonl");
         var log = new JsonlModelExchangeLog(path);
         var runId = RunId.New();
+        const int writerCount = 6;
+        var readyCount = 0;
+        var allReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task AppendAsync(int index)
+        {
+            if (Interlocked.Increment(ref readyCount) == writerCount)
+            {
+                allReady.TrySetResult();
+            }
+
+            await release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await log.AppendCompletionAsync(
+                runId,
+                index,
+                index + 1,
+                TestContext.Current.CancellationToken);
+        }
 
         Task[] writes =
         [
-            .. Enumerable.Range(0, 32)
-                .Select(index => log.AppendCompletionAsync(
-                    runId,
-                    index,
-                    index + 1,
-                    TestContext.Current.CancellationToken)),
+            .. Enumerable.Range(0, writerCount).Select(AppendAsync),
         ];
+        try
+        {
+            await allReady.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
         await Task.WhenAll(writes);
 
         var lines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
-        Assert.Equal(32, lines.Length);
+        Assert.Equal(writerCount, lines.Length);
         foreach (var line in lines)
         {
             using var entry = JsonDocument.Parse(line);
@@ -577,7 +602,8 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task LoggingModelProvider_WritesRequestChunksAndCompletion()
     {
-        var path = Path.Combine(Path.GetTempPath(), "threadsmith-model-log-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        using var temporary = new TemporaryDirectory("model-log");
+        var path = temporary.GetPath("exchange.jsonl");
         var provider = new LoggingModelProvider(new SingleChunkModelProvider(), new JsonlModelExchangeLog(path));
         const string providerInstructions = "PRIVATE_PROVIDER_PROMPT";
         var request = new ModelStreamRequest
@@ -636,9 +662,8 @@ public static class AppBootstrapTests
     [Fact]
     public static async Task LoggingModelProvider_SharedSink_ConcurrentRoutersRemainValidJsonl()
     {
-        var path = Path.Combine(
-            Path.GetTempPath(),
-            "threadsmith-model-log-shared-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        using var temporary = new TemporaryDirectory("model-log");
+        var path = temporary.GetPath("shared.jsonl");
         var log = new JsonlModelExchangeLog(path);
         var ordinary = new LoggingModelProvider(new SingleChunkModelProvider(), log);
         var trusted = new LoggingModelProvider(new SingleChunkModelProvider(), log);
@@ -772,5 +797,41 @@ public static class AppBootstrapTests
             SessionConfiguration = Path.Combine(root, ".threadsmith", "session.json"),
             SecretsConfiguration = Path.Combine(root, ".threadsmith", "secrets", "config.json"),
         };
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        internal TemporaryDirectory(string purpose)
+        {
+            Root = Path.Combine(
+                Path.GetTempPath(),
+                "Threadsmith",
+                "architecture-tests",
+                purpose + "-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Root);
+        }
+
+        internal string Root { get; }
+
+        public void Dispose()
+        {
+            var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root));
+            var normalizedParent = Path.TrimEndingDirectorySeparator(
+                Path.Combine(Path.GetTempPath(), "Threadsmith", "architecture-tests"));
+            if (!string.Equals(
+                    Path.GetDirectoryName(normalizedRoot),
+                    normalizedParent,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Refusing to delete an unowned test directory.");
+            }
+
+            Directory.Delete(normalizedRoot, recursive: true);
+        }
+
+        internal string GetPath(string relativePath)
+        {
+            return Path.Combine(Root, relativePath);
+        }
     }
 }

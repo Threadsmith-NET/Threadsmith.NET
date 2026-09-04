@@ -1,10 +1,55 @@
 # Implementation Plan 99: Proportionate, Deterministic Test Fixtures
 
-**Status:** Planned.
+**Status:** Implemented with the P99-07 extension-lifecycle slice deferred as documented below.
 **Delivery track:** Maintenance — test-fixture scope, deterministic concurrency, and resource hygiene
 **Prerequisites:** The implemented test contracts for Plans 17, 31, 50, 68, 80, 90, 91, 96, and 97; the current full solution test suite; and the current production safety limits and observable behavior covered by those tests
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially small host-owned abstractions, deterministic boundaries, cancellation propagation, and meaningful verification
 **Related contracts:** [planning governance](planning-governance.md), [maintenance track](milestones/maintenance-track.md), [root AGENTS](../../AGENTS.md), [test-tree AGENTS](../../tests/AGENTS.md), [Plan 17](plan-17-extension-unload-verification-hot-replacement.md), [Plan 50](plan-50-openai-codex-responses-oauth-provider.md), [Plan 68](plan-68-profile-guided-text-allocation-reduction.md), [Plan 80](plan-80-active-turn-tool-continuation-compaction.md), [Plan 90](plan-90-deployable-prompt-assets.md), [Plan 91](plan-91-create-sub-agent-delegation-tool.md), [Plan 96](plan-96-active-run-steering-and-double-escape.md), and [Plan 97](plan-97-external-semantic-refresh.md)
+
+---
+
+## 0 Implementation Outcome (2026-09-04)
+
+Plan 99 is implemented for the prompt, semantic-refresh, active-turn, tool-output, parallel-agent, event/dispatcher, Codex, skill, mutation, secret, bootstrap, and allocation-test workstreams. The planned cleanup preserves production bounds and behavior. Subsequent failure triage corrected one pre-existing `code_explore` output-note regression as recorded below. P99-07 is intentionally not part of the resulting diff: its attempted extension-host fixture exposed broader collectible-load-context teardown and staging-root ownership defects, so the complete extension experiment was reverted for a separate runtime-focused change rather than hidden behind test complexity.
+
+### 0.1 Resource reductions
+
+- Focused prompt-loader tests now materialize one or two declared assets. Exactly one named integration test still materializes the complete 289-file catalog.
+- The 280-file active-turn fixtures and 200-file planning fixture now use small deterministic tool results through the production tool/context pipeline; they create no pressure-only file trees.
+- Semantic admission tests cross instance-scoped 32/64-byte test bounds instead of constructing 4 MiB and 64 MiB inputs. Direct tests lock the unchanged production values.
+- Delegated-result projection uses two children, three stable findings, and a 1,200-byte test bound instead of multi-megabyte text and 16,384 generated evidence identifiers.
+- The assessed event-stream and UI-dispatcher tests use tiny gated cohorts/capacities instead of 2,048 and 5,000 events, while preserving ordering, batching, coalescing, and lossless-delivery assertions.
+- The skill traversal test uses a maximum of two and creates exactly three relevant files. Codex capacity tests use small injected profiles and inputs. The active-turn framing test uses a named fixed boundary instead of searching 1 through 4,000 characters.
+- App-log concurrency uses six positively gated writers instead of 32 scheduler-dependent tasks. Secret tests initialize Git only for repository-provider behavior and verified cleanup leaves no new owned roots.
+- The semantic integration scenario is four focused cases over a seven-file declared manifest; recursive build-tree copying is gone.
+- The mutation harness shares only repeated proposal wiring. Representative successful-apply and semantic/projection verticals remain explicitly assembled.
+- The two local SSE allocation comparisons were removed because they did not invoke Threadsmith code. The remaining allocation tests exercise production TUI layout and sanitizer paths.
+
+The retained large fixtures are the explicit exceptions from section 5.2, including the 2,001-line truncation case that proves the exact 2,000-line product cap. No Plan 99 test creates thousands of files.
+
+### 0.2 Verification evidence
+
+- `dotnet build src\Threadsmith.sln --no-restore`: passed with 0 warnings and 0 errors.
+- Independent affected-project runs passed: ContextCaching 33 passed/3 platform-skipped; Extensions 56; Planning 98; ConversationContext 81; ParallelAgents 85; CoreRuntime 274; ExecutionOrchestration 23; CodexProvider 21; Skills 37; SecretResolution 25; Architecture 137; Mutations 59; and SessionStatus 16.
+- The initial complete ModelTooling run reached 347 passed and 1 platform skip, exposing two pre-existing `CodeExploreOutputFormattingTool` failures. Follow-up triage fixed the documented model-budget omission regression with a 20-line in-memory fixture and deleted the redundant stale continuation-cap test; the repaired regression plus three adjacent formatter/pipeline tests pass together in 461 ms.
+- Three consecutive runs passed for each changed concurrency-sensitive full project: ContextCaching, Planning, ParallelAgents, CoreRuntime, ExecutionOrchestration, SessionStatus, and Architecture. Three sequential focused ModelTooling runs each passed all 219 changed-class tests.
+- A full-solution test run completed every other project successfully and reported only the same two known ModelTooling failures, but the remaining ModelTooling runner did not terminate within ten minutes and was stopped. This pre-existing long-tail runner/failure state is recorded rather than masked; it is a deviation from acceptance criterion 21.
+- Fresh isolated checks left zero prompt-loader roots and zero architecture-test roots. A SecretResolution run kept the pre-existing historical root count unchanged at 225, proving the revised run leaked no new root; historical roots were not deleted.
+- Structural searches confirm one complete prompt-catalog materialization, no former 280/200-file fixtures, no production-sized semantic/agent/Codex allocations in the cleaned tests, no recursive semantic fixture copy, and no thousand-file fixture.
+- `git diff --check` passed. All changed tracked text files report LF worktree endings, and the new planning test helper contains no CRLF lines.
+
+### 0.3 Extension deviation
+
+The P99-07 implementation attempt and independent checkpoint review found that reliable cleanup would require changing extension-runtime unload ordering, failed-load disposal, and manager root ownership. Those changes exceed a test-fixture cleanup. The finding was accepted by reverting the entire extension runtime/test slice to `HEAD`; scoped status and diff checks for `src/Threadsmith.Extensions.Runtime` and `tests/Threadsmith.Extensions.Tests` are clean. The unchanged extension suite passes 56/56, while its production 250 ms quiet period and existing staging-root cleanup defect remain for a separate extension-lifecycle plan. Consequently, acceptance criteria 4 and 5 are deferred rather than claimed complete.
+
+### 0.4 Review disposition
+
+- The internal prompt, semantic, and delegated-result limit seams received an independent clean review; they remain immutable, internal, instance-scoped, and retain exact production defaults.
+- The extension checkpoint findings were accepted and resolved by reverting the whole P99-07 slice.
+- The P99-08 checkpoint found silent SecretFixture cleanup failures and stale allocation-harness documentation. Cleanup now validates the exact GUID-owned child, clears read-only attributes only inside that root, surfaces deletion failures, and passed a no-new-root verification; re-review was clean.
+- The first mutation-harness review rejected an over-broad helper, missing explicit vertical coverage, and non-exception-safe construction. The harness was narrowed, explicit verticals restored, failure cleanup added, and re-review was clean.
+- Final whole-diff review found no actionable code or test issues. Its only finding was this stale pending-review note; updating it completes the review disposition.
+- Follow-up review of the model-budget repair found one invalid test-tool metadata shortcut. Supplying complete bounded metadata resolved it; the final re-review was clean, and the regression test has no filesystem, network, process, or deployed-prompt dependency.
 
 ---
 

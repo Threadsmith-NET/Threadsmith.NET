@@ -5,6 +5,77 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 
+/// <summary>Immutable host-owned resource bounds for semantic refresh coordination.</summary>
+internal sealed record SemanticRefreshResourceLimits
+{
+    /// <summary>Initializes a new instance of the <see cref="SemanticRefreshResourceLimits"/> class.</summary>
+    public SemanticRefreshResourceLimits(
+        int maximumAuthoritativeInputPaths = 4096,
+        int maximumGraphScanDepth = 64,
+        int maximumGraphScanEntries = 20000,
+        int maximumPendingPaths = 1024,
+        int maximumRecentHostEchoIdentities = 1024,
+        int maximumSafeReasonLength = 256,
+        int maximumWatcherDirectories = 512,
+        long maximumAuthoritativeSnapshotBytes = 64 * 1024 * 1024,
+        long maximumStableReadBytes = 4 * 1024 * 1024)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAuthoritativeInputPaths);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumGraphScanDepth);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumGraphScanEntries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumPendingPaths);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRecentHostEchoIdentities);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSafeReasonLength);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWatcherDirectories);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAuthoritativeSnapshotBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumStableReadBytes);
+        if (maximumAuthoritativeSnapshotBytes < maximumStableReadBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumAuthoritativeSnapshotBytes));
+        }
+
+        MaximumAuthoritativeInputPaths = maximumAuthoritativeInputPaths;
+        MaximumGraphScanDepth = maximumGraphScanDepth;
+        MaximumGraphScanEntries = maximumGraphScanEntries;
+        MaximumPendingPaths = maximumPendingPaths;
+        MaximumRecentHostEchoIdentities = maximumRecentHostEchoIdentities;
+        MaximumSafeReasonLength = maximumSafeReasonLength;
+        MaximumWatcherDirectories = maximumWatcherDirectories;
+        MaximumAuthoritativeSnapshotBytes = maximumAuthoritativeSnapshotBytes;
+        MaximumStableReadBytes = maximumStableReadBytes;
+    }
+
+    /// <summary>Gets the maximum authoritative input path count.</summary>
+    public int MaximumAuthoritativeInputPaths { get; }
+
+    /// <summary>Gets the aggregate authoritative snapshot byte bound.</summary>
+    public long MaximumAuthoritativeSnapshotBytes { get; }
+
+    /// <summary>Gets the maximum repository graph scan depth.</summary>
+    public int MaximumGraphScanDepth { get; }
+
+    /// <summary>Gets the maximum repository graph scan entry count.</summary>
+    public int MaximumGraphScanEntries { get; }
+
+    /// <summary>Gets the maximum pending path count.</summary>
+    public int MaximumPendingPaths { get; }
+
+    /// <summary>Gets the maximum retained host echo identity count.</summary>
+    public int MaximumRecentHostEchoIdentities { get; }
+
+    /// <summary>Gets the maximum safe failure-reason character count.</summary>
+    public int MaximumSafeReasonLength { get; }
+
+    /// <summary>Gets the per-file stable-read byte bound.</summary>
+    public long MaximumStableReadBytes { get; }
+
+    /// <summary>Gets the maximum watched directory count.</summary>
+    public int MaximumWatcherDirectories { get; }
+
+    /// <summary>Gets the production semantic refresh resource limits.</summary>
+    public static SemanticRefreshResourceLimits Production { get; } = new();
+}
+
 /// <summary>Owns workspace-scoped monitoring and single-flight semantic refresh convergence.</summary>
 public sealed class SemanticRefreshCoordinator :
     ISemanticRefreshCoordinator,
@@ -12,15 +83,6 @@ public sealed class SemanticRefreshCoordinator :
     ICommandHandler<EnsureSemanticCurrentCommand, SemanticRefreshResult>,
     ICommandHandler<ForceSemanticRefreshCommand, SemanticRefreshResult>
 {
-    private const int _maximumAuthoritativeInputPaths = 4096;
-    private const int _maximumGraphScanDepth = 64;
-    private const int _maximumGraphScanEntries = 20000;
-    private const int _maximumPendingPaths = 1024;
-    private const int _maximumRecentHostEchoIdentities = 1024;
-    private const int _maximumSafeReasonLength = 256;
-    private const int _maximumWatcherDirectories = 512;
-    private const long _maximumAuthoritativeSnapshotBytes = 64 * 1024 * 1024;
-    private const long _maximumStableReadBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan _defaultMaximumBurstWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan _defaultRecentHostEchoLifetime = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan _defaultSettleInterval = TimeSpan.FromMilliseconds(350);
@@ -36,6 +98,7 @@ public sealed class SemanticRefreshCoordinator :
     private readonly ISemanticPathSafetyValidator? _pathSafetyValidator;
     private readonly ISemanticRefreshPublicationGate? _publicationGate;
     private readonly TimeSpan _recentHostEchoLifetime;
+    private readonly SemanticRefreshResourceLimits _resourceLimits;
     private readonly TimeSpan _settleInterval;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string, FileSystemWatcher> _watcherFactory;
@@ -145,7 +208,8 @@ public sealed class SemanticRefreshCoordinator :
         ISemanticPathSafetyValidator? pathSafetyValidator = null,
         TimeSpan? recentHostEchoLifetime = null,
         Func<string, FileSystemWatcher>? watcherFactory = null,
-        int watcherScanEntryLimit = _maximumGraphScanEntries)
+        int? watcherScanEntryLimit = null,
+        SemanticRefreshResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(events);
@@ -176,12 +240,13 @@ public sealed class SemanticRefreshCoordinator :
         _logger = logger;
         _publicationGate = publicationGate;
         _recentHostEchoLifetime = recentHostEchoLifetime ?? _defaultRecentHostEchoLifetime;
+        _resourceLimits = resourceLimits ?? SemanticRefreshResourceLimits.Production;
         _pathSafetyValidator = pathSafetyValidator;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _settleInterval = settleInterval ?? _defaultSettleInterval;
         _maximumBurstWindow = maximumBurstWindow ?? _defaultMaximumBurstWindow;
         _watcherFactory = watcherFactory ?? (static path => new FileSystemWatcher(path));
-        _watcherScanEntryLimit = watcherScanEntryLimit;
+        _watcherScanEntryLimit = watcherScanEntryLimit ?? _resourceLimits.MaximumGraphScanEntries;
         if (_maximumBurstWindow < _settleInterval)
         {
             throw new ArgumentException(
@@ -266,7 +331,8 @@ public sealed class SemanticRefreshCoordinator :
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
                     _watcherFactory,
-                    _watcherScanEntryLimit);
+                    _watcherScanEntryLimit,
+                    _resourceLimits.MaximumWatcherDirectories);
                 if (_workspaceBindings.Remove(request.WorkspaceId, out var replacedWorkspace))
                 {
                     MarkBindingObsolete(replacedWorkspace);
@@ -889,7 +955,8 @@ public sealed class SemanticRefreshCoordinator :
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
                     _watcherFactory,
-                    _watcherScanEntryLimit)
+                    _watcherScanEntryLimit,
+                    _resourceLimits.MaximumWatcherDirectories)
                 {
                     IsLoading = true,
                 };
@@ -1127,7 +1194,7 @@ public sealed class SemanticRefreshCoordinator :
             var observedAt = _timeProvider.GetUtcNow();
             binding.BurstStartedAt ??= observedAt;
             binding.LastObservedAt = observedAt;
-            if (binding.PendingChanges.Count >= _maximumPendingPaths
+            if (binding.PendingChanges.Count >= _resourceLimits.MaximumPendingPaths
                 && !binding.PendingChanges.ContainsKey(fullPath))
             {
                 binding.PendingChanges.Clear();
@@ -1706,7 +1773,7 @@ public sealed class SemanticRefreshCoordinator :
                         sequence.DirtyVersion,
                         binding.AppliedVersion,
                         failureKind,
-                        safeReason[..Math.Min(safeReason.Length, _maximumSafeReasonLength)],
+                        safeReason[..Math.Min(safeReason.Length, _resourceLimits.MaximumSafeReasonLength)],
                         ToElapsedMilliseconds(duration)),
                     CancellationToken.None);
             }
@@ -1827,7 +1894,7 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             if (!binding.RecentHostEchoIdentities.ContainsKey(change.Path)
-                && binding.RecentHostEchoIdentities.Count >= _maximumRecentHostEchoIdentities)
+                && binding.RecentHostEchoIdentities.Count >= _resourceLimits.MaximumRecentHostEchoIdentities)
             {
                 var oldest = binding.RecentHostEchoIdentities.MinBy(
                     item => item.Value.ExpiresAt);
@@ -2086,7 +2153,7 @@ public sealed class SemanticRefreshCoordinator :
                 continue;
             }
 
-            if (!paths.Contains(normalized) && paths.Count >= _maximumAuthoritativeInputPaths)
+            if (!paths.Contains(normalized) && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
             {
                 isComplete = false;
                 break;
@@ -2114,7 +2181,7 @@ public sealed class SemanticRefreshCoordinator :
             cancellationToken.ThrowIfCancellationRequested();
             var pathLength = TryGetSafeFileLength(binding, path);
             if (!pathLength.HasValue
-                || pathLength.Value > _maximumAuthoritativeSnapshotBytes - snapshotBytes)
+                || pathLength.Value > _resourceLimits.MaximumAuthoritativeSnapshotBytes - snapshotBytes)
             {
                 isComplete = false;
                 break;
@@ -2154,7 +2221,7 @@ public sealed class SemanticRefreshCoordinator :
         }
     }
 
-    private static bool AddCurrentFullReloadInputs(
+    private bool AddCurrentFullReloadInputs(
         WorkspaceBinding binding,
         IEnumerable<string> inputs,
         HashSet<string> paths,
@@ -2179,7 +2246,7 @@ public sealed class SemanticRefreshCoordinator :
             paths.Add(normalized);
             currentPaths.Add(normalized);
             binaryPaths.Add(normalized);
-            if (paths.Count > _maximumAuthoritativeInputPaths)
+            if (paths.Count > _resourceLimits.MaximumAuthoritativeInputPaths)
             {
                 return false;
             }
@@ -2188,7 +2255,7 @@ public sealed class SemanticRefreshCoordinator :
         return isComplete;
     }
 
-    private static bool AddCurrentGraphControlInputs(
+    private bool AddCurrentGraphControlInputs(
         WorkspaceBinding binding,
         HashSet<string> paths,
         HashSet<string> currentPaths,
@@ -2210,7 +2277,7 @@ public sealed class SemanticRefreshCoordinator :
                     SearchOption.TopDirectoryOnly))
                 {
                     scannedEntries++;
-                    if (scannedEntries > _maximumGraphScanEntries)
+                    if (scannedEntries > _resourceLimits.MaximumGraphScanEntries)
                     {
                         return false;
                     }
@@ -2229,7 +2296,7 @@ public sealed class SemanticRefreshCoordinator :
                             continue;
                         }
 
-                        if (depth >= _maximumGraphScanDepth)
+                        if (depth >= _resourceLimits.MaximumGraphScanDepth)
                         {
                             isComplete = false;
                             continue;
@@ -2259,7 +2326,7 @@ public sealed class SemanticRefreshCoordinator :
                     }
 
                     if (!paths.Contains(normalized)
-                        && paths.Count >= _maximumAuthoritativeInputPaths)
+                        && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
                     {
                         return false;
                     }
@@ -2289,7 +2356,7 @@ public sealed class SemanticRefreshCoordinator :
             return false;
         }
 
-        if (!paths.Contains(solutionPath) && paths.Count >= _maximumAuthoritativeInputPaths)
+        if (!paths.Contains(solutionPath) && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
         {
             return false;
         }
@@ -2567,7 +2634,7 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             var before = new FileInfo(path);
-            if (before.Length > _maximumStableReadBytes)
+            if (before.Length > _resourceLimits.MaximumStableReadBytes)
             {
                 if (!IsSafeForRead(binding, path))
                 {
@@ -2807,6 +2874,7 @@ public sealed class SemanticRefreshCoordinator :
     {
         private readonly Lock _watcherGate = new();
         private readonly Func<string, FileSystemWatcher> _watcherFactory;
+        private readonly int _maximumWatcherDirectories;
         private readonly int _watcherScanEntryLimit;
         private readonly bool _watchFileSystem;
         private readonly List<FileSystemWatcher> _watchers = [];
@@ -2816,13 +2884,15 @@ public sealed class SemanticRefreshCoordinator :
             long generation,
             bool watchFileSystem,
             Func<string, FileSystemWatcher> watcherFactory,
-            int watcherScanEntryLimit)
+            int watcherScanEntryLimit,
+            int maximumWatcherDirectories)
         {
             Request = request;
             Generation = generation;
             _watchFileSystem = watchFileSystem;
             _watcherFactory = watcherFactory;
             _watcherScanEntryLimit = watcherScanEntryLimit;
+            _maximumWatcherDirectories = maximumWatcherDirectories;
             AppliedIdentities = new Dictionary<string, string>(PathComparer);
             HostIdentities = new Dictionary<string, HashSet<string>>(PathComparer);
             HostMismatchPaths = new HashSet<string>(PathComparer);

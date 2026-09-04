@@ -32,17 +32,20 @@ public static class Plan96ActiveRunInputTests
     [Fact]
     public static async Task ActiveRunInput_DoubleEscape_ProducesCancellationSignal()
     {
-        var inner = new QueueConsole([
-            CreateKey('\u001b', ConsoleKey.Escape),
-            CreateKey('\u001b', ConsoleKey.Escape),
-        ]);
+        var inner = new QueueConsole([CreateKey('\u001b', ConsoleKey.Escape)]);
+        var timeProvider = new AdjustableTimeProvider(
+            new DateTimeOffset(2026, 9, 4, 0, 0, 0, TimeSpan.Zero));
         var console = new BufferedPromptConsole(inner);
         await using var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
-            console.TryBeginActiveRunInput(TimeProvider.System));
+            console.TryBeginActiveRunInput(timeProvider));
 
-        var signal = await session.ReadAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        var armed = await session.ReadAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        timeProvider.Advance(TimeSpan.FromMilliseconds(850));
+        inner.Enqueue(CreateKey('\u001b', ConsoleKey.Escape));
+        var cancelled = await session.ReadAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(ActiveRunInputSignal.CancellationRequested, signal);
+        Assert.Equal(ActiveRunInputSignal.CancellationArmed, armed);
+        Assert.Equal(ActiveRunInputSignal.CancellationRequested, cancelled);
     }
 
     /// <summary>A multiline typed or pasted burst is replayed exactly to the next PrettyPrompt read.</summary>
@@ -79,19 +82,36 @@ public static class Plan96ActiveRunInputTests
             CreateKey('a', ConsoleKey.A),
             CreateKey('\r', ConsoleKey.Enter),
         ];
-        var inner = new QueueConsole([expected[0]]);
+        var firstRead = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRead = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var inner = new QueueConsole([expected[0]])
+        {
+            FirstReadCompleted = firstRead,
+            SecondReadCompleted = secondRead,
+        };
         var console = new BufferedPromptConsole(inner);
         var session = Assert.IsAssignableFrom<IActiveRunInputLease>(
             console.TryBeginActiveRunInput(TimeProvider.System));
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        using var cancellation = new CancellationTokenSource();
         var pendingSignal = session.ReadAsync(cancellation.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(75), TestContext.Current.CancellationToken);
-        inner.Enqueue(expected[1]);
-
+        try
+        {
+            await firstRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            inner.Enqueue(expected[1]);
+            await secondRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await cancellation.CancelAsync();
 #pragma warning disable VSTHRD003 // The test started and owns the active-input read.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pendingSignal);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                pendingSignal.WaitAsync(TimeSpan.FromSeconds(2)));
 #pragma warning restore VSTHRD003
-        await session.DisposeAsync();
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await session.DisposeAsync();
+        }
 
         Assert.Equal(expected, expected.Select(_ => console.ReadKey(intercept: true)).ToArray());
     }
@@ -182,10 +202,31 @@ public static class Plan96ActiveRunInputTests
         return new ConsoleKeyInfo(character, key, shift: false, alt: false, control: false);
     }
 
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private long _utcTicks = utcNow.UtcTicks;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return new DateTimeOffset(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(elapsed));
+            }
+
+            _ = Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+        }
+    }
+
     private sealed class QueueConsole(IEnumerable<ConsoleKeyInfo> keys) : IConsole
     {
         private readonly Lock _gate = new();
         private readonly Queue<ConsoleKeyInfo> _keys = new(keys);
+        private int _readCount;
         private int _readObserved;
 
         /// <summary>Gets a test barrier that delays the first consumed key.</summary>
@@ -193,6 +234,12 @@ public static class Plan96ActiveRunInputTests
 
         /// <summary>Gets a signal completed when the first key has been consumed.</summary>
         public TaskCompletionSource? ReadEntered { get; init; }
+
+        /// <summary>Gets a signal completed after the first key has been returned.</summary>
+        public TaskCompletionSource? FirstReadCompleted { get; init; }
+
+        /// <summary>Gets a signal completed after the second key has been returned.</summary>
+        public TaskCompletionSource? SecondReadCompleted { get; init; }
 
         public int CursorTop => 0;
 
@@ -233,10 +280,23 @@ public static class Plan96ActiveRunInputTests
                 AllowReadToReturn?.Wait();
             }
 
+            ConsoleKeyInfo key;
             lock (_gate)
             {
-                return _keys.Dequeue();
+                key = _keys.Dequeue();
             }
+
+            var readCount = Interlocked.Increment(ref _readCount);
+            if (readCount == 1)
+            {
+                FirstReadCompleted?.TrySetResult();
+            }
+            else if (readCount == 2)
+            {
+                SecondReadCompleted?.TrySetResult();
+            }
+
+            return key;
         }
 
         /// <summary>Adds one key after the active reader has begun polling.</summary>

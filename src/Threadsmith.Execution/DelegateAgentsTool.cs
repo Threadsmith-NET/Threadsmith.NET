@@ -88,19 +88,40 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         DelegateAgentsOptions options,
         IPromptLoader prompts,
         RunSteeringCoordinator? steering = null)
+        : this(
+            plans,
+            runners,
+            coordinator,
+            options,
+            prompts,
+            steering,
+            DelegateAgentsProjectionLimits.Production)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="DelegateAgentsTool"/> class under explicit structured-result bounds.</summary>
+    internal DelegateAgentsTool(
+        DelegateAgentsPlanFactory plans,
+        IExplorerAssignmentRunnerFactory runners,
+        IDelegationCoordinator coordinator,
+        DelegateAgentsOptions options,
+        IPromptLoader prompts,
+        RunSteeringCoordinator? steering,
+        DelegateAgentsProjectionLimits projectionLimits)
     {
         ArgumentNullException.ThrowIfNull(plans);
         ArgumentNullException.ThrowIfNull(runners);
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(prompts);
+        ArgumentNullException.ThrowIfNull(projectionLimits);
         options.Validate();
         _plans = plans;
         _runners = runners;
         _coordinator = coordinator;
         _options = options;
         _steering = steering;
-        _projector = new DelegateAgentsResultProjector(options);
+        _projector = new DelegateAgentsResultProjector(options, projectionLimits);
         _renderer = new DelegateAgentsResultRenderer(prompts);
         _definition = CreateDefinition(options, prompts);
     }

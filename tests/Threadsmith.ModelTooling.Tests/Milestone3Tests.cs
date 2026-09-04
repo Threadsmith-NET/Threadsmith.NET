@@ -37,35 +37,36 @@ public static class Milestone3Tests
         Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile]));
     }
 
-    /// <summary>Roslyn discovery carries confidence, stable identities, TFMs, ranges, and invalidation.</summary>
+    /// <summary>Roslyn solution loading discovers projects, target frameworks, generated files, and linked files.</summary>
     [Fact]
-    public static async Task SemanticEngine_LoadSearchInvalidateAndPromote_AreConfidenceAware()
+    public static async Task SemanticEngine_LoadDiscoversProjectsTargetFrameworksGeneratedAndLinkedFiles()
     {
-        var root = Path.Combine(
-            AppContext.BaseDirectory,
-            "fixtures",
-            "semantic",
-            "SmallDotNetSolution");
-        var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
+        var root = SmallSemanticSolutionFixture.Root;
         await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((domainEvent, _) =>
-        {
-            observed.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        await using var engine = new SemanticEngine(
-            events,
-            NullLogger<SemanticEngine>.Instance,
-            TimeSpan.FromMilliseconds(100));
-        var request = new SemanticLoadRequest(
-            SessionId.New(),
-            WorkspaceId.New(),
-            root,
-            solutionPath,
-            RepositoryTrustLevel.TrustedBuild);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
 
-        var loaded = await engine.LoadAsync(request);
+        var loaded = await engine.LoadAsync(SmallSemanticSolutionFixture.CreateLoadRequest());
+        var generated = await engine.FindSymbolsAsync("GeneratedMarker");
+        var linked = await engine.FindSymbolsAsync("LinkedMarker");
+
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, loaded.Confidence);
+        Assert.Equal(2, loaded.Projects.Count);
+        Assert.All(loaded.Projects, project => Assert.Contains("net10.0", project.TargetFrameworks));
+        Assert.Contains(generated, item => item.Location.IsGenerated);
+        Assert.NotEmpty(linked);
+        Assert.All(linked, item => Assert.True(item.Location.IsLinked));
+    }
+
+    /// <summary>Semantic queries and tools preserve stable identities, confidence, ranges, sources, and confinement.</summary>
+    [Fact]
+    public static async Task SemanticEngine_SymbolQueriesAndToolsProjectStableSemanticResults()
+    {
+        var root = SmallSemanticSolutionFixture.Root;
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
+        await engine.LoadAsync(request);
+
         var symbols = await engine.FindSymbolsAsync("IService");
         var symbol = Assert.Single(symbols, item => item.Symbol.DisplayName.Contains(
             "IService",
@@ -75,63 +76,17 @@ public static class Milestone3Tests
         var resolver = new TestSemanticResolver(request.WorkspaceId, engine);
         var toolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindSymbolInput { Query = "IService" },
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                request.SessionId,
-                RunId.New(),
-                new ToolInvocationContext
-                {
-                    WorkspaceId = request.WorkspaceId,
-                    RepositoryPath = root,
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    RequestedBy = "test",
-                }));
+            CreateSemanticToolExecutionContext(request));
         var referenceToolResult = await new FindReferencesTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindReferencesInput { SymbolId = symbol.Symbol.Id },
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                request.SessionId,
-                RunId.New(),
-                new ToolInvocationContext
-                {
-                    WorkspaceId = request.WorkspaceId,
-                    RepositoryPath = root,
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    RequestedBy = "test",
-                }));
+            CreateSemanticToolExecutionContext(request));
         var implementationToolResult = await new FindImplementationsTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindImplementationsInput { SymbolId = symbol.Symbol.Id },
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                request.SessionId,
-                RunId.New(),
-                new ToolInvocationContext
-                {
-                    WorkspaceId = request.WorkspaceId,
-                    RepositoryPath = root,
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    RequestedBy = "test",
-                }));
+            CreateSemanticToolExecutionContext(request));
         var confinedToolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(
             new FindSymbolInput { Query = "IService" },
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                request.SessionId,
-                RunId.New(),
-                new ToolInvocationContext
-                {
-                    WorkspaceId = request.WorkspaceId,
-                    RepositoryPath = root,
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    ProhibitedPaths = ["Contracts/**"],
-                    RequestedBy = "test",
-                }));
-        var generated = await engine.FindSymbolsAsync("GeneratedMarker");
-        var linked = await engine.FindSymbolsAsync("LinkedMarker");
+            CreateSemanticToolExecutionContext(request, ["Contracts/**"]));
 
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, loaded.Confidence);
-        Assert.Equal(2, loaded.Projects.Count);
-        Assert.All(loaded.Projects, project => Assert.Contains("net10.0", project.TargetFrameworks));
         Assert.NotEmpty(references);
         Assert.All(toolResult.Value, item => Assert.Equal(
             SemanticConfidenceLevel.FullSemantic,
@@ -144,9 +99,6 @@ public static class Milestone3Tests
         Assert.Empty(confinedToolResult.Value);
         Assert.True(confinedToolResult.IsTruncated);
         Assert.DoesNotContain("IService", confinedToolResult.ModelResultContent, StringComparison.Ordinal);
-        Assert.Contains(generated, item => item.Location.IsGenerated);
-        Assert.NotEmpty(linked);
-        Assert.All(linked, item => Assert.True(item.Location.IsLinked));
         Assert.Contains(implementations, item => item.Symbol.DisplayName.Contains(
             "Service",
             StringComparison.Ordinal));
@@ -156,8 +108,29 @@ public static class Milestone3Tests
             Assert.False(string.IsNullOrWhiteSpace(item.Location.TargetFramework));
             Assert.True(item.Location.Range.StartLine > 0);
         });
+    }
+
+    /// <summary>Invalidation lowers confidence until promotion, and a direct-project reload restores full semantics.</summary>
+    [Fact]
+    public static async Task SemanticEngine_InvalidationPromotionAndDirectProjectReloadRemainConfidenceAware()
+    {
+        var root = SmallSemanticSolutionFixture.Root;
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        await using var engine = new SemanticEngine(
+            events,
+            NullLogger<SemanticEngine>.Instance,
+            TimeSpan.FromMilliseconds(100));
+        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
+        await engine.LoadAsync(request);
 
         engine.QueueInvalidation(Path.Combine(root, "Contracts", "Contracts.csproj"));
+
         Assert.Equal(
             SemanticConfidenceLevel.ProjectGraphOnly,
             await engine.ApplyInvalidationsAsync());
@@ -173,29 +146,29 @@ public static class Milestone3Tests
         {
             SolutionPath = Path.Combine(root, "App", "App.csproj"),
         });
+
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, directProject.Confidence);
         Assert.NotEmpty(await engine.FindSymbolsAsync("IService"));
+    }
 
-        var brokenRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-broken-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(brokenRoot);
+    /// <summary>Missing project metadata and invalid solution content degrade without recursive fixture copying.</summary>
+    [Fact]
+    public static async Task SemanticEngine_DegradedLoadsReportProjectAndSolutionFailures()
+    {
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
+        var brokenRoot = SmallSemanticSolutionFixture.CopyToTemporaryRoot("threadsmith-broken");
         try
         {
-            foreach (var sourcePath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            {
-                var relativePath = Path.GetRelativePath(root, sourcePath);
-                var destinationPath = Path.Combine(brokenRoot, relativePath);
-                Directory.CreateDirectory(
-                    Path.GetDirectoryName(destinationPath)
-                        ?? throw new InvalidOperationException("Fixture destination has no parent."));
-                File.Copy(sourcePath, destinationPath);
-            }
-
             File.Delete(Path.Combine(brokenRoot, "Contracts", "Contracts.csproj"));
+
             var broken = await engine.LoadAsync(request with
             {
                 RepositoryPath = brokenRoot,
                 SolutionPath = Path.Combine(brokenRoot, "SmallDotNetSolution.sln"),
             });
+
             Assert.NotEqual(SemanticConfidenceLevel.FullSemantic, broken.Confidence);
             Assert.Contains(broken.Projects, project => project.Name == "Contracts"
                 && project.Confidence < SemanticConfidenceLevel.FullSemantic);
@@ -211,12 +184,14 @@ public static class Milestone3Tests
         {
             var invalidSolution = Path.Combine(invalidRoot, "Invalid.sln");
             await File.WriteAllTextAsync(invalidSolution, "not a solution");
+
             var degraded = await engine.LoadAsync(new SemanticLoadRequest(
                 request.SessionId,
                 WorkspaceId.New(),
                 invalidRoot,
                 invalidSolution,
                 RepositoryTrustLevel.TrustedBuild));
+
             Assert.Equal(SemanticConfidenceLevel.None, degraded.Confidence);
             Assert.Contains(degraded.Diagnostics, diagnostic => diagnostic.Contains(
                 "MSBuild load failed",
@@ -2726,6 +2701,24 @@ public static class Milestone3Tests
         Assert.Equal(ReasoningLevel.None, provider.Requests[0].ReasoningLevel);
     }
 
+    private static ToolExecutionContext CreateSemanticToolExecutionContext(
+        SemanticLoadRequest request,
+        IReadOnlyList<string>? prohibitedPaths = null)
+    {
+        return new ToolExecutionContext(
+            ToolInvocationId.New(),
+            request.SessionId,
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                WorkspaceId = request.WorkspaceId,
+                RepositoryPath = request.RepositoryPath,
+                TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                ProhibitedPaths = prohibitedPaths ?? [],
+                RequestedBy = "test",
+            });
+    }
+
     private static void AssertFlatSemanticProjection(string? content, string? symbolId = null)
     {
         using var document = JsonDocument.Parse(Assert.IsType<string>(content));
@@ -2744,6 +2737,60 @@ public static class Milestone3Tests
         Assert.True(item.GetProperty("line").GetInt32() > 0);
         Assert.DoesNotContain("semanticConfidence", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("targetFramework", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static class SmallSemanticSolutionFixture
+    {
+        private static readonly string[] _requiredFiles =
+        [
+            "SmallDotNetSolution.sln",
+            Path.Combine("App", "App.csproj"),
+            Path.Combine("App", "Program.cs"),
+            Path.Combine("Contracts", "Contracts.csproj"),
+            Path.Combine("Contracts", "GeneratedMarker.g.cs"),
+            Path.Combine("Contracts", "Services.cs"),
+            Path.Combine("Shared", "Linked.cs"),
+        ];
+
+        internal static string Root => Path.Combine(
+            AppContext.BaseDirectory,
+            "fixtures",
+            "semantic",
+            "SmallDotNetSolution");
+
+        internal static SemanticLoadRequest CreateLoadRequest()
+        {
+            return new SemanticLoadRequest(
+                SessionId.New(),
+                WorkspaceId.New(),
+                Root,
+                Path.Combine(Root, "SmallDotNetSolution.sln"),
+                RepositoryTrustLevel.TrustedBuild);
+        }
+
+        internal static string CopyToTemporaryRoot(string prefix)
+        {
+            var destinationRoot = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(destinationRoot);
+            try
+            {
+                foreach (var relativePath in _requiredFiles)
+                {
+                    var destinationPath = Path.Combine(destinationRoot, relativePath);
+                    Directory.CreateDirectory(
+                        Path.GetDirectoryName(destinationPath)
+                            ?? throw new InvalidOperationException("Fixture destination has no parent."));
+                    File.Copy(Path.Combine(Root, relativePath), destinationPath);
+                }
+
+                return destinationRoot;
+            }
+            catch
+            {
+                Directory.Delete(destinationRoot, recursive: true);
+                throw;
+            }
+        }
     }
 
     private static string CreateMinimalProjectText()

@@ -61,6 +61,11 @@ Provide automated verification of project-level contracts: dependency direction,
 - When adding a product project, update `DependencyDirectionTests._productProjects` and `_allowedGraph`.
 - When adding a forbidden package constraint, update `_forbiddenPackages`.
 - When adding a config key, update `RepoConfigTests._requiredKeys`.
+- Size fixtures in proportion to the behavior under test. Prefer a small injected limit crossed by one, a few stable records, or one directly relevant file over production-scale trees, payloads, generated identifiers, or brute-force boundary searches.
+- Unit tests must be hermetic and normally subsecond; three seconds is the hard ceiling for any individual test in the ordinary suite. A scenario that requires network access, an external service, an installed executable, ambient filesystem/source-tree state, or a longer runtime belongs in an explicitly categorized opt-in integration or stress suite.
+- Coordinate async and concurrency tests with `TaskCompletionSource` using `RunContinuationsAsynchronously`, gates, fake time, or existing lifecycle events. Use small cohorts that positively prove entry/overlap, and keep real-time timeouts only as bounded failure diagnostics.
+- Exact production-boundary and OS/runtime integration tests are valid and must not be mechanically downsized. Retain the real limit or integration when that boundary is itself the contract, and make the reason visible in the test.
+- Every fixture that creates files, staging generations, processes, or other artifacts must own and release them. Cleanup must validate the exact normalized owned root and must refuse broad locations such as a filesystem root, repository root, user profile, or shared temporary parent.
 
 ## Verification
 

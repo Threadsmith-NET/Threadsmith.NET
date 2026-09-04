@@ -18,6 +18,38 @@ public sealed record LoadedPromptAssetMetadata
     public required string Digest { get; init; }
 }
 
+/// <summary>Immutable host-owned bounds for loading deployed prompt assets.</summary>
+internal sealed record DeployedPromptLoadLimits
+{
+    /// <summary>Initializes a new instance of the <see cref="DeployedPromptLoadLimits"/> class.</summary>
+    public DeployedPromptLoadLimits(int maximumFileBytes, int maximumCatalogBytes)
+    {
+        if (maximumFileBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
+        }
+
+        if (maximumCatalogBytes <= 0 || maximumCatalogBytes < maximumFileBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumCatalogBytes));
+        }
+
+        MaximumFileBytes = maximumFileBytes;
+        MaximumCatalogBytes = maximumCatalogBytes;
+    }
+
+    /// <summary>Gets the aggregate catalog byte bound.</summary>
+    public int MaximumCatalogBytes { get; }
+
+    /// <summary>Gets the per-file byte bound.</summary>
+    public int MaximumFileBytes { get; }
+
+    /// <summary>Gets the deployed production limits.</summary>
+    public static DeployedPromptLoadLimits Production { get; } = new(
+        DeployedPromptLoader.MaximumFileBytes,
+        DeployedPromptLoader.MaximumCatalogBytes);
+}
+
 /// <summary>Eagerly loads and strictly renders the required flat deployed prompt catalog.</summary>
 public sealed class DeployedPromptLoader : IPromptLoader
 {
@@ -62,53 +94,11 @@ public sealed class DeployedPromptLoader : IPromptLoader
         string applicationBaseDirectory,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(applicationBaseDirectory);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var baseDirectory = Path.GetFullPath(applicationBaseDirectory);
-        var promptRoot = Path.GetFullPath(Path.Combine(baseDirectory, "prompts"));
-        EnsureDirectChild(baseDirectory, promptRoot);
-        EnsureOrdinaryDirectory(promptRoot);
-        ValidateCatalogDefinitions();
-        ValidatePhysicalNameCollisions(promptRoot);
-
-        var loaded = new Dictionary<string, LoadedPrompt>(StringComparer.Ordinal);
-        var metadata = new List<LoadedPromptAssetMetadata>(PromptAssetCatalog.All.Count);
-        long totalBytes = 0;
-        foreach (var definition in PromptAssetCatalog.All)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.GetFullPath(Path.Combine(promptRoot, definition.FileName));
-            EnsureDirectChild(promptRoot, path);
-            var bytes = await ReadPromptBytesAsync(path, definition.FileName, cancellationToken);
-            totalBytes = checked(totalBytes + bytes.Length);
-            if (totalBytes > MaximumCatalogBytes)
-            {
-                throw CreateInitializationException(definition.FileName, "catalog-size-limit");
-            }
-
-            var content = Decode(bytes, definition.FileName);
-            ValidateTemplate(definition, content);
-            var digest = ComputeDigest(bytes);
-            loaded.Add(definition.FileName, new LoadedPrompt(definition, content));
-            metadata.Add(new LoadedPromptAssetMetadata
-            {
-                FileName = definition.FileName,
-                Bytes = bytes.Length,
-                Digest = digest,
-            });
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var orderedMetadata = metadata
-            .OrderBy(asset => asset.FileName, StringComparer.Ordinal)
-            .ToArray();
-        var catalogDigest = ComputeCatalogDigest(orderedMetadata);
-        return new DeployedPromptLoader(
-            new ReadOnlyDictionary<string, LoadedPrompt>(loaded),
-            Array.AsReadOnly(orderedMetadata),
-            totalBytes,
-            catalogDigest);
+        return await LoadCoreAsync(
+            applicationBaseDirectory,
+            PromptAssetCatalog.All,
+            DeployedPromptLoadLimits.Production,
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -148,6 +138,79 @@ public sealed class DeployedPromptLoader : IPromptLoader
 
         builder.Append(prompt.Content, cursor, prompt.Content.Length - cursor);
         return builder.ToString();
+    }
+
+    /// <summary>Loads an explicit code-owned catalog under immutable host bounds.</summary>
+    internal static Task<DeployedPromptLoader> LoadAsync(
+        string applicationBaseDirectory,
+        IReadOnlyList<PromptAssetDefinition> definitions,
+        DeployedPromptLoadLimits limits,
+        CancellationToken cancellationToken = default)
+    {
+        return LoadCoreAsync(applicationBaseDirectory, definitions, limits, cancellationToken);
+    }
+
+    private static async Task<DeployedPromptLoader> LoadCoreAsync(
+        string applicationBaseDirectory,
+        IReadOnlyList<PromptAssetDefinition> definitions,
+        DeployedPromptLoadLimits limits,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(applicationBaseDirectory);
+        ArgumentNullException.ThrowIfNull(definitions);
+        ArgumentNullException.ThrowIfNull(limits);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        PromptAssetDefinition[] catalog = [.. definitions];
+
+        var baseDirectory = Path.GetFullPath(applicationBaseDirectory);
+        var promptRoot = Path.GetFullPath(Path.Combine(baseDirectory, "prompts"));
+        EnsureDirectChild(baseDirectory, promptRoot);
+        EnsureOrdinaryDirectory(promptRoot);
+        ValidateCatalogDefinitions(catalog);
+        ValidatePhysicalNameCollisions(promptRoot);
+
+        var loaded = new Dictionary<string, LoadedPrompt>(StringComparer.Ordinal);
+        var metadata = new List<LoadedPromptAssetMetadata>(catalog.Length);
+        long totalBytes = 0;
+        foreach (var definition in catalog)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = Path.GetFullPath(Path.Combine(promptRoot, definition.FileName));
+            EnsureDirectChild(promptRoot, path);
+            var bytes = await ReadPromptBytesAsync(
+                path,
+                definition.FileName,
+                limits.MaximumFileBytes,
+                cancellationToken);
+            totalBytes = checked(totalBytes + bytes.Length);
+            if (totalBytes > limits.MaximumCatalogBytes)
+            {
+                throw CreateInitializationException(definition.FileName, "catalog-size-limit");
+            }
+
+            var content = Decode(bytes, definition.FileName);
+            ValidateTemplate(definition, content);
+            var digest = ComputeDigest(bytes);
+            loaded.Add(definition.FileName, new LoadedPrompt(definition, content));
+            metadata.Add(new LoadedPromptAssetMetadata
+            {
+                FileName = definition.FileName,
+                Bytes = bytes.Length,
+                Digest = digest,
+            });
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var orderedMetadata = metadata
+            .OrderBy(asset => asset.FileName, StringComparer.Ordinal)
+            .ToArray();
+        var catalogDigest = ComputeCatalogDigest(orderedMetadata);
+        return new DeployedPromptLoader(
+            new ReadOnlyDictionary<string, LoadedPrompt>(loaded),
+            Array.AsReadOnly(orderedMetadata),
+            totalBytes,
+            catalogDigest);
     }
 
     private static string ComputeCatalogDigest(IReadOnlyList<LoadedPromptAssetMetadata> metadata)
@@ -288,6 +351,7 @@ public sealed class DeployedPromptLoader : IPromptLoader
     private static async Task<byte[]> ReadPromptBytesAsync(
         string path,
         string fileName,
+        int maximumFileBytes,
         CancellationToken cancellationToken)
     {
         try
@@ -306,7 +370,7 @@ public sealed class DeployedPromptLoader : IPromptLoader
                 FileShare.Read,
                 bufferSize: 16 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (stream.Length > MaximumFileBytes)
+            if (stream.Length > maximumFileBytes)
             {
                 throw CreateInitializationException(fileName, "file-size-limit");
             }
@@ -376,10 +440,10 @@ public sealed class DeployedPromptLoader : IPromptLoader
         return supplied;
     }
 
-    private static void ValidateCatalogDefinitions()
+    private static void ValidateCatalogDefinitions(IReadOnlyList<PromptAssetDefinition> definitions)
     {
         var fileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var definition in PromptAssetCatalog.All)
+        foreach (var definition in definitions)
         {
             if (!IsValidFileName(definition.FileName)
                 || !fileNames.Add(definition.FileName)

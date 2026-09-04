@@ -160,12 +160,14 @@ public sealed class Milestone17CompatibilityTests
         // Arrange
         using var directory = new TemporaryDirectory();
         var skillRoot = CreateSkill(directory.Path, "portable-review", string.Empty);
-        for (var index = 0; index < 64; index++)
+        for (var index = 0; index < 2; index++)
         {
             await File.WriteAllTextAsync(Path.Combine(skillRoot, $"resource-{index:D2}.txt"), "content");
         }
 
-        var catalog = CreateClaudeCatalog(directory.Path);
+        var catalog = new ClaudeSkillCompatibilityCatalog(
+            [new ClaudeSkillRoot(SkillScope.Repository, directory.Path, "repository:.claude/skills", true)],
+            new ClaudeSkillCompatibilityOptions { MaximumFiles = 2 });
         var candidate = Assert.Single(await catalog.RefreshAsync());
 
         // Act and assert

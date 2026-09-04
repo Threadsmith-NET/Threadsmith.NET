@@ -337,19 +337,24 @@ public sealed class WebFetchTests
     {
         // Arrange
         var options = new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) };
+        var transport = new DeadlineExpiringTransport();
         var fetcher = new WebContentFetcher(
-            new DeadlineExpiringTransport(),
+            transport,
             options,
             TestPromptLoader.Instance);
 
         // Act
-        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
+        var fetch = fetcher.FetchAsync(
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
-            new HashSet<string>(StringComparer.Ordinal)));
+            new HashSet<string>(StringComparer.Ordinal));
+        await transport.Started.WaitAsync(TimeSpan.FromSeconds(2));
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() =>
+            fetch.WaitAsync(TimeSpan.FromSeconds(2)));
 
         // Assert
         Assert.Equal(WebFetchFailureKind.Timeout, exception.Kind);
+        await transport.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     /// <summary>Allowlisted bodies that agree with their declared media shape remain fetchable.</summary>
@@ -990,12 +995,12 @@ public sealed class WebFetchTests
 
         // Act
         var first = router.RequestApprovalAsync(firstRequest);
-        await firstStarted.Task;
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         var second = router.RequestApprovalAsync(secondRequest);
-        await Task.Delay(25);
+        Assert.False(second.IsCompleted);
         var callsBeforeRelease = order.Count;
         releaseFirst.TrySetResult();
-        var outcomes = await Task.WhenAll(first, second);
+        var outcomes = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
 
         // Assert
         Assert.Equal(1, callsBeforeRelease);
@@ -1132,6 +1137,16 @@ public sealed class WebFetchTests
 
     private sealed class DeadlineExpiringTransport : IWebContentTransport
     {
+        private readonly TaskCompletionSource _cancellationObserved = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly TaskCompletionSource _started = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public Task Started => _started.Task;
+
         public async Task<WebFetchTransportResponse> GetAsync(
             Uri uri,
             WebFetchSourceKind sourceKind,
@@ -1139,17 +1154,17 @@ public sealed class WebFetchTests
             WebFetchOptions options,
             CancellationToken cancellationToken = default)
         {
-            await Task.Delay(options.Timeout + TimeSpan.FromMilliseconds(10));
-            return new WebFetchTransportResponse(
-                uri,
-                uri,
-                System.Net.HttpStatusCode.OK,
-                "text/html",
-                "utf-8",
-                null,
-                Encoding.UTF8.GetBytes("<p>content</p>"),
-                14,
-                []);
+            _started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("The deadline transport completed without cancellation.");
+            }
+            catch (OperationCanceledException)
+            {
+                _cancellationObserved.TrySetResult();
+                throw;
+            }
         }
     }
 

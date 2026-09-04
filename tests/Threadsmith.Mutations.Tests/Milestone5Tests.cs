@@ -562,28 +562,7 @@ public static class Milestone5Tests
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
             Usage = new ModelUsage(100, 50),
         });
-        await using var events = new DomainEventStream();
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
-            model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -608,13 +587,11 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Change Name", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         Assert.Equal(repository.SessionId, staged.MutationSet.SessionId);
         Assert.Equal(runId, staged.MutationSet.RunId);
@@ -626,7 +603,7 @@ public static class Milestone5Tests
         Assert.Equal(source.IndexOf("StandardizerName", StringComparison.Ordinal), stagedMutation.StartOffset);
         Assert.Contains("+public override string Name => \"test\";", staged.Preview.UnifiedDiff);
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/SectorEntityStandardizer.cs")));
-        var schema = Assert.Single(Assert.Single(context.Requests).ToolSchemas);
+        var schema = Assert.Single(Assert.Single(scenario.ContextRequests).ToolSchemas);
         Assert.Contains("\"mutations\"", schema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("\"replacementText\"", schema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("\"RenameSymbol\"", schema.JsonSchema, StringComparison.Ordinal);
@@ -824,37 +801,12 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", goodArguments),
                 Usage = new ModelUsage(100, 50),
             });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
         var semanticMutations = new FakeSemanticMutationEngine();
         semanticMutations.MissingSymbolIds.Add("T:Demo.MissingRetriever");
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithSemanticMutationEngineAsync(
+            repository,
             model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            semanticMutations: semanticMutations,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            semanticMutations);
         var plan = new ImplementationPlan
         {
             Summary = "Rename IRetriever to IRetrieval.",
@@ -871,20 +823,18 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Rename IRetriever", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         Assert.Equal(2, model.Requests.Count);
         Assert.Equal(2, semanticMutations.RenameRequests.Count);
-        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        var correction = Assert.Single(scenario.Events<ModelCorrectionAttempted>());
         Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
-        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        Assert.Empty(scenario.Events<MutationProposalRepairAttempted>());
+        Assert.Empty(scenario.ContextRequests[1].Task.UserConstraints ?? []);
         Assert.Contains(
             "RenameSymbol proposal is invalid",
             GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
@@ -947,36 +897,11 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", goodArguments),
                 Usage = new ModelUsage(100, 50),
             });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
         var preMutationAnalyzer = new FakePreMutationAnalyzer();
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithPreMutationAnalyzerAsync(
+            repository,
             model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            preMutationAnalyzer: preMutationAnalyzer,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            preMutationAnalyzer);
         var plan = new ImplementationPlan
         {
             Summary = "Edit Example.",
@@ -993,20 +918,18 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Add member", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         Assert.Equal(2, model.Requests.Count);
         Assert.Equal(2, preMutationAnalyzer.Requests.Count);
         Assert.DoesNotContain("Broken", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Contains("Fixed", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
-        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        var correction = Assert.Single(scenario.Events<ModelCorrectionAttempted>());
         Assert.Equal(ModelCorrectionCategory.PreMutationAnalysis, correction.Category);
         var expectedPreMutationCorrection =
             "Pre-mutation Roslyn analysis found blocking diagnostics before staging or approval. "
@@ -1015,18 +938,18 @@ public static class Milestone5Tests
             + "[containing MethodDeclaration] Hunk: public void Broken( { }"
             + " Omission: Repository analyzers were not loaded before approval.";
         Assert.Equal(expectedPreMutationCorrection, correction.SafeReason);
-        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        Assert.Empty(scenario.Events<MutationProposalRepairAttempted>());
+        Assert.Empty(scenario.ContextRequests[1].Task.UserConstraints ?? []);
         Assert.Contains(
             expectedPreMutationCorrection,
             GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
             StringComparison.Ordinal);
-        PreMutationAnalysisCompleted[] analysisEvents = [.. observed.OfType<PreMutationAnalysisCompleted>()];
-        Assert.Equal(2, analysisEvents.Length);
+        var analysisEvents = scenario.Events<PreMutationAnalysisCompleted>();
+        Assert.Equal(2, analysisEvents.Count);
         Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, analysisEvents[0].Decision);
         Assert.Equal(1, analysisEvents[0].BlockingDiagnosticCount);
         Assert.Equal(PreMutationGateDecision.PassedCheapGates, analysisEvents[1].Decision);
-        var proposedEvent = Assert.Single(observed.OfType<MutationSetProposed>());
+        var proposedEvent = Assert.Single(scenario.Events<MutationSetProposed>());
         Assert.DoesNotContain("Broken", proposedEvent.Preview?.UnifiedDiff ?? string.Empty, StringComparison.Ordinal);
 
         string CreateArguments(string replacementText)
@@ -1078,34 +1001,10 @@ public static class Milestone5Tests
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
             Usage = new ModelUsage(100, 50),
         });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithPreMutationAnalyzerAsync(
+            repository,
             model,
-            new RecordingContextAssembler(new ContextAssembler(
-                new EvidenceStore(events, sanitizer),
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance,
-                new ContextAssemblerOptions())),
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            preMutationAnalyzer: new ThrowingPreMutationAnalyzer(),
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            new ThrowingPreMutationAnalyzer());
         var plan = new ImplementationPlan
         {
             Summary = "Create existing file.",
@@ -1122,16 +1021,14 @@ public static class Milestone5Tests
             ],
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scenario.ProposeAsync(
             RunId.New(),
-            repository.WorkspaceId,
             new TaskSpecification("Create existing file", []),
             plan,
-            RunPhase.ImplementationModelTurn)));
+            RunPhase.ImplementationModelTurn));
 
-        Assert.DoesNotContain(observed, item => item is PreMutationAnalysisCompleted);
-        Assert.DoesNotContain(observed, item => item is MutationSetProposed);
+        Assert.Empty(scenario.Events<PreMutationAnalysisCompleted>());
+        Assert.Empty(scenario.Events<MutationSetProposed>());
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
 
         static string CreateArguments(StepId stepId)
@@ -1210,27 +1107,13 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", arguments),
                 Usage = new ModelUsage(100, 50),
             });
-            await using var events = new DomainEventStream();
-            var sanitizer = new PassthroughSanitizer();
             var preMutationAnalyzer = new FakePreMutationAnalyzer();
-            var application = new MutationProposalApplication(
+            await using var scenario = await MutationScenario.CreateForCaseSensitiveWorkspaceAsync(
+                sessionId,
+                baseline,
                 model,
-                new RecordingContextAssembler(new ContextAssembler(
-                    new EvidenceStore(events, sanitizer),
-                    new TokenEstimator(),
-                    new ContextPolicy(),
-                    new PromptAppendLoader(sanitizer),
-                    sanitizer,
-                    events,
-                    TestPromptLoader.Instance,
-                    new ContextAssemblerOptions())),
                 workspaces,
-                new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-                sanitizer,
-                events,
-                preMutationAnalyzer: preMutationAnalyzer,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                preMutationAnalyzer);
             var plan = new ImplementationPlan
             {
                 Summary = "Edit case-distinct files.",
@@ -1247,13 +1130,11 @@ public static class Milestone5Tests
                 ],
             };
 
-            await application.HandleAsync(new ProposeMutationSetCommand(
-                sessionId,
+            await scenario.ProposeAsync(
                 RunId.New(),
-                workspaceId,
                 new TaskSpecification("Edit case-distinct files", []),
                 plan,
-                RunPhase.ImplementationModelTurn));
+                RunPhase.ImplementationModelTurn);
 
             var request = Assert.Single(preMutationAnalyzer.Requests);
             Assert.Contains(request.OverlayFiles, file => file.RelativePath == "src/Foo.cs"
@@ -1354,34 +1235,10 @@ public static class Milestone5Tests
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
             Usage = new ModelUsage(100, 50),
         });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithPreMutationAnalyzerAsync(
+            repository,
             model,
-            new RecordingContextAssembler(new ContextAssembler(
-                new EvidenceStore(events, sanitizer),
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance,
-                new ContextAssemblerOptions())),
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            preMutationAnalyzer: new DecisionPreMutationAnalyzer(decision),
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            new DecisionPreMutationAnalyzer(decision));
         var plan = new ImplementationPlan
         {
             Summary = "Edit Example.",
@@ -1398,17 +1255,15 @@ public static class Milestone5Tests
             ],
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scenario.ProposeAsync(
             RunId.New(),
-            repository.WorkspaceId,
             new TaskSpecification("Add member", []),
             plan,
-            RunPhase.ImplementationModelTurn)));
+            RunPhase.ImplementationModelTurn));
 
-        Assert.DoesNotContain(observed, item => item is MutationSetProposed);
+        Assert.Empty(scenario.Events<MutationSetProposed>());
         Assert.Equal(source, await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
-        var completed = Assert.Single(observed.OfType<PreMutationAnalysisCompleted>());
+        var completed = Assert.Single(scenario.Events<PreMutationAnalysisCompleted>());
         Assert.Equal(decision, completed.Decision);
 
         static string CreateArguments(
@@ -1463,32 +1318,13 @@ public static class Milestone5Tests
         {
             Output = new ToolRequestModelOutput("propose_mutations", oversizedInvalidArguments),
         });
-        await using var events = new DomainEventStream();
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(
+            repository,
             model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            limits: ExecutionLimits.Default with
+            ExecutionLimits.Default with
             {
                 MaxStructuredOutputCharacters = "propose_mutations".Length + 8,
-            },
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            });
         var plan = new ImplementationPlan
         {
             Summary = "Change Example.",
@@ -1506,13 +1342,11 @@ public static class Milestone5Tests
         };
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
-            application.HandleAsync(new ProposeMutationSetCommand(
-                repository.SessionId,
+            scenario.ProposeAsync(
                 runId,
-                repository.WorkspaceId,
                 new TaskSpecification("Change Example", []),
                 plan,
-                RunPhase.ImplementationModelTurn)));
+                RunPhase.ImplementationModelTurn));
 
         Assert.Contains("structured-output limit", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("schema", exception.Message, StringComparison.OrdinalIgnoreCase);
@@ -1558,28 +1392,7 @@ public static class Milestone5Tests
             Output = new ToolRequestModelOutput("propose_mutations", arguments),
             Usage = new ModelUsage(100, 50),
         });
-        await using var events = new DomainEventStream();
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
-            model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
         var plan = new ImplementationPlan
         {
             Summary = "Add a file.",
@@ -1596,13 +1409,11 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Add file", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         var mutation = Assert.Single(staged.MutationSet.Mutations);
         Assert.Equal(MutationType.CreateFile, mutation.Type);
@@ -1635,34 +1446,7 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", goodArguments),
                 Usage = new ModelUsage(100, 50),
             });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
-            model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -1679,27 +1463,25 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Change Name", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         Assert.Equal(2, model.Requests.Count);
-        MutationProposalStarted[] starts = [.. observed.OfType<MutationProposalStarted>()];
+        var starts = scenario.Events<MutationProposalStarted>();
         Assert.Equal([1, 2], [.. starts.Select(item => item.AttemptNumber)]);
         Assert.All(starts, start => Assert.Equal(4, start.MaximumAttempts));
-        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        var correction = Assert.Single(scenario.Events<ModelCorrectionAttempted>());
         Assert.Equal(runId, correction.RunId);
         Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
         Assert.Equal(1, correction.AttemptNumber);
         Assert.Equal(3, correction.MaximumAttempts);
         Assert.Contains("expectedText was not found", correction.SafeReason, StringComparison.Ordinal);
-        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
-        var additionalMessage = Assert.Single(context.Requests[1].AdditionalMessages);
+        Assert.Empty(scenario.Events<MutationProposalRepairAttempted>());
+        Assert.Empty(scenario.ContextRequests[1].Task.UserConstraints ?? []);
+        var additionalMessage = Assert.Single(scenario.ContextRequests[1].AdditionalMessages);
         Assert.StartsWith("active-turn-mutation-correction:", additionalMessage.SectionId, StringComparison.Ordinal);
         Assert.Contains(
             "expectedText was not found",
@@ -1894,35 +1676,10 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", badArguments),
                 Usage = new ModelUsage(100, 50),
             });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(
+            repository,
             model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 1 },
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            ExecutionLimits.Default with { MaxCorrectiveTurns = 1 });
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -1940,21 +1697,19 @@ public static class Milestone5Tests
         };
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
-            application.HandleAsync(new ProposeMutationSetCommand(
-                repository.SessionId,
+            scenario.ProposeAsync(
                 runId,
-                repository.WorkspaceId,
                 new TaskSpecification("Change Name", []),
                 plan,
-                RunPhase.ImplementationModelTurn)));
+                RunPhase.ImplementationModelTurn));
 
         Assert.Contains("corrective-turn budget was exhausted", exception.Message, StringComparison.Ordinal);
         Assert.Contains("expectedText was not found", exception.Message, StringComparison.Ordinal);
         Assert.Equal(2, model.Requests.Count);
-        Assert.Single(observed.OfType<ModelCorrectionAttempted>());
-        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Empty(observed.OfType<MutationSetProposed>());
-        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        Assert.Single(scenario.Events<ModelCorrectionAttempted>());
+        Assert.Empty(scenario.Events<MutationProposalRepairAttempted>());
+        Assert.Empty(scenario.Events<MutationSetProposed>());
+        Assert.Empty(scenario.ContextRequests[1].Task.UserConstraints ?? []);
         Assert.Contains(
             "expectedText was not found",
             GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:"),
@@ -2041,34 +1796,7 @@ public static class Milestone5Tests
                 Output = new ToolRequestModelOutput("propose_mutations", goodArguments),
                 Usage = new ModelUsage(100, 50),
             });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var context = new RecordingContextAssembler(new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions()));
-        var application = new MutationProposalApplication(
-            model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
         var plan = new ImplementationPlan
         {
             Summary = "Change the Name property.",
@@ -2085,22 +1813,20 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Change Name", []),
             plan,
-            RunPhase.ImplementationModelTurn));
+            RunPhase.ImplementationModelTurn);
 
         Assert.Equal(2, model.Requests.Count);
-        var correction = Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        var correction = Assert.Single(scenario.Events<ModelCorrectionAttempted>());
         Assert.Equal(runId, correction.RunId);
         Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
         Assert.Equal(1, correction.AttemptNumber);
         Assert.Contains("schema", correction.SafeReason, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(observed.OfType<MutationProposalRepairAttempted>());
-        Assert.Empty(context.Requests[1].Task.UserConstraints ?? []);
+        Assert.Empty(scenario.Events<MutationProposalRepairAttempted>());
+        Assert.Empty(scenario.ContextRequests[1].Task.UserConstraints ?? []);
         var correctionText = GetCorrectionMessageText(model.Requests[1], "active-turn-mutation-correction:");
         Assert.Contains("propose_mutations", correctionText, StringComparison.Ordinal);
         Assert.Contains("advertised schema", correctionText, StringComparison.Ordinal);
@@ -2157,34 +1883,11 @@ public static class Milestone5Tests
             new ModelChunk { Reasoning = "private <secret> thought" },
             new ModelChunk { Text = json },
             new ModelChunk { Usage = new ModelUsage(100, 50) });
-        var observed = new ConcurrentBag<IDomainEvent>();
-        await using var events = new DomainEventStream();
-        await using var subscription = events.Subscribe((domainEvent, _) =>
-        {
-            observed.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
         var sanitizer = new RedactingSanitizer();
-        var context = new ContextAssembler(
-            new EvidenceStore(events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            new ContextAssemblerOptions());
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithSanitizerAsync(
+            repository,
             model,
-            context,
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            sanitizer);
         var plan = new ImplementationPlan
         {
             Summary = "Change Example.",
@@ -2201,14 +1904,12 @@ public static class Milestone5Tests
             ],
         };
 
-        var staged = await application.HandleAsync(new ProposeMutationSetCommand(
-            repository.SessionId,
+        var staged = await scenario.ProposeAsync(
             runId,
-            repository.WorkspaceId,
             new TaskSpecification("Change Example", []),
-            plan));
+            plan);
 
-        var reasoning = Assert.Single(observed.OfType<ModelReasoningObserved>());
+        var reasoning = Assert.Single(scenario.Events<ModelReasoningObserved>());
         Assert.Equal(repository.SessionId, reasoning.SessionId);
         Assert.Equal("private [redacted] thought", reasoning.Text);
         Assert.False(staged.Conflicts.HasConflicts);
@@ -2260,34 +1961,10 @@ public static class Milestone5Tests
                         Converters = { new JsonStringEnumConverter() },
                     })),
         });
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(
+            repository,
             model,
-            new ContextAssembler(
-                new EvidenceStore(events, sanitizer),
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance,
-                new ContextAssemblerOptions()),
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(10_000, 10, TimeSpan.FromMinutes(1), 1)),
-            sanitizer,
-            events,
-            limits: ExecutionLimits.Default with { MaxCorrectiveTurns = 2 },
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            ExecutionLimits.Default with { MaxCorrectiveTurns = 2 });
         var plan = new ImplementationPlan
         {
             Revision = 1,
@@ -2306,18 +1983,16 @@ public static class Milestone5Tests
         };
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
-            application.HandleAsync(new ProposeMutationSetCommand(
-                repository.SessionId,
+            scenario.ProposeAsync(
                 runId,
-                repository.WorkspaceId,
                 new TaskSpecification("Change Example", []),
                 plan,
-                RunPhase.ImplementationModelTurn)));
+                RunPhase.ImplementationModelTurn));
 
         Assert.Contains("path confinement", exception.Message, StringComparison.Ordinal);
         Assert.Single(model.Requests);
-        Assert.Empty(observed.OfType<ModelCorrectionAttempted>());
-        Assert.Empty(observed.OfType<MutationSetProposed>());
+        Assert.Empty(scenario.Events<ModelCorrectionAttempted>());
+        Assert.Empty(scenario.Events<MutationSetProposed>());
         Assert.Equal("old", await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
     }
 
@@ -2348,31 +2023,7 @@ public static class Milestone5Tests
                 },
             ],
         });
-        await using var events = new DomainEventStream();
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var application = new MutationProposalApplication(
-            model,
-            new ContextAssembler(
-                new EvidenceStore(events, sanitizer),
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance,
-                new ContextAssemblerOptions()),
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(
-                10_000,
-                10,
-                TimeSpan.FromMinutes(1),
-                1)),
-            sanitizer,
-            events,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
         var plan = new ImplementationPlan
         {
             Summary = "Change only the planned file.",
@@ -2390,23 +2041,20 @@ public static class Milestone5Tests
         };
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
-            application.HandleAsync(new ProposeMutationSetCommand(
-                repository.SessionId,
+            scenario.ProposeAsync(
                 runId,
-                repository.WorkspaceId,
                 new TaskSpecification("Change Example", []),
-                plan)));
+                plan));
 
         Assert.Contains("outside the approved plan", exception.Message, StringComparison.Ordinal);
         Assert.Equal("protected", await File.ReadAllTextAsync(repository.PathOf("src/Unplanned.cs")));
         var commitException = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            workspaces.HandleAsync(new CommitMutationSetCommand(
-                repository.SessionId,
+            scenario.ExecuteAsync(
                 proposal.MutationSetId,
                 new MutationApproval
                 {
                     Level = MutationApprovalLevel.EntireSet,
-                })));
+                }));
         Assert.Contains("not registered", commitException.Message, StringComparison.Ordinal);
     }
 
@@ -2447,32 +2095,10 @@ public static class Milestone5Tests
                 },
             ],
         });
-        await using var events = new DomainEventStream();
-        await using var workspaces = new TransactionalWorkspaceCoordinator(events);
-        await workspaces.RegisterBaselineAsync(repository.Baseline);
-        var sanitizer = new PassthroughSanitizer();
-        var application = new MutationProposalApplication(
+        await using var scenario = await MutationScenario.CreateWithPreMutationAnalyzerAsync(
+            repository,
             model,
-            new ContextAssembler(
-                new EvidenceStore(events, sanitizer),
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance,
-                new ContextAssemblerOptions()),
-            workspaces,
-            new ExecutionBudget(new BudgetDimensions(
-                10_000,
-                10,
-                TimeSpan.FromMinutes(1),
-                1)),
-            sanitizer,
-            events,
-            preMutationAnalyzer: new ThrowingPreMutationAnalyzer(),
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
+            new ThrowingPreMutationAnalyzer());
         var plan = new ImplementationPlan
         {
             Summary = "Modify only the planned file.",
@@ -2490,23 +2116,20 @@ public static class Milestone5Tests
         };
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(() =>
-            application.HandleAsync(new ProposeMutationSetCommand(
-                repository.SessionId,
+            scenario.ProposeAsync(
                 runId,
-                repository.WorkspaceId,
                 new TaskSpecification("Change Example", []),
-                plan)));
+                plan));
 
         Assert.Contains("outside the approved plan", exception.Message, StringComparison.Ordinal);
         Assert.Equal("planned", await File.ReadAllTextAsync(repository.PathOf("src/Example.cs")));
         var commitException = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            workspaces.HandleAsync(new CommitMutationSetCommand(
-                repository.SessionId,
+            scenario.ExecuteAsync(
                 proposal.MutationSetId,
                 new MutationApproval
                 {
                     Level = MutationApprovalLevel.EntireSet,
-                })));
+                }));
         Assert.Contains("not registered", commitException.Message, StringComparison.Ordinal);
     }
 
@@ -3594,6 +3217,297 @@ public static class Milestone5Tests
         };
         var gitMetadata = CreateMutationSet(repository, [gitMetadataMutation]);
         await Assert.ThrowsAsync<MutationPolicyException>(() => workspace.StageAsync(gitMetadata));
+    }
+
+    private sealed class MutationScenario : IAsyncDisposable
+    {
+        private readonly MutationProposalApplication _application;
+        private readonly DomainEventStream _events;
+        private readonly IAsyncDisposable _eventSubscription;
+        private readonly TransactionalWorkspaceCoordinator? _ownedWorkspaces;
+        private readonly SessionId _sessionId;
+        private readonly WorkspaceId _workspaceId;
+        private readonly ITransactionalWorkspaceResolver _workspaces;
+        private readonly ConcurrentQueue<IDomainEvent> _observedEvents;
+
+        private MutationScenario(
+            SessionId sessionId,
+            WorkspaceId workspaceId,
+            MutationProposalApplication application,
+            RecordingContextAssembler context,
+            DomainEventStream events,
+            IAsyncDisposable eventSubscription,
+            ConcurrentQueue<IDomainEvent> observedEvents,
+            ITransactionalWorkspaceResolver workspaces,
+            TransactionalWorkspaceCoordinator? ownedWorkspaces)
+        {
+            _sessionId = sessionId;
+            _workspaceId = workspaceId;
+            _application = application;
+            ContextRequests = context.Requests;
+            _events = events;
+            _eventSubscription = eventSubscription;
+            _observedEvents = observedEvents;
+            _workspaces = workspaces;
+            _ownedWorkspaces = ownedWorkspaces;
+        }
+
+        public IReadOnlyList<ContextAssemblyRequest> ContextRequests { get; }
+
+        public static Task<MutationScenario> CreateAsync(
+            TestRepository repository,
+            IModelProvider model)
+        {
+            return CreateOwnedAsync(
+                repository,
+                model,
+                new PassthroughSanitizer(),
+                semanticMutations: null,
+                preMutationAnalyzer: null,
+                limits: null);
+        }
+
+        public static Task<MutationScenario> CreateForCaseSensitiveWorkspaceAsync(
+            SessionId sessionId,
+            WorkspaceBaseline baseline,
+            IModelProvider model,
+            FakeTransactionalWorkspaceResolver workspaceResolver,
+            FakePreMutationAnalyzer preMutationAnalyzer)
+        {
+            ArgumentNullException.ThrowIfNull(baseline);
+            ArgumentNullException.ThrowIfNull(model);
+            ArgumentNullException.ThrowIfNull(workspaceResolver);
+            ArgumentNullException.ThrowIfNull(preMutationAnalyzer);
+            return CreateCoreAsync(
+                sessionId,
+                baseline,
+                model,
+                workspaceResolver,
+                semanticMutations: null,
+                preMutationAnalyzer,
+                new PassthroughSanitizer(),
+                limits: null);
+        }
+
+        public static Task<MutationScenario> CreateWithSemanticMutationEngineAsync(
+            TestRepository repository,
+            IModelProvider model,
+            FakeSemanticMutationEngine semanticMutations)
+        {
+            ArgumentNullException.ThrowIfNull(semanticMutations);
+            return CreateOwnedAsync(
+                repository,
+                model,
+                new PassthroughSanitizer(),
+                semanticMutations,
+                preMutationAnalyzer: null,
+                limits: null);
+        }
+
+        public static Task<MutationScenario> CreateWithPreMutationAnalyzerAsync(
+            TestRepository repository,
+            IModelProvider model,
+            IPreMutationAnalyzer preMutationAnalyzer)
+        {
+            ArgumentNullException.ThrowIfNull(preMutationAnalyzer);
+            return CreateOwnedAsync(
+                repository,
+                model,
+                new PassthroughSanitizer(),
+                semanticMutations: null,
+                preMutationAnalyzer,
+                limits: null);
+        }
+
+        public static Task<MutationScenario> CreateWithLimitsAsync(
+            TestRepository repository,
+            IModelProvider model,
+            ExecutionLimits limits)
+        {
+            ArgumentNullException.ThrowIfNull(limits);
+            return CreateOwnedAsync(
+                repository,
+                model,
+                new PassthroughSanitizer(),
+                semanticMutations: null,
+                preMutationAnalyzer: null,
+                limits);
+        }
+
+        public static Task<MutationScenario> CreateWithSanitizerAsync(
+            TestRepository repository,
+            IModelProvider model,
+            IOutputSanitizer sanitizer)
+        {
+            ArgumentNullException.ThrowIfNull(sanitizer);
+            return CreateOwnedAsync(
+                repository,
+                model,
+                sanitizer,
+                semanticMutations: null,
+                preMutationAnalyzer: null,
+                limits: null);
+        }
+
+        public Task<StagedMutationSet> ProposeAsync(
+            RunId runId,
+            TaskSpecification task,
+            ImplementationPlan plan,
+            RunPhase phase = RunPhase.MutationPreparation,
+            CancellationToken cancellationToken = default)
+        {
+            return _application.HandleAsync(
+                new ProposeMutationSetCommand(
+                    _sessionId,
+                    runId,
+                    _workspaceId,
+                    task,
+                    plan,
+                    phase),
+                cancellationToken);
+        }
+
+        public Task<MutationCommitResult> ExecuteAsync(
+            MutationSetId mutationSetId,
+            MutationApproval approval,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(approval);
+            if (_ownedWorkspaces is not null)
+            {
+                return _ownedWorkspaces.HandleAsync(
+                    new CommitMutationSetCommand(_sessionId, mutationSetId, approval),
+                    cancellationToken);
+            }
+
+            return _workspaces.GetWorkspace(_workspaceId).CommitAsync(
+                mutationSetId,
+                approval,
+                cancellationToken);
+        }
+
+        public IReadOnlyList<TEvent> Events<TEvent>()
+            where TEvent : IDomainEvent
+        {
+            return [.. _observedEvents.OfType<TEvent>()];
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _eventSubscription.DisposeAsync();
+            if (_ownedWorkspaces is not null)
+            {
+                await _ownedWorkspaces.DisposeAsync();
+            }
+
+            await _events.DisposeAsync();
+        }
+
+        private static Task<MutationScenario> CreateOwnedAsync(
+            TestRepository repository,
+            IModelProvider model,
+            IOutputSanitizer sanitizer,
+            ISemanticMutationEngine? semanticMutations,
+            IPreMutationAnalyzer? preMutationAnalyzer,
+            ExecutionLimits? limits = null)
+        {
+            ArgumentNullException.ThrowIfNull(repository);
+            return CreateCoreAsync(
+                repository.SessionId,
+                repository.Baseline,
+                model,
+                workspaceResolver: null,
+                semanticMutations,
+                preMutationAnalyzer,
+                sanitizer,
+                limits);
+        }
+
+        private static async Task<MutationScenario> CreateCoreAsync(
+            SessionId sessionId,
+            WorkspaceBaseline baseline,
+            IModelProvider model,
+            ITransactionalWorkspaceResolver? workspaceResolver,
+            ISemanticMutationEngine? semanticMutations,
+            IPreMutationAnalyzer? preMutationAnalyzer,
+            IOutputSanitizer sanitizer,
+            ExecutionLimits? limits)
+        {
+            ArgumentNullException.ThrowIfNull(baseline);
+            ArgumentNullException.ThrowIfNull(model);
+            var events = new DomainEventStream();
+            var observedEvents = new ConcurrentQueue<IDomainEvent>();
+            IAsyncDisposable? eventSubscription = null;
+            TransactionalWorkspaceCoordinator? ownedWorkspaces = null;
+            try
+            {
+                eventSubscription = events.Subscribe((domainEvent, _) =>
+                {
+                    observedEvents.Enqueue(domainEvent);
+                    return Task.CompletedTask;
+                });
+                ownedWorkspaces = workspaceResolver is null
+                    ? new TransactionalWorkspaceCoordinator(events)
+                    : null;
+                var workspaces = workspaceResolver ?? ownedWorkspaces
+                    ?? throw new InvalidOperationException("A mutation workspace resolver is required.");
+                if (ownedWorkspaces is not null)
+                {
+                    await ownedWorkspaces.RegisterBaselineAsync(baseline);
+                }
+
+                var context = new RecordingContextAssembler(new ContextAssembler(
+                    new EvidenceStore(events, sanitizer),
+                    new TokenEstimator(),
+                    new ContextPolicy(),
+                    new PromptAppendLoader(sanitizer),
+                    sanitizer,
+                    events,
+                    TestPromptLoader.Instance,
+                    new ContextAssemblerOptions()));
+                var application = new MutationProposalApplication(
+                    model,
+                    context,
+                    workspaces,
+                    new ExecutionBudget(new BudgetDimensions(
+                        10_000,
+                        10,
+                        TimeSpan.FromMinutes(1),
+                        1)),
+                    sanitizer,
+                    events,
+                    semanticMutations: semanticMutations,
+                    preMutationAnalyzer: preMutationAnalyzer,
+                    limits: limits,
+                    correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                    prompts: TestPromptLoader.Instance);
+                return new MutationScenario(
+                    sessionId,
+                    baseline.WorkspaceId,
+                    application,
+                    context,
+                    events,
+                    eventSubscription,
+                    observedEvents,
+                    workspaces,
+                    ownedWorkspaces);
+            }
+            catch
+            {
+                if (eventSubscription is not null)
+                {
+                    await eventSubscription.DisposeAsync();
+                }
+
+                if (ownedWorkspaces is not null)
+                {
+                    await ownedWorkspaces.DisposeAsync();
+                }
+
+                await events.DisposeAsync();
+                throw;
+            }
+        }
     }
 
     private sealed class RecordingPlanApprovalRepositoryStore : IRepositoryPlanApprovalPolicyStore

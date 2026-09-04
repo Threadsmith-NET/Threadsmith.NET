@@ -375,10 +375,34 @@ public static class Plan31ModelProviderCatalogTests
         using var fixture = new CatalogFixture();
         fixture.WriteUser(BaseCatalog());
         var catalog = fixture.Load();
+        const int readerCount = 6;
+        var readersEntered = 0;
+        var allReadersEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReaders = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Act
-        var profiles = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(
-            () => catalog.ModelCatalog.Get(new(new Guid(FirstModelId))))));
+        var readers = Enumerable.Range(0, readerCount).Select(_ => Task.Run(async () =>
+        {
+            if (Interlocked.Increment(ref readersEntered) == readerCount)
+            {
+                allReadersEntered.TrySetResult();
+            }
+
+            await releaseReaders.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return catalog.ModelCatalog.Get(new(new Guid(FirstModelId)));
+        })).ToArray();
+        try
+        {
+            await allReadersEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            releaseReaders.TrySetResult();
+        }
+
+        var profiles = await Task.WhenAll(readers).WaitAsync(TimeSpan.FromSeconds(2));
 
         // Assert
         Assert.All(profiles, profile => Assert.Same(profiles[0], profile));

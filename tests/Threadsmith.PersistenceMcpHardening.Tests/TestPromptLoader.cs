@@ -1,5 +1,3 @@
-global using TestPromptLoader = Threadsmith.PersistenceMcpHardening.Tests.TestPromptLoader;
-
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
 using System.Collections.ObjectModel;

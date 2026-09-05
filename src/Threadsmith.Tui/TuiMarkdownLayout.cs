@@ -18,8 +18,14 @@ internal static class TuiMarkdownLayout
 internal readonly struct PrettyPromptTextMetrics : IDisplayTextMetrics<PrettyPromptTextMetrics>
 {
     /// <inheritdoc />
-    public static int GetWidth(string text) => UnicodeWidth.GetWidth(text.AsSpan());
+    public static int GetWidth(string text)
+    {
+        return UnicodeWidth.GetWidth(text.AsSpan());
+    }
 
     /// <inheritdoc />
-    public static int GetLengthThatFits(string text, int width) => UnicodeWidth.GetLengthThatFits(text.AsSpan(), width);
+    public static int GetLengthThatFits(string text, int width)
+    {
+        return UnicodeWidth.GetLengthThatFits(text.AsSpan(), width);
+    }
 }

@@ -17,8 +17,14 @@ internal static class TuiMarkdownLayout
 internal readonly struct TuiKitTextMetrics : IDisplayTextMetrics<TuiKitTextMetrics>
 {
     /// <inheritdoc />
-    public static int GetWidth(string text) => UnicodeWidth.GetWidth(text);
+    public static int GetWidth(string text)
+    {
+        return UnicodeWidth.GetWidth(text);
+    }
 
     /// <inheritdoc />
-    public static int GetLengthThatFits(string text, int width) => UnicodeWidth.GetLengthThatFits(text, width);
+    public static int GetLengthThatFits(string text, int width)
+    {
+        return UnicodeWidth.GetLengthThatFits(text, width);
+    }
 }

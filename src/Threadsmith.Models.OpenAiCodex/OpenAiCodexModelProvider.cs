@@ -233,7 +233,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         var suppliedEstimate = request.WireEstimate
             ?? throw new ModelProviderException(
                 "Native Codex requests require a complete provider-wire capacity estimate.");
-        IReadOnlyList<ModelMessage> messages = request.Messages.Count == 0
+        var messages = request.Messages.Count == 0
             ?
             [
                 new ModelMessage

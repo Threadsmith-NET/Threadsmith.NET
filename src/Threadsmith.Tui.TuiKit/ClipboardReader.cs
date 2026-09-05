@@ -50,28 +50,6 @@ internal static class ClipboardReader
         return null;
     }
 
-    private static (string Executable, string[] Arguments)[] ResolveLinuxCommands()
-    {
-        var candidates = new[]
-        {
-            (Name: "wl-paste", Arguments: new[] { "--no-newline" }),
-            (Name: "xclip", Arguments: new[] { "-selection", "clipboard", "-o" }),
-            (Name: "xsel", Arguments: new[] { "--clipboard", "--output" }),
-        };
-        var absoluteDirectories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Where(Path.IsPathFullyQualified)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        return candidates
-            .Select(candidate => (
-                Path: absoluteDirectories.Select(directory => Path.Combine(directory, candidate.Name)).FirstOrDefault(File.Exists),
-                candidate.Arguments))
-            .Where(candidate => candidate.Path is not null)
-            .Select(candidate => (candidate.Path ?? throw new InvalidOperationException("Resolved clipboard helper path was null."), candidate.Arguments))
-            .ToArray();
-    }
-
     /// <summary>Decodes at most one MiB of strict UTF-8 clipboard data.</summary>
     internal static async Task<string> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken)
     {
@@ -99,6 +77,28 @@ internal static class ClipboardReader
         {
             ArrayPool<byte>.Shared.Return(bytes);
         }
+    }
+
+    private static (string Executable, string[] Arguments)[] ResolveLinuxCommands()
+    {
+        var arguments = new[] { "--clipboard", "--output" };
+        var candidates = new[]
+        {
+            (Name: "wl-paste", Arguments: ["--no-newline"]),
+            (Name: "xclip", Arguments: ["-selection", "clipboard", "-o"]),
+            (Name: "xsel", Arguments: arguments),
+        };
+        var absoluteDirectories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(Path.IsPathFullyQualified)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return [.. candidates
+            .Select(candidate => (
+                Path: absoluteDirectories.Select(directory => Path.Combine(directory, candidate.Name)).FirstOrDefault(File.Exists),
+                candidate.Arguments))
+            .Where(candidate => candidate.Path is not null)
+            .Select(candidate => (candidate.Path ?? throw new InvalidOperationException("Resolved clipboard helper path was null."), candidate.Arguments))];
     }
 
     private static async Task<string?> ReadProcessAsync(string executable, string[] arguments, CancellationToken cancellationToken)

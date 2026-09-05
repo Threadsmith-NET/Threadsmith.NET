@@ -1,6 +1,5 @@
 namespace Threadsmith.ContextCaching.Tests;
 
-using System.Collections;
 using System.Security.Cryptography;
 using System.Text;
 using Threadsmith.Context;

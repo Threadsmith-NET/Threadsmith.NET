@@ -19,7 +19,6 @@ using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
@@ -57,7 +56,7 @@ public static class Milestone1Tests
         var commands = InteractiveCommandCatalog.All;
 
         Assert.IsNotType<InteractiveCommandDescriptor[]>(commands);
-        var collection = Assert.IsAssignableFrom<ICollection<InteractiveCommandDescriptor>>(commands);
+        var collection = Assert.IsAssignableFrom<IList<InteractiveCommandDescriptor>>(commands);
         Assert.True(collection.IsReadOnly);
         Assert.Throws<NotSupportedException>(() => collection[0] = commands[^1]);
     }
@@ -1263,6 +1262,7 @@ public static class Milestone1Tests
         Assert.Equal(response, input.Text);
         Assert.Equal(2, surface.Writes.Count(write => string.Equals(write, prompt, StringComparison.Ordinal)));
         Assert.Equal(["read", "read"], surface.Operations);
+        Assert.Equal(2, surface.ComposerRequests.Count);
         Assert.All(surface.ComposerRequests, request => Assert.Equal(ComposerPurpose.Secondary, request.Purpose));
     }
 
@@ -4386,6 +4386,7 @@ public static class Milestone1Tests
         private readonly List<string> _operations = [];
         private readonly List<PresentationItem> _outputItems = [];
         private readonly List<string> _sessionStatuses = [];
+        private readonly List<ComposerRequest> _composerRequests = [];
         private readonly List<string> _writes = [];
         private readonly int _statusWidth;
         private readonly Exception? _statusFailure;
@@ -4519,6 +4520,17 @@ public static class Milestone1Tests
             }
         }
 
+        public IReadOnlyList<ComposerRequest> ComposerRequests
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _composerRequests.ToArray();
+                }
+            }
+        }
+
         public Task StatusStarted => _statusStarted.Task;
 
         public IReadOnlyList<string> Writes
@@ -4588,6 +4600,21 @@ public static class Milestone1Tests
             }
 
             return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public async Task<InteractionInput> ReadComposerAsync(
+            ComposerRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            await SetPromptAsync(request.Prompt, cancellationToken);
+            lock (_gate)
+            {
+                _composerRequests.Add(request);
+            }
+
+            return await ReadAsync(cancellationToken);
         }
 
         /// <inheritdoc />

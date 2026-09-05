@@ -30,7 +30,10 @@ public static class FrontendSelectionTests
     [InlineData("--tui=")]
     [InlineData("--tui=pretty")]
     [InlineData("--tui=unknown")]
-    public static void RejectsUnknownFrontend(string argument) => Assert.NotNull(CommandLineParser.Parse([argument]).Error);
+    public static void RejectsUnknownFrontend(string argument)
+    {
+        Assert.NotNull(CommandLineParser.Parse([argument]).Error);
+    }
 
     /// <summary>Duplicate TUI switches fail and MCP retains precedence over either frontend.</summary>
     [Fact]

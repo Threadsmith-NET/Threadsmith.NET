@@ -38,7 +38,10 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private int _itemBytes;
 
     /// <inheritdoc/>
-    public Size Measure(Size available) => available;
+    public Size Measure(Size available)
+    {
+        return available;
+    }
 
     /// <inheritdoc/>
     public void Render(ISurface surface)
@@ -247,36 +250,6 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         NewCount = 0;
     }
 
-    /// <summary>Appends standalone text split only at grapheme boundaries.</summary>
-    internal void Append(string text, CellStyle style = default)
-    {
-        foreach (var part in Safe(text).Split('\n'))
-        {
-            // Oversized logical lines are split without dropping graphemes or source text.
-            var chunk = new StringBuilder();
-            var bytes = 0;
-            var continued = false;
-            var elements = StringInfo.GetTextElementEnumerator(part);
-            while (elements.MoveNext())
-            {
-                var element = elements.GetTextElement();
-                var size = Encoding.UTF8.GetByteCount(element);
-                if (bytes + size > 16 * 1024 && chunk.Length > 0)
-                {
-                    AddLine(chunk.ToString(), style, continued);
-                    continued = true;
-                    chunk.Clear();
-                    bytes = 0;
-                }
-
-                chunk.Append(element);
-                bytes += size;
-            }
-
-            AddLine(chunk.ToString(), style, continued);
-        }
-    }
-
     /// <summary>Returns selected source text without inserting soft-wrap line breaks.</summary>
     internal string SelectedText()
     {
@@ -457,7 +430,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         {
             var grapheme = graphemes[index];
             var width = Math.Clamp(grapheme.Width, 1, 2);
-            string? text = grapheme.Text.Length == 1 && grapheme.Text[0] < 128
+            var text = grapheme.Text.Length == 1 && grapheme.Text[0] < 128
                 ? null
                 : grapheme.Width == 0 ? "\u25cc" + grapheme.Text : grapheme.Text;
             glyphs[index] = new DisplayGlyph(offset, width, text);
@@ -562,9 +535,12 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         AtBottom = false;
     }
 
-    private (Point First, Point Last) OrderedSelection() => _anchor is { } anchor && _end is { } end
+    private (Point First, Point Last) OrderedSelection()
+    {
+        return _anchor is { } anchor && _end is { } end
         ? (anchor.Line < end.Line || (anchor.Line == end.Line && anchor.Offset <= end.Offset) ? (anchor, end) : (end, anchor))
         : (new Point(0, 0), new Point(0, 0));
+    }
 
     private void Scroll(int amount)
     {

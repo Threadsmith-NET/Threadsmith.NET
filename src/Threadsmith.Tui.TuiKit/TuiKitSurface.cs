@@ -470,6 +470,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             lease?.DisarmEscape();
         }
+
         if (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == KeyModifiers.Ctrl)
         {
             HandleControlC();
@@ -849,7 +850,10 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             _owner = owner;
         }
 
-        public Size Measure(Size available) => new(available.Width, Math.Min(4, available.Height));
+        public Size Measure(Size available)
+        {
+            return new(available.Width, Math.Min(4, available.Height));
+        }
 
         public bool HandleKey(KeyEvent key)
         {

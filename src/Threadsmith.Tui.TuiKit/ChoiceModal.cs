@@ -102,7 +102,11 @@ internal sealed class ChoiceModal : Modal
                 _detail = new TranscriptView { ResolveStyle = ResolveStyle };
                 if (_matches.Length > 0)
                 {
-                    _detail.Append(_matches[_selected].Label);
+                    _detail.Present(new PresentationBatch([
+                        new PresentationTextItem([
+                            new(_matches[_selected].Label, PresentationTextRole.Default),
+                        ]),
+                    ]));
                     _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
                 }
             }
@@ -209,7 +213,10 @@ internal sealed class ChoiceModal : Modal
         }
     }
 
-    private void Move(int delta) => _selected = Math.Clamp(_selected + delta, 0, Math.Max(0, _matches.Length - 1));
+    private void Move(int delta)
+    {
+        _selected = Math.Clamp(_selected + delta, 0, Math.Max(0, _matches.Length - 1));
+    }
 
     private CachedTextRun GetOptionRun(Choice option)
     {

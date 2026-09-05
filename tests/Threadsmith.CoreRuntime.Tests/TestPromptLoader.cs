@@ -1,5 +1,3 @@
-global using TestPromptLoader = Threadsmith.CoreRuntime.Tests.TestPromptLoader;
-
 namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Collections.ObjectModel;

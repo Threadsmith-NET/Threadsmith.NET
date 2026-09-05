@@ -55,10 +55,16 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
     internal Action? PasteRequested { get; set; }
 
     /// <inheritdoc />
-    public void OnFocusChanged(bool focused) => IsFocused = focused;
+    public void OnFocusChanged(bool focused)
+    {
+        IsFocused = focused;
+    }
 
     /// <inheritdoc />
-    public Size Measure(Size available) => new(available.Width, Math.Min(4, available.Height));
+    public Size Measure(Size available)
+    {
+        return new(available.Width, Math.Min(4, available.Height));
+    }
 
     /// <inheritdoc />
     public bool HandleKey(KeyEvent key)

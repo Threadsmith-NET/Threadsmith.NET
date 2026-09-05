@@ -6,9 +6,7 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Extensions.Runtime;
 using Threadsmith.Tools;
-using Threadsmith.Tui;
 using Threadsmith.Tui.TuiKit;
-using Threadsmith.Workspaces;
 
 /// <summary>Runs the selected terminal projection and owns process-global cancellation registration.</summary>
 internal static class ShellRunner

@@ -93,7 +93,10 @@ internal sealed class ComposerHistory
     }
 
     /// <summary>Ends consecutive history-key navigation while preserving the draft.</summary>
-    internal void LeaveNavigationKey() => _lastWasNavigation = false;
+    internal void LeaveNavigationKey()
+    {
+        _lastWasNavigation = false;
+    }
 
     private int Find(int start)
     {

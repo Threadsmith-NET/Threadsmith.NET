@@ -1,12 +1,8 @@
 namespace Threadsmith.Interaction.Coordination;
 
 using System.Text;
-using System.Threading.Channels;
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Models;
-using Threadsmith.Tools;
 
 /// <summary>Owns the ordered conversation text produced from live domain events.</summary>
 internal sealed class ConversationTranscript

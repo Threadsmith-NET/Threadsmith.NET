@@ -1,7 +1,5 @@
 namespace Threadsmith.Interaction.Coordination;
 
-using System.Text;
-using System.Threading.Channels;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Presentation;

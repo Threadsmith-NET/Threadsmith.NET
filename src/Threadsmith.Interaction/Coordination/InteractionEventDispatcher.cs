@@ -1,12 +1,7 @@
 namespace Threadsmith.Interaction.Coordination;
 
-using System.Text;
 using System.Threading.Channels;
 using Threadsmith.Core;
-using Threadsmith.Execution;
-using Threadsmith.Interaction.Presentation;
-using Threadsmith.Models;
-using Threadsmith.Tools;
 
 /// <summary>Bounded engine-to-UI dispatcher with redraw coalescing.</summary>
 public sealed class InteractionEventDispatcher

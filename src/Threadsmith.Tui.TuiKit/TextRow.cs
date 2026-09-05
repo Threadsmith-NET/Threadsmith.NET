@@ -18,7 +18,10 @@ internal sealed class TextRow : IWidget
     }
 
     /// <inheritdoc />
-    public Size Measure(Size available) => new(available.Width, 1);
+    public Size Measure(Size available)
+    {
+        return new(available.Width, 1);
+    }
 
     /// <inheritdoc />
     public void Render(ISurface surface)

@@ -75,11 +75,14 @@ internal static class InteractiveFrontendRunner
             codeExploreOutputOptions: context.CodeExploreOutputOptions);
     }
 
-    private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken) => coordinator.RunAsync(
+    private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken)
+    {
+        return coordinator.RunAsync(
         context.Paths.RepositoryRoot,
         context.CommandLine.RequestedTrust,
         context.CommandLine.RequestedSolution,
         context.Models.Status,
         context.Paths.RepositoryConfigurationDirectoryExistedAtStartup,
         cancellationToken);
+    }
 }

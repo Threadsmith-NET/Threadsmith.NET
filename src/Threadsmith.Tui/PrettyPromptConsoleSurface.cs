@@ -1,28 +1,16 @@
 namespace Threadsmith.Tui;
 
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Globalization;
 using System.Reflection;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Channels;
-using Microsoft.Extensions.Configuration;
 using PrettyPrompt;
 using PrettyPrompt.Consoles;
 using PrettyPrompt.Highlighting;
 using Spectre.Console;
 using Threadsmith.Core;
-using Threadsmith.Execution;
-using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
-using Threadsmith.Interaction.Coordination;
-using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
-using Threadsmith.Models;
-using Threadsmith.Tools;
 
 /// <summary>Abstracts interactive terminal input and output for deterministic shell tests.</summary>
 internal interface IConsoleSurface : IInteractionSurface

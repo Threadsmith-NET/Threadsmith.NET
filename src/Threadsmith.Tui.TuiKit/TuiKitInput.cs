@@ -6,14 +6,17 @@ using TUIKit.Input;
 internal static class TuiKitInput
 {
     /// <summary>Normalizes protocol-specific control runes to named keys.</summary>
-    internal static KeyEvent Normalize(KeyEvent key) => key.Code == KeyCode.Character ? key.Rune switch
+    internal static KeyEvent Normalize(KeyEvent key)
     {
-        9 => KeyEvent.Special(KeyCode.Tab, key.Modifiers),
-        13 => KeyEvent.Special(KeyCode.Enter, key.Modifiers),
-        27 => KeyEvent.Special(KeyCode.Escape, key.Modifiers),
-        127 => KeyEvent.Special(KeyCode.Backspace, key.Modifiers),
-        _ => key,
-    } : key;
+        return key.Code == KeyCode.Character ? key.Rune switch
+        {
+            9 => KeyEvent.Special(KeyCode.Tab, key.Modifiers),
+            13 => KeyEvent.Special(KeyCode.Enter, key.Modifiers),
+            27 => KeyEvent.Special(KeyCode.Escape, key.Modifiers),
+            127 => KeyEvent.Special(KeyCode.Backspace, key.Modifiers),
+            _ => key,
+        } : key;
+    }
 
     /// <summary>Distinguishes submission from an explicit multiline insertion.</summary>
     internal static SubmitDecision ResolveSubmit(KeyEvent key)

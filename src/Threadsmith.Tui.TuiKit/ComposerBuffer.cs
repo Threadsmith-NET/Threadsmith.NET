@@ -237,7 +237,10 @@ internal sealed class ComposerBuffer
         _undo.Add(edit);
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+    private static string Normalize(string text)
+    {
+        return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+    }
 
     private static int GetValidatedByteCount(string text)
     {

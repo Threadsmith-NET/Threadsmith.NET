@@ -679,7 +679,7 @@ public sealed class Plan50OpenAiCodexTests
             SectionId = "provider-openai-codex-instructions",
             Content = providerInstructionContent,
         };
-        IReadOnlyList<ModelMessage> messages = request.Messages.Count == 0
+        var messages = request.Messages.Count == 0
             ?
             [
                 new ModelMessage

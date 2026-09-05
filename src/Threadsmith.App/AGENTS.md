@@ -56,3 +56,7 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+## Frontend selection
+
+`InteractiveFrontendKind` is the startup source of truth: no switch means `None`, bare `--tui` and `--tui=tuikit` mean `TuiKit`, and `--tui=original` means `Original`. The former `--tui=pretty` spelling and all duplicate/empty/unknown selectors fail before startup. `UseInteractiveTerminal` is a derived compatibility property. MCP/authentication retain their existing precedence and do not construct a terminal backend. `InteractiveFrontendRunner` composes identical coordinator dependencies for both frontends; only the selected TUIKit path constructs and owns its retained terminal loop.

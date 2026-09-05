@@ -31,7 +31,7 @@ public interface IInteractionSurface
     /// <param name="cancellationToken">Cancels admission before the batch is accepted.</param>
     Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default);
 
-    /// <summary>Presents structured status at the frontend's ordinary composer boundary.</summary>
+    /// <summary>Presents structured status at the composer boundary and, when supported, during retained interaction.</summary>
     /// <param name="status">Immutable host-derived status.</param>
     /// <param name="cancellationToken">Stops the pending presentation.</param>
     Task PresentSessionStatusAsync(

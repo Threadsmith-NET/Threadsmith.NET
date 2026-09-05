@@ -64,3 +64,7 @@ Adapt the shared interaction layer to the conversation-first PrettyPrompt/Spectr
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+## Shared theme boundary
+
+BCL-only theme values/catalog/preferences and the `/theme` contribution live in `Threadsmith.Interaction.Themes`. This frontend retains configuration binding, user-configuration persistence, PrettyPrompt/Spectre style conversion, and compatibility facades. `--tui=original` selects this frontend. The sibling TUIKit adapter never references this project; App composes both through the same coordinator.

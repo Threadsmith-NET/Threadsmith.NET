@@ -227,6 +227,10 @@
             {
               "id": "TextCopy",
               "resolvedVersion": "6.2.1"
+            },
+            {
+              "id": "TUIKit",
+              "resolvedVersion": "0.10.1"
             }
           ]
         }
@@ -1610,6 +1614,10 @@
               "resolvedVersion": "6.2.1"
             },
             {
+              "id": "TUIKit",
+              "resolvedVersion": "0.10.1"
+            },
+            {
               "id": "xunit.v3.assert",
               "resolvedVersion": "3.2.2"
             },
@@ -1790,6 +1798,10 @@
             {
               "id": "TextCopy",
               "resolvedVersion": "6.2.1"
+            },
+            {
+              "id": "TUIKit",
+              "resolvedVersion": "0.10.1"
             },
             {
               "id": "xunit.v3.assert",
@@ -5818,6 +5830,114 @@
             }
           ],
           "transitivePackages": [
+            {
+              "id": "Microsoft.Data.Sqlite",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Data.Sqlite.Core",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Binder",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.FileExtensions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Json",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.DependencyInjection.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.FileProviders.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.FileProviders.Physical",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.FileSystemGlobbing",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Logging.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Primitives",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "SQLitePCLRaw.bundle_e_sqlite3",
+              "resolvedVersion": "2.1.11"
+            },
+            {
+              "id": "SQLitePCLRaw.core",
+              "resolvedVersion": "2.1.11"
+            },
+            {
+              "id": "SQLitePCLRaw.lib.e_sqlite3",
+              "resolvedVersion": "2.1.12"
+            },
+            {
+              "id": "SQLitePCLRaw.provider.e_sqlite3",
+              "resolvedVersion": "2.1.11"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/src/Threadsmith.Tui.TuiKit/Threadsmith.Tui.TuiKit.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "topLevelPackages": [
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            },
+            {
+              "id": "TUIKit",
+              "requestedVersion": "0.10.1",
+              "resolvedVersion": "0.10.1"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Markdig",
+              "resolvedVersion": "1.3.2"
+            },
             {
               "id": "Microsoft.Data.Sqlite",
               "resolvedVersion": "10.0.10"

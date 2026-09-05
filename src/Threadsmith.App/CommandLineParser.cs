@@ -14,6 +14,7 @@ internal static class CommandLineParser
         RepositoryTrustLevel? requestedTrust = null;
         var repositoryOptionsSpecified = false;
         var useInteractiveTerminal = false;
+        var frontend = InteractiveFrontendKind.None;
         var showHelp = false;
         var showVersion = false;
         string? codexAuthenticationAction = null;
@@ -32,8 +33,28 @@ internal static class CommandLineParser
         // available to ConfigurationBootstrap but likewise never become model input.
         for (var index = 0; index < args.Length; index++)
         {
-            if (string.Equals(args[index], "--tui", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(args[index], "--tui", StringComparison.OrdinalIgnoreCase)
+                || args[index].StartsWith("--tui=", StringComparison.OrdinalIgnoreCase))
             {
+                if (useInteractiveTerminal)
+                {
+                    return CommandLineParseResult.Failure("Specify --tui only once: --tui, --tui=tuikit, or --tui=original.");
+                }
+
+                var name = args[index].Length == 5 ? "tuikit" : args[index][6..];
+                if (string.Equals(name, "original", StringComparison.OrdinalIgnoreCase))
+                {
+                    frontend = InteractiveFrontendKind.Original;
+                }
+                else if (string.Equals(name, "tuikit", StringComparison.OrdinalIgnoreCase))
+                {
+                    frontend = InteractiveFrontendKind.TuiKit;
+                }
+                else
+                {
+                    return CommandLineParseResult.Failure("Unknown TUI frontend. Use --tui, --tui=tuikit, or --tui=original.");
+                }
+
                 useInteractiveTerminal = true;
                 continue;
             }
@@ -173,7 +194,7 @@ internal static class CommandLineParser
             RequestedSolution = requestedSolution,
             RequestedTrust = requestedTrust,
             RepositoryOptionsSpecified = repositoryOptionsSpecified,
-            UseInteractiveTerminal = useInteractiveTerminal,
+            InteractiveFrontend = frontend,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             CodexAuthenticationAction = codexAuthenticationAction,
@@ -281,6 +302,9 @@ internal static class CommandLineParser
 /// <summary>Immutable command-line options used by later startup phases.</summary>
 internal sealed record CommandLineOptions
 {
+    /// <summary>Gets the selected frontend; bare --tui selects TUIKit.</summary>
+    internal InteractiveFrontendKind InteractiveFrontend { get; init; }
+
     /// <summary>Gets the explicitly requested repository, or <see langword="null"/> for the current directory.</summary>
     internal string? RequestedRepository { get; init; }
 
@@ -294,7 +318,11 @@ internal sealed record CommandLineOptions
     internal bool RepositoryOptionsSpecified { get; init; }
 
     /// <summary>Gets whether the interactive terminal was requested.</summary>
-    internal bool UseInteractiveTerminal { get; init; }
+    internal bool UseInteractiveTerminal
+    {
+        get => InteractiveFrontend != InteractiveFrontendKind.None;
+        init => InteractiveFrontend = value ? InteractiveFrontendKind.TuiKit : InteractiveFrontendKind.None;
+    }
 
     /// <summary>Gets whether side-effect-free command help was requested.</summary>
     internal bool ShowHelp { get; init; }

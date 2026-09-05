@@ -95,3 +95,7 @@ Provide automated verification of project-level contracts: dependency direction,
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+## TUIKit frontend checks
+
+`Threadsmith.CoreRuntime.Tests/TuiKitFrontendTests.cs` uses the actual TUIKit adapter and headless backend for exact input ownership, cancellation, stable selections, grapheme edits, bounded retention, and shared Markdown parity. Each new case is bounded to two seconds. `FrontendSelectionTests` covers default TUIKit selection, explicit original selection, invalid/duplicate selectors, and MCP precedence. Long terminal/load diagnostics remain outside unit tests.

@@ -7,6 +7,7 @@ using Threadsmith.Execution;
 using Threadsmith.Extensions.Runtime;
 using Threadsmith.Tools;
 using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Threadsmith.Workspaces;
 
 /// <summary>Runs the selected terminal projection and owns process-global cancellation registration.</summary>
@@ -52,35 +53,17 @@ internal static class ShellRunner
 
             if (context.CommandLine.UseInteractiveTerminal)
             {
-                var extensionHost = context.ExtensionHost
-                    ?? throw new InvalidOperationException("Interactive startup requires the extension host.");
-                await new ConversationalShell(
-                    new TuiPresenter(context.Dispatcher, context.Projections),
-                    context.Events,
-                    context.Models.Catalog,
-                    context.Applications.EffectiveStartupProfileId,
-                    context.Applications.SessionModelPreferences,
-                    extensionHost,
-                    context.Configuration,
-                    context.Applications.SessionUsage,
-                    context.ToolStateManager,
-                    context.Applications.MutationApprovalPolicy,
-                    context.Applications.PlanApprovalPolicy,
-                    context.Models.ActiveModels is not null,
-                    context.Applications.ClaudeSkillCatalog,
-                    sessionLifecycleAvailable: true,
-                    gitQueries: new GitQueryService(),
-                    webFetchAuthorization: context.WebFetchAuthorization,
-                    directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
-                    userConfigurationPath: context.Paths.UserConfiguration,
-                    validationStages: context.Applications.ValidationStages,
-                    codeExploreOutputOptions: context.CodeExploreOutputOptions).RunAsync(
-                        context.Paths.RepositoryRoot,
-                        context.CommandLine.RequestedTrust,
-                        context.CommandLine.RequestedSolution,
-                        context.Models.Status,
-                        context.Paths.RepositoryConfigurationDirectoryExistedAtStartup,
-                        processCancellation.Token);
+                try
+                {
+                    await InteractiveFrontendRunner.RunAsync(context, processCancellation);
+                }
+                catch (UnsupportedTerminalException exception)
+                {
+                    await Console.Error.WriteLineAsync(exception.Message);
+                    return 2;
+                }
+
+                processCancellation.Token.ThrowIfCancellationRequested();
                 return 0;
             }
 

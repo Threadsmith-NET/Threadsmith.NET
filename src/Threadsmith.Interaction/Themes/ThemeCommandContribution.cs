@@ -1,4 +1,4 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Interaction.Themes;
 
 using System.Text.Json;
 using Threadsmith.Interaction.Commands;

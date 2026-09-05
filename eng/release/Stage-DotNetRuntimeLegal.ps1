@@ -6,7 +6,7 @@ $evidence = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
 $runtimeVersion = [string]$evidence.windowsSelfContainedDecision.runtimeVersion
 $assets = Get-Content -LiteralPath $AssetsFile -Raw | ConvertFrom-Json
 $runtimePackId = "Microsoft.NETCore.App.Runtime.$RuntimeIdentifier"
-$runtimePackLibrary = @($assets.libraries.PSObject.Properties | Where-Object { $_.Name -eq "$runtimePackId/$runtimeVersion" -and $_.Value.type -eq 'package' })
+$runtimePackLibrary = @(Get-RestoredRuntimePacks $assets | Where-Object { $_.id -eq $runtimePackId -and $_.version -eq $runtimeVersion })
 if ($runtimePackLibrary.Count -ne 1) { throw "Restore assets do not contain the reviewed runtime pack $runtimePackId/$runtimeVersion." }
 if ([string]::IsNullOrWhiteSpace($RuntimeLegalDirectory)) {
     $packageFolders = @($assets.packageFolders.PSObject.Properties.Name)
@@ -17,10 +17,13 @@ if ([string]::IsNullOrWhiteSpace($RuntimeLegalDirectory)) {
 $destination = Join-Path $StageDirectory 'third-party/dotnet-runtime'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 $records = @()
-foreach ($entry in @(@('LICENSE.txt', 'LICENSE.txt'), @('ThirdPartyNotices.txt', 'THIRD-PARTY-NOTICES.txt'))) {
-    $sourceName = $entry[0]
-    $name = $entry[1]
-    $sources = @(Get-ChildItem -LiteralPath $RuntimeLegalDirectory -File | Where-Object { $_.Name.Equals($sourceName, [StringComparison]::OrdinalIgnoreCase) })
+$requiredFiles = @(
+    [pscustomobject]@{ SourceNames = @('LICENSE.txt'); DestinationName = 'LICENSE.txt' }
+    [pscustomobject]@{ SourceNames = @('ThirdPartyNotices.txt', 'THIRD-PARTY-NOTICES.txt'); DestinationName = 'THIRD-PARTY-NOTICES.txt' }
+)
+foreach ($entry in $requiredFiles) {
+    $name = $entry.DestinationName
+    $sources = @(Get-ChildItem -LiteralPath $RuntimeLegalDirectory -File | Where-Object { $entry.SourceNames -contains $_.Name })
     if ($sources.Count -ne 1 -or ($sources[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Required .NET runtime legal file is missing, ambiguous, or linked: $name" }
     $source = $sources[0].FullName
     Copy-Item -LiteralPath $source -Destination (Join-Path $destination $name)

@@ -1,22 +1,22 @@
 # Implementation Plan 100: Selectable TUIKit Interactive Frontend
 
-**Status:** Planned.
+**Status:** Product integration implemented on `feat/plan-100-tuikit-frontend`; automated regression, six-RID publish/legal closure, and Linux PTY checks passed. Physical-terminal acceptance remains pending. The alternate adapter, selection, shared themes, retained status refresh, input/selection/rendering/lifecycle paths, and TUIKit release notices are present. TUIKit is the default interactive frontend; the existing frontend remains available through `--tui=original`. Automated results and remaining physical-terminal acceptance are recorded in spike notes; this plan is not yet marked complete.
 
-**Delivery track:** Product capability — optional alternate full-screen interactive frontend.
+**Delivery track:** Product capability — selectable full-screen interactive frontends, with TUIKit as the default interactive choice.
 
-**Prerequisites:** [Plan 98](plan-98-frontend-neutral-interaction-coordination.md) has been implemented in full, including `Threadsmith.Interaction`, `IInteractionSurface`, shared command/review/run/session/repository coordination, shared semantic presentation, shared session-status assembly, shared Markdown document generation, and the terminal-free interaction conformance harness. The existing PrettyPrompt/Spectre frontend remains working and is the default interactive frontend.
+**Prerequisites:** [Plan 98](plan-98-frontend-neutral-interaction-coordination.md) has been implemented in full, including `Threadsmith.Interaction`, `IInteractionSurface`, shared command/review/run/session/repository coordination, shared semantic presentation, shared session-status assembly, shared Markdown document generation, and the terminal-free interaction conformance harness. The existing PrettyPrompt/Spectre frontend remains working and selectable.
 
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially UI-as-projection, host-owned authority, external-framework isolation, bounded immutable DTOs, cancellation propagation, and headless parity.
 
 **Related contracts:** [ADR-15](../architecture/adr-15-conversation-first-terminal.md), [Plan 03](plan-03-tui-application-shell.md), [Plan 24](plan-24-tui-semantic-styles-theme-contracts.md), [Plan 25](plan-25-configured-themes-theme-command.md), [Plan 26](plan-26-tui-session-footer.md), [Plan 63](plan-63-markdown-console-rendering.md), [Plan 96](plan-96-active-run-steering-and-double-escape.md), [Plan 98](plan-98-frontend-neutral-interaction-coordination.md), [ADR-49](../architecture/adr-49-public-release-license-compliance.md), and [release-license evidence](../../eng/release/release-license-evidence.json).
 
-**Evaluated upstream baseline (2026-09-04):** [TUIKit](https://github.com/jchristn/TUIKit) 0.9.0, an MIT-licensed, pre-1.0 .NET TUI framework. Its upstream README and [changelog](https://github.com/jchristn/TUIKit/blob/main/CHANGELOG.md) describe `net10.0` support, a retained full-screen host, docked regions, a multiline editor, typed modals, a fixed status bar, raw terminal input, bracketed paste, mouse selection/capture control, terminal restoration, and a headless backend. The same documents explicitly classify the API as alpha and state that the real console backend remains manually validated rather than benchmarked. The version and package facts must be revalidated by the spike before any product reference is added.
+**Evaluated upstream baseline (2026-09-04):** [TUIKit](https://github.com/jchristn/TUIKit) 0.9.0 initially, followed by exact 0.10.1 for its published terminal-teardown fix. The retained isolated precheck pins 0.10.1; both stock editors failed the initial checks. The recovery uses the same exact package with a Threadsmith-owned composer. The user authorized product integration after the recovery measurements; the product now pins 0.10.1. Physical-terminal acceptance remains a separate completion gate. TUIKit is an MIT-licensed, pre-1.0 .NET TUI framework. Its upstream README and [changelog](https://github.com/jchristn/TUIKit/blob/main/CHANGELOG.md) describe `net10.0` support, a retained full-screen host, docked regions, a multiline editor, typed modals, a fixed status bar, raw terminal input, bracketed paste, mouse selection/capture control, terminal restoration, and a headless backend. The same documents explicitly classify the API as alpha and state that the real console backend remains manually validated rather than benchmarked. The exact package digest, embedded resources, public API behavior, and license inputs were verified during the spike.
 
 ---
 
 ## 1 Objective
 
-Add a second, explicitly selected interactive frontend for Threadsmith.NET using TUIKit while retaining the existing PrettyPrompt/Spectre frontend.
+Add a second interactive frontend for Threadsmith.NET using TUIKit, make it the default interactive choice, and retain the existing PrettyPrompt/Spectre frontend as an explicit option.
 
 The new frontend provides a retained full-screen conversation surface with:
 
@@ -28,15 +28,15 @@ The new frontend provides a retained full-screen conversation surface with:
 - safe copying/selection and scroll-lock behavior;
 - shared Markdown, commands, approvals, steering, cancellation, repository, and session behavior supplied by `Threadsmith.Interaction`.
 
-Launch selection is explicit and backward compatible:
+Launch selection is explicit:
 
 ```text
-threadsmith --tui             # existing PrettyPrompt/Spectre frontend
-threadsmith --tui=pretty      # existing PrettyPrompt/Spectre frontend, explicitly named
-threadsmith --tui=tuikit      # new TUIKit frontend
+threadsmith --tui             # TUIKit frontend (default interactive choice)
+threadsmith --tui=tuikit      # TUIKit frontend, explicitly named
+threadsmith --tui=original    # existing PrettyPrompt/Spectre frontend
 ```
 
-Bare `--tui` continues to mean the existing frontend. Headless invocation remains the default when no TUI switch is supplied. Plan 100 does not replace, rename, deprecate, or silently redirect the current frontend.
+Bare `--tui` and `--tui=tuikit` select TUIKit. `--tui=original` selects the existing frontend. Headless invocation remains the default when no TUI switch is supplied, and the existing frontend remains supported.
 
 ## 2 Architectural Context and Suitability
 
@@ -67,7 +67,7 @@ Both frontends consume the same coordinator. Neither frontend owns trust, policy
 |---|---|---|
 | fixed footer | docked regions and `StatusBar` | strong fit; status occupies the bottom row for the complete TUIKit session |
 | live transcript | retained thread-safe `Pane`, bounded ring, scroll lock, “new” indicator | strong fit; consume shared presentation batches rather than TUIKit's independent agent model |
-| multiline input | `TextEditor`, input routing, bracketed paste, submit-key helper | promising; exact 10 KiB/100 KiB multiline paste and newline behavior are hard spike gates |
+| multiline input | public widget/focus/surface contracts, bracketed paste, submit-key helper | use a Threadsmith-owned composer; stock `TextEditor` has reproduced Unicode/caret defects; exact paste and the owned editor remain hard spike gates |
 | selectors/reviews | awaitable typed modals and `SelectAsync`/`PromptAsync`/`ConfirmAsync` | strong fit; visible labels map back to Plan 98 stable option IDs |
 | semantic output | styled text, tables, panes, themes, Unicode width | strong fit; adapter maps Threadsmith roles and documents without exposing TUIKit types |
 | Markdown | upstream Markdown renderer and streaming helper | not used for parsing or answer collection; Plan 98 remains authoritative |
@@ -83,20 +83,20 @@ TUIKit is conditionally suitable. Its retained layout directly solves the fixed-
 
 ADR-15 remains authoritative for the default PrettyPrompt frontend. It explicitly requires a new ADR and real-terminal latency evidence before a full-screen surface is adopted. Plan 100 therefore requires:
 
-1. a passing TUIKit spike;
+1. recorded passing TUIKit feasibility evidence;
 2. recorded real-terminal evidence;
-3. a new ADR governing the optional TUIKit frontend;
+3. a new ADR governing the selectable TUIKit frontend and default interactive choice;
 4. no amendment or weakening of the existing PrettyPrompt/native-scrollback contract.
 
 The new ADR must describe the frontends as parallel choices. It must not supersede ADR-15 globally.
 
 ## 3 Scope
 
-- Build and run a focused `Spike.TuiKit` before production implementation.
+- Build and run a disposable focused TUIKit feasibility probe before production implementation, then remove it after its evidence is incorporated.
 - Add one production adapter project, `src/Threadsmith.Tui.TuiKit/`.
-- Add one focused test project, `tests/Threadsmith.Tui.TuiKit.Tests/`.
-- Pin one exact TUIKit version through Central Package Management after the spike passes.
-- Add `--tui=pretty` and `--tui=tuikit`, preserving bare `--tui`.
+- Add one focused test project, `tests/Threadsmith.CoreRuntime.Tests/TuiKitFrontendTests.cs`.
+- Pin one exact TUIKit version through Central Package Management after the feasibility gate passes.
+- Make bare `--tui` and `--tui=tuikit` select TUIKit, and add `--tui=original` for the existing frontend.
 - Compose exactly one interactive frontend per process.
 - Implement `IInteractionSurface` using TUIKit public APIs only.
 - Implement the fixed transcript/activity/composer/status layout defined in section 6.
@@ -110,7 +110,6 @@ The new ADR must describe the frontends as parallel choices. It must not superse
 ## 4 Non-Scope
 
 - Replacing or removing `Threadsmith.Tui`, PrettyPrompt, or Spectre.Console.
-- Changing which frontend bare `--tui` selects.
 - Automatically selecting TUIKit by terminal capability, operating system, configuration, prior choice, or package availability.
 - Persisting a preferred frontend in user or repository configuration.
 - Falling back silently from a failed TUIKit launch to PrettyPrompt.
@@ -173,7 +172,7 @@ Replace the startup boolean as the source of truth with a host-owned enum such a
 
 ```text
 InteractiveFrontendKind.None
-InteractiveFrontendKind.Pretty
+InteractiveFrontendKind.Original
 InteractiveFrontendKind.TuiKit
 ```
 
@@ -182,18 +181,18 @@ InteractiveFrontendKind.TuiKit
 Parsing rules:
 
 - no `--tui` switch → `None`;
-- `--tui` → `Pretty`;
-- `--tui=pretty` → `Pretty`;
+- `--tui` → `TuiKit`;
 - `--tui=tuikit` → `TuiKit`;
+- `--tui=original` → `Original`;
 - frontend IDs are case-insensitive and canonicalized for diagnostics;
 - an empty or unknown `--tui=` value returns an actionable side-effect-free command-line error and exit code 2;
 - more than one TUI selector returns an ambiguity error, even when values are equivalent;
 - `--tui tuikit` retains current parsing: `tuikit` is request text, not an optionally consumed switch value;
-- `--help` documents all three forms;
+- `--help` documents all supported forms;
 - headless MCP management retains precedence and never initializes either TUI, including with `--tui=tuikit`;
 - Codex authentication retains its current interactive-browser meaning and does not initialize a TUI merely because a frontend was selected.
 
-There is no `--tuikit` alias and no configuration default in Plan 100.
+There is no `--tuikit` alias and no persisted frontend preference in Plan 100.
 
 ### 6.3 Full-screen layout
 
@@ -286,15 +285,147 @@ Specialized TUIKit widgets such as `Table` may be used only when they preserve a
 
 ### 6.8 Composer and ordinary input
 
-- Use the multiline `TextEditor`, not a single-line prompt field.
+- Use the Threadsmith-owned multiline composer described in section 6.8.1, hosted through TUIKit public widget/focus/surface contracts. The stock `TextEditor` is retained only in the diagnostic reproducer.
 - `Enter` submits the current ordinary composer through the shared coordinator.
 - `Shift+Enter` inserts a newline where the terminal reports the modified chord.
-- `Ctrl+J` is the portable newline fallback and is documented for the TUIKit frontend.
+- `Ctrl+Enter` inserts a newline whether the terminal reports the enhanced modified-Enter sequence or its line-feed representation.
 - Bracketed paste inserts one exact operation, retains embedded CR/LF as normalized composer newlines, and never submits implicitly.
 - `Ctrl+V`/platform paste and `Shift+Insert` use the same bounded paste path where the terminal reports them.
 - Input limits, cancellation, empty submission, slash-command handling, repository prompt label, and successful `/open` label changes remain shared contracts.
 - Submitting swaps the draft into an immutable shared input result before clearing the editor.
 - A failed submit handoff restores the exact draft and caret/selection where public TUIKit APIs permit; otherwise it preserves the exact draft with a documented caret fallback.
+
+### 6.8.1 Recovery design: a Threadsmith composer hosted by TUIKit
+
+**Decision:** implement an internal `TuiKitComposer` through public `IWidget`,
+`IFocusable`, and `IFocusAware` contracts. TUIKit continues to own the terminal,
+input decoder, focus routing, layout, surfaces, and modal stack. The composer
+owns its text and editing state. It does not use the stock `TextEditor` editing
+or caret-rendering paths that failed the initial precheck. This is an explicit
+revision of the original stock-widget choice; production integration still
+requires the complete spike to pass.
+
+The isolated owned composer now passes the reproduced Unicode, caret, undo and
+paste prechecks; see spike notes for its exact validation scope. A wrapper that calls Backspace twice would leave
+intermediate invalid text in undo history; assigning `TextEditor.Text` after
+each edit resets its undo/redo state. Therefore, do not stack those workarounds.
+Use a small coherent composer with one authoritative buffer and bounded edit
+history. No general editor framework, syntax engine, or extra package is needed.
+
+| Observed defect | Planned implementation | Required proof |
+|---|---|---|
+| Backspace removes half an emoji | Delete a complete Unicode text element in one edit | Emoji, combining mark, flag, modifier, and joined-emoji deletion plus undo preserve exact valid text |
+| Left permits insertion inside an emoji | Caret/selection endpoints always sit on text-element boundaries | Left/Right/Up/Down, word motion, Home/End, selection replacement, and paste never split an element |
+| Caret renderer writes half a surrogate | Draw complete grapheme cells and apply caret styling to the entire visible cluster | Valid cells for focused/unfocused CJK, emoji, combining sequences, and end-of-line caret |
+| Long lines hide input/caret | Soft-wrap for display and scroll the four-row viewport to the caret | Typing, paste, navigation, selection, resize, and restoration keep the caret visible at all required widths |
+
+Keep the initial code in the spike and organize production behavior into at most
+three cohesive responsibilities; do not create a class for each key or command:
+
+1. **Composer buffer.** Logical lines, caret, selection anchor, and preferred
+   visual column. Use .NET 10 `StringInfo` text-element boundaries for edits and
+   re-evaluate affected boundaries after insertion, replacement, or line joins.
+   Store normalized LF newlines; preserve all other admitted input exactly.
+   Enforce existing input admission rules. Inspect PrettyPrompt's effective
+   bindings and history behavior before implementing the complete editing
+   inventory: movement, selection, deletion, cut/copy/paste, undo/redo, and
+   command-history traversal where currently available. A paste, deletion of a
+   text element, or replacement of a selection is one undoable operation.
+   Bound edit history by retained bytes as well as entry count; evict oldest undo
+   records without truncating the live draft. Never snapshot the entire 100 KiB
+   draft once per pasted character.
+2. **Composer view.** Map logical offsets to visual rows/cell columns, soft-wrap
+   only at grapheme boundaries, handle tabs with display-only expansion, and
+   preserve a preferred visual column for vertical motion. Use TUIKit's public
+   Unicode-width and cell/surface primitives; validate their widths against the
+   Unicode fixtures and the terminal matrix. Keep the complete text element in
+   each leading cell and valid continuation cells for wide glyphs. Redraw only
+   the bounded viewport; resize changes wrapping and scroll position, not text,
+   selection, or undo history. Never allocate a terminal surface as wide as an
+   entire long pasted line. During the too-small screen, preserve all state and
+   disable decisions until the layout recovers.
+3. **Input and lifetime integration.** Bind the composer through the existing
+   TUIKit input owner. The surface interprets submit, newline, `Ctrl+T`, active-run
+   Enter/double-Escape, and interruption; ordinary editing belongs to the
+   composer. Keep conversation, secondary-prompt, and steering drafts separate.
+   Transfer text to immutable `InteractionInput` before clearing it; restore the
+   draft on a failed handoff. No polling console reader, nested terminal loop, or
+   adapter-owned slash-command/approval policy is permitted.
+
+The framework support for text-element indexing is documented in
+[.NET StringInfo](https://learn.microsoft.com/en-us/dotnet/api/system.globalization.stringinfo?view=net-10.0).
+TUIKit public API evidence comes from the XML documentation in the exact 0.10.1
+package and its recorded source commit `820e8ef5e199549a119360647c13427d0c36d63e`.
+Unicode segmentation and terminal column width are separate concerns; neither
+`string.Length` nor rune count may be used as displayed width.
+
+### 6.8.2 Recovery execution order and decision points
+
+**First: verify the actual shared boundary.** Regenerate the command, selector,
+review, composer, history, and keyboard inventory from this branch. The existing
+276-test baseline is useful evidence, not a complete parity certificate. Source
+inspection identified these concrete prerequisite checks:
+
+- `InteractionSessionSurface.SelectAsync` returns `-1` for cancellation.
+  `SelectMcpProfileAsync` and `SelectMcpCapabilityAsync` currently index the
+  returned value without checking it; the MCP switch-account selector checks
+  only the explicit Cancel index. Add fail-closed guards and exercise Escape
+  before any identity-changing command. Fix these in Interaction for both
+  frontends, with small focused checks; preserve unrelated user changes.
+- Current plan/mutation reviews use secondary composer reads. Preserve those
+  exact workflows initially. Do not infer a typed review from display strings
+  or invent an adapter-specific approval path. Any later typed-review contract
+  change must update the shared coordinator, both adapters, and conformance
+  together.
+- Session status is assembled before ordinary composer reads. Add a neutral
+  retained-status capability and shared refresh scheduling for opted-in surfaces
+  so usage/context/model/repository/session changes refresh the fixed row during
+  runs and modals. Both modes use the same status assembler; PrettyPrompt keeps
+  its existing prompt-boundary output timing. Perform Git/host reads outside the
+  render loop, coalesce replaceable snapshots without reordering accepted
+  presentation, and discard late snapshots after a session/repository change.
+- Include the empty-composer `Ctrl+T` reasoning toggle and every frontend-local
+  theme command in parity. An alternate layout must not silently lose these
+  behaviors merely because they are not slash commands in the shared catalog.
+
+**Second: prove the owned composer.** Preserve the original stock-editor
+reproducer as an explicitly selected diagnostic mode. Add an adapter precheck
+that runs the same four behavioral assertions against `TuiKitComposer` and
+retains exact 10/100 KiB paste, submit/newline, and teardown checks. Add only the
+small cases needed for undo/redo, selection replacement, multiline joins, and
+visual navigation. Report stock-editor diagnostics separately from the proposed
+adapter's results; do not change the original expected behavior to make it pass.
+The exit criterion is correct text/cells and a visible caret, with no private
+API, source fork, or per-character paste path.
+
+**Third: complete the full spike.** On the same exact 0.10.1 package, exercise the
+four-region layout and public modal lifecycle; FIFO output; retained bounds;
+shared Markdown; active-run input; selection/copy/F12; cancellation and complete
+restoration. Use a small custom typed modal where stock `SelectModal` cannot
+provide filtering and inspectable long labels: filtering preserves host order
+and stable IDs, a detail path exposes complete decision text, and Escape never
+activates an option. Before PASS, execute the required physical Windows Terminal
+and Linux/macOS runs, six-RID package checks, license review including bundled
+fonts, and the separate 60-second saturation/latency/memory probe. Missing access
+to a physical terminal is recorded as an unrun gate, not an upstream failure or
+a simulated pass. Product integration waits for evidence.
+
+**Fourth: integrate the alternate frontend.** After the spike passes, execute
+P100-03 onward: ADR, package/legal closure, adapter project, launch selection,
+shared theme extraction, semantic rendering/status/input/modals, and teardown.
+Use one shared coordinator and exactly one selected frontend. Make bare `--tui`
+and `--tui=tuikit` select TUIKit, expose the existing frontend only as
+`--tui=original`, and leave headless/MCP/auth precedence intact.
+
+**Fifth: close every parity row and release gate.** Maintain a branch-derived
+matrix covering every current command and selector, successful and cancelled
+reviews, post-action list refresh, stale IDs, session/repository transitions,
+ordinary/secondary/steering input, themes, Markdown/source mode, status, copy,
+and exits. Compare the same semantic interactions and resulting typed host
+commands through both adapters. Record any intentional layout/terminal-ownership
+difference separately; all required functionality must remain available. Then
+run the full regression/release matrix and real-terminal procedures before
+declaring functional parity or completing this plan.
 
 ### 6.9 Active-run steering and cancellation
 
@@ -396,19 +527,19 @@ The TUIKit frontend may repaint currently retained cells when a theme changes be
 - Suspend/resume and resize use public lifecycle signals and do not create domain events.
 - Do not emit image protocols or arbitrary OSC sequences.
 
-An explicit `--tui=tuikit` invocation requires an interactive input/output terminal. A non-TTY, `TERM=dumb`, or unsupported initialization fails with a concise actionable message and exit code 2; it does not silently switch to PrettyPrompt or headless mode. `NO_COLOR` is supported and changes styling only.
+A bare `--tui` or explicit `--tui=tuikit` invocation requires an interactive input/output terminal. A non-TTY, `TERM=dumb`, or unsupported initialization fails with a concise actionable message and exit code 2; it does not silently switch to PrettyPrompt or headless mode. `NO_COLOR` is supported and changes styling only.
 
-## 7 Mandatory TUIKit Spike
+## 7 Mandatory TUIKit Feasibility Evidence
 
 ### 7.1 Purpose and isolation
 
-Create `spikes/Spike.TuiKit/` and add it only to `spikes/Spikes.sln`. The spike may reference the implemented `Threadsmith.Interaction` contracts and the candidate TUIKit package. It remains outside `src/Threadsmith.sln`, release payloads, and product dependency graphs.
+Use an isolated throwaway probe before production implementation. It may reference the implemented `Threadsmith.Interaction` contracts and the candidate TUIKit package, but remains outside `src/Threadsmith.sln`, release payloads, and product dependency graphs. Remove the probe after its evidence is recorded and equivalent production regressions exist.
 
-The spike is a decision gate, not a prototype to polish or merge wholesale. Record exact package identity/version, resolved dependencies, terminal/OS versions, measurements, failures, and PASS/FAIL in `docs/architecture/spike-notes.md`.
+The probe is a decision gate, not a prototype to polish or merge wholesale. Record exact package identity/version, resolved dependencies, terminal/OS versions, measurements, failures, and PASS/FAIL in `docs/architecture/spike-notes.md`.
 
 ### 7.2 Candidate package gate
 
-Start with exact TUIKit 0.9.0 because that is the evaluated upstream baseline. Verify:
+Use exact TUIKit 0.10.1 for the recovery probe. The initial 0.9.0 precheck and the 0.10.1 retry are historical evidence, not passing gates. Verify:
 
 - the package exists on the approved NuGet source;
 - package metadata points to the expected upstream project;
@@ -418,7 +549,7 @@ Start with exact TUIKit 0.9.0 because that is the evaluated upstream baseline. V
 - no install/build target executes unreviewed repository code;
 - all six Threadsmith release RIDs can resolve/publish the managed dependency.
 
-If 0.9.0 is unavailable or a later version is required for a blocking fix, update this plan's evaluated baseline, pin one exact replacement, and rerun the entire spike. Do not use a floating version or source checkout as production input.
+If a different published version is required, update this plan's evaluated baseline, pin one exact replacement, and rerun the entire spike. Adapter corrections may be evaluated on the same exact pin; they must pass the complete integration gate. Do not use a floating version or source checkout as production input.
 
 ### 7.3 Spike fixture
 
@@ -426,7 +557,7 @@ Build the smallest surface that exercises real risk:
 
 - fill transcript pane;
 - one mutable activity row;
-- four-row multiline editor;
+- four-row Threadsmith-owned multiline composer, including Unicode-safe editing, bounded undo/redo, selection, and wrapping;
 - fixed one-row status bar containing a monotonically changing sentinel;
 - typed selector and confirmation modal;
 - semantic presentation batches including Markdown, links, diffs, controls, Unicode, and long lines;
@@ -458,7 +589,7 @@ Run on Windows Terminal and at least one real Linux or macOS terminal before PAS
 Required cases:
 
 1. exact 10 KiB and 100 KiB multiline bracketed paste into the editor with no submission, loss, duplication, per-character latency, or newline stripping;
-2. Enter submit plus Shift+Enter where supported and Ctrl+J portable newline;
+2. Enter submit plus Ctrl+Enter newline and Shift+Enter where supported;
 3. 100 background presentation updates per second for 60 seconds while typing, scrolling, opening/cancelling a modal, and resizing, with no lost/reordered accepted item or sustained input lag;
 4. fixed footer remains stable during output and at 40/80/120/200 columns;
 5. scroll detach/new-count/reattach and transcript eviction notice;
@@ -488,6 +619,7 @@ The spike passes only if all of the following are true:
 
 - fixed status/footer behavior works through public APIs;
 - exact multiline paste passes;
+- the owned composer preserves Unicode text/cells, complete edit/undo semantics, and caret visibility on long lines;
 - active-run input semantics are implementable without a competing reader;
 - selection/copy has both an application path and terminal handoff path;
 - terminal restoration passes every tested exit path;
@@ -496,7 +628,19 @@ The spike passes only if all of the following are true:
 - package/license/release closure is acceptable;
 - no required behavior depends on reflection, private fields, vendored patches, or a build from `main`.
 
-On FAIL, do not add the production package/project/launch selector. Record the blockers, mark Plan 100 `Deferred — spike failed`, and keep the existing frontend unchanged. A later retry requires a new upstream version and a complete rerun, not a waived gate.
+Evaluate the proposed adapter, including its owned composer, against these gates.
+A failing stock-widget diagnostic is evidence for adapter work, not by itself a
+final no-go for the framework. Correct defects through the in-scope public-API
+adapter and rerun affected prechecks; rerun the complete spike before PASS.
+Keep original diagnostic expectations and distinguish stock versus adapter
+results. Do not claim PASS while any required check is failing or unrun.
+
+If a required capability remains unimplementable within these boundaries, do not
+add the production package/project/launch selector. Record the precise unresolved
+blocker and attempted public-API approach, mark this plan `Deferred — spike failed`, and preserve the existing frontend. A subsequent documented adapter
+revision may retry the same exact package; changing the package also requires a
+complete rerun. Neither route may waive Unicode, input, selection/copy, terminal
+restoration, parity, performance, or legal/release requirements.
 
 ## 8 Public Contracts and Dependency Rules
 
@@ -532,19 +676,17 @@ Expose only the factory/entry point needed by App composition. Widgets, backend,
 
 | Area | Planned change |
 |---|---|
-| `spikes/Spike.TuiKit/` | minimal gated full-screen/copy/input/teardown spike |
-| `spikes/Spikes.sln` | add spike project only |
 | `docs/architecture/spike-notes.md` | record exact evidence and PASS/FAIL |
-| `docs/architecture/adr-51-*.md` | if the next ADR number remains 51, record optional full-screen frontend decision after PASS |
+| `docs/architecture/adr-51-*.md` | if the next ADR number remains 51, record the selectable full-screen frontend decision after PASS |
 | `Directory.Packages.props` | exact approved TUIKit pin after PASS |
-| `src/Threadsmith.Tui.TuiKit/` | new adapter project, surface, layout, rendering, input, modals, themes, lifecycle |
+| `src/Threadsmith.Tui.TuiKit/` | new adapter project, owned composer buffer/view, surface, layout, rendering, input, modals, themes, lifecycle |
 | `src/Threadsmith.Interaction/` | only terminal-neutral contract/theme refinements justified by the second consumer |
 | `src/Threadsmith.App/CommandLineParser.cs` | parse frontend kind and invalid/duplicate selectors |
 | `src/Threadsmith.App/ShellRunner.cs` | compose one selected frontend and coordinate cancellation ownership |
 | `src/Threadsmith.App/Program.cs` | updated help text only; no frontend logic |
 | `src/Threadsmith.App/Threadsmith.App.csproj` | reference the new adapter project |
 | `src/Threadsmith.sln` | add production adapter and focused tests |
-| `tests/Threadsmith.Tui.TuiKit.Tests/` | headless rendering, input, modal, ordering, status, bounds, and lifecycle tests |
+| `tests/Threadsmith.CoreRuntime.Tests/TuiKitFrontendTests.cs` | headless rendering, input, modal, ordering, status, bounds, and lifecycle tests |
 | existing Interaction/TUI/App/Architecture tests | shared conformance, PrettyPrompt non-regression, launch grammar, dependencies |
 | release legal evidence/package graph | TUIKit identity, MIT notice, source/provenance, release closure |
 | user/operations/planning docs | launch, keys, full-screen selection, fixed status, acceptance/manual verification |
@@ -559,21 +701,23 @@ Verify the next ADR number at implementation time rather than overwriting an int
 2. Run those tests against the PrettyPrompt adapter and record the baseline.
 3. Inventory the final public Interaction contracts rather than coding against the illustrative names in Plans 98/100.
 4. Confirm the current branch has no unrelated unfinished interaction-boundary migration.
+5. Close the concrete cancellation and live-status boundary gaps described in section 6.8.2 through shared contracts; preserve both frontends' behavior and fail-closed decisions.
+6. Include effective PrettyPrompt editing/history bindings, empty-input Ctrl+T, themes, and secondary review reads in the baseline inventory; do not equate a passing test count with complete characterization.
 
 **Gate:** no TUIKit product work begins while Plan 98 behavior is duplicated or incomplete.
 
 ### P100-02 Run the mandatory spike
 
-1. Create the isolated spike and exact package reference.
+1. Extend the isolated spike on exact TUIKit 0.10.1 with the owned composer from section 6.8.1. Preserve stock-editor failures as separate diagnostics and run the same behavioral assertions against the actual proposed composer.
 2. Complete package, headless, physical-terminal, performance, selection/copy, input, and teardown checks from section 7.
 3. Record evidence in `spike-notes.md`.
 4. Decide PASS or FAIL strictly from the go/no-go rule.
 
-**Gate:** FAIL ends implementation without product changes. PASS authorizes P100-03 onward.
+**Gate:** a final unresolved no-go prevents production integration. Stock-widget failures trigger the bounded adapter work in sections 6.8.1–6.8.2. Only a complete passing spike authorizes P100-03 onward; unrun physical-terminal checks remain pending.
 
 ### P100-03 Record architecture and planning ownership
 
-1. Add the next ADR for the optional full-screen frontend, citing ADR-15 and the spike.
+1. Add the next ADR for the selectable full-screen frontend, citing ADR-15 and the spike.
 2. Register an owning product milestone/index/DAG entry if required by the planning state when implementation is activated; do not attach the capability to a completed milestone.
 3. Add product acceptance Scenario AR (or the next available stable ID) for explicit frontend selection, fixed status, shared authority, full-screen interaction, and default-frontend non-regression.
 4. Reserve MTP-256 (or the next available stable ID) for the real-terminal TUIKit matrix.
@@ -589,7 +733,7 @@ Verify the next ADR number at implementation time rather than overwriting an int
 ### P100-05 Scaffold the adapter and tests
 
 1. Add `Threadsmith.Tui.TuiKit` and its project DOX.
-2. Add `Threadsmith.Tui.TuiKit.Tests` and test DOX/index updates.
+2. Add focused adapter tests in the existing `Threadsmith.CoreRuntime.Tests` suite and update test DOX/index ownership. No additional test project is needed; the user requires small, fast unit checks.
 3. Add project references and solution configurations.
 4. Implement a factory/entry point with no host policy dependencies.
 5. Add forbidden-reference and public-signature architecture guards before feature code.
@@ -600,7 +744,7 @@ Verify the next ADR number at implementation time rather than overwriting an int
 2. Update help/usage.
 3. Add parser tests for no selector, bare selector, both named values, case, empty, unknown, duplicate, request-text preservation, MCP precedence, and auth behavior.
 4. Refactor `ShellRunner` to choose one adapter factory without duplicating its shared dependencies.
-5. Prove `--tui` still constructs only PrettyPrompt and no TUIKit type is loaded/initialized on headless or PrettyPrompt paths.
+5. Prove bare `--tui` constructs only TUIKit, `--tui=original` constructs only PrettyPrompt, and no terminal frontend is loaded or initialized on headless paths.
 
 ### P100-07 Build layout and UI-loop serialization
 
@@ -620,7 +764,7 @@ Verify the next ADR number at implementation time rather than overwriting an int
 
 ### P100-09 Implement fixed status and activity
 
-1. Cache/render the latest status snapshot in the bottom row.
+1. Supply fresh status from the shared coordinator through the neutral retained-status capability described in section 6.8.2, then cache/render it in the bottom row. Preserve PrettyPrompt prompt-boundary emission and avoid host queries inside rendering.
 2. Implement responsive omission and width measurement through TUIKit.
 3. Implement one mutable activity row and bounded refresh.
 4. Preserve estimate/unknown values and ensure no synchronous host query occurs while rendering.
@@ -628,7 +772,7 @@ Verify the next ADR number at implementation time rather than overwriting an int
 
 ### P100-10 Implement composer, paste, and run input
 
-1. Wire multiline editor submit/newline behavior.
+1. Implement the proven owned-composer design, including text-element editing, display wrapping, selection, bounded undo/history, and submit/newline behavior; do not transplant spike code wholesale.
 2. Implement one-operation bracketed paste with exact multiline preservation and current bounds.
 3. Implement ordinary cancellation and exact draft handoff/restoration.
 4. Implement active-run Enter, repeated Enter, double Escape, Ctrl+C, ordinary input buffering, safe-boundary steering, and draft restoration.
@@ -711,10 +855,20 @@ Use the upstream headless backend for:
 
 Do not make broad ANSI snapshots the primary semantic oracle. Assert cell-buffer text, roles/styles where relevant, and shared conformance traces.
 
+Keep every new unit test small and direct, completing within one to two seconds on the development machine.
+Use simple table-driven input/expected-output cases and the existing clock/input
+seams. Do not introduce sleep-based tests, elaborate mocks, a reusable terminal
+testing framework, or tests more complex than the behavior they check. Run the
+60-second saturation, memory, six-RID publishing, and physical-terminal work as
+explicit spike/integration/manual probes rather than unit tests. Share scenario
+definitions through the existing conformance approach without creating a new
+cross-project test-helper library. Extend an existing check only for a distinct
+failure or contract; do not multiply cases to inflate coverage counts.
+
 ### 11.3 App and architecture tests
 
 - exact CLI grammar and side-effect-free errors;
-- bare `--tui` default compatibility;
+- bare `--tui` TUIKit default and explicit original selection;
 - one frontend constructed per process path;
 - MCP/headless/auth precedence;
 - forbidden references and terminal-type isolation;
@@ -725,7 +879,7 @@ Do not make broad ANSI snapshots the primary semantic oracle. Assert cell-buffer
 
 ### 11.4 PrettyPrompt non-regression
 
-Run existing TUI tests and real-terminal procedures without changing their expected behavior. In particular, bare `--tui` retains native scrollback, composer-adjacent status, current paste/selection, current themes, and current cancellation.
+Run existing TUI tests and real-terminal procedures against `--tui=original` without changing their expected behavior. The original frontend retains native scrollback, composer-adjacent status, current paste/selection, current themes, and current cancellation.
 
 ### 11.5 Manual verification
 
@@ -742,18 +896,16 @@ Add MTP-256 with prerequisites, exact commands, terminal matrix, and expected re
 - theme and `NO_COLOR`;
 - normal/failure/cancellation teardown;
 - Windows, Linux/macOS, SSH/tmux where available;
-- PrettyPrompt default non-regression.
+- PrettyPrompt `--tui=original` non-regression.
 
 Affected existing MTP cases should gain a TUIKit variant only when their executable procedure genuinely applies. Do not rewrite PrettyPrompt-native expectations as though both frontends own native scrollback.
 
 ### 11.6 Minimum verification commands
 
-After the spike passes and production projects exist, run at minimum:
+After the feasibility gate passes and production projects exist, run at minimum:
 
 ```powershell
-dotnet run --project spikes\Spike.TuiKit\Spike.TuiKit.csproj
 dotnet build src\Threadsmith.sln --no-restore
-dotnet test tests\Threadsmith.Tui.TuiKit.Tests\Threadsmith.Tui.TuiKit.Tests.csproj --no-restore
 dotnet test tests\Threadsmith.CoreRuntime.Tests\Threadsmith.CoreRuntime.Tests.csproj --no-restore
 dotnet test tests\Threadsmith.SessionStatus.Tests\Threadsmith.SessionStatus.Tests.csproj --no-restore
 dotnet test tests\Threadsmith.RepositoryLifecycle.Tests\Threadsmith.RepositoryLifecycle.Tests.csproj --no-restore
@@ -804,22 +956,22 @@ Frame timing, queue depth, dropped/coalesced frames, and memory counters may be 
 ## 14 Migration and Compatibility
 
 - No persisted data, event, checkpoint, repository config, or database migration is required.
-- Bare `--tui` and all existing headless commands remain compatible.
+- Bare `--tui` now selects TUIKit; all existing headless commands remain compatible.
 - Existing scripts that pass a request token immediately after `--tui` continue to treat that token as request text; only `--tui=<id>` selects a named frontend.
 - PrettyPrompt remains installed and shipped.
-- TUIKit adds package and payload size but no selection unless explicitly requested.
+- TUIKit adds package and payload size and is selected by bare `--tui` or `--tui=tuikit`.
 - Sessions created in either frontend can be resumed by the other because frontend state is not durable.
 - Raw Markdown and durable transcript remain frontend-independent.
 - TUIKit's visible retained transcript is bounded and may not contain an entire long session; the durable session remains authoritative.
 - Theme identity/configuration is shared, but current retained TUIKit cells may repaint while prior native PrettyPrompt scrollback cannot.
 - Unknown/unsupported TUIKit terminals fail explicitly; they never change the saved preference because no preference is persisted.
-- An upstream TUIKit upgrade is a compatibility project: update the exact pin, review breaking changes/license/dependencies, rerun the spike, both adapters' conformance, release builds, and MTP-256.
+- An upstream TUIKit upgrade is a compatibility project: update the exact pin, review breaking changes/license/dependencies, rerun focused compatibility probes, both adapters' conformance, release builds, and MTP-256.
 
 ## 15 Acceptance Criteria
 
-1. The TUIKit spike passes every package, input, selection/copy, performance, terminal-restoration, and release gate using public APIs only.
-2. A new ADR authorizes TUIKit as an optional full-screen frontend without superseding ADR-15 for PrettyPrompt.
-3. `threadsmith --tui` and `threadsmith --tui=pretty` launch the existing frontend; `threadsmith --tui=tuikit` launches the new frontend.
+1. Recorded TUIKit feasibility evidence passes every package, input, selection/copy, performance, terminal-restoration, and release gate using public APIs only.
+2. A new ADR authorizes TUIKit as the default interactive frontend without superseding ADR-15 for PrettyPrompt.
+3. `threadsmith --tui` and `threadsmith --tui=tuikit` launch TUIKit; `threadsmith --tui=original` launches the existing frontend; the former `--tui=pretty` spelling is rejected.
 4. Empty, unknown, or duplicate frontend selectors fail before startup side effects with exit code 2.
 5. Headless, MCP-management, and authentication precedence remain unchanged and do not initialize TUIKit.
 6. Exactly one frontend consumes the shared Plan 98 coordinator in a process.
@@ -831,7 +983,7 @@ Frame timing, queue depth, dropped/coalesced frames, and memory counters may be 
 12. Semantic presentation content, order, roles, lifecycle boundaries, diffs, durations, safe-source behavior, and terminal outcomes remain equivalent across frontends.
 13. TUIKit renders the shared Markdown document and never independently parses/recollects model answers.
 14. Raw Markdown remains exact and authoritative in transcript persistence, context, restore, and headless output.
-15. Enter submits; Shift+Enter works where reported; Ctrl+J always inserts a newline; 10 KiB and 100 KiB multiline paste is exact and never implicitly submits.
+15. Enter submits; Ctrl+Enter inserts a newline; Shift+Enter works where reported; 10 KiB and 100 KiB multiline paste is exact and never implicitly submits. The owned composer preserves complete Unicode text elements across movement, selection, edits, and undo/redo, renders valid grapheme cells, and keeps the caret visible through long lines and resize.
 16. Every selection list present after Plan 98—including models, repository tool enablement, extensions, sessions, MCP profiles/capabilities/actions, repository trust/solutions/init, policies, themes, approvals/reviews, and contributed selectors—remains available in TUIKit with equivalent ordering, decision-relevant information, navigation/search, dynamic refresh, stable-ID mapping, and fail-closed cancellation; the same choices dispatch the same typed host commands as PrettyPrompt.
 17. Active-run Enter, repeated Enter, double Escape, Ctrl+C, buffered ordinary input, safe-boundary steering, `/agents`, and draft restoration satisfy Plan 96/98.
 18. Detached scrolling preserves position and reports new items; reattaching clears the count; bounded eviction is disclosed.
@@ -849,12 +1001,14 @@ Frame timing, queue depth, dropped/coalesced frames, and memory counters may be 
 | Risk | Mitigation |
 |---|---|
 | TUIKit is alpha and breaks between minor versions | exact pin, package isolation, mandatory spike, explicit upgrade procedure, no use of `main` |
-| Full-screen mode regresses selection/copy | TUIKit selection + bounded explicit copy + F12 terminal handoff; physical-terminal gate; keep PrettyPrompt default |
+| Full-screen mode regresses selection/copy | TUIKit selection + bounded explicit copy + F12 terminal handoff; physical-terminal gate; keep PrettyPrompt available through `--tui=original` |
 | Raw mode leaves the shell damaged | one cancellation owner, idempotent `finally` teardown, upstream lifecycle APIs, forced-failure terminal tests |
-| 0.9.0 paste fix covers fields but not multiline editor needs | exact TextEditor 10/100 KiB multiline spike gate; no production work on failure |
+| Stock editor corrupts Unicode or hides long-line input | owned composer over public widget/surface contracts; retain the four original behavioral assertions plus exact 10/100 KiB paste and edit/undo checks |
 | TUIKit command/Markdown helpers duplicate shared policy | architecture tests and source review prohibit slash routing, streaming finalization, and raw Markdown parsing in adapter |
 | UI-loop marshalling reorders output | one adapter queue, loop-post acknowledgements, shared differential traces, saturation tests |
 | Persistent composer changes steering semantics | explicit active-run mode, separate ordinary draft buffer, shared lease signals, Plan 96 conformance |
+| Owned composer grows into a second editor framework | three cohesive responsibilities, branch-derived editing parity, bounded undo/history, public TUIKit host integration, and no general editor features |
+| Shared cancellation/status assumptions hide parity gaps | audit every cancellation sentinel and existing secondary prompt; refresh shared status for opted-in surfaces while preserving PrettyPrompt timing |
 | Ctrl+C conflicts with TUIKit and `ShellRunner` handlers | spike exact policy; one idempotent cancellation route; teardown-race tests |
 | Retained transcript grows without bound | line+byte caps, stable eviction, omission notice, memory stabilization test, durable history remains separate |
 | Fixed regions leave too little room | measured minimum size, compact status, internal composer scrolling, recoverable too-small screen |
@@ -872,13 +1026,13 @@ Frame timing, queue depth, dropped/coalesced frames, and memory counters may be 
 After a passing spike and during production implementation:
 
 - update `docs/architecture/spike-notes.md` with exact evidence;
-- add the next ADR for the optional full-screen frontend;
+- add the next ADR for the selectable full-screen frontend;
 - add/update the owning milestone documents required by planning governance without reopening completed milestones;
 - add Scenario AR or the next available acceptance ID;
 - add MTP-256 or the next available manual-test ID;
 - update `docs/user-guide.md` with launch selection, fixed status, transcript bounds, full-screen behavior, and differences from native scrollback;
 - update `docs/operations/keyboard-shortcuts.md` with frontend-specific input, selection, copy, mouse handoff, and newline keys;
-- update root README usage examples without changing the default;
+- update root README usage examples with TUIKit as the default interactive frontend;
 - update root/src/tests/frontend project DOX and child indexes;
 - update release package graph, legal evidence/status, notice/SBOM verification, and deployment documentation;
 - update the active Plan 100 status/evidence only when implementation state changes.
@@ -889,23 +1043,24 @@ Do not edit completed milestone details or rewrite ADR-15. Link to the new optio
 
 | Question | Decision |
 |---|---|
-| Existing frontend | retained and remains the bare-`--tui` default |
-| New launch syntax | `--tui=tuikit`; explicit existing form is `--tui=pretty` |
+| Existing frontend | retained and selected by `--tui=original` |
+| Launch syntax | bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` selects the existing frontend |
 | Frontend persistence | none |
 | Architecture | one additional adapter over implemented Plan 98 coordination |
-| TUIKit package | exact version only; 0.9.0 is the initial spike candidate |
+| TUIKit package | exact version only; 0.10.1 is the recovery candidate; 0.9.0 remains historical precheck evidence |
 | Production gate | mandatory spike + ADR; failure means no product integration |
 | Layout | transcript fill + fixed activity + fixed four-row composer + fixed bottom status |
 | Markdown | Plan 98 document generation; no TUIKit reparse or recollection |
 | Slash commands/approvals | Plan 98 only |
 | Status | shared truth, fixed TUIKit placement |
 | Selection/copy | application selection/copy plus F12 terminal mouse handoff |
-| Multiline newline | Enter submit; Shift+Enter when distinguishable; Ctrl+J portable newline |
+| Composer | Threadsmith-owned, Unicode-safe multiline widget through TUIKit public APIs; stock TextEditor retained only as a diagnostic |
+| Multiline newline | Enter submit; Ctrl+Enter newline; Shift+Enter when distinguishable |
 | Non-TTY | explicit failure, no silent fallback |
 | Extra dashboard features | deferred |
 
 ### 17.3 Open decisions
 
-No product decision requires user input before this plan is executable. The spike is authorized to determine only evidence-bound adapter constants and compatibility details: minimum terminal size, visible transcript line/byte caps, and a reliable application-copy chord if `Ctrl+Shift+C` cannot be observed. It may not change the launch syntax, default frontend, fixed-footer requirement, shared authority boundary, or go/no-go criteria.
+No product decision requires user input before this revised plan is executable. The owned-composer choice and same-version public-API recovery are defined in sections 6.8.1–6.8.2. The spike determines evidence-bound adapter constants and compatibility details: minimum terminal size, visible transcript line/byte caps, bounded editor-history storage, and a reliable application-copy chord if `Ctrl+Shift+C` cannot be observed. It may not change the launch syntax, TUIKit interactive default, fixed-footer requirement, shared authority boundary, or go/no-go criteria.
 
-Plan 100 is complete only after the spike passes, the new frontend is explicitly selectable and release-complete, both adapters pass shared conformance, PrettyPrompt remains unchanged by default, and real terminals demonstrate responsive input, exact paste, usable copying/selection, and complete terminal restoration.
+Plan 100 is complete only after the spike passes, the new frontend is the default interactive choice and release-complete, both adapters pass shared conformance, PrettyPrompt remains available and unchanged through `--tui=original`, and real terminals demonstrate responsive input, exact paste, usable copying/selection, and complete terminal restoration.

@@ -13,6 +13,9 @@ Test-Contract 'semantic versions' {
     Assert-ReleaseVersion '1.2.3'; Assert-ReleaseVersion '1.2.3-rc.1'
     try { Assert-ReleaseVersion 'v1.2.3'; throw 'Invalid version was accepted.' } catch { if ($_.Exception.Message -eq 'Invalid version was accepted.') { throw } }
 }
+Test-Contract 'source prompt filename catalog is readable' {
+    Get-CodeDeclaredPromptNames -SourceRoot (Get-RepositoryRoot) | Out-Null
+}
 Test-Contract 'prompt payload is complete, collision-free, byte-exact, and validated for every RID' {
     $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-prompts-contract-$([Guid]::NewGuid().ToString('N'))"
     $source = Join-Path $temp 'source'
@@ -30,6 +33,9 @@ Test-Contract 'prompt payload is complete, collision-free, byte-exact, and valid
     )
     try {
         $expectedPromptNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $coreDirectory = Join-Path $source 'src/Threadsmith.Core'
+        New-Item -ItemType Directory -Path $coreDirectory -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Get-RepositoryRoot) 'src/Threadsmith.Core/PromptContracts.cs') -Destination $coreDirectory
         New-Item -ItemType Directory -Path $promptDirectory -Force | Out-Null
         for ($index = 0; $index -lt $ownerDirectories.Count; $index++) {
             $owner = Join-Path $source $ownerDirectories[$index]
@@ -84,9 +90,13 @@ Test-Contract 'release-license evidence is closed, current, and fail-closed' {
 Test-Contract 'legal artifacts are deterministic and cover the exact restore closure' {
     $root = Get-RepositoryRoot
     $assets = Join-Path $root 'src/Threadsmith.App/obj/project.assets.json'
-    $runtimePackName = 'Microsoft.NETCore.App.Runtime.linux-x64/'
-    $hasRuntimePack = (Test-Path $assets) -and ((Get-Content -LiteralPath $assets -Raw).Contains($runtimePackName, [StringComparison]::Ordinal))
-    if (-not $hasRuntimePack) { dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime linux-x64 | Out-Null }
+    $review = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
+    $runtimeVersion = $review.windowsSelfContainedDecision.runtimeVersion
+    $hasRuntimePack = (Test-Path $assets) -and @(Get-RestoredRuntimePacks (Get-Content -LiteralPath $assets -Raw | ConvertFrom-Json) | Where-Object { $_.id -eq 'Microsoft.NETCore.App.Runtime.linux-x64' -and $_.version -eq $runtimeVersion }).Count -gt 0
+    if (-not $hasRuntimePack) {
+        dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime linux-x64 "-p:RuntimeFrameworkVersion=$runtimeVersion" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not restore the recorded runtime version for release contract verification.' }
+    }
     $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-legal-contract-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory (Join-Path $temp 'a'), (Join-Path $temp 'b') -Force | Out-Null
     try {
@@ -96,6 +106,7 @@ Test-Contract 'legal artifacts are deterministic and cover the exact restore clo
             if ((Get-FileHash (Join-Path $temp "a/$name")).Hash -ne (Get-FileHash (Join-Path $temp "b/$name")).Hash) { throw "$name is not deterministic." }
         }
         $notices = Get-Content (Join-Path $temp 'a/THIRD-PARTY-NOTICES.txt') -Raw
+        if (-not $notices.Contains('TUIKit 0.10.1') -or -not $notices.Contains('DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE')) { throw 'TUIKit code/font notices are missing.' }
         if (-not $notices.Contains('MPL source availability:', [StringComparison]::Ordinal) -or -not $notices.Contains('SQLite is in the public domain.', [StringComparison]::Ordinal)) { throw 'Critical MPL or SQLite notice treatment is missing.' }
     } finally { Remove-Item $temp -Recurse -Force }
 }
@@ -104,12 +115,12 @@ Test-Contract 'runtime legal staging binds exact RID and rejects omissions' {
     New-Item -ItemType Directory (Join-Path $temp 'source'), (Join-Path $temp 'stage') -Force | Out-Null
     try {
         Set-Content (Join-Path $temp 'source/LICENSE.txt') 'runtime license' -NoNewline
-        Set-Content (Join-Path $temp 'source/ThirdPartyNotices.txt') 'runtime notices' -NoNewline
+        Set-Content (Join-Path $temp 'source/THIRD-PARTY-NOTICES.TXT') 'runtime notices' -NoNewline
         $assets = Join-Path (Get-RepositoryRoot) 'src/Threadsmith.App/obj/project.assets.json'
         & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier linux-x64 -StageDirectory (Join-Path $temp 'stage') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source')
         $provenance = Get-Content (Join-Path $temp 'stage/third-party/dotnet-runtime/PROVENANCE.json') -Raw | ConvertFrom-Json
         if ($provenance.runtimeIdentifier -ne 'linux-x64' -or $provenance.files.Count -ne 2) { throw 'Runtime provenance did not bind both files to the RID.' }
-        Remove-Item (Join-Path $temp 'source/ThirdPartyNotices.txt')
+        Remove-Item (Join-Path $temp 'source/THIRD-PARTY-NOTICES.TXT')
         try { & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier linux-x64 -StageDirectory (Join-Path $temp 'stage-2') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source'); throw 'Missing runtime notices were accepted.' } catch { if ($_.Exception.Message -eq 'Missing runtime notices were accepted.') { throw } }
     } finally { Remove-Item $temp -Recurse -Force }
 }

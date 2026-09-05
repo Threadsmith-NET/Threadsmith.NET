@@ -1,6 +1,6 @@
 # AGENTS.md — src/ (Product Source)
 
-> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 22 product projects and their dependency graph.
+> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 23 product projects and their dependency graph.
 
 ## Purpose
 
@@ -27,7 +27,7 @@ Projects are organized in dependency layers. A project may only reference projec
 - **Layer 3:** `Threadsmith.Tools`, `Threadsmith.DotNet`, `Threadsmith.Workspaces` — reference Core + Layer 2.
 - **Layer 4:** `Threadsmith.Validation`, `Threadsmith.Execution`, `Threadsmith.Skills`, `Threadsmith.Extensions.Runtime` — reference Core + layers 1–3. Skills may reference neutral Context/Models/Telemetry/Tools but never Execution, Workspaces, Validation, MCP, terminal adapters, or provider/persistence implementations; it returns only Core host-action proposals and checkpoints.
 - **Layer 5:** `Threadsmith.Interaction`, `Threadsmith.Cli`, `Threadsmith.Mcp`, `Threadsmith.Hooks` — reference Core + layers 1–4. Interaction coordinates existing commands/projections without owning authority; Hooks references only Core + Tools.
-- **Layer 6:** `Threadsmith.Tui` — references Interaction and lower layers to adapt shared semantics to PrettyPrompt/Spectre.Console while retaining compatibility facades.
+- **Layer 6:** `Threadsmith.Tui.TuiKit` references only Interaction and the centrally pinned TUIKit package. `Threadsmith.Tui` — references Interaction and lower layers to adapt shared semantics to PrettyPrompt/Spectre.Console while retaining compatibility facades.
 - **Layer 7 (composition root):** `Threadsmith.App` — references all product projects.
 
 ### Forbidden package references (§8.1)
@@ -116,6 +116,7 @@ Projects are organized in dependency layers. A project may only reference projec
 | `Threadsmith.Tools/AGENTS.md` | Tool contracts, policy pipeline, built-ins, secrets, and process lifecycle |
 | `Threadsmith.Mcp/AGENTS.md` | SDK-isolated transports, lifecycle authority, bounded capability mapping, OAuth identity, and imported tools |
 | `Threadsmith.Interaction/AGENTS.md` | Frontend-neutral commands, coordination, status, semantic presentation, and Markdown generation |
+| `Threadsmith.Tui.TuiKit/AGENTS.md` | Default retained frontend: input ownership, rendering, clipboard, and teardown |
 | `Threadsmith.Tui/AGENTS.md` | PrettyPrompt input, Spectre rendering, terminal layout, themes, and compatibility facades |
 | `Threadsmith.Workspaces/AGENTS.md` | Repository lifecycle, immutable baselines, transactional mutation, and Git-worktree isolation |
 | `Threadsmith.Validation/AGENTS.md` | Trusted builds, normalized diagnostics, confidence classification, correlation, correction bounds, and gates |

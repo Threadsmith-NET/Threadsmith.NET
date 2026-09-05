@@ -2,7 +2,7 @@
 
 A .NET-native, terminal-first coding harness where the host owns control flow and the model is a pluggable reasoning engine—not an autonomous actor.
 
-Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed read-only tools, requires host-validated plans before repository changes, stages mutations transactionally, and runs confidence-aware build and test validation. The interactive interface preserves native terminal scrollback, selection, copying, and responsive bulk paste; equivalent headless operation supports scripts and CI.
+Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed read-only tools, requires host-validated plans before repository changes, stages mutations transactionally, and runs confidence-aware build and test validation. Interactive use defaults to a retained full-screen TUIKit interface, with the original native-scrollback frontend available explicitly; equivalent headless operation supports scripts and CI.
 
 ## Current state
 
@@ -89,6 +89,8 @@ Launch the interactive terminal from the repository you want to inspect:
 ```powershell
 dotnet run --project C:\source\repos\Threadsmith\src\Threadsmith.App -- --tui
 ```
+
+Bare `--tui` launches the retained TUIKit interface; `--tui=tuikit` is the equivalent explicit form. Use `--tui=original` for the previous PrettyPrompt/Spectre interface. Both use the same commands and approval workflows. TUIKit moves each committed ordinary entry into retained output before the composer clears. If Enter is pressed while the initial semantic model is loading, TUIKit visibly queues one message and submits it when repository semantics are ready. See the [user guide](docs/user-guide.md#retained-tuikit-frontend-default) for keys, fixed status, and selection.
 
 When running Threadsmith against its own source tree:
 
@@ -248,7 +250,8 @@ Threadsmith/
 │   ├── Threadsmith.Persistence/           # durable events, facts, artifacts, and migrations
 │   ├── Threadsmith.Telemetry/             # metrics, tracing, logging, and diagnostics
 │   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination and presentation
-│   ├── Threadsmith.Tui/                   # conversation-first terminal adapter
+│   ├── Threadsmith.Tui/                   # original PrettyPrompt/Spectre terminal adapter
+│   ├── Threadsmith.Tui.TuiKit/            # default retained TUIKit terminal adapter
 │   ├── Threadsmith.Cli/                   # headless command adapter
 │   ├── Threadsmith.Mcp/                   # host-owned MCP boundary
 │   ├── Threadsmith.Skills/                # governed declarative catalog and workflows

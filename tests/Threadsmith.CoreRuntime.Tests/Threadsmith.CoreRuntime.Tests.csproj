@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Cli\Threadsmith.Cli.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tui\Threadsmith.Tui.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Tui.TuiKit\Threadsmith.Tui.TuiKit.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
   </ItemGroup>

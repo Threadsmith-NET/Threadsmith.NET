@@ -72,6 +72,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Extensions.Runtime",
         "Threadsmith.Interaction",
         "Threadsmith.Tui",
+        "Threadsmith.Tui.TuiKit",
         "Threadsmith.Cli",
         "Threadsmith.Mcp",
         "Threadsmith.Scripting.Worker",
@@ -334,6 +335,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Hooks"] = ["Threadsmith.Core", "Threadsmith.Tools"],
             ["Threadsmith.Extensions.Runtime"] = ["Threadsmith.Core", "Threadsmith.Extensions.Abstractions", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Interaction"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution"],
+            ["Threadsmith.Tui.TuiKit"] = ["Threadsmith.Interaction"],
             ["Threadsmith.Tui"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution", "Threadsmith.Interaction"],
             ["Threadsmith.Cli"] = ["Threadsmith.Core", "Threadsmith.Execution"],
             ["Threadsmith.Mcp"] = ["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Extensions.Abstractions"],
@@ -347,7 +349,7 @@ public static class DependencyDirectionTests
             "Threadsmith.Context", "Threadsmith.Tools",
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
             "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",
-            "Threadsmith.Tui", "Threadsmith.Cli", "Threadsmith.Mcp",
+            "Threadsmith.Tui", "Threadsmith.Tui.TuiKit", "Threadsmith.Cli", "Threadsmith.Mcp",
             "Threadsmith.Scripting.Worker",
         ];
         return graph;
@@ -359,16 +361,17 @@ public static class DependencyDirectionTests
         // no extension implementations (§8.1).
         var graph = new Dictionary<string, HashSet<string>>
         {
-            ["Threadsmith.Core"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "System.Net.Http"],
+            ["Threadsmith.Core"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "System.Net.Http"],
             // Provider SDKs and concrete protocol packages stay in dedicated provider projects.
             ["Threadsmith.Models"] = ["OpenAI"],
-            ["Threadsmith.Skills"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
+            ["Threadsmith.Skills"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Abstractions stays small + stable; references no host implementation (§8.1).
-            ["Threadsmith.Extensions.Abstractions"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
+            ["Threadsmith.Extensions.Abstractions"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Interaction owns semantic coordination and Markdown generation, not terminal adaptation.
-            ["Threadsmith.Interaction"] = ["Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
+            ["Threadsmith.Interaction"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Tui references no persistence implementations (§8.1).
-            ["Threadsmith.Tui"] = ["Microsoft.Data.Sqlite"],
+            ["Threadsmith.Tui"] = ["TUIKit", "Microsoft.Data.Sqlite"],
+            ["Threadsmith.Tui.TuiKit"] = ["PrettyPrompt", "Spectre.Console", "Markdig", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
         };
         return graph;
     }

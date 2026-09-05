@@ -771,3 +771,13 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 10. Repeat submission and forced refresh through the headless surface. Confirm it uses the same command/coordinator and freshness invariant and returns the same structured refresh outcome without interactive prompting.
 
 **Verifies:** repository/solution lifecycle and path policy, immutable Roslyn generations and semantic confidence, workspace-scoped monitoring/coalescing/stable identity, incremental versus full refresh classification, dirty/applied convergence, single-flight admission/manual/background coordination, exact host-mutation attribution, serialized draft-safe TUI lifecycle projection, headless parity, bounded cancellation/rebinding/recovery, and pre-`RunId` stale-state exclusion.
+
+## Scenario AR — Default TUIKit with shared interaction authority
+
+**Source:** Plan 100; ADR-52; MTP-257.
+
+With the same scripted model and repository, exercise both frontends through ordinary chat; every slash command; repository open/trust; session new/resume/clone; model/reasoning and theme changes; MCP/extensions/tools/skills/hooks management; policy choices; planning approval/rejection; exact-diff apply/discard; validation retry/correction; context/source/Markdown output; usage; steering and cancellation. Assert identical host commands, identities, authority decisions, persistence outcomes, and semantic output.
+
+TUIKit additionally keeps a fixed bottom footer through runs, selectors, output, and resize; moves each committed ordinary entry into retained output exactly once while preserving its exact `current-user` context content; preserves exact drafts across prompt purposes; exposes complete option labels and safe links; bounds retained text/queues; and restores terminal state on all exits. Bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` retains PrettyPrompt/Spectre with native scrollback. MCP/authentication bypass either backend. Package notices and SPDX include the exact TUIKit payload and supplemental font terms for every supported RID.
+
+Record automated and physical-terminal evidence separately; unexecuted operator cases remain pending.

@@ -16,6 +16,7 @@
     <!-- Conversation-first interactive terminal (ADR-15). -->
     <PackageVersion Include="Markdig" Version="1.3.2" />
     <PackageVersion Include="PrettyPrompt" Version="6.0.4" />
+    <PackageVersion Include="TUIKit" Version="0.10.1" />
     <PackageVersion Include="Spectre.Console" Version="0.57.0" />
     <!-- Historical retained spike only; excluded from product/release closure. -->
     <PackageVersion Include="Terminal.Gui" Version="2.4.17" />

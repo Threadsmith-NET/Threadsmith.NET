@@ -1025,14 +1025,28 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
 
     private static long EstimateGroupInputCharacters(ActiveTurnContinuationGroup group)
     {
-        return group.Messages.Sum(message =>
-                64L
-                + (message.ToolCallId?.Length ?? 0)
-                + (message.ToolName?.Length ?? 0)
-                + message.Content.Where(static part => part.IsModelVisible).Sum(static part => 32L + part.Content.Length))
-            + group.FilesRead.Sum(path => 16L + path.Length)
-            + group.FilesChanged.Sum(path => 16L + path.Length)
+        return group.Messages.Sum(EstimateMessageInputCharacters)
+            + group.FilesRead.Sum(EstimatePathInputCharacters)
+            + group.FilesChanged.Sum(EstimatePathInputCharacters)
             + 128;
+    }
+
+    private static long EstimateMessageInputCharacters(ModelMessage message)
+    {
+        return 64L
+            + (message.ToolCallId?.Length ?? 0)
+            + (message.ToolName?.Length ?? 0)
+            + message.Content.Sum(EstimateContentPartInputCharacters);
+    }
+
+    private static long EstimateContentPartInputCharacters(ModelContentPart part)
+    {
+        return part.IsModelVisible ? 32L + part.Content.Length : 0L;
+    }
+
+    private static long EstimatePathInputCharacters(string path)
+    {
+        return 16L + path.Length;
     }
 
     private IReadOnlyList<ModelMessage> CreateMessages(

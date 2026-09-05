@@ -342,7 +342,7 @@ public sealed class InteractionCoordinator
             .AppendLine($"  Trust: {trustStatus}")
             .AppendLine($"  Solution: {solutionStatus}")
             .AppendLine(_showSessionStatus
-                ? "  Session status: Composer-adjacent"
+                ? _surface.Surface.Capabilities.SupportsRetainedStatus ? "  Session status: Fixed bottom row" : "  Session status: Composer-adjacent"
                 : "  Session status: Disabled by tui:footer:enabled");
         if (snapshot.TargetFrameworks is { Count: > 0 } targetFrameworks)
         {
@@ -706,6 +706,9 @@ public sealed class InteractionCoordinator
         {
             while (!lifetime.IsCancellationRequested)
             {
+                await using var statusRefresh = _surface.Surface.Capabilities.SupportsRetainedStatus
+                    ? new RetainedStatusRefresh(lifetime.Token)
+                    : null;
                 while (decisions.Reader.TryRead(out var pendingDecision))
                 {
                     _ = await HandleDecisionAsync(controller, pendingDecision, lifetime.Token);
@@ -746,6 +749,31 @@ public sealed class InteractionCoordinator
                             usage,
                             branch);
                         await _surface.ShowSessionStatusAsync(status, lifetime.Token);
+                        if (_surface.Surface.Capabilities.SupportsRetainedStatus)
+                        {
+                            // Publish only from this immutable identity; the scope is joined before
+                            // another iteration or invalidated before switching repository/session.
+                            var statusSessionId = sessionId;
+                            var statusDirectory = Directory.GetCurrentDirectory();
+                            statusRefresh!.Start(
+                                async token =>
+                            {
+                                var refreshedProfileId = _sessionPreferences?.CurrentProfileId ?? _startupProfileId;
+                                var refreshedProfile = _modelCatalog?.Profiles.FirstOrDefault(profile => profile.Id == refreshedProfileId);
+                                token.ThrowIfCancellationRequested();
+                                var refreshed = SessionStatusAssembler.Create(
+                                    statusDirectory,
+                                    repositoryName,
+                                    modelStatus,
+                                    refreshedProfile,
+                                    _sessionPreferences?.Reasoning ?? ReasoningLevel.None,
+                                    latestContextInspection,
+                                    _sessionUsage?.GetSnapshot(statusSessionId) ?? new SessionUsageSnapshot(0, 0, false, HasObservation: false),
+                                    branch);
+                                await _surface.ShowSessionStatusAsync(refreshed, token);
+                            },
+                                lifetime);
+                        }
                     }
 
                     input = await _surface.ReadAsync(lifetime.Token);
@@ -860,6 +888,11 @@ public sealed class InteractionCoordinator
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/new", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
+                    }
+
                     var result = await controller.CreateNewSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
@@ -875,6 +908,11 @@ public sealed class InteractionCoordinator
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/clone", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
+                    }
+
                     var result = await controller.CloneSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
@@ -930,6 +968,11 @@ public sealed class InteractionCoordinator
                             PresentationTextRole.Error,
                             lifetime.Token);
                         continue;
+                    }
+
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
                     }
 
                     var result = await controller.ResumeSessionAsync(target, lifetime.Token);
@@ -1155,6 +1198,11 @@ public sealed class InteractionCoordinator
 
                     try
                     {
+                        if (statusRefresh is not null)
+                        {
+                            await statusRefresh.StopAsync();
+                        }
+
                         var result = await OpenRepositoryAsync(
                             controller,
                             openPath,
@@ -1224,6 +1272,11 @@ public sealed class InteractionCoordinator
                     try
                     {
                         var previousTrust = openRepository.Trust.Level;
+                        if (statusRefresh is not null)
+                        {
+                            await statusRefresh.StopAsync();
+                        }
+
                         var result = await OpenRepositoryAsync(
                             controller,
                             openRepository.RepositoryPath,
@@ -2477,7 +2530,7 @@ public sealed class InteractionCoordinator
                     $"Replace the MCP identity for '{profileId}' ({identity})",
                     ["Local logout, then authenticate", "Remote revoke, then authenticate", "Cancel"],
                     cancellationToken);
-                if (switchMode == 2)
+                if (switchMode is < 0 or 2)
                 {
                     return;
                 }
@@ -2598,7 +2651,7 @@ public sealed class InteractionCoordinator
             [.. result.Profiles.Select(profile =>
                 $"{profile.DisplayName} ({profile.ProfileId}) — {profile.State}; {profile.Transport}; {profile.EndpointIdentity}")],
             cancellationToken);
-        return result.Profiles[selected].ProfileId;
+        return selected >= 0 && selected < result.Profiles.Count ? result.Profiles[selected].ProfileId : null;
     }
 
     private async Task<string?> SelectMcpCapabilityAsync(
@@ -2633,7 +2686,7 @@ public sealed class InteractionCoordinator
                 $"{capability.Name} ({capability.CapabilityId}) — {capability.Kind}"
                 + (capability.Enabled is null ? string.Empty : capability.Enabled.Value ? "; enabled" : "; disabled"))],
             cancellationToken);
-        return capabilities[selected].CapabilityId;
+        return selected >= 0 && selected < capabilities.Length ? capabilities[selected].CapabilityId : null;
     }
 
     private static string[]? SplitMcpArguments(string value)

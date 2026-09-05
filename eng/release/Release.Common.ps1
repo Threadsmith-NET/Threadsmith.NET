@@ -63,7 +63,7 @@ function Get-CodeDeclaredPromptNames {
 
     $allMatch = [Text.RegularExpressions.Regex]::Match(
         $contract,
-        'public static IReadOnlyList<string> All \{ get; \} = Array\.AsReadOnly\(\s*\[(?<items>.*?)\]\);',
+        'public static IReadOnlyList<string> All \{ get; \} = Array\.AsReadOnly(?:<string>)?\(\s*\[(?<items>.*?)\]\);',
         [Text.RegularExpressions.RegexOptions]::Singleline)
     if (-not $allMatch.Success) { throw 'The code-owned prompt filename catalog could not be read.' }
 
@@ -113,7 +113,10 @@ function Assert-CodeDeclaredPromptTokenContracts {
         foreach ($marker in [Text.RegularExpressions.Regex]::Matches($content, '\{\{(?<token>[A-Za-z][A-Za-z0-9]*)\}\}')) {
             $markers.Add($marker.Groups['token'].Value) | Out-Null
         }
-        $tokens = if ($declaredTokens.ContainsKey($fileName)) { $declaredTokens[$fileName] } else { [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+        $tokens = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        if ($declaredTokens.ContainsKey($fileName)) {
+            $tokens = $declaredTokens[$fileName]
+        }
         if ($markers.Count -ne $tokens.Count -or @($markers | Where-Object { -not $tokens.Contains($_) }).Count -ne 0) {
             throw "Prompt source does not match its code-owned token contract: $fileName"
         }
@@ -232,4 +235,27 @@ function Assert-ReleasePromptPayload {
     if ($actual.Count -ne $expected.Count) {
         throw "Published prompt payload has the wrong asset count for ${RuntimeIdentifier}."
     }
+}
+
+# SDK versions use either ordinary libraries or exact framework download dependencies.
+function Get-RestoredRuntimePacks([object] $Assets) {
+    $pattern = '^Microsoft\.(?:NETCore|AspNetCore)\.App\.(?:Runtime|Host)\.[A-Za-z0-9.-]+$'
+    $packs = @($Assets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq 'package' } | ForEach-Object {
+        $separator = $_.Name.LastIndexOf('/')
+        $id = $_.Name.Substring(0, $separator)
+        if ($id -match $pattern) { [pscustomobject]@{ id = $id; version = $_.Name.Substring($separator + 1) } }
+    })
+    if ($Assets.PSObject.Properties.Name -contains 'project') {
+        $packs += @($Assets.project.frameworks.PSObject.Properties | ForEach-Object {
+            if ($_.Value.PSObject.Properties.Name -contains 'downloadDependencies') {
+                foreach ($download in $_.Value.downloadDependencies) {
+                    if ($download.name -match $pattern) {
+                        if ($download.version -notmatch '^\[([^,]+),\s*\1\]$') { throw "Runtime download $($download.name) is not pinned to one exact version." }
+                        [pscustomobject]@{ id = $download.name; version = $Matches[1] }
+                    }
+                }
+            }
+        })
+    }
+    return @($packs | Sort-Object id, version -Unique)
 }

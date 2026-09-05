@@ -67,9 +67,9 @@ public static class Program
         if (commandLine.ShowHelp)
         {
             await Console.Out.WriteLineAsync(
-                "Threadsmith.NET\nUsage: threadsmith [--tui] [--repository PATH] [--solution PATH] [--trust LEVEL] [--raw-model-log PATH] [REQUEST]\n"
+                "Threadsmith.NET\nUsage: threadsmith [--tui[=tuikit|original]] [--repository PATH] [--solution PATH] [--trust LEVEL] [--raw-model-log PATH] [REQUEST]\n"
                 + "       threadsmith --mcp ACTION [PROFILE] [CAPABILITY] [key=value ...] [--confirm] [--revoke-current] [--allow-local-cleanup]\n"
-                + "       threadsmith [--tui] --codex-login | --codex-status | --codex-logout\n"
+                + "       threadsmith [--tui[=tuikit|original]] --codex-login | --codex-status | --codex-logout\n"
                 + "       threadsmith --version");
             return 0;
         }

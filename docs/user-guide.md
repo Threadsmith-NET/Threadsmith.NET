@@ -122,7 +122,9 @@ Common arguments include:
 
 | Argument | Purpose |
 |---|---|
-| `--tui` | Start the interactive terminal. |
+| `--tui` | Start the default retained TUIKit terminal. |
+| `--tui=tuikit` | Explicitly start the retained TUIKit terminal. |
+| `--tui=original` | Start the original PrettyPrompt/Spectre terminal. |
 | `--repository <path>` | Open a repository other than the current directory. |
 | `--solution <path>` | Select a solution or supported project explicitly. |
 | `--trust <level>` | Request a trust level without an interactive selector. |
@@ -260,7 +262,9 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 A resumed session reconstructs tolerant event projections and the sanitized conversation archive, governed memory, mode, persisted usage, and compatible model/reasoning selection. Stale context inspections and provider continuation/cache handles are invalidated. A clone receives new session-local identities and independent future history; it does not duplicate live execution authority, approvals, transactions, leases, credentials, hidden reasoning, or provider transcripts. Clone output includes a copyable `/resume <source-session-id>` return command. See [Session lifecycle operations](operations/session-lifecycle.md).
 
-### Keyboard and clipboard
+### Original frontend keyboard and clipboard
+
+The following keys apply to `--tui=original`. The default retained TUIKit frontend has its own keyboard and clipboard details [below](#retained-tuikit-frontend-default).
 
 | Input | Action |
 |---|---|
@@ -1042,7 +1046,7 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Success` | General successful outcomes. |
 | `Warning` | Warnings. |
 | `Error` | Errors and failures. |
-| `UserPrompt` | User-authored transcript content when projected by a surface; ordinary composer submissions are not redundantly echoed. |
+| `UserPrompt` | User-authored transcript content. TUIKit moves each committed ordinary composer entry into its retained transcript once; the original frontend keeps the native prompt line in terminal scrollback. |
 | `ComposerPrompt` | The interactive repository-name composer prompt. |
 | `ThinkingIndicator` | The transient `THINKING` indicator. |
 | `Reasoning` | Streaming reasoning enabled with `/thinking` or `Ctrl+T`. |
@@ -1666,3 +1670,17 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 ## Maintaining this guide
 
 This is the primary user-facing reference. Update it in the same change whenever implemented behavior affects installation, startup, commands, configuration, trust, tools, models, extensions, safety boundaries, output, exit codes, or troubleshooting. Keep the README concise and link here for operational detail. Do not document planned behavior as available.
+
+## Retained TUIKit frontend (default)
+
+Run `threadsmith --tui` for the default full-screen interface; `threadsmith --tui=tuikit` is equivalent. Run `threadsmith --tui=original` for the previous PrettyPrompt/Spectre interface with native scrollback. Both use the same commands, repository/session workflows, approvals, policies, models, themes, source/Markdown settings, and run coordination. No frontend is selected by configuration. Invalid or repeated frontend selectors fail before startup, and the former `--tui=pretty` spelling is rejected.
+
+TUIKit keeps a one-row status footer and activity row below a scrolling transcript, with one contiguous four-row composer. The first input cell appears directly after the repository prompt. The status footer is the terminal's final row, with no spacer row below it. It requires an interactive terminal of at least 40 columns by 12 rows; shrinking preserves your draft until the terminal grows again. The footer uses shared status snapshots refreshed during runs and selectors; `tui:footer:enabled=false` still hides it.
+
+Enter submits. TUIKit moves each committed ordinary entry into the retained transcript before clearing the composer. During initial semantic loading, it accepts one submitted message, retains it in the transcript, marks it queued, and sends it automatically when the coordinator opens conversation input. Model execution still waits for the current semantic generation so repository tools cannot start against incomplete state; text entered after the queued message remains as the next draft. Ctrl+Enter inserts a newline; Shift+Enter and Alt+Enter do so where the terminal distinguishes them. Ctrl+Alt+Enter submits. Editing supports grapheme/word movement, selection, multiline paste, bounded undo/redo, indentation, and submission history. Ordinary, secondary, and steering prompts keep separate drafts. During a run, Enter requests steering at a safe boundary; double Escape cancels the run. Ctrl+C copies selected text and otherwise exits through process cancellation.
+
+F1 opens a static, non-selectable explanation of every key shown in the activity row. F7 switches keyboard focus between the composer and transcript. In the transcript, arrows/PageUp/PageDown/Home/End scroll; shifted movement selects. Incoming output preserves detached scroll position and shows an unseen-output count. Ctrl+L clears the visible viewport while bounded earlier content remains reachable with Home. Ctrl+C and F6 copy visible selected text; Ctrl+C cancels the process only when nothing is selected. Ctrl+Shift+C copies the focused selection or complete draft. F8 lists validated links from retained output so Enter can copy one. F12 releases or recaptures the mouse, allowing terminal-native selection while released. Explicit application copy is limited to 64 KiB and depends on OSC 52 terminal support. Ctrl+V/Shift+Insert request an OS clipboard read bounded to one MiB and two seconds; terminal bracketed paste is also supported.
+
+Selectors filter labels while preserving stable option identities. Arrows/PageUp/PageDown/Home/End navigate, Enter selects, and Escape cancels. F2 opens complete scrollable option details, including long paths and model descriptions. F8 lists validated links from retained output; Enter copies the selected target and F2 shows the complete target. Links never execute automatically.
+
+The retained transcript keeps up to 1024 chunks/512 KiB and visibly announces eviction. It is a view, not durable session history or native terminal scrollback. Themes and `NO_COLOR` remain supported; selector markers remain visible without color.

@@ -23,4 +23,5 @@
     <InternalsVisibleTo Include="Threadsmith.SessionStatus.Tests" />
   </ItemGroup>
 
+  <ItemGroup><InternalsVisibleTo Include="Threadsmith.App" /></ItemGroup>
 </Project>

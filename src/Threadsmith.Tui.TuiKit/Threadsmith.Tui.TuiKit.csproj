@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Default retained terminal frontend over the shared interaction coordinator.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Threadsmith.Interaction/Threadsmith.Interaction.csproj" />
+    <PackageReference Include="TUIKit" />
+    <InternalsVisibleTo Include="Threadsmith.App" />
+    <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />
+  </ItemGroup>
+</Project>

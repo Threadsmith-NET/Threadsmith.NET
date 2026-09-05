@@ -39,3 +39,7 @@ Own repository-maintained build, development-tool staging, and release automatio
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+## TUIKit supplemental notices
+
+TUIKit 0.10.1 is a bundled package. Canonical evidence records its exact digest, MIT package declaration, and supplemental font notices. Notice generation includes every listed supplemental file; verification rejects missing files. SPDX preserves MIT as declared and the recorded aggregate conclusion without relabeling the embedded font inventory. Keep the existing runtime-version evidence independent of this dependency addition.

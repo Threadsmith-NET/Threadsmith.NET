@@ -11,7 +11,8 @@
     "MIT OR Unlicense",
     "custom-approved",
     "platform-terms-approved",
-    "not-bundled"
+    "not-bundled",
+    "WTFPL"
   ],
   "windowsSelfContainedDecision": {
     "status": "approved",
@@ -754,6 +755,29 @@
       "licenseExpression": "not-bundled",
       "noticeTreatment": "Spike removed from active solution and dependency closure",
       "reviewState": "approved"
+    },
+    {
+      "id": "TUIKit",
+      "version": "0.10.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/TUIKit/0.10.1",
+      "sourceRevision": "820e8ef5e199549a119360647c13427d0c36d63e",
+      "packageSha512": "5v6+vegWXDhmitvTY5U4IFKIXhj0cXUD0qcD9h0ped3j+X/ih+BkoXpdSDSSpIGCMqRvrDvRGxNn1y8dqjL17g==",
+      "licenseExpression": "MIT",
+      "licenseConcluded": "NOASSERTION",
+      "licenseText": "legal/TUIKit-0.10.1-candidate/TUIKit-LICENSE.txt",
+      "additionalNotices": [
+        "legal/TUIKit-0.10.1-candidate/WTFPL-2.0.txt",
+        "legal/TUIKit-0.10.1-candidate/TUIKit-font-attribution.txt",
+        "legal/TUIKit-0.10.1-candidate/TUIKit-font-removed.txt",
+        "legal/TUIKit-0.10.1-candidate/TUIKit-font-headers.txt"
+      ],
+      "noticeTreatment": "Preserve the MIT code license and all embedded FIGlet font headers, attribution and permissive WTFPL v2 text. MIT is the declared package license; the mixed embedded font inventory is not relabeled MIT.",
+      "reviewState": "approved",
+      "copyrightText": "Copyright (c) 2026 Joel Christner; embedded font authors are identified in the accompanying headers and attribution.",
+      "supplementalLicenseExpressions": [
+        "WTFPL"
+      ]
     }
   ]
 }

@@ -372,9 +372,12 @@ FodyWeavers.xsd
 # CodeGraph index (regenerable local tooling artifact)
 .codegraph/
 
-# Pi inbox, spikes, and release outputs (local/generated artifacts, not source)
+# Local artifacts; keep the maintained TUIKit spike reviewable.
 .inbox/
-spikes/
+spikes/*
+!spikes/AGENTS.md
+!spikes/Spikes.sln
+!spikes/Spike.TuiKit/
 artifacts/release/
 
 # Threadsmith local repository state; repo-owned examples/docs remain source.

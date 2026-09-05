@@ -78,3 +78,7 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 | Child | Scope |
 |---|---|
 | `implementation-plans/AGENTS.md` | Planning authority, lifecycle, frozen capability contracts, acceptance, and verification workflow |
+
+## TUIKit frontend documentation
+
+ADR-52 records TUIKit as the default interactive choice, keeps the original frontend explicit, and refines ADR-51 for shared terminal-neutral themes and retained status. The user guide owns keys, fixed-footer behavior, bounds, and selection. Scenario AR and MTP-257 own full parity/physical-terminal acceptance; distinguish automated backend evidence from operator validation.

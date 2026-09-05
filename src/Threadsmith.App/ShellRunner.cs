@@ -52,35 +52,8 @@ internal static class ShellRunner
 
             if (context.CommandLine.UseInteractiveTerminal)
             {
-                var extensionHost = context.ExtensionHost
-                    ?? throw new InvalidOperationException("Interactive startup requires the extension host.");
-                await new ConversationalShell(
-                    new TuiPresenter(context.Dispatcher, context.Projections),
-                    context.Events,
-                    context.Models.Catalog,
-                    context.Applications.EffectiveStartupProfileId,
-                    context.Applications.SessionModelPreferences,
-                    extensionHost,
-                    context.Configuration,
-                    context.Applications.SessionUsage,
-                    context.ToolStateManager,
-                    context.Applications.MutationApprovalPolicy,
-                    context.Applications.PlanApprovalPolicy,
-                    context.Models.ActiveModels is not null,
-                    context.Applications.ClaudeSkillCatalog,
-                    sessionLifecycleAvailable: true,
-                    gitQueries: new GitQueryService(),
-                    webFetchAuthorization: context.WebFetchAuthorization,
-                    directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
-                    userConfigurationPath: context.Paths.UserConfiguration,
-                    validationStages: context.Applications.ValidationStages,
-                    codeExploreOutputOptions: context.CodeExploreOutputOptions).RunAsync(
-                        context.Paths.RepositoryRoot,
-                        context.CommandLine.RequestedTrust,
-                        context.CommandLine.RequestedSolution,
-                        context.Models.Status,
-                        context.Paths.RepositoryConfigurationDirectoryExistedAtStartup,
-                        processCancellation.Token);
+                await InteractiveFrontendRunner.RunAsync(context, processCancellation);
+                processCancellation.Token.ThrowIfCancellationRequested();
                 return 0;
             }
 

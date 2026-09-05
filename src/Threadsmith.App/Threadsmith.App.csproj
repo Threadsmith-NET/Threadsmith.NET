@@ -32,6 +32,7 @@
     <ProjectReference Include="..\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
     <ProjectReference Include="..\Threadsmith.Extensions.Runtime\Threadsmith.Extensions.Runtime.csproj" />
     <ProjectReference Include="..\Threadsmith.Tui\Threadsmith.Tui.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tui.TuiKit\Threadsmith.Tui.TuiKit.csproj" />
     <ProjectReference Include="..\Threadsmith.Cli\Threadsmith.Cli.csproj" />
     <ProjectReference Include="..\Threadsmith.Mcp\Threadsmith.Mcp.csproj" />
     <ProjectReference Include="..\Threadsmith.Scripting.Worker\Threadsmith.Scripting.Worker.csproj" />

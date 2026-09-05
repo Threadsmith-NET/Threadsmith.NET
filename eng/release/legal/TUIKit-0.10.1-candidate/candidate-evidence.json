@@ -1,0 +1,708 @@
+{
+  "schemaVersion": 1,
+  "id": "TUIKit",
+  "version": "0.10.1",
+  "scope": "optional-product-frontend",
+  "reviewedAtUtc": "2026-09-04",
+  "reviewState": "notice-inventory-recorded",
+  "packageLicenseExpression": "MIT",
+  "aggregateLicenseConcluded": "NOASSERTION",
+  "packageSha256": "88b84c1a50788d6e1ead387f30f1cc48f2e82b6722ab0d16f9fcfc4b64d5a07a",
+  "packageSha512": "5v6+vegWXDhmitvTY5U4IFKIXhj0cXUD0qcD9h0ped3j+X/ih+BkoXpdSDSSpIGCMqRvrDvRGxNn1y8dqjL17g==",
+  "sourceCommit": "820e8ef5e199549a119360647c13427d0c36d63e",
+  "source": "https://github.com/jchristn/TUIKit/tree/820e8ef5e199549a119360647c13427d0c36d63e",
+  "licenseSource": "https://raw.githubusercontent.com/jchristn/TUIKit/820e8ef5e199549a119360647c13427d0c36d63e/LICENSE.md",
+  "fontLicenseSource": "https://raw.githubusercontent.com/cacalabs/toilet/master/COPYING",
+  "targetFramework": "net10.0",
+  "managedDependencies": [],
+  "embeddedFontCount": 83,
+  "documents": [
+    {
+      "path": "TUIKit-font-attribution.txt",
+      "sha256": "b77366e1a8578cd4be1626199b34f7695bee6fbe7932339a85e030bb0b0287e5"
+    },
+    {
+      "path": "TUIKit-font-headers.txt",
+      "sha256": "dcda01cb0fad70a525ce45fd6c1ed664ca7e82d83189ff78b37125872ca21b7d"
+    },
+    {
+      "path": "TUIKit-font-removed.txt",
+      "sha256": "e7a10dd092d77245cb6e0c005a35c0a20272b5daaabac107a7a06b082208f9e8"
+    },
+    {
+      "path": "TUIKit-LICENSE.txt",
+      "sha256": "a7192b4cde94ee3e282f6de13ed10ae8cd581837ce31d1a38d81c5678acab53b"
+    },
+    {
+      "path": "WTFPL-2.0.txt",
+      "sha256": "7637386b5f81e8a719ca336233149005e5fa28b5e6054ea7b67de49355b0ad40"
+    }
+  ],
+  "fonts": [
+    {
+      "name": "Alligator",
+      "resource": "TUIKit.Ascii.Fonts.Data.Alligator.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "904ee05f6e2c55ff8623c151cdcbb822366fbb19431240047504a7bd7283338f"
+    },
+    {
+      "name": "Alligator2",
+      "resource": "TUIKit.Ascii.Fonts.Data.Alligator2.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0cecdc8605f2a095518bb014ac54353114732370372ed99198816cc20ae5c042"
+    },
+    {
+      "name": "AnsiCompact",
+      "resource": "TUIKit.Ascii.Fonts.Data.AnsiCompact.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "MIT",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "7725d789f12f20f854a2d0fb6f23df3080fefd0753e94055f2078b3853afe30f"
+    },
+    {
+      "name": "AnsiRegular",
+      "resource": "TUIKit.Ascii.Fonts.Data.AnsiRegular.flf",
+      "commentLines": 7,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "f4b8365d3b658908374fe03f8a3c02d47f620f4af88ec136b88540e788b463b4"
+    },
+    {
+      "name": "AnsiShadow",
+      "resource": "TUIKit.Ascii.Fonts.Data.AnsiShadow.flf",
+      "commentLines": 7,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "5b3141fa14163c90ff199d169331333875df557fa463b9fb05b85fee6eca6dc1"
+    },
+    {
+      "name": "Ascii12",
+      "resource": "TUIKit.Ascii.Fonts.Data.Ascii12.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "719a0e501f476bce407783b581441125f17543e4950669b2aa0a5f3b79d6ffa3"
+    },
+    {
+      "name": "Ascii9",
+      "resource": "TUIKit.Ascii.Fonts.Data.Ascii9.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "024e83a5435e0c8ac28a1875a071f3c597b2f0da1e4e1d434fa58ec036915d4d"
+    },
+    {
+      "name": "Banner3",
+      "resource": "TUIKit.Ascii.Fonts.Data.Banner3.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "d34042b857075dc95aadce2d569e8db63959b3bcf4b4defbb485ed8c4f8473d1"
+    },
+    {
+      "name": "Banner3D",
+      "resource": "TUIKit.Ascii.Fonts.Data.Banner3D.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "f23ecaad3623ae484c628d4ac4fb05bb4ac73e5c145f73d184bef10696d06c3f"
+    },
+    {
+      "name": "Banner4",
+      "resource": "TUIKit.Ascii.Fonts.Data.Banner4.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "24042a4eca80ef9869be6841abca55f49fa60807ebafe502359c33b10a395a8b"
+    },
+    {
+      "name": "Big",
+      "resource": "TUIKit.Ascii.Fonts.Data.Big.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "3cdf2dd15945c4f3f04d9a0f75724afbbcefef172332a4301f72e94dcf62971f"
+    },
+    {
+      "name": "BigMoneyNe",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMoneyNe.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "e69ebd240b687c1fc1806818ee8d516d76294d11b46ed24be5d1d6a4c18ac982"
+    },
+    {
+      "name": "BigMoneyNw",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMoneyNw.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "35d15067d68270d0959d45aa5ffca18fd0db5cc754ae071580ca9b0ab20f0a7a"
+    },
+    {
+      "name": "BigMoneySe",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMoneySe.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "178808c076406a6d56db4c19320e1de3f2f829cfed39c6f4907d6680b178c816"
+    },
+    {
+      "name": "BigMoneySw",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMoneySw.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "9a56e3822b708838560a32c5a2f1db215318fdfe76e7096c65f170d34794d818"
+    },
+    {
+      "name": "BigMono12",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMono12.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "150ce07d35615ed7ef85cdd2eb643a51a7089f5a197cc28bd693ae81551ed605"
+    },
+    {
+      "name": "BigMono9",
+      "resource": "TUIKit.Ascii.Fonts.Data.BigMono9.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0d7f03d30aa90dad836c8bdaaf368e23a767e3540e89c20c8cdfd4ebd6f4a46e"
+    },
+    {
+      "name": "BlockFiglet",
+      "resource": "TUIKit.Ascii.Fonts.Data.BlockFiglet.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "22d141018c5cd9456105992da68d51c3647a31500a3500dda2828956279d9f79"
+    },
+    {
+      "name": "Blocks",
+      "resource": "TUIKit.Ascii.Fonts.Data.Blocks.flf",
+      "commentLines": 11,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "ebed66f57eea6666ba8cc6b0887fdf6633da46e29fc4829503e01dc8426a2ad8"
+    },
+    {
+      "name": "Bloody",
+      "resource": "TUIKit.Ascii.Fonts.Data.Bloody.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "e3a6a25f8113bfce06a3444f299f67b46d53b27a3604f2f1e328c345ad47ded3"
+    },
+    {
+      "name": "BlurVisionAscii",
+      "resource": "TUIKit.Ascii.Fonts.Data.BlurVisionAscii.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "8fb892feff7e9015da7faff92b3b1f699242eac47aeea04852c07467eb02068e"
+    },
+    {
+      "name": "Bright",
+      "resource": "TUIKit.Ascii.Fonts.Data.Bright.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "cc45b0a8d6b4ed3494baa306063299d27432b566edbc3efc63deb0d7b446cbef"
+    },
+    {
+      "name": "Caligraphy",
+      "resource": "TUIKit.Ascii.Fonts.Data.Caligraphy.flf",
+      "commentLines": 14,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "00350e6fddd5ec0dc79409b51bec2c2297f23d4d52bdf591822b5276a25fc9a9"
+    },
+    {
+      "name": "Caligraphy2",
+      "resource": "TUIKit.Ascii.Fonts.Data.Caligraphy2.flf",
+      "commentLines": 30,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "92cb5ba374d3d7a9a7f7b780cf567aa1d9e11a14e3f9c2a927a44fa4890e0c88"
+    },
+    {
+      "name": "CalvinS",
+      "resource": "TUIKit.Ascii.Fonts.Data.CalvinS.flf",
+      "commentLines": 7,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "3167e52e15e0d8598c4f035dc26b710d0c673d9f06cd84bac70614ccfa7af7bd"
+    },
+    {
+      "name": "Chiseled",
+      "resource": "TUIKit.Ascii.Fonts.Data.Chiseled.flf",
+      "commentLines": 16,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "8df4229332eb853d3443c41c890e5c99f60142b605a3dc832d2f3c0b067e149a"
+    },
+    {
+      "name": "Chunky",
+      "resource": "TUIKit.Ascii.Fonts.Data.Chunky.flf",
+      "commentLines": 6,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "bba134e875f5c1406fb5f817b70398ee6c04b06d72d021c5a371de2242cc63e4"
+    },
+    {
+      "name": "Classy",
+      "resource": "TUIKit.Ascii.Fonts.Data.Classy.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "MIT",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "c738ee428830b85bd7cdbe3edc7a296f1f1540b73910ee61756933ec43e06998"
+    },
+    {
+      "name": "CoderMini",
+      "resource": "TUIKit.Ascii.Fonts.Data.CoderMini.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "MIT",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "08857103cca94c8c3f515875af04389ec90f926876973c13ca11756c7d724592"
+    },
+    {
+      "name": "Colossal",
+      "resource": "TUIKit.Ascii.Fonts.Data.Colossal.flf",
+      "commentLines": 17,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "f716a383fc75ca1bbe0470c338a50fe9e91d9e4795c57a8a1eff6f37270c22cb"
+    },
+    {
+      "name": "Contrast",
+      "resource": "TUIKit.Ascii.Fonts.Data.Contrast.flf",
+      "commentLines": 2,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "84ea64c2e57d660f69ba28a93446b25ca3255c789cd0170179e4bc49fb42f50c"
+    },
+    {
+      "name": "Cosmike",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cosmike.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "e39e6f3d6012c89564dc38b15544df6fa212f632a95533e45607eb67260a20c5"
+    },
+    {
+      "name": "Cosmike2",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cosmike2.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "42c3fd07ad5a34b7c0c81390256a250ba21df3a3f8962fec7e1b271db9d3d541"
+    },
+    {
+      "name": "Crawford",
+      "resource": "TUIKit.Ascii.Fonts.Data.Crawford.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "1627beaa584156e08a8e67b82397548042b8b2c46b753ee6533938964b16b71e"
+    },
+    {
+      "name": "Crawford2",
+      "resource": "TUIKit.Ascii.Fonts.Data.Crawford2.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "6151279ea9002033516d56b962a6d86f2fb13cc6c2b71cd815d341b16307c68c"
+    },
+    {
+      "name": "Cricket",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cricket.flf",
+      "commentLines": 25,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "8c13c63ab541a80082971b6c213026a599b7bcf29f2e8de9d59cda247b315e3b"
+    },
+    {
+      "name": "Cyberlarge",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cyberlarge.flf",
+      "commentLines": 20,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "ba9b64f63caa5a7e49d3aca1e61267adb81d9dd0469c3da0eafbb4cc1476ba9c"
+    },
+    {
+      "name": "Cybermedium",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cybermedium.flf",
+      "commentLines": 20,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "fcbb6ba53c8eaa4fd64407c02df04240b5c4822dae7bb27357fdc7446d7a88f7"
+    },
+    {
+      "name": "Cybersmall",
+      "resource": "TUIKit.Ascii.Fonts.Data.Cybersmall.flf",
+      "commentLines": 20,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "b670eb18de006d00b07556bf71afbb43801527d57211c7760cf27f2d2d165ae5"
+    },
+    {
+      "name": "DeltaCorpsPriest1",
+      "resource": "TUIKit.Ascii.Fonts.Data.DeltaCorpsPriest1.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "5065f00aa615c5e2fa18e9f7871628cb0384e9d9154d1531096e3adc0d84d41f"
+    },
+    {
+      "name": "Doh",
+      "resource": "TUIKit.Ascii.Fonts.Data.Doh.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "1524624f5155f0480d9e8261b9192acf7e5cf514a6d165eeb91fe99733cecd9a"
+    },
+    {
+      "name": "Doom",
+      "resource": "TUIKit.Ascii.Fonts.Data.Doom.flf",
+      "commentLines": 16,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "3d8fe9963526329ff9d5414a97b0f47e3a852d2f288a693f2938730f5a230e75"
+    },
+    {
+      "name": "DosRebel",
+      "resource": "TUIKit.Ascii.Fonts.Data.DosRebel.flf",
+      "commentLines": 14,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0a167aaab7a99e59dc8034b6621f9bc87343734e4ca71acbad8b3c1d3800767d"
+    },
+    {
+      "name": "FireFontK",
+      "resource": "TUIKit.Ascii.Fonts.Data.FireFontK.flf",
+      "commentLines": 18,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "cadf9724b51ff32b9505fc853d5b435c56ef33fdbb4f3a927a09e91350d02396"
+    },
+    {
+      "name": "FireFontS",
+      "resource": "TUIKit.Ascii.Fonts.Data.FireFontS.flf",
+      "commentLines": 18,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "94792b02cf262eaaf8eb58126ffbf9aa9ba066def61cf71fa79e9850a48e7da1"
+    },
+    {
+      "name": "Future",
+      "resource": "TUIKit.Ascii.Fonts.Data.Future.flf",
+      "commentLines": 22,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "d3f82bef2625e99b750e81f230d5f4d2b122eb621250e94d2c5317da3e039682"
+    },
+    {
+      "name": "FutureSmooth",
+      "resource": "TUIKit.Ascii.Fonts.Data.FutureSmooth.flf",
+      "commentLines": 28,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "5dd4a5add7e3c8a76b9a0c6fce69b64292d2efd634f86882ebb3e217741a20f4"
+    },
+    {
+      "name": "FutureThin",
+      "resource": "TUIKit.Ascii.Fonts.Data.FutureThin.flf",
+      "commentLines": 24,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "09640a4d6a109d5fa874fa9092872f0e1b4f0d0a7b241ae65c1facb639770dab"
+    },
+    {
+      "name": "Graffiti",
+      "resource": "TUIKit.Ascii.Fonts.Data.Graffiti.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "d57f8b170124f49a15d0f7bb9021509a282a583a7b876f309314c7667bdd4b7d"
+    },
+    {
+      "name": "Jazmine",
+      "resource": "TUIKit.Ascii.Fonts.Data.Jazmine.flf",
+      "commentLines": 9,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "039d93e9ddeaa5f244787027ec28bd2779ede6c1a39dc7795b0502e52aacd33c"
+    },
+    {
+      "name": "Mono12",
+      "resource": "TUIKit.Ascii.Fonts.Data.Mono12.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "a5385ff14c654d0a4f1ea09e6c64dbb2ac6951d81880913b1046a1784c3a0cfd"
+    },
+    {
+      "name": "Mono9",
+      "resource": "TUIKit.Ascii.Fonts.Data.Mono9.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "9386c4515d68c89c3a95802a67b3accf04755217c5c1a13e6d8c4f2c672043f5"
+    },
+    {
+      "name": "Ogre",
+      "resource": "TUIKit.Ascii.Fonts.Data.Ogre.flf",
+      "commentLines": 13,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "c6e88144edc8e4fce435f38eaf54f946b03d5774dab8a347fcc9ad8fae8f1284"
+    },
+    {
+      "name": "Pagga",
+      "resource": "TUIKit.Ascii.Fonts.Data.Pagga.flf",
+      "commentLines": 15,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "ac5693a0d48e73bc0ef816755fcb0ff04631fcc0a40ed35f22e21dfdafbbede2"
+    },
+    {
+      "name": "Rebel",
+      "resource": "TUIKit.Ascii.Fonts.Data.Rebel.flf",
+      "commentLines": 15,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "420c2bedf8c5af44458b1a1d93acda2dd473ad2ee14d08d223a73592c08c41e9"
+    },
+    {
+      "name": "Rectangles",
+      "resource": "TUIKit.Ascii.Fonts.Data.Rectangles.flf",
+      "commentLines": 1,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "edae7049b9c4b3032354025c2ec954ba29cb82b783edb49f9b26a16f62f8cabf"
+    },
+    {
+      "name": "Relief",
+      "resource": "TUIKit.Ascii.Fonts.Data.Relief.flf",
+      "commentLines": 2,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0aacaa05621e347e4b4f0d813a26cd9ffab77fa7dea4c79d43690bd0b9fc476e"
+    },
+    {
+      "name": "Relief2",
+      "resource": "TUIKit.Ascii.Fonts.Data.Relief2.flf",
+      "commentLines": 2,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "fcb5c23981bee484ccff8996a48efa59efa4f76e958508407baadef8b55b8e1a"
+    },
+    {
+      "name": "ShadedBlocky",
+      "resource": "TUIKit.Ascii.Fonts.Data.ShadedBlocky.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "ac43b55046979b86c5d281e8496508601cf47b622fbb38c14f189d351a9fbd85"
+    },
+    {
+      "name": "Slant",
+      "resource": "TUIKit.Ascii.Fonts.Data.Slant.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0a1f6ebfa9b0a1658107765d5273f537e2a626c79a6fb431e1ca1e5330a74f2a"
+    },
+    {
+      "name": "SlantRelief",
+      "resource": "TUIKit.Ascii.Fonts.Data.SlantRelief.flf",
+      "commentLines": 15,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "010496378b233c8fbb728d1f78874c03c8d1d0bf12239d5821296cb4df4cda7b"
+    },
+    {
+      "name": "Small",
+      "resource": "TUIKit.Ascii.Fonts.Data.Small.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "6326d8a718cb57689d5eaa98d301b9297ef6f6300279635b901532a2f3d6aadf"
+    },
+    {
+      "name": "SmallAscii12",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallAscii12.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "49f6062593517363537a27fc7df2b6876751879cd36dd5ed11c163093b9af2a3"
+    },
+    {
+      "name": "SmallAscii9",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallAscii9.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "5f98dd79cf2f20c1ed3f93bf5a4bbcaf2d35d0adace054903c59c497c31c49ab"
+    },
+    {
+      "name": "SmallBlock",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallBlock.flf",
+      "commentLines": 16,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "53f60d05c830b49ec2b9efcf58ec83bc1e8df075ef9f9416ab4896136d93ef9c"
+    },
+    {
+      "name": "SmallBraille",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallBraille.flf",
+      "commentLines": 15,
+      "observedHeaderTerms": "WTFPL",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "b556845b33323a2100b79b2a8192f925c4a712a809a5ddc4be7669cef1f60d00"
+    },
+    {
+      "name": "SmallCaps",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallCaps.flf",
+      "commentLines": 11,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "5e4c9f6ca47e52a0432364413d3e0567c094ff6288ded99f8f2eb65c9ac520e3"
+    },
+    {
+      "name": "SmallIsometric1",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallIsometric1.flf",
+      "commentLines": 18,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "3a597af3a16fa06703d0011343f8a563378d89213ee8766096e4c848d86661cb"
+    },
+    {
+      "name": "SmallKeyboard",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallKeyboard.flf",
+      "commentLines": 57,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "f16beb25472b19a9aab463f55dea60bb54c4ace37167f65503733e20830488fd"
+    },
+    {
+      "name": "SmallMono12",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallMono12.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "00f785a2a082717e198b1bb55588ba6dea4d3834460d8dda4af031e795aa20d9"
+    },
+    {
+      "name": "SmallMono9",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallMono9.flf",
+      "commentLines": 4,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "8c38c715bc935338d14d078cf82c500b3a8b9935b31ac4a897dd9a636b9520e1"
+    },
+    {
+      "name": "SmallPoison",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallPoison.flf",
+      "commentLines": 14,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "6f44fff5e3b80fdda86b62f341fe672cbc1f6db73807a31740a0d190bbdb898e"
+    },
+    {
+      "name": "SmallScript",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallScript.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "9bfc87722314d13654cdace4c9b6d6f0d28cfe712bdeecfd58f3b2cfef39e2bd"
+    },
+    {
+      "name": "SmallShadow",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallShadow.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0202bf57d115edb7f2bd36a6f08e9518289649790291a50b0fce7bb5f89d8148"
+    },
+    {
+      "name": "SmallSlant",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallSlant.flf",
+      "commentLines": 10,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "0ae40e029cc613468153816a8df9933451043d09c23604e914a677a87d0bbf91"
+    },
+    {
+      "name": "SmallTengwar",
+      "resource": "TUIKit.Ascii.Fonts.Data.SmallTengwar.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "598d90dd74854273eaaca7075f4c1dcbedba63f928d54bc03ed8c7814c63951e"
+    },
+    {
+      "name": "Soft",
+      "resource": "TUIKit.Ascii.Fonts.Data.Soft.flf",
+      "commentLines": 19,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "fb93498fb2341b98557ce25792efa9693305af433c2a9f847a7b13767c2f5201"
+    },
+    {
+      "name": "Standard",
+      "resource": "TUIKit.Ascii.Fonts.Data.Standard.flf",
+      "commentLines": 13,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "44573a1b2145dfdf0110b6a2d3d98bdc47a98cca50795bd7b78278ee5ca96f79"
+    },
+    {
+      "name": "SubZero",
+      "resource": "TUIKit.Ascii.Fonts.Data.SubZero.flf",
+      "commentLines": 16,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "1f15190f71336333bd349e7a8a1395bc684e836dd6bb83b9231a52eca95b9dea"
+    },
+    {
+      "name": "Terrace",
+      "resource": "TUIKit.Ascii.Fonts.Data.Terrace.flf",
+      "commentLines": 5,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "b64ac30d9e3d9349e7ed604337efd25f2a3114b0fd130c151a6a4f8019a0624c"
+    },
+    {
+      "name": "Tmplr",
+      "resource": "TUIKit.Ascii.Fonts.Data.Tmplr.flf",
+      "commentLines": 3,
+      "observedHeaderTerms": "no-explicit-license-in-header",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "73d02a6034f26b6d5a035ed7d9251c49251d53f6405946fa50d44f4592b59dfc"
+    },
+    {
+      "name": "Train",
+      "resource": "TUIKit.Ascii.Fonts.Data.Train.flf",
+      "commentLines": 13,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "b73b3c94f1a6167b7894eeff757fed34b226d0591055ec00519b0f97a6765d13"
+    },
+    {
+      "name": "Varsity",
+      "resource": "TUIKit.Ascii.Fonts.Data.Varsity.flf",
+      "commentLines": 11,
+      "observedHeaderTerms": "modification-credit-permission",
+      "reviewState": "notice-inventory-recorded",
+      "resourceSha256": "96b103d68065a448dcc4e5a50533886eabab6c9a2ff40195efc772802d02070b"
+    }
+  ],
+  "managedAssemblySha256": "888ae9c2787104fdce798c7f2d3320b07a53429a61ebb999fa33880e312a829c"
+}

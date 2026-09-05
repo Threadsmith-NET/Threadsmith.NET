@@ -47,9 +47,18 @@ public static class TuiKitFrontendTests
     {
         var modal = new ChoiceModal("Choose", [new("one", "same label"), new("two", "same label")]);
         var cells = new CellBuffer(40, 12);
-        modal.Render(new BufferSurface(cells));
+        var surface = new BufferSurface(cells);
+        surface.Fill(new Rect(0, 0, 40, 12), Cell.Glyph("X", CellStyle.Default, 1));
+        modal.Render(surface);
         var text = TUIKit.Testing.Snapshot.ToText(cells);
         Assert.Contains("> same label", text, StringComparison.Ordinal);
+        var lines = text.Split('\n');
+        for (var index = 0; index < lines.Length - 1; index++)
+        {
+            Assert.DoesNotContain("X", lines[index], StringComparison.Ordinal);
+        }
+
+        Assert.StartsWith("X", lines[^1], StringComparison.Ordinal);
         Assert.True(modal.HandleKey(KeyEvent.Special(KeyCode.Down)));
         Assert.True(modal.HandleKey(KeyEvent.Special(KeyCode.F2)));
         modal.Render(new BufferSurface(cells));

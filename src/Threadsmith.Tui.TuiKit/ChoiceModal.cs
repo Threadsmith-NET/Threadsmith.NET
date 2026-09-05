@@ -189,9 +189,12 @@ internal sealed class ChoiceModal : Modal
             return;
         }
 
+        var background = ResolveStyle(PresentationTextRole.Default);
+        surface.Fill(
+            new Rect(0, 0, surface.Size.Width, surface.Size.Height - 1),
+            Cell.Blank(background));
         var area = new Rect(1, 1, surface.Size.Width - 2, surface.Size.Height - 3);
         var view = buffer.CreateView(area);
-        view.Fill(new Rect(0, 0, area.Width, area.Height), Cell.Blank(ResolveStyle(PresentationTextRole.Default)));
         _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
         _hintRun.Draw(view, 0, 1, _details ? "Details: PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
         _height = Math.Max(1, area.Height - 3);

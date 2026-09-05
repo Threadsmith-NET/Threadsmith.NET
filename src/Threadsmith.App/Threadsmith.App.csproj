@@ -43,6 +43,21 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Curated application-owned help evidence; implementation and feature plans are intentionally not globbed. -->
+    <None Include="ThreadsmithDocs.manifest.json" Link="ThreadsmithDocs/manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\README.md" Link="ThreadsmithDocs/README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\CONTRIBUTING.md" Link="ThreadsmithDocs/CONTRIBUTING.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\CODE_OF_CONDUCT.md" Link="ThreadsmithDocs/CODE_OF_CONDUCT.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\LICENSE" Link="ThreadsmithDocs/LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\*.md" Exclude="..\..\docs\AGENTS.md" Link="ThreadsmithDocs/docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\operations\**\*.md" Link="ThreadsmithDocs/docs/operations/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\extension-authoring\**\*.md" Link="ThreadsmithDocs/docs/extension-authoring/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\testing\**\*.md" Link="ThreadsmithDocs/docs/testing/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\architecture\**\*.md" Link="ThreadsmithDocs/docs/architecture/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\guardrails\**\*.md" Link="ThreadsmithDocs/docs/guardrails/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
   </ItemGroup>
 

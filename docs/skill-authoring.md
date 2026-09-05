@@ -97,4 +97,4 @@ Before distribution:
 7. test every proposed action through ordinary Plan-37/38 policy and validation;
 8. confirm events, logs, persistence, and diagnostic bundles contain no package body, secret, raw provider payload, or hidden reasoning.
 
-See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and [Plan 39](implementation-plans/plan-39-governed-skills-reusable-workflows.md).
+See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).

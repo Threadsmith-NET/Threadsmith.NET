@@ -1,6 +1,6 @@
 # Parallel-agent operations
 
-Milestone 11.1 adds one host-owned delegation layer for bounded research, isolated implementation, and independent review. It composes over the serial Plan-37 execution path; it does not replace mutation approval, transactions, validation, or recovery.
+Threadsmith has one host-owned delegation layer for bounded research, isolated implementation, and independent review. It composes over the serial approved-plan execution path; it does not replace mutation approval, transactions, validation, or recovery.
 
 ## Safety boundary
 

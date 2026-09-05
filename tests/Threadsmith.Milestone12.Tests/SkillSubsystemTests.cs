@@ -35,9 +35,9 @@ public sealed class SkillSubsystemTests
         Assert.False(candidate.Enabled);
     }
 
-    /// <summary>Verifies all three maintained packages discover and integrity-verify.</summary>
+    /// <summary>Verifies all maintained packages discover and integrity-verify.</summary>
     [Fact]
-    public async Task MaintainedCatalog_ContainsThreeVerifiedWorkflows()
+    public async Task MaintainedCatalog_ContainsVerifiedWorkflows()
     {
         // Arrange
         var root = MaintainedRoot();
@@ -53,12 +53,16 @@ public sealed class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(3, verified.Length);
+        Assert.Equal(4, verified.Length);
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "upgrade-package");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review-pr");
+        var docs = Assert.Single(verified, item =>
+            item.Metadata.SkillId.Value == PackagedDocumentationPolicy.SkillId);
+        Assert.Equal(["read_file", "search"], docs.Metadata.Requirements.RequiredTools.Order());
+        Assert.Empty(docs.Metadata.Requirements.OptionalTools);
     }
 
     /// <summary>Verifies a body changed after metadata discovery fails integrity verification.</summary>
@@ -310,13 +314,14 @@ public sealed class SkillSubsystemTests
         };
 
         // Act
-        _ = await tool.ExecuteAsync(
+        var result = await tool.ExecuteAsync(
             new InvokeSkillInput { Selector = "test-skill", InputJson = "{}" },
             context);
 
         // Assert
         Assert.NotNull(workflows.Request);
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
+        Assert.Equal("{\"answer\":\"test\"}", result.Value.OutputJson);
     }
 
     /// <summary>Verifies required procedure assets cannot be silently dropped under context pressure.</summary>
@@ -995,6 +1000,7 @@ public sealed class SkillSubsystemTests
                 InvocationId = request.InvocationId,
                 Package = package,
                 Status = SkillInvocationStatus.Completed,
+                OutputJson = "{\"answer\":\"test\"}",
                 Reason = "test complete",
                 Checkpoint = checkpoint,
             });

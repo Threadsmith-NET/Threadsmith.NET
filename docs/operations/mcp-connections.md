@@ -65,7 +65,7 @@ Static bearer tokens and API keys are supported through `headers` plus `secretSc
 
 ### Interactive OAuth SSO
 
-Milestone 10 supports authorization-code + PKCE for SSE and streamable-HTTP profiles. The official MCP SDK performs protected-resource and authorization-server discovery, state and RFC 9207 issuer validation, token exchange, bearer attachment, and transparent refresh. Threadsmith owns browser/callback UX and durable secret caching.
+SSE and streamable-HTTP profiles support authorization code with PKCE. The official MCP SDK performs protected-resource and authorization-server discovery, state and RFC 9207 issuer validation, token exchange, bearer attachment, and transparent refresh. Threadsmith owns browser/callback UX and durable secret caching.
 
 ```json
 {
@@ -114,7 +114,7 @@ MCP lifecycle management retains one identity per profile. Dynamic client regist
 
 Missing IDs use numbered selectors. Connect/disconnect/reconnect serialize per profile. Reconnect always drains the retiring generation and performs fresh profile, secret, transport, authentication, discovery, and registry evaluation. Disconnect atomically closes invocation admission before removing registry entries, waits for admitted requests, then retunes SDK stdio shutdown to the remaining drain/kill deadline; a required forced termination remains visible as `Killed` rather than being reported as a clean disconnect. Live connection handles are never restored by resume, clone, or restart.
 
-Tools, resources, resource templates, and prompts are discovered only when both the server and profile allow them. Tool IDs stay profile-qualified; tool availability remains owned by Plan 27 but additionally requires an exact repository-bound, schema-digest-bound approval in the owner-protected user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` or `tools:defaultEnabledOverrides` values can narrow availability but cannot grant this approval. Imported tools default disabled. Advertised list-change notifications debounce into one complete replacement within the 256-capability connection bound; tool publication changes atomically, schema changes advance the manager generation, and pre-resolved tools from a replaced generation are denied. Resources and prompts are not model tools: exact explicit operations return bounded, sanitized text marked `UNTRUSTED MCP`, including aggregate truncation disclosure when server items are omitted; binary content is withheld as safe metadata.
+Tools, resources, resource templates, and prompts are discovered only when both the server and profile allow them. Tool IDs stay profile-qualified; tool availability additionally requires an exact repository-bound, schema-digest-bound approval in the owner-protected user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` or `tools:defaultEnabledOverrides` values can narrow availability but cannot grant this approval. Imported tools default disabled. Advertised list-change notifications debounce into one complete replacement within the 256-capability connection bound; tool publication changes atomically, schema changes advance the manager generation, and pre-resolved tools from a replaced generation are denied. Resources and prompts are not model tools: exact explicit operations return bounded, sanitized text marked `UNTRUSTED MCP`, including aggregate truncation disclosure when server items are omitted; binary content is withheld as safe metadata.
 
 `/mcp diagnose` checks eligibility, endpoint/executable shape, secret-reference count, coarse OAuth state, capability translation, and—only while connected—a protocol ping. Servers whose negotiated protocol has no ping report that check honestly; Threadsmith never invokes an arbitrary tool as a health probe. Startup/discovery and recent explicit resource/prompt/ping measurements use monotonic labels and bounded aggregates.
 
@@ -142,7 +142,7 @@ Headless syntax is `threadsmith --mcp <action> [profile] [capability] [key=value
 
 ## Live HTTP verification
 
-The Milestone 9 suite always runs the in-repo real stdio server. HTTP verification is opt-in because it requires a real endpoint:
+The MCP integration suite always runs the in-repository real stdio server. HTTP verification is opt-in because it requires a real endpoint:
 
 ```powershell
 $env:THREADSMITH_MCP_HTTP_ENDPOINT = "https://mcp.example.com/mcp"

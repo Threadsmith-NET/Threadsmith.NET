@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "threadsmith-docs-help"
+  },
+  "packageId": "threadsmith.threadsmith-docs-help",
+  "version": "1.0.0",
+  "displayName": "Threadsmith Documentation Help",
+  "description": "Answer Threadsmith usage, configuration, operations, troubleshooting, and authoring questions from the packaged local documentation.",
+  "tags": [
+    "documentation",
+    "help",
+    "configuration",
+    "operations"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "MIT",
+  "assets": [
+    {
+      "path": "instructions/answer.md",
+      "bytes": 1191,
+      "sha256": "f4797cd36fff137d488afe5f7c7b56bf4f520d9ea5a52b1a06e3fa101995b09f",
+      "required": true,
+      "kind": "instructions"
+    },
+    {
+      "path": "schemas/answer-output.json",
+      "bytes": 1044,
+      "sha256": "37b3503f790dd830643f74abbff45426460fe714d6a674a82be0dcbba5340382",
+      "required": true,
+      "kind": "output-schema"
+    },
+    {
+      "path": "schemas/input.json",
+      "bytes": 400,
+      "sha256": "b34bb5f60c1f6cecf7beb26c25aaf85e5515d2a253bce8c57d94479ff78307e1",
+      "required": true,
+      "kind": "input-schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "search",
+      "read_file"
+    ],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "TrustedRead",
+    "approvalCategories": [
+      "read-only discovery"
+    ],
+    "model": {
+      "workloads": [
+        "General"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": true,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": {
+    "contentTokens": 6000,
+    "workflowSteps": 2,
+    "modelTurns": 4,
+    "toolCalls": 12,
+    "mutations": 0,
+    "validationAttempts": 0,
+    "delegatedChildren": 0,
+    "parallelChildren": 0,
+    "worktrees": 0,
+    "reviewerFindings": 0,
+    "wallTime": "00:05:00"
+  },
+  "agents": [],
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "threadsmith-docs-help",
+    "steps": [
+      {
+        "stepId": "answer",
+        "outputSchemaAsset": "schemas/answer-output.json",
+        "instructionAsset": "instructions/answer.md",
+        "hostAction": null,
+        "maximumIterations": 1,
+        "dependsOn": [],
+        "inputSchemaAsset": "schemas/input.json",
+        "kind": "invokeProcedure"
+      }
+    ]
+  },
+  "signature": null
+}

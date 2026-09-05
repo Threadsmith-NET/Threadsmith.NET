@@ -60,7 +60,7 @@ Compaction never deletes archived messages. Full bodies have an independent rete
 
 ## Configuration
 
-Configure repository overrides under `context:conversation` in `.threadsmith/config.*`. The complete schema is in `.threadsmith/config.example`.
+Configure repository overrides under `context:conversation` in `.threadsmith/config.*`. The complete schema is in `config.example` beside an installed Threadsmith executable and in `.threadsmith/config.example` in a source checkout.
 
 Compiled defaults:
 
@@ -95,4 +95,4 @@ Persistence migration 2 owns archive, mode, memory, provenance-edge, and summary
 
 ## Verification
 
-Automated acceptance coverage is in `Threadsmith.Milestone7_4.Tests`, including named Scenario I coverage for promotion, compaction, repository invalidation, all three modes, restart restoration, deterministic retrieval, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in `docs/implementation-plans/manual-test-plan.md` §12.
+Automated acceptance coverage is in `Threadsmith.Milestone7_4.Tests`, including promotion, compaction, repository invalidation, all three modes, restart restoration, deterministic retrieval, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in the source-repository [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md).

@@ -6,7 +6,7 @@ Own repository-maintained build, development-tool staging, and release automatio
 
 ## Ownership
 
-- `release/` — release target matrix; reviewed license evidence, deterministic SPDX/notices, exact runtime legal staging, artifact compliance; self-contained publish/staging; Windows, Linux, and macOS packaging; signing/notarization hooks; aggregate provenance; and release contract/smoke checks.
+- `release/` — release target matrix; reviewed license evidence, deterministic SPDX/notices, exact runtime legal staging, bounded curated `ThreadsmithDocs` validation, artifact compliance; self-contained publish/staging; Windows, Linux, and macOS packaging; signing/notarization hooks; aggregate provenance; and release contract/smoke checks.
 - `Stage-DevelopmentRipgrep.ps1` — detects or accepts one supported RID and delegates to the release-owned checksum-verified ripgrep stager under ignored `artifacts/dev-tools/<rid>` for source-development App builds.
 
 ## Local Contracts
@@ -19,6 +19,7 @@ Own repository-maintained build, development-tool staging, and release automatio
 - Logs and manifests contain no secrets or machine-user paths.
 - Trimming, Native AOT, and single-file assumptions remain disabled until separately proven compatible.
 - Ordinary builds remain offline and do not download native tools. When the verified development stage exists, `Threadsmith.App.csproj` copies `tools/rg(.exe)` plus ripgrep license/source evidence into build and publish outputs.
+- Every staged payload includes the manifest-bound `ThreadsmithDocs` bundle and rejects implementation/feature plans, filesystem links, missing required help files, missing/escaping local Markdown link targets, or bundle size/count overflow before artifact creation.
 
 ## Work Guidance
 

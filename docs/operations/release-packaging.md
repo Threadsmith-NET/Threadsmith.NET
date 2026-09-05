@@ -11,7 +11,7 @@
 | macOS | Intel x64 | `Threadsmith-<version>-osx-x64.pkg` |
 | macOS | Apple silicon | `Threadsmith-<version>-osx-arm64.pkg` |
 
-All payloads are self-contained; .NET 10 does not need to be installed. Each payload also contains its matching official ripgrep executable under `tools/` for fast repository text search, plus upstream license/provenance notices under `third-party/ripgrep/`. Trimming, Native AOT, and single-file publishing are intentionally disabled. Verify downloads with the release's `SHA256SUMS` before installation.
+All payloads are self-contained; .NET 10 does not need to be installed. Each payload also contains its matching official ripgrep executable under `tools/` for fast repository text search, plus upstream license/provenance notices under `third-party/ripgrep/`. The application-owned `ThreadsmithDocs/` bundle contains curated user, operator, authoring, architecture, testing, and guardrail documentation used by local help. Implementation plans, feature plans, repository runtime state, and generated artifacts are excluded. Trimming, Native AOT, and single-file publishing are intentionally disabled. Verify downloads with the release's `SHA256SUMS` before installation.
 
 ## Installation
 
@@ -65,3 +65,5 @@ Use `Build-LinuxArchive.ps1` only on Linux and `Build-MacPackage.ps1` only on ma
 Each publish validates the exact `project.assets.json` identity/version/SHA-512 closure, then emits deterministic UTF-8 `third-party/THIRD-PARTY-NOTICES.txt` and SPDX 2.3 `third-party/sbom.spdx.json`. PrettyPrompt carries its MPL-2.0 full text and versioned source-availability URL; SQLitePCLRaw carries Apache-2.0 text and the reviewed SQLite public-domain notice. The same publish copies the SDK root's runtime `LICENSE.txt` and `ThirdPartyNotices.txt` to canonical `third-party/dotnet-runtime/LICENSE.txt` and `THIRD-PARTY-NOTICES.txt`, recording same-RID digests in `PROVENANCE.json`.
 
 Packaging runs only after `Test-ReleaseCompliance.ps1` passes. Every archive/installer gets a `.compliance.json` sidecar bound to its SHA-256 and staged-payload digest. `New-ReleaseManifest.ps1` rejects any missing, failed, wrong-RID, stale, or digest-mismatched sidecar, so the tag-gated workflow cannot reach `gh release create` on legal uncertainty. Inspect all six artifacts and sidecars during rehearsal; never manually bypass this gate.
+
+`Test-PackagedDocumentation.ps1` is part of staged-payload validation. It requires the bundle manifest and core help files, enforces file-count and byte bounds, rejects linked files, validates local Markdown link targets, and fails if an excluded prefix such as `docs/implementation-plans/` appears. Artifact inspection then proves the validated staged files are present byte-for-byte in each installer or archive.

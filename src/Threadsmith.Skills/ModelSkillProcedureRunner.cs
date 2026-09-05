@@ -121,6 +121,19 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     throw new InvalidDataException("Skill procedure returned empty output.");
                 }
 
+                if (plan.Scope == SkillScope.Maintained
+                    && string.Equals(
+                        plan.Package.SkillId.Value,
+                        PackagedDocumentationPolicy.SkillId,
+                        StringComparison.Ordinal))
+                {
+                    var documentationContext = await _toolContext(plan.Request, cancellationToken);
+                    await PackagedDocumentationPolicy.ValidateAnswerAsync(
+                        output,
+                        documentationContext.RepositoryPath,
+                        cancellationToken);
+                }
+
                 return new SkillProcedureResult(output, round + 1, toolCalls);
             }
 

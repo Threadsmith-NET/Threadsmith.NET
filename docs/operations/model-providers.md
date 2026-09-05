@@ -108,7 +108,7 @@ Caller cancellation interrupts the HTTP request, retry delay, or active response
 
 ## Reasoning models
 
-Reasoning models stream thinking separately from visible answer content. Explicit M16 compatibility accepts only the configured compiled response mode (`reasoningContent`, `reasoning`, or `none`) and normalizes accepted text to `ModelChunk.Reasoning`. Display reasoning is sanitized, bounded, transient process state. It is excluded from conversation, memory, evidence, hooks, telemetry, diagnostics, and SQLite; migration 7 removes historical `modelReasoningObserved` rows. The terminal shows only transient `THINKING` activity, removes it before completed output, and retains the opt-in `<thinking>` view.
+Reasoning models stream thinking separately from visible answer content. Compatibility accepts only the configured compiled response mode (`reasoningContent`, `reasoning`, or `none`) and normalizes accepted text to `ModelChunk.Reasoning`. Display reasoning is sanitized, bounded, transient process state. It is excluded from conversation, memory, evidence, hooks, telemetry, diagnostics, and SQLite; persisted historical reasoning rows are removed during migration. The terminal shows only transient `THINKING` activity, removes it before completed output, and retains the opt-in `<thinking>` view.
 
 Catalogs without `reasoningCompatibility` retain the legacy request behavior exactly: reasoning-capable profiles emit lowercase `reasoning_effort`, unsupported requested levels clamp to `none`, and `[none]`-only profiles omit the property. Explicit compatibility opts into strict validation and rejects unsupported levels before network I/O.
 

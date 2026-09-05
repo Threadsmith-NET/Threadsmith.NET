@@ -189,7 +189,10 @@ public sealed record ContextAssemblerOptions
         + "advertised or after the applicable semantic tool fails or explicitly reports incomplete or degraded "
         + "evidence; do not repeat equivalent searches after sufficient semantic evidence. Once evidence resolves "
         + "the requested change and no correctness ambiguity remains, stop calling tools and propose the plan rather "
-        + "than investigating unrelated patterns or references. Never perform mutations during governed planning.";
+        + "than investigating unrelated patterns or references. When invoke_skill and the maintained "
+        + "threadsmith-docs-help skill are available, enabled, and compatible, prefer that skill for questions about "
+        + "Threadsmith usage, commands, configuration, context, providers, operations, troubleshooting, or authoring. "
+        + "Never perform mutations during governed planning.";
 
     /// <summary>Ordered project prompt append paths from repository configuration.</summary>
     public IReadOnlyList<string> PromptAppendFiles { get; init; } = [];

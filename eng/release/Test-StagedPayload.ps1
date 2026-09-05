@@ -5,9 +5,10 @@ Assert-ReleaseRid $RuntimeIdentifier
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
 $suffix = if ($RuntimeIdentifier.StartsWith('win-')) { '.exe' } else { '' }
 $ripgrepRelativePath = "tools/rg$suffix"
-foreach ($name in @("Threadsmith.App$suffix", "Threadsmith.Scripting.Worker$suffix", $ripgrepRelativePath, 'third-party/ripgrep/LICENSE-MIT', 'third-party/ripgrep/UNLICENSE', 'third-party/ripgrep/SOURCE.json', 'third-party/THIRD-PARTY-NOTICES.txt', 'third-party/sbom.spdx.json', 'third-party/dotnet-runtime/LICENSE.txt', 'third-party/dotnet-runtime/THIRD-PARTY-NOTICES.txt', 'third-party/dotnet-runtime/PROVENANCE.json', 'release-compliance.json', 'LICENSE', 'config.example', 'providers.example.json')) {
+foreach ($name in @("Threadsmith.App$suffix", "Threadsmith.Scripting.Worker$suffix", $ripgrepRelativePath, 'third-party/ripgrep/LICENSE-MIT', 'third-party/ripgrep/UNLICENSE', 'third-party/ripgrep/SOURCE.json', 'third-party/THIRD-PARTY-NOTICES.txt', 'third-party/sbom.spdx.json', 'third-party/dotnet-runtime/LICENSE.txt', 'third-party/dotnet-runtime/THIRD-PARTY-NOTICES.txt', 'third-party/dotnet-runtime/PROVENANCE.json', 'release-compliance.json', 'LICENSE', 'config.example', 'providers.example.json', 'ThreadsmithDocs/manifest.json')) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $name) -PathType Leaf)) { throw "Staged payload is missing $name." }
 }
+& (Join-Path $PSScriptRoot 'Test-PackagedDocumentation.ps1') -StageDirectory $stage | Out-Null
 & (Join-Path $PSScriptRoot 'Test-ReleaseCompliance.ps1') -StageDirectory $stage -RuntimeIdentifier $RuntimeIdentifier | Out-Null
 $ripgrepSource = Get-Content -LiteralPath (Join-Path $stage 'third-party/ripgrep/SOURCE.json') -Raw | ConvertFrom-Json
 if ($ripgrepSource.product -ne 'ripgrep' -or $ripgrepSource.version -notmatch '^\d+\.\d+\.\d+$' -or $ripgrepSource.selectedLicense -ne 'MIT') {

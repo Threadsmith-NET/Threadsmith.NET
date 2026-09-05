@@ -18,12 +18,13 @@ This guide documents the currently implemented user-facing behavior. Features de
 10. [Themes and session status](#themes-and-session-status)
 11. [Extensions](#extensions)
 12. [Governed skills and reusable workflows](#governed-skills-and-reusable-workflows)
-13. [Headless and automated use](#headless-and-automated-use)
-14. [Persistence, retention, and diagnostics](#persistence-retention-and-diagnostics)
-15. [MCP connection profiles](#mcp-connection-profiles)
-16. [Safety model](#safety-model)
-17. [Troubleshooting](#troubleshooting)
-18. [Further reference](#further-reference)
+13. [Lifecycle hooks and policy automation](#lifecycle-hooks-and-policy-automation)
+14. [Headless and automated use](#headless-and-automated-use)
+15. [Persistence, retention, and diagnostics](#persistence-retention-and-diagnostics)
+16. [MCP connection profiles](#mcp-connection-profiles)
+17. [Safety model](#safety-model)
+18. [Troubleshooting](#troubleshooting)
+19. [Further reference](#further-reference)
 
 ## Requirements and installation
 
@@ -203,8 +204,12 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
 | `/clone` | Create and activate an independent governed copy of the current session. |
 | `/models` | Select and persist the active repository provider/model. |
+| `/auth openai-codex [login\|status\|logout]` | Manage OpenAI Codex authentication. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
 | `/thinking` | Show or hide the latest sanitized reasoning. |
+| `/fetch-authorize <url> [redirect ...]` | Authorize one exact URL chain for `web_fetch`. |
+| `/mcp [...]` | Inspect and manage MCP profiles and capabilities. |
+| `/hooks [...]` | Inspect, test, approve, enable, disable, or audit lifecycle hooks. |
 | `/theme` | Select a theme. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
@@ -212,6 +217,9 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
 | `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
 | `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/validation retry` | Resume interrupted post-apply validation. |
+| `/agents <id> [cancel\|cancel-child <id>]` | Inspect or cancel a delegation tree. |
+| `/skills [...]` | Inspect, verify, enable, invoke, resume, or cancel skills. |
 | `/help` | Display available commands. |
 | `/quit` | Exit cleanly. |
 
@@ -475,23 +483,23 @@ These settings narrow runtime use independently of availability:
 
 The catalog includes repository listing/reading/search, typed local Git inspection, normalized .NET inventory, semantic symbol/reference/implementation discovery, controlled process execution, current date/time, and other host-governed capabilities. Recursive repository listing and text search skip prohibited/reparse-point descendants; installed releases include a RID-matched ripgrep executable and use it through a bounded `rg` fast path for whole-repository literal text search, respecting repository ignore files while including relevant hidden files. Source-development launches prefer the same app-local `tools/rg(.exe)` layout and may use an `rg` found on `PATH` when no staged payload exists. Regex searches, narrowed globs, configured prohibited-path boundaries, unavailable ripgrep, or a failed native invocation use the confined managed scanner. Search prunes `.git`, `bin`, `obj`, SQLite databases (including `.threadsmith/threadsmith.db`), and oversized files as applicable; files that become locked, inaccessible, or unavailable are skipped without aborting the managed scan. Results and native output remain bounded. On Windows these tools also skip reserved DOS device-name entries such as `nul` so one unopenable path cannot abort the remaining inspection. Use `find_symbol` followed by `find_references` or `find_implementations` for structural code questions; use `search` for exact text and regular expressions.
 
-Plan 41 adds distinct `git_diff`, `git_log`, `git_show`, `git_blame`, and `git_compare_branches` tools. They accept closed modes and validated revision tokens, treat path filters as literal repository-relative data after `--`, preserve unusual filenames through NUL-delimited normalization, classify blobs before text decoding, disable pagers/color/external diff and text-conversion behavior, perform no remote access, and truthfully report bounded commits, paths, lines, patches, bytes, and execution time. `git_diff` supports working-tree, staged, root/ordinary commit, direct-range, and merge-base comparisons. Branch comparison reports its merge base, ahead/behind counts, and normalized changed paths. Git is evaluated by executable policy, and recursive evidence omits descendants outside approved roots or matching prohibited paths.
+The typed Git tools are `git_diff`, `git_log`, `git_show`, `git_blame`, and `git_compare_branches`. They accept closed modes and validated revision tokens, treat path filters as literal repository-relative data after `--`, preserve unusual filenames through NUL-delimited normalization, classify blobs before text decoding, disable pagers/color/external diff and text-conversion behavior, perform no remote access, and truthfully report bounded commits, paths, lines, patches, bytes, and execution time. `git_diff` supports working-tree, staged, root/ordinary commit, direct-range, and merge-base comparisons. Branch comparison reports its merge base, ahead/behind counts, and normalized changed paths. Git is evaluated by executable policy, and recursive evidence omits descendants outside approved roots or matching prohibited paths.
 
 `dotnet_inventory` projects the authoritative selected loaded semantic workspace into deterministic solution/project, TFM, project-reference, package-reference, central-version-source, and test-project results. Caller-supplied path text cannot replace selected-solution provenance. It reports semantic confidence and omissions; degraded or absent workspace state is not presented as complete evaluation. Every selected solution, loaded project, and `Directory.Packages.props` metadata access is confined by approved-root, prohibited-path, and reparse-point policy before bounded reads; inventory never restores packages.
 
-All Plan 41 tools require `TrustedRead`, use the central availability/invocation policy and evidence pipeline, and return the same normalized JSON through interactive and headless model turns.
+All typed Git tools require `TrustedRead`, use the central availability/invocation policy and evidence pipeline, and return the same normalized JSON through interactive and headless model turns.
 
-Plan 42 adds `nuget_health`, `dotnet_build`, `dotnet_analyzers`, `dotnet_format_check`, `diagnostic_query`, `test_discover`, and `test_run_targeted`. These are distinct typed operations rather than argument routers. They accept only host-defined target, configuration, framework, limit, query, and identity fields; no arbitrary MSBuild property, logger, response file, adapter, runsettings, environment, command, or filter expression is accepted.
+The .NET health and validation catalog includes `nuget_health`, `dotnet_build`, `dotnet_analyzers`, `dotnet_format_check`, `diagnostic_query`, `test_discover`, and `test_run_targeted`. These are distinct typed operations rather than argument routers. They accept only host-defined target, configuration, framework, limit, query, and identity fields; no arbitrary MSBuild property, logger, response file, adapter, runsettings, environment, command, or filter expression is accepted.
 
 `nuget_health` reads bounded existing `obj/project.assets.json` data to distinguish direct and transitive resolved dependencies without restoring. Offline results report asset freshness, completeness, and omissions. Configured-source mode runs separate bounded vulnerable, deprecated, and outdated queries against HTTPS sources supplied only by trusted machine/user configuration; source hosts must also pass invocation network policy. Optional private sources pair a bounded source name and username with a logical `secrets:` reference. The exact reference must also be present in trusted `tools.allowedSecretReferences`; private-source credentials require `UserOwned` source trust, so repository values are ineligible. The value is resolved only at the final process boundary into the NuGet child environment; the generated temporary NuGet configuration contains source names/URIs but no credential and is deleted after use. Credentials never enter arguments, normalized results, or provenance. The tool never adds, removes, updates, restores, or writes package state.
 
-`dotnet_build` and `dotnet_analyzers` require `TrustedBuild`, execute through the tracked process manager, use closed Debug/Release and validated TFM scopes, always pass `--no-restore`, and normalize diagnostics. `dotnet_format_check` uses `dotnet format --verify-no-changes --no-restore`; it reports drift but never applies formatting. Any formatting apply remains a Plan 10/30/37 transactional mutation with exact diff review.
+`dotnet_build` and `dotnet_analyzers` require `TrustedBuild`, execute through the tracked process manager, use closed Debug/Release and validated TFM scopes, always pass `--no-restore`, and normalize diagnostics. `dotnet_format_check` uses `dotnet format --verify-no-changes --no-restore`; it reports drift but never applies formatting. Applying formatting remains a normal approved transactional mutation with exact-diff review.
 
 `diagnostic_query` pages the bounded process-local exploratory index by invocation/run, project, file, code, severity, compiler/analyzer origin, and baseline class. `test_discover` enumerates one confined supported test project without restore/build, derives host-issued repository-bound identities, and can narrow results by exact namespace, class, method, or available trait metadata. `test_run_targeted` accepts only one unexpired issued identity, rechecks its project against current path policy, and generates an exact effective filter. Unknown, cross-repository, expired, or ambiguous identities fail closed.
 
-Every Plan 42 result is labeled `Exploratory`. These tools cannot replace, overwrite, or satisfy M11 authoritative baseline, affected-project, test-selection, acceptance, or correction evidence. Process cancellation kills the tracked tree; output, dependencies, advisories, diagnostics, tests, time, and pagination are bounded. Interactive and headless turns use the same registry and normalized results.
+Every result from these exploratory .NET tools is labeled `Exploratory`. These tools cannot replace, overwrite, or satisfy authoritative baseline, affected-project, test-selection, acceptance, or correction evidence. Process cancellation kills the tracked tree; output, dependencies, advisories, diagnostics, tests, time, and pagination are bounded. Interactive and headless turns use the same registry and normalized results.
 
-Plan 43 adds `call_hierarchy`, `symbol_impact`, `csharp_pattern_search`, and `generated_code_query`. All four require an opened `TrustedBuild` semantic workspace, are read-only, run no process/network/build/restore/generator/mutation operation, and execute against one captured workspace generation. If invalidation or reload changes that generation before completion, the late result is discarded rather than projected as current.
+Compiler-backed semantic analysis includes `call_hierarchy`, `symbol_impact`, `csharp_pattern_search`, and `generated_code_query`. All four require an opened `TrustedBuild` semantic workspace, are read-only, run no process/network/build/restore/generator/mutation operation, and execute against one captured workspace generation. If invalidation or reload changes that generation before completion, the late result is discarded rather than projected as current.
 
 `call_hierarchy` accepts a stable symbol ID, incoming/outgoing/both direction, and explicit depth/node/edge/time limits. Edges report caller, callee, source call site, direct/static/constructor/interface/virtual/extension/local-function/delegate/unknown dispatch, ambiguity, and cycle closure. Dynamic, reflection, and runtime-only targets are omissions; results never claim whole-program completeness.
 
@@ -659,7 +667,7 @@ Threadsmith loads model providers from two dedicated catalogs:
 
 Providers and their nested models merge by stable `id`, not array position. Matching entries inherit omitted settings, other arrays replace the inherited array, and new entries append in repository order. Set `enabled` to `false` to disable an inherited provider or model. An override cannot change an inherited entry's `type` discriminator. If an inherited provider has a secret reference, a repository override also cannot change its provider-specific connection or authentication settings, including `baseUri` and `secretKeyReference`.
 
-Each provider owns an array of typed models. `defaultProviderId` is a case-insensitive stable provider string; `defaultModelId` is the model's stable GUID. See [`.threadsmith/providers.example.json`](../.threadsmith/providers.example.json) for a complete secret-free example.
+Each provider owns an array of typed models. `defaultProviderId` is a case-insensitive stable provider string; `defaultModelId` is the model's stable GUID. A complete secret-free [provider example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/providers.example.json) is available in the source repository.
 
 ```json
 {
@@ -783,7 +791,7 @@ For full provider fields, retry, timeout, usage, and cost behavior, see [operati
 
 ## Repository configuration
 
-Repository configuration lives at `.threadsmith/config.json`. It is data, not executable code. The complete annotated schema is [.threadsmith/config.example](../.threadsmith/config.example).
+Repository configuration lives at `.threadsmith/config.json`. It is data, not executable code. The complete annotated [configuration example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/config.example) is available in the source repository and as `config.example` beside an installed Threadsmith executable.
 
 Important sections include:
 
@@ -994,7 +1002,7 @@ Extension authors should read [extension-authoring/authoring-guide.md](extension
 
 ## Governed skills and reusable workflows
 
-Milestone 12 provides reusable declarative procedures without making package content executable or authoritative. Threadsmith searches organization, machine, user, repository, and maintained catalogs by bounded metadata. Startup does not open instruction/schema/reference bodies. A candidate reports scope, id, semantic version, SHA-256 digest, publisher/source, declared requirements, verification state, and enablement state.
+Skills provide reusable declarative procedures without making package content executable or authoritative. Threadsmith searches organization, machine, user, repository, and maintained catalogs by bounded metadata. Startup does not open instruction/schema/reference bodies. A candidate reports scope, id, semantic version, SHA-256 digest, publisher/source, declared requirements, verification state, and enablement state.
 
 Skills are data packages, not extensions. They cannot ship assemblies or scripts, add tools, grant trust, approve work, create agents, schedule tasks, mutate a repository, access the network/processes directly, or claim build/test success. Extension packages remain the executable capability mechanism. Skill workflows can only use existing host tools and return closed typed host-action proposals.
 
@@ -1048,6 +1056,9 @@ Maintained packages are enabled after their shipped integrity verifies:
 - `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
 - `review-pr` — returns bounded security, test, performance, and architecture findings without publishing or mutating.
+- `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
+
+For a natural question such as “How do I compact context?”, the model prefers `threadsmith-docs-help` when `invoke_skill`, the maintained package, current trust, and a compatible model are available. The skill can use only existing `search` and `read_file` capabilities rebound to `ThreadsmithDocs`; it cannot inspect the opened repository, access the network or secrets, execute processes, or mutate anything. If the shipped docs are missing or do not answer the question, it returns `partial` or `unavailable` and states the gap instead of guessing. Shipped documentation is evidence, not policy, and cannot override current host behavior, user instructions, approvals, or repository instructions.
 
 ### Copyable maintained-skill examples
 
@@ -1066,7 +1077,7 @@ A successful analyzer procedure returns schema-versioned `propose_plan` argument
 /skills continue <invocation-id> {"accepted":true,"planId":"<host-plan-id>"}
 ```
 
-Plan acceptance still does not apply edits. Plan 37 approval, implementation, exact-diff policy, transaction, build/test validation, and correction follow normally.
+Accepting the proposed plan still does not apply edits. The normal approval, implementation, exact-diff policy, transaction, build/test validation, and correction flow follows.
 
 The conversational equivalent is to ask the model to use an exact selector and provide the typed input, for example: `Use Maintained:fix-analyzer-warnings@1.0.0 with diagnostics [...] and scope [...]`. During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. The tool is not available as a way to invoke nested skills or during an ineligible phase.
 
@@ -1158,7 +1169,7 @@ The complete manifest must still declare and hash every referenced asset and sat
 
 1. `/skills use` runs the bounded `scope` procedure with the selected skill model.
 2. The workflow pauses and displays the complete typed `ProposeDelegation` payload.
-3. The host validates that request against Plan 38: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
+3. The host validates that request against the delegation policy: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
 4. Only an accepted host request creates a delegation ID. Inspect it with `/agents <delegation-id>` and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
 5. After the delegation reaches its authoritative structured join, the adapter supplies that real result through `/skills continue <invocation-id> <delegation-result-json>`. The next workflow step receives only the schema-valid structured result—not raw child transcripts or hidden reasoning.
 
@@ -1199,7 +1210,7 @@ Workflow checkpoints pin package identity, input, selected model/tools, budget, 
 
 ## Lifecycle hooks and policy automation
 
-Milestone 13 adds opt-in typed automation at repository, model, tool, planning, mutation, validation, correction, run, extension, and MCP lifecycle boundaries. With no handlers configured, behavior is unchanged.
+Lifecycle hooks provide opt-in typed automation at repository, model, tool, planning, mutation, validation, correction, run, extension, and MCP boundaries. With no handlers configured, behavior is unchanged.
 
 Repository configuration may declare handlers under `hooks:repositoryHandlers`, but declarations start disabled and cannot approve themselves. Interactive users use `/hooks list`, `/hooks inspect <id>`, `/hooks enable|disable <id>`, `/hooks test <id>`, `/hooks approve|revoke <id>`, and `/hooks audit [id]`. The matching `HeadlessShell` methods expose the same operations for automation. Both surfaces dispatch the same Core commands (`ListHooksCommand`, `InspectHookCommand`, `ApproveRepositoryHookCommand`, `RevokeRepositoryHookCommand`, `SetHookEnabledCommand`, `TestHookCommand`, and `QueryHookAuditCommand`); a test command invokes only its selected handler.
 
@@ -1280,7 +1291,7 @@ The repository configuration may override the locations and cleanup policy:
 
 The redaction audit is defense in depth, not a substitute for keeping secrets out of prompts and tool output. Event history is append-only and findings there are reported but not rewritten. With `repairArtifacts: true`, unsafe artifact bodies are sanitized. Disabling the audit or retention increases local-data exposure and should be a deliberate repository-owner decision.
 
-Milestone 8 also supplies the bounded `DiagnosticBundleGenerator` contract used by tests and future support surfaces. Bundle entries are sanitized and size-limited, and a canary-secret gate verifies generated ZIP content. There is not yet an interactive or headless command that generates a bundle; consequently the `diagnostics` example keys are reserved contract settings rather than an available user command.
+The host also supplies a bounded `DiagnosticBundleGenerator` contract used by tests and future support surfaces. Bundle entries are sanitized and size-limited, and a canary-secret gate verifies generated ZIP content. There is not yet an interactive or headless command that generates a bundle; consequently the `diagnostics` example keys are reserved contract settings rather than an available user command.
 
 ## MCP connection profiles
 
@@ -1447,9 +1458,9 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 - [Project prompt append](operations/project-prompt-append.md)
 - [Cache-optimized context](operations/cache-optimized-context.md)
 - [Extension authoring](extension-authoring/authoring-guide.md)
-- [Architecture decisions](architecture/)
-- [Implementation roadmap](implementation-plans/README.md)
-- [Maintained manual test plan](implementation-plans/manual-test-plan.md)
+- [Architecture decisions](architecture/README.md)
+- [Implementation roadmap (source repository)](https://github.com/Threadsmith-NET/Threadsmith.NET/tree/main/docs/implementation-plans)
+- [Maintained regression test plan (source repository)](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md)
 
 ## Maintaining this guide
 

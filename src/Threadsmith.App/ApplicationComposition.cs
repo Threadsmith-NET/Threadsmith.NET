@@ -416,7 +416,10 @@ internal static class ApplicationComposition
                         var state = await host.Projections.GetAsync<SessionProjection>(
                             key,
                             cancellationToken);
-                        return CreateToolInvocationContext(host, state);
+                        var context = CreateToolInvocationContext(host, state);
+                        return PackagedDocumentationPolicy.IsDocumentationSkillSelector(request.Selector)
+                            ? PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory)
+                            : context;
                     }),
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>

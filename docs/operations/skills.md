@@ -1,6 +1,6 @@
 # Governed skills and reusable workflows
 
-Milestone 12 adds host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
+Threadsmith skills are host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
 
 ## Catalog scopes and discovery
 
@@ -86,8 +86,11 @@ A skill can produce only a typed proposal. Repository mutation still requires go
 - `fix-analyzer-warnings` — verifies supplied diagnostics and proposes a bounded remediation plan; it never adds blanket suppression or edits directly.
 - `upgrade-package` — assesses a Central Package Management upgrade and proposes compatibility, rollback, build, and test steps; it never restores or accesses the network implicitly.
 - `review-pr` — produces and deduplicates bounded security/test/performance/architecture findings; it never publishes, approves, merges, or mutates.
+- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns exact local path/heading/line/snippet citations or an explicit documentation gap.
 
 They use the same manifest, hash, schema, content loader, model/tool, workflow, persistence, and event pipeline as third-party packages.
+
+When `invoke_skill` is available and this maintained package is compatible, ordinary model guidance prefers it for Threadsmith commands, configuration, context, providers, operations, troubleshooting, and authoring questions. No documentation-specific tool is added to ordinary requests. The local docs remain help evidence rather than policy; current host checks, user instructions, and repository instructions stay authoritative.
 
 ## Persistence and recovery
 

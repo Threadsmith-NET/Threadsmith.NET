@@ -16,7 +16,8 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - `ClaudeSkillCompatibilityCatalog.cs` — pinned safe scalar frontmatter parsing, explicit-root metadata discovery, compatibility/tool projection, confinement, strict-UTF-8 resource loading, and deterministic immutable activation digests.
 - The Claude compatibility adapter owns combined native/Claude catalog projection, activation-time exact verification and external policy, content adaptation, shared invocation, and exact-digest resume fencing.
 - `SkillApplication.cs` / `InvokeSkillTool.cs` — shared command and model-tool adapters.
-- `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, and `review-pr` packages copied to output when newer.
+- `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, `review-pr`, and `threadsmith-docs-help` packages copied to output when newer.
+- `PackagedDocumentationPolicy.cs` — maintained docs-skill identity, application-owned `ThreadsmithDocs` tool rebinding, and exact citation validation.
 
 ## Local Contracts
 
@@ -35,6 +36,7 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - Procedure turns advertise only declared available tools and call them through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
 - Workflow host actions remain proposals. The execution subsystem owns planning/mutation/validation; the delegation subsystem owns scheduling/worktrees/review/integration. Nested skills, arbitrary loops, and package-owned concurrency are prohibited.
 - Maintained packages use exactly the same manifest/hash/schema/content/model/tool/workflow/persistence path as third-party packages.
+- The maintained docs-help package has only `search` and `read_file`; composition rebinds those calls to `ThreadsmithDocs`, clears workspace/process/network/secret authority, and validates non-unavailable citations against exact local headings, ranges, and snippets.
 
 ## Work Guidance
 

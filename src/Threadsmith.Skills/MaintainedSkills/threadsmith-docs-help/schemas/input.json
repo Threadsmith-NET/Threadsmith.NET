@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question"],
+  "properties": {
+    "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "focus": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "enum": ["commands", "configuration", "skills", "context", "providers", "operations", "authoring", "troubleshooting"] }
+    }
+  }
+}

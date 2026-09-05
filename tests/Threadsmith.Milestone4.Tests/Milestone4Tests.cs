@@ -2880,6 +2880,10 @@ public static class Milestone4Tests
             "stop calling tools and propose the plan",
             policy,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "threadsmith-docs-help skill are available, enabled, and compatible",
+            policy,
+            StringComparison.Ordinal);
     }
 
     /// <summary>The presenter renders the plan, token pressure, evidence rationale, and prompt assets.</summary>

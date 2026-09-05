@@ -9,14 +9,15 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 ## Ownership
 
 - `docs/user-guide.md` — Primary comprehensive user-facing guide for currently implemented behavior.
+- `docs/README.md` — Installed-documentation landing page and audience routing index.
 - `docs/skill-authoring.md` — Declarative package layout, manifest/schema/workflow/signing/import/testing guide.
 - `docs/skill-compatibility-spec-v1.md` — pinned Agent Skills and Claude-extension metadata/parser/tool-mapping compatibility contract.
 - `docs/hook-authoring.md` — Lifecycle-hook envelope/result protocol, compatibility, and handler bounds.
 - `docs/third-party-license-inventory-status.md` and `docs/dotnet-package-graph.json` — durable release-licensing assessment and machine-readable restored dependency snapshot; update together when release closure evidence is refreshed.
-- `docs/architecture/` — Architecture Decision Records (ADRs), including ADR-34 governed declarative skills, ADR-36 structured file lifecycle mutations, ADR-37 canonical release payloads/installers, ADR-38 closed OpenAI-compatible reasoning compatibility, ADR-39 compatible skill adaptation/active model selection, ADR-40 native Codex provider isolation/output reserve semantics, ADR-41 canonical cache-optimized model requests, ADR-42 serialized active-session lifecycle, ADR-43 host-owned tool effect/conflict scheduling, ADR-44 governed web fetch, ADR-45 host-owned MCP lifecycle management, ADR-47 low-friction exact fetch authorization, ADR-48 extensible static-secret discovery, ADR-49 canonical release-license closure and fail-closed publication, and spike notes.
+- `docs/architecture/` — Installed architecture index, Architecture Decision Records (ADRs), including ADR-34 governed declarative skills, ADR-36 structured file lifecycle mutations, ADR-37 canonical release payloads/installers, ADR-38 closed OpenAI-compatible reasoning compatibility, ADR-39 compatible skill adaptation/active model selection, ADR-40 native Codex provider isolation/output reserve semantics, ADR-41 canonical cache-optimized model requests, ADR-42 serialized active-session lifecycle, ADR-43 host-owned tool effect/conflict scheduling, ADR-44 governed web fetch, ADR-45 host-owned MCP lifecycle management, ADR-47 low-friction exact fetch authorization, ADR-48 extensible static-secret discovery, ADR-49 canonical release-license closure and fail-closed publication, and spike notes.
 - `docs/guardrails/` — Portable C# coding guardrails (G-1…G-31).
 - `docs/implementation-plans/` — Governed implementation records, milestone lifecycle, acceptance specifications, manual verification, and dependency sequencing; governed by its child `AGENTS.md`.
-- `docs/operations/` — Operator-facing interaction references, including keyboard shortcuts, repository opening, providers/tools/themes, bounded conversation context, approved-plan execution cancellation/checkpoint/resumption, parallel-agent delegation/worktree recovery, governed skill catalog/workflow operations, lifecycle-hook installation/trust/audit/recovery, cross-platform release packaging/publication, cache-optimized context diagnostics/recovery, durable session lifecycle/resume/clone, interactive/headless MCP lifecycle management, and static-secret discovery operations.
+- `docs/operations/` — Operator-facing index and interaction references, including keyboard shortcuts, repository opening, providers/tools/themes, bounded conversation context, approved-plan execution cancellation/checkpoint/resumption, parallel-agent delegation/worktree recovery, governed skill catalog/workflow operations, lifecycle-hook installation/trust/audit/recovery, cross-platform release packaging/publication, cache-optimized context diagnostics/recovery, durable session lifecycle/resume/clone, interactive/headless MCP lifecycle management, and static-secret discovery operations.
 - `docs/extension-authoring/` — Stable host contracts that future extension packages must preserve, plus the `authoring-guide.md` walkthrough (reference convention, capabilities, unload-leak avoidance).
 - `docs/testing/` — Test fixture and deterministic fake-model format documentation.
 
@@ -62,7 +63,8 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 
 ## Verification
 
-- No automated verification yet. Manual review ensures consistency between implementation records, ADRs, guardrails, implemented contracts, shared context, and declared dependencies.
+- `eng/release/Test-PackagedDocumentation.ps1` validates the exact installed bundle allowlist, required files, bounds, excluded content, filesystem-link absence, and local Markdown link targets.
+- Manual review remains responsible for behavioral accuracy, readability, ADR integrity, guardrails, and implementation-plan consistency.
 
 ## Child DOX Index
 

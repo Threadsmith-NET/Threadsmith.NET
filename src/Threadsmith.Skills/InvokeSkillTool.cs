@@ -22,7 +22,8 @@ public sealed record InvokeSkillOutput(
     SkillInvocationStatus Status,
     string Reason,
     string NextAction,
-    IReadOnlyList<SkillHostActionProposal> HostActions);
+    IReadOnlyList<SkillHostActionProposal> HostActions,
+    string? OutputJson);
 
 /// <summary>Invokes an enabled verified declarative package through the workflow coordinator.</summary>
 public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
@@ -94,7 +95,8 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 result.Status,
                 result.Reason,
                 result.Checkpoint.NextAction,
-                result.HostActions),
+                result.HostActions,
+                result.OutputJson),
             [new ToolProvenanceSource(
                 "skill-package",
                 result.Package.SkillId.Value,

@@ -15,7 +15,7 @@ Test-Contract 'semantic versions' {
 }
 Test-Contract 'workflow scripts are tracked' {
     $root = Get-RepositoryRoot
-    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-StagedPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
+    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
         $path = "eng/release/$name"
         if (-not (Test-Path (Join-Path $root $path))) { throw "Missing $path." }
         git -C $root ls-files --error-unmatch $path 2>$null | Out-Null

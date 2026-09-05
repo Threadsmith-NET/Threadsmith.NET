@@ -15,14 +15,14 @@ Threadsmith.NET has adopted the Contributor Covenant. Contributors, maintainers,
 3. For a feature, explain the user problem, the proposed behavior, important safety or compatibility constraints, and any alternatives considered.
 4. Never include credentials, access tokens, private repository content, or other secrets in an issue, log, fixture, or screenshot.
 
-Threadsmith is a governed coding harness: the host owns trust, approval, mutation, validation, and durable-state boundaries. Proposals should preserve those boundaries and the dependency rules documented in [AGENTS.md](AGENTS.md).
+Threadsmith is a governed coding harness: the host owns trust, approval, mutation, validation, and durable-state boundaries. Proposals should preserve those boundaries and the dependency rules documented in the source repository's [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
 
 ## Local development
 
 ### Prerequisites
 
 - Git.
-- The .NET 10 SDK selected by [`global.json`](global.json) (currently `10.0.204`, with latest-feature roll-forward).
+- The .NET 10 SDK selected by [`global.json`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/global.json) (currently `10.0.204`, with latest-feature roll-forward).
 - PowerShell for repository-maintained release scripts. Normal restore, build, and test commands are cross-platform.
 - An editor or IDE with current .NET and C# support.
 
@@ -76,17 +76,17 @@ dotnet --version
 
 Before changing files:
 
-1. Read the root [AGENTS.md](AGENTS.md).
+1. Read the root [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
 2. Follow its DOX chain by reading every closer `AGENTS.md` that owns the files you will touch.
 3. Before writing or modifying C#, read the [portable C# guardrails](docs/guardrails/portable-csharp-guardrails.md).
-4. Review applicable architecture decisions and implementation plans under [`docs/`](docs/).
+4. Review applicable architecture decisions and implementation plans from the [`docs` index](docs/README.md).
 
 Important repository conventions include:
 
 - Target .NET 10 and the repository's latest C# language version.
 - Keep nullable analysis clean; do not use null-forgiving suppression.
 - Treat warnings and enabled analyzer findings as errors.
-- Add external package versions to [`Directory.Packages.props`](Directory.Packages.props), not individual project files.
+- Add external package versions to [`Directory.Packages.props`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/Directory.Packages.props), not individual project files.
 - Preserve dependency direction; architecture tests enforce subsystem boundaries.
 - Propagate cancellation through asynchronous boundaries.
 - Add XML documentation to public members.
@@ -94,7 +94,7 @@ Important repository conventions include:
 - Add or update meaningful tests for externally observable behavior changes.
 - Complete the required DOX pass after meaningful changes so owning `AGENTS.md` files and child indexes remain current.
 
-The root [`.editorconfig`](.editorconfig) owns formatting and style. Check formatting without rewriting unrelated files:
+The root [`.editorconfig`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.editorconfig) owns formatting and style. Check formatting without rewriting unrelated files:
 
 ```powershell
 dotnet format src/Threadsmith.sln --verify-no-changes --no-restore
@@ -115,9 +115,9 @@ dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
 Also run checks owned by the area you changed:
 
 - Architecture or project-reference changes: `tests/Threadsmith.Architecture.Tests`.
-- Release automation changes: follow [`eng/AGENTS.md`](eng/AGENTS.md) and run the release contract checks.
+- Release automation changes: follow [`eng/AGENTS.md`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/eng/AGENTS.md) and run the release contract checks.
 - Spike changes: build `spikes/Spikes.sln` and run the affected headless-safe spike.
-- Interactive terminal changes: update automated projection tests and the maintained [manual test plan](docs/implementation-plans/manual-test-plan.md) when real-terminal behavior changes.
+- Interactive terminal changes: update automated projection tests and the maintained [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) when real-terminal behavior changes.
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
 

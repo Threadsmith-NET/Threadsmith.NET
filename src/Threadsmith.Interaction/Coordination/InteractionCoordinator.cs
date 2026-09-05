@@ -888,9 +888,13 @@ public sealed class InteractionCoordinator
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/new", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
+                    }
+
                     var result = await controller.CreateNewSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
-                    statusRefresh?.Cancel();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
@@ -904,9 +908,13 @@ public sealed class InteractionCoordinator
                 if (_sessionLifecycleAvailable
                     && string.Equals(commandText, "/clone", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
+                    }
+
                     var result = await controller.CloneSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
-                    statusRefresh?.Cancel();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
@@ -962,9 +970,13 @@ public sealed class InteractionCoordinator
                         continue;
                     }
 
+                    if (statusRefresh is not null)
+                    {
+                        await statusRefresh.StopAsync();
+                    }
+
                     var result = await controller.ResumeSessionAsync(target, lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
-                    statusRefresh?.Cancel();
                     sessionId = result.ActiveSession.SessionId;
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
@@ -1186,6 +1198,11 @@ public sealed class InteractionCoordinator
 
                     try
                     {
+                        if (statusRefresh is not null)
+                        {
+                            await statusRefresh.StopAsync();
+                        }
+
                         var result = await OpenRepositoryAsync(
                             controller,
                             openPath,
@@ -1193,7 +1210,6 @@ public sealed class InteractionCoordinator
                             requestedSolutionPath: null,
                             configurationDirectoryExistedBeforeRuntimeStorage: null,
                             lifetime.Token);
-                        statusRefresh?.Cancel();
                         activeRepository = result.Repository is null
                             ? activeRepository
                             : result;
@@ -1256,6 +1272,11 @@ public sealed class InteractionCoordinator
                     try
                     {
                         var previousTrust = openRepository.Trust.Level;
+                        if (statusRefresh is not null)
+                        {
+                            await statusRefresh.StopAsync();
+                        }
+
                         var result = await OpenRepositoryAsync(
                             controller,
                             openRepository.RepositoryPath,
@@ -1264,7 +1285,6 @@ public sealed class InteractionCoordinator
                             configurationDirectoryExistedBeforeRuntimeStorage: null,
                             lifetime.Token);
                         var updatedRepository = result.Repository ?? openRepository;
-                        statusRefresh?.Cancel();
                         activeRepository = result.Repository is null ? activeRepository : result;
                         var effectiveTrust = updatedRepository.Trust.Level;
                         var status = effectiveTrust == previousTrust && trust < previousTrust

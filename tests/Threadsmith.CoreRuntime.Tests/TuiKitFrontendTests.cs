@@ -86,6 +86,39 @@ public static class TuiKitFrontendTests
         Assert.Contains("done", string.Join(string.Empty, view.Lines), StringComparison.Ordinal);
     }
 
+    /// <summary>Retained Markdown reruns semantic layout when the viewport widens.</summary>
+    [Fact]
+    public static void TranscriptReflowsMarkdownAfterResize()
+    {
+        const string source = "This paragraph contains enough words to wrap at forty columns but remain on one line at a wider terminal width.";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, false)]));
+
+        view.Render(new BufferSurface(new CellBuffer(40, 12)));
+        var narrowLines = view.Lines.Count;
+        view.Render(new BufferSurface(new CellBuffer(120, 12)));
+
+        Assert.True(narrowLines > view.Lines.Count);
+        Assert.Contains("wider terminal width", string.Join(' ', view.Lines), StringComparison.Ordinal);
+    }
+
+    /// <summary>Detached output is counted until End reattaches the viewport.</summary>
+    [Fact]
+    public static void TranscriptCountsUnseenOutputUntilReattached()
+    {
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationTextItem([new("first\nsecond", PresentationTextRole.Default)])]));
+        view.Render(new BufferSurface(new CellBuffer(40, 1)));
+        Assert.True(view.HandleKey(KeyEvent.Special(KeyCode.Home)));
+
+        view.Present(new PresentationBatch([new PresentationTextItem([new("\nnew", PresentationTextRole.Default)])]));
+
+        Assert.True(view.NewCount > 0);
+        Assert.True(view.HandleKey(KeyEvent.Special(KeyCode.End)));
+        Assert.Equal(0, view.NewCount);
+    }
+
     /// <summary>The real UI loop preserves draft ownership across cancellation, prompts, and selectors.</summary>
     [Fact]
     public static async Task InputOwnershipAndModalCancellation()
@@ -194,9 +227,11 @@ public static class TuiKitFrontendTests
         {
             await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
             {
-                backend.FeedInput("draft\r\u001b[27u\u001b[27u");
+                backend.FeedInput("draft\r\u001b[27ux\u001b[27u");
                 Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
                 Assert.Equal(ActiveRunInputSignal.CancellationArmed, await lease.ReadAsync(token));
+                Assert.Equal(ActiveRunInputSignal.CancellationArmed, await lease.ReadAsync(token));
+                backend.FeedInput("\u001b[27u");
                 Assert.Equal(ActiveRunInputSignal.CancellationRequested, await lease.ReadAsync(token));
             }
 
@@ -210,7 +245,7 @@ public static class TuiKitFrontendTests
             var read = surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
             backend.FeedInput("\r");
-            Assert.Equal("draft", (await read).Text);
+            Assert.Equal("draftx", (await read).Text);
         },
             timeout.Token);
         Assert.True(backend.IsStopped);

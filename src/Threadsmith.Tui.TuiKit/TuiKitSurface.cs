@@ -92,7 +92,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             || string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)))
         {
             _backend.Dispose();
-            throw new InvalidOperationException("--tui=tuikit requires an interactive terminal with cursor support.");
+            throw new UnsupportedTerminalException("--tui=tuikit requires an interactive terminal with cursor support.");
         }
 
         _theme = theme;
@@ -131,17 +131,23 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             if (surface.Size.Width < 40 || surface.Size.Height < 12)
             {
                 surface.Fill(new Rect(0, 0, surface.Size.Width, surface.Size.Height), Cell.Blank(CellStyle.Default));
-                _terminalTooSmall.Draw(surface, 0, 0, "Terminal too small: need 40 x 12", CellStyle.Default);
+                if (surface.Size.Width > 0 && surface.Size.Height > 0)
+                {
+                    _terminalTooSmall.Draw(surface, 0, 0, "Terminal too small: need 40 x 12", CellStyle.Default);
+                }
             }
 
             // TUIKit streams a complete first frame through the bottom-right cell and relies on
             // terminal autowrap between rows. Some terminals scroll as that final cell is written,
             // moving the status bar up and exposing a blank last row. An orphan continuation is
             // retained in the buffer but omitted by the renderer, preventing that terminal scroll.
-            surface.Set(
-                surface.Size.Width - 1,
-                surface.Size.Height - 1,
-                Cell.Continuation(CellStyle.Default));
+            if (surface.Size.Width > 0 && surface.Size.Height > 0)
+            {
+                surface.Set(
+                    surface.Size.Width - 1,
+                    surface.Size.Height - 1,
+                    Cell.Continuation(CellStyle.Default));
+            }
         };
         _app.Post(_drain);
     }
@@ -459,6 +465,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private bool HandleKey(KeyEvent key)
     {
         key = TuiKitInput.Normalize(key);
+        var lease = Volatile.Read(ref _activeInput);
+        if (key.Code != KeyCode.Escape)
+        {
+            lease?.DisarmEscape();
+        }
         if (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == KeyModifiers.Ctrl)
         {
             HandleControlC();
@@ -509,7 +520,6 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             return true;
         }
 
-        var lease = Volatile.Read(ref _activeInput);
         if (key.Code == KeyCode.Escape && key.Modifiers == KeyModifiers.None)
         {
             if (_read is not null)
@@ -665,7 +675,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             _formattedActivity = null;
             _activityFrame = -1;
-            return _notice;
+            return AppendUnseenOutput(_notice);
         }
 
         var frame = (int)((Environment.TickCount64 / 250) % frames.Length);
@@ -679,7 +689,14 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             _activityText = queued ? $"{activity} | message queued" : activity;
         }
 
-        return _activityText;
+        return AppendUnseenOutput(_activityText);
+    }
+
+    private string AppendUnseenOutput(string text)
+    {
+        return _transcript.NewCount == 0
+            ? text
+            : $"{text}{(text.Length == 0 ? string.Empty : " | ")}{_transcript.NewCount} new output update(s) — End to follow";
     }
 
     private string StatusText()
@@ -713,8 +730,10 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         var composerSelection = _composer.Buffer.Selection;
         var focusedSelection = _app.FocusedRegion == "transcript" ? transcriptSelection : composerSelection;
         var remainingSelection = _app.FocusedRegion == "transcript" ? composerSelection : transcriptSelection;
-        if (Copy(focusedSelection.Length > 0 ? focusedSelection : remainingSelection))
+        var selection = focusedSelection.Length > 0 ? focusedSelection : remainingSelection;
+        if (selection.Length > 0)
         {
+            _ = Copy(selection);
             return;
         }
 
@@ -745,6 +764,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private void Paste(string text)
     {
+        Volatile.Read(ref _activeInput)?.DisarmEscape();
         if (_backend.Size.Width < 40 || _backend.Size.Height < 12)
         {
             return;

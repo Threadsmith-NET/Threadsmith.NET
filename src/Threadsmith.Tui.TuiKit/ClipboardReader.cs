@@ -21,7 +21,7 @@ internal static class ClipboardReader
         var commands = OperatingSystem.IsWindows()
             ? new[]
             {
-                ("powershell.exe", new[]
+                (Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), new[]
             {
                 "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
                 "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::Write([string](Get-Clipboard -Raw))",
@@ -29,8 +29,7 @@ internal static class ClipboardReader
             }
             : OperatingSystem.IsMacOS()
                 ? [("/usr/bin/pbpaste", Array.Empty<string>())]
-                : [("wl-paste", new[] { "--no-newline" }), ("xclip", new[] { "-selection", "clipboard", "-o" }),
-                    ("xsel", new[] { "--clipboard", "--output" })];
+                : ResolveLinuxCommands();
         try
         {
             foreach (var (executable, arguments) in commands)
@@ -49,6 +48,28 @@ internal static class ClipboardReader
         }
 
         return null;
+    }
+
+    private static (string Executable, string[] Arguments)[] ResolveLinuxCommands()
+    {
+        var candidates = new[]
+        {
+            (Name: "wl-paste", Arguments: new[] { "--no-newline" }),
+            (Name: "xclip", Arguments: new[] { "-selection", "clipboard", "-o" }),
+            (Name: "xsel", Arguments: new[] { "--clipboard", "--output" }),
+        };
+        var absoluteDirectories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(Path.IsPathFullyQualified)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return candidates
+            .Select(candidate => (
+                Path: absoluteDirectories.Select(directory => Path.Combine(directory, candidate.Name)).FirstOrDefault(File.Exists),
+                candidate.Arguments))
+            .Where(candidate => candidate.Path is not null)
+            .Select(candidate => (candidate.Path ?? throw new InvalidOperationException("Resolved clipboard helper path was null."), candidate.Arguments))
+            .ToArray();
     }
 
     /// <summary>Decodes at most one MiB of strict UTF-8 clipboard data.</summary>

@@ -22,6 +22,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private const int RowGlyphCacheLimit = 512;
     private static readonly string[] _asciiGlyphs = CreateAsciiGlyphs();
     private readonly CachedTextRun _evictionNotice = new();
+    private readonly Queue<PresentationItem> _items = [];
     private readonly List<Line> _lines = [];
     private readonly List<Row> _rows = [];
     private readonly Dictionary<RowKey, DisplayGlyph[]> _rowGlyphs = [];
@@ -34,6 +35,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private Point? _anchor;
     private Point? _end;
     private long? _clearBeforeId;
+    private int _itemBytes;
 
     /// <inheritdoc/>
     public Size Measure(Size available) => available;
@@ -51,14 +53,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         if (_width != surface.Size.Width)
         {
             _width = surface.Size.Width;
-            _rows.Clear();
-            _rowGlyphs.Clear();
-            foreach (var line in _lines)
-            {
-                Wrap(line);
-            }
-
-            _top = Math.Max(0, topId is { } retainedTopId ? FindFirstRow(retainedTopId) : -1);
+            ReprojectForWidth(topId);
         }
 
         var notice = Evicted > 0 ? 1 : 0;
@@ -177,6 +172,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         foreach (var item in batch.Items)
         {
+            Retain(item);
             foreach (var segment in Project(item, Math.Max(40, _width)))
             {
                 segment.Validate();
@@ -337,6 +333,62 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         return safe.ToString();
+    }
+
+    private void Retain(PresentationItem item)
+    {
+        var bytes = PresentationBytes(item);
+        _items.Enqueue(item);
+        _itemBytes += bytes;
+        while (_items.Count > LineLimit || _itemBytes > ByteLimit)
+        {
+            var removed = _items.Dequeue();
+            _itemBytes -= PresentationBytes(removed);
+        }
+    }
+
+    private static int PresentationBytes(PresentationItem item)
+    {
+        return item switch
+        {
+            PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text)),
+            PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
+            PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
+            _ => 0,
+        };
+    }
+
+    private void ReprojectForWidth(long? previousTopId)
+    {
+        var followedTail = AtBottom;
+        var unseen = NewCount;
+        var evicted = Evicted;
+        var previousTop = previousTopId is { } id ? FindFirstRow(id) : 0;
+        var previousRowCount = Math.Max(1, _rows.Count);
+
+        _lines.Clear();
+        _rows.Clear();
+        _rowGlyphs.Clear();
+        _styles.Clear();
+        _anchor = _end = null;
+        _clearBeforeId = null;
+        RetainedBytes = 0;
+        _nextId = 0;
+        AtBottom = true;
+        foreach (var item in _items)
+        {
+            foreach (var segment in Project(item, Math.Max(40, _width)))
+            {
+                AppendContent(segment);
+            }
+        }
+
+        AtBottom = followedTail;
+        NewCount = unseen;
+        Evicted = evicted;
+        _top = followedTail || _rows.Count == 0
+            ? Math.Max(0, _rows.Count - _height)
+            : Math.Clamp((int)((long)Math.Max(0, previousTop) * _rows.Count / previousRowCount), 0, _rows.Count - 1);
     }
 
     private void DrawRow(ISurface surface, int y, Row row, bool selected, Point first, Point last)

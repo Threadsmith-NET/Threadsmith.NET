@@ -89,6 +89,12 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
         }
     }
 
+    /// <summary>Clears a pending Escape arm after any intervening input action.</summary>
+    internal void DisarmEscape()
+    {
+        _escape = null;
+    }
+
     /// <summary>Arms cancellation and emits it after a second nearby Escape.</summary>
     internal void Escape()
     {

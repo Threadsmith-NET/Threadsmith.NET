@@ -15,6 +15,13 @@ internal sealed class RetainedStatusRefresh : IAsyncDisposable
     /// <summary>Cancels and observes the refresh before allowing the next context to publish.</summary>
     public async ValueTask DisposeAsync()
     {
+        await StopAsync();
+        _stop.Dispose();
+    }
+
+    /// <summary>Invalidates the captured context and joins any admitted surface update.</summary>
+    internal async Task StopAsync()
+    {
         await _stop.CancelAsync();
         try
         {
@@ -24,10 +31,6 @@ internal sealed class RetainedStatusRefresh : IAsyncDisposable
         {
             // Scope cancellation intentionally ends the bounded refresh loop.
         }
-        finally
-        {
-            _stop.Dispose();
-        }
     }
 
     /// <summary>Starts one refresh loop; failures wake the coordinator and propagate at disposal.</summary>
@@ -35,9 +38,6 @@ internal sealed class RetainedStatusRefresh : IAsyncDisposable
     {
         _refresh = RunAsync(refresh, lifetime, _stop.Token);
     }
-
-    /// <summary>Invalidates the captured context before a session or repository transition.</summary>
-    internal void Cancel() => _stop.Cancel();
 
     private static async Task RunAsync(Func<CancellationToken, Task> refresh, CancellationTokenSource lifetime, CancellationToken cancellationToken)
     {

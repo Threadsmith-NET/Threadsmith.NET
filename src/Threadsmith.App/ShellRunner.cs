@@ -7,6 +7,7 @@ using Threadsmith.Execution;
 using Threadsmith.Extensions.Runtime;
 using Threadsmith.Tools;
 using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Threadsmith.Workspaces;
 
 /// <summary>Runs the selected terminal projection and owns process-global cancellation registration.</summary>
@@ -52,7 +53,16 @@ internal static class ShellRunner
 
             if (context.CommandLine.UseInteractiveTerminal)
             {
-                await InteractiveFrontendRunner.RunAsync(context, processCancellation);
+                try
+                {
+                    await InteractiveFrontendRunner.RunAsync(context, processCancellation);
+                }
+                catch (UnsupportedTerminalException exception)
+                {
+                    await Console.Error.WriteLineAsync(exception.Message);
+                    return 2;
+                }
+
                 processCancellation.Token.ThrowIfCancellationRequested();
                 return 0;
             }

@@ -1,0 +1,1 @@
+Child {{AssignmentId}} details: {{DetailsJson}}

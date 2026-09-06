@@ -1,34 +1,34 @@
-# Implementation Plan 95: Subagent Efficiency, Code Explore Precision, and Role Model Routing
+# Implementation Plan 95: Subagent Efficiency and Code Explore Precision
 
 **Status:** Planned.
-**Delivery track:** Maintenance - model-callable delegation efficiency, semantic retrieval precision, and configurable child-model routing
-**Prerequisites:** Plans 38, 80, 81-85, 89, 91, and 94; the implemented `delegate_agents` fork/join path; the current `AgentModelSelector`; the effective and repository-excluding model catalogs; and the current `code_explore` request, result, continuation, and Markdown contracts
-**Strategy source:** [Shared implementation context](00-shared-context.md), especially host-owned authority, immutable child assignments, provider-neutral model dispatch, complete governed context, semantic-first evidence, structured joins, cancellation propagation, and maintenance-track routing
+**Delivery track:** Maintenance - model-callable delegation efficiency, semantic retrieval precision, and clearer child-agent evidence
+**Prerequisites:** Plans 38, 80, 81-85, 89, 91, and 94; the implemented `delegate_agents` fork/join path; and the current `code_explore` request, result, continuation, and Markdown contracts
+**Strategy source:** [Shared implementation context](00-shared-context.md), especially clear responsibility boundaries, stable child assignments, model dispatch that does not depend on one provider, complete request context, semantic-first evidence, durable joins, cancellation propagation, and maintenance-track routing
+**Follow-up:** [Plan 95.1](plan-95.1-subagent-role-runners-and-role-model-assignment.md) owns role-specific prompt amendments, unrestricted ordinary responses, and role-based model assignment.
 **Related contracts:** [planning governance](planning-governance.md), [Plan 38](plan-38-in-process-parallel-agents-isolated-workers.md), [Plan 91](plan-91-create-sub-agent-delegation-tool.md), [Plan 94](plan-94-code-explore-agent-execution-quality.md), [delegate_agents architecture](../architecture/delegate-agents-tool.md), [parallel-agent operations](../operations/parallel-agents.md), [model-provider operations](../operations/model-providers.md), [source-tree AGENTS](../../src/AGENTS.md), [Threadsmith.Models AGENTS](../../src/Threadsmith.Models/AGENTS.md), [Threadsmith.Tools AGENTS](../../src/Threadsmith.Tools/AGENTS.md), [Threadsmith.DotNet AGENTS](../../src/Threadsmith.DotNet/AGENTS.md), [root AGENTS](../../AGENTS.md), and [portable C# guardrails](../guardrails/portable-csharp-guardrails.md)
 
 ---
 
 ## 1 Objective
 
-Continue improving subagent usefulness and efficiency without reducing the context, evidence, prompt appends, or caller-derived authority required to do the work correctly.
+Continue improving Explorer subagent usefulness and efficiency without reducing the context, evidence, prompt appends, or caller permissions required to do the work correctly.
 
-This plan has three product goals:
+This plan has four product goals:
 
 1. Reduce avoidable child model rounds, duplicate retrieval, model-wire input, and parent wait time while preserving or improving answer completeness.
 2. Address residual `code_explore` behavior observed during real parent-versus-child architecture traces after Plan 94.
-3. Add trusted configuration that selects a configured provider/model profile and reasoning level for each subagent role. TUI editing is not required in this plan.
+3. Make child requests easier for Explorer agents to scan by adding an evidence index and a more stable request layout.
+4. Make semantic workspace problems explicit so the model does not keep retrying the same unavailable semantic path.
 
-Efficiency means completing the requested evidence-backed work with less redundant model and tool activity. It does not mean imposing a synthetic cumulative tool-call, correction, token, evidence, or file quota. The selected model's real context/output capacity, bounded individual payloads, cancellation, and the child deadline remain the execution backstops.
+Efficiency means completing the requested evidence-backed work with less redundant model and tool activity. It does not mean imposing a synthetic cumulative tool-call, correction, token, evidence, or file quota. The selected model's real context/output capacity, per-call limits, cancellation, and the child deadline remain the execution backstops.
 
 ## 2 Architectural Context
 
-Threadsmith already runs delegated children concurrently through `AgentRunScheduler` and joins structured outcomes through `DelegationCoordinator`. Model-callable `delegate_agents` currently creates Explorer assignments only. The broader delegation contracts also define Implementer, SecurityReviewer, TestReviewer, PerformanceReviewer, and ArchitectureReviewer roles, but not every role currently has a model-backed runner on every workflow.
+At this plan's original baseline, Threadsmith ran delegated children concurrently through `AgentRunScheduler`, joined structured outcomes through `DelegationCoordinator`, and exposed only Explorer assignments through model-callable `delegate_agents`. Plan 95 retains its Explorer-efficiency focus; Plan 95.1 extends ordinary delegation to all six roles and owns role-based model assignment. Under that clarification, a role supplies a system-prompt amendment, selected model, and eligible tools, not a required final-response template.
 
-Role-aware configuration must therefore be generic without pretending all roles execute through `ChildAgentModelLoop`. It applies when a role reaches a real model-dispatch boundary. Explorer-specific convergence guidance remains owned by the Explorer runner and must not become a generic scheduler assumption.
+Ordinary final bodies are stored in `AgentRunOutcome.Response` separately from host-owned role, model, and status metadata. Any present body, including empty text or JSON, can complete without role fields, citation GUIDs, response-format repair, repeated-answer rejection, or semantic grading. Tool argument protocols, evidence provenance, cancellation, real model capacity, and the separately validated approved mutation protocol remain enforced.
 
 Child requests currently preserve all selected parent evidence and all resolved `AGENTS.md` and configured prompt append sources. That behavior is required. Plan 95 must improve request layout, evidence reuse, retrieval quality, and cacheability rather than deleting context.
-
-Model profiles are provider/model bindings. A stable `ModelProfileId` uniquely identifies one configured model, while `EffectiveModelProviderCatalog` retains the associated stable provider ID. Positive role routing is host authority and must come from repository-excluding trusted configuration. Repository content may narrow child authority through existing policy, but cannot reroute child evidence to a different provider or model endpoint.
 
 ## 3 Scope
 
@@ -38,12 +38,9 @@ Model profiles are provider/model bindings. A stable `ModelProfileId` uniquely i
 - Improve stable-prefix/cache behavior for complete child instructions and prompt append content.
 - Improve parent assignment guidance so each child receives one narrow, independently answerable objective with known evidence and explicit required claims.
 - Preserve sibling isolation; prevent duplicate work through assignment quality and diagnostics rather than live transcript sharing.
-- Add trusted role-to-provider/model/reasoning configuration for every defined `AgentRole`.
-- Freeze the effective role-model preference and selection source in assignment/model provenance.
-- Preserve capability, sensitivity, workload, context, cost, and provider-policy validation at runtime.
 - Address residual `code_explore` output that causes children and direct parent runs to fall back to repeated `find_symbol`, `search`, and `read_file` calls.
 - Improve semantic-workspace failure classification so unavailable semantic state is explicit and does not look like a low-quality successful exploration.
-- Keep exact symbols, paths, source identities, continuations, and host-owned structured results authoritative.
+- Keep exact symbols, paths, source identities, continuations, and structured tool results as the retrieval source of truth, without promoting ordinary response claims to verified findings.
 
 ## 4 Non-Scope
 
@@ -53,17 +50,17 @@ Model profiles are provider/model bindings. A stable `ModelProfileId` uniquely i
 - No arbitrary cumulative child call, token, correction, evidence, file, or byte quota.
 - No generic assumption that every role is an Explorer or that every assignment is repository research.
 - No hard-coded tool sequence such as always calling `code_explore`, then `find_symbol`, then `read_file`.
+- No ordinary final-response JSON/schema/citation-format requirement, answer grading, or response-format repair loop.
 - No provider SDK type in Core, assignment policy, checkpoints, events, evidence, or result DTOs.
-- No repository-controlled positive model/provider routing, credentials, endpoint selection, or trust elevation.
-- No TUI editor for role-model configuration. Read-only display may be added only where an existing model/agent inspection surface naturally owns it.
+- No role-based model routing, role-specific provider assignment, or new non-Explorer role runners; Plan 95.1 owns that work.
 - No broad rewrite of Roslyn semantic loading or `AdvancedSemanticQueryService`; extract only cohesive policies touched by this work.
 - No weakening of exact `code_explore` anchor, digest, path-confinement, continuation, or sanitization guarantees.
 
-## 5 Current State
+## 5 Historical Baseline and Motivation
 
 ### 5.1 Delegated execution observations
 
-Manual runs of the same two architecture traces before and after the latest Explorer convergence changes showed:
+At the original Explorer-only baseline, manual runs of the same two architecture traces before and after the then-current convergence changes showed:
 
 | Sample | Outcome | Child tool calls | Approximate model input | Parent elapsed |
 |---|---|---:|---:|---:|
@@ -72,11 +69,11 @@ Manual runs of the same two architecture traces before and after the latest Expl
 | Adjusted delegated sample B | Both children complete | 20 | 398,000 tokens including parent synthesis | 82 seconds |
 | Same questions run directly and separately | Both direct answers complete | 42 combined | 579,000 combined tokens | 153 seconds combined |
 
-These are directional live observations, not a committed deterministic benchmark. They show that real parallelism and claim-oriented continuation materially help, while run-to-run tool selection still varies enough to warrant a maintained evaluation set.
+These historical directional observations are not a committed deterministic benchmark or results for the Plan 95.1 response contract. They motivated a maintained evaluation set for parallelism, focused continuation, and run-to-run tool-selection variance.
 
-The first adjusted run also exposed an unbounded malformed-output correction cycle: the model repeatedly returned objects where `unresolvedQuestions` required strings. The current implementation now documents the exact schema, returns a field-specific correction, and terminates exact repetition of a rejected response. Plan 95 must preserve this state-based cycle detection rather than restore a numeric correction quota.
+The first adjusted run exposed an unbounded malformed-output correction cycle: the model repeatedly returned objects where the then-required `unresolvedQuestions` field expected strings. That earlier implementation added schema guidance, field-specific correction, and repeated-response rejection. Plan 95.1 supersedes those ordinary-answer requirements with unrestricted responses; this incident is historical motivation to avoid format-driven work, not a requirement to preserve that parser or correction cycle. Technical tool protocols and actual mutation proposal validation remain separate.
 
-### 5.2 Evidence and prompt behavior
+### 5.2 Evidence and prompt behavior at the baseline
 
 - Every resolved repository instruction and configured prompt append is included in the child request.
 - Eligible parent evidence is included with stable evidence IDs and provenance.
@@ -102,11 +99,11 @@ Plan 94 improved natural-language ranking and selected the exact `FindDispatchIm
 
 The problem is no longer basic natural-language ranking. The remaining issue is intent-appropriate evidence allocation and projection: source, flow, impact, artifacts, continuations, and omissions should compete according to the question being answered.
 
-### 5.4 Role-model configuration gap
+### 5.4 Role work moved to Plan 95.1
 
-`.threadsmith/config.example` and model-provider operations mention `agents:roleProfiles`, but application composition does not bind or apply that section. Conversation delegation currently copies the parent session model preference into each Explorer assignment and then lets `AgentModelSelector` retain it or choose a compatible fallback.
+At the original baseline, broader delegation contracts named Implementer, SecurityReviewer, TestReviewer, PerformanceReviewer, and ArchitectureReviewer, but not every role had a model-backed runner. Role-profile configuration ideas were also not wired end to end. These are prior-baseline observations, not a description of the Plan 95.1 implementation.
 
-There is no implemented trusted mapping that says, for example, use one configured provider/model for Explorers and a different model for SecurityReviewers. The documented but inert `roleProfiles` example must not remain ambiguous after this plan.
+Plan 95.1 owns role prompt amendments, ordinary response handling, and trusted role-model configuration. Plan 95 keeps Explorer efficiency and `code_explore` precision without redefining those role or routing contracts.
 
 ## 6 Proposed Design
 
@@ -124,138 +121,61 @@ Include at least:
 - scheduler/join tracing;
 - exact-symbol explanation with source;
 - cross-file architecture flow;
-- test/review assignment appropriate to reviewer roles;
+- a reviewer-style source investigation using the ordinary response contract owned by Plan 95.1;
 - one query where semantic workspace availability is intentionally degraded.
 
-For each actual model run, record existing provider-neutral usage plus bounded convergence diagnostics:
+For each actual model run, record existing model-usage data plus compact convergence diagnostics:
 
 - model rounds and provider calls;
 - tool calls by tool ID;
 - attributed file/source growth per batch;
 - payload-only and no-growth batches;
-- corrections and repeated-response cycle termination;
+- technical tool-protocol failures and recovery activity, separately from final-response contents;
 - provider-reported input/output/cache-read tokens when available;
 - host wire estimates when usage is missing;
 - time to first tool result, child terminal result, delegation join, and parent completion;
-- finding/citation/required-claim completeness determined by the evaluation case, not by token count alone.
+- manual observations of usefulness, omissions, and evidence support, kept separate from mechanical completion and efficiency metrics.
 
-Do not create a production score that can cancel a child merely for exceeding an observed median. Evaluation metrics guide implementation and regression review; actual execution remains bounded by real request/payload/output/deadline limits.
+Do not create a production score or automatic answer-quality gate. Evaluation metrics and manual observations guide implementation and regression review; empty replies, JSON, missing citations, and repeated wording do not fail ordinary completion or trigger repair. Host identity, transport, join, permission, cancellation, and actual request-capacity checks remain independent of answer contents.
 
 ### 6.2 Assignment specificity and existing-evidence reuse
 
 Update the model-facing `delegate_agents` description and parent guidance to prefer:
 
 - one independently answerable objective per child;
-- explicit required claims instead of broad topics;
+- concrete questions instead of broad topics;
 - non-overlapping assignments;
 - known relevant files, symbols, prior evidence IDs, and constraints in `context`;
-- a stopping condition implicit in the task: return when those claims are cited.
+- a stopping condition implicit in the task: return when the requested investigation is addressed, without prescribing a response format.
 
-Keep the v1 input schema (`task`, `context`, `toolAccess`) unless evaluation proves a new field removes ambiguity that cannot be expressed in those fields. Do not add model-facing provider, model, reasoning, budget, deadline, trust, or authority fields.
+Keep the existing input fields (`task`, `context`, `toolAccess`, and the optional `role` owned by Plan 95.1) unless evaluation proves a new field removes ambiguity that cannot be expressed there. This is tool-argument validation, not a final-response schema. Do not add model-facing provider, model, reasoning, budget, deadline, trust, or permission fields.
 
-Render an additional host-authored evidence index before the complete initial evidence body. The index may list stable evidence ID, source kind, repository-relative path, range, and symbol when already known. It must be derived from existing provenance, bounded independently, and must not replace or shorten the complete evidence body. Its purpose is navigation, not summarization.
+Render an additional application-written evidence index before the complete initial evidence body. The index may list stable evidence ID, source kind, repository-relative path, range, and symbol when already known. It must be derived from existing provenance, have its own size limit, and must not replace or shorten the complete evidence body. Its purpose is navigation, not summarization.
 
-When the parent supplied no eligible evidence, say so explicitly. When evidence exists, instruct the Explorer to reuse and cite it before requesting equivalent source again.
+When the parent supplied no eligible evidence, say so explicitly. When evidence exists, guide the Explorer to reuse it before requesting equivalent source again. Preserve host evidence identities and provenance without requiring citation syntax in the final reply.
 
-Do not share live sibling results. Detect likely overlapping assignments before scheduling and expose a bounded advisory diagnostic to the parent/tool result; reject only exact duplicate assignments that cannot produce independent value, and do not attempt semantic equivalence rejection from untrusted prose.
+Do not share live sibling results. Detect likely overlapping assignments before scheduling and expose a compact advisory diagnostic to the parent/tool result; reject only exact duplicate assignments that cannot produce independent value, and do not attempt semantic equivalence rejection from untrusted prose.
 
 ### 6.3 Canonical child request layout and cache reuse
 
-Give child requests a canonical provider-neutral layout with stable sections first:
+Give child requests a deterministic layout with stable sections first:
 
 1. child host policy;
-2. child output schema;
+2. child role system-prompt amendment;
 3. complete repository instructions and prompt appends in deterministic source order;
-4. immutable assignment and baseline;
+4. assignment and baseline;
 5. evidence index and complete evidence;
-6. chronological tool calls/results, progress telemetry, corrections, and steering.
+6. chronological tool calls/results, progress telemetry, technical tool-error feedback, and steering.
 
 Use the existing request-layout/wire-estimation contracts so providers with automatic or explicit prefix caching can reuse the unchanged prefix. Preserve every message and exact tool result. Do not rewrite earlier messages merely to improve a digest. Record cache-family and cache-read telemetry where the provider supports it.
 
-If the complete stable prefix plus required assignment/evidence cannot fit the configured role model, fail before provider I/O with the exact capacity explanation. Do not silently drop prompt appends, host evidence, tool definitions, or assignment context to force a smaller model.
-
-### 6.4 Trusted role-model routing
-
-Add repository-excluding trusted configuration under `agents:roleModels`:
-
-```json
-{
-  "agents": {
-    "roleModels": {
-      "explorer": {
-        "providerId": "openai-codex",
-        "profileId": "00000000-0000-0000-0000-000000000000",
-        "reasoningLevel": "medium"
-      },
-      "implementer": {
-        "providerId": "openai-compatible-local",
-        "profileId": "11111111-1111-1111-1111-111111111111",
-        "reasoningLevel": "high"
-      },
-      "securityReviewer": {
-        "providerId": "openai-codex",
-        "profileId": "22222222-2222-2222-2222-222222222222",
-        "reasoningLevel": "high"
-      }
-    }
-  }
-}
-```
-
-Supported keys are the exact camel-case projections of all defined roles:
-
-- `explorer`;
-- `implementer`;
-- `securityReviewer`;
-- `testReviewer`;
-- `performanceReviewer`;
-- `architectureReviewer`.
-
-Each entry selects one configured profile. `providerId` is required as a human-auditable cross-check and must match the provider binding for `profileId`. `reasoningLevel` is optional; omission uses the selected profile's default. The mapping contains no endpoint, provider type, model wire ID, credential, secret reference, cost override, capability override, or fallback endpoint.
-
-Configuration semantics:
-
-- positive role routing is read only from machine/user/environment/host trusted configuration;
-- repository `.threadsmith/config.*` cannot add, replace, or reroute a role model;
-- the selected profile must exist and be enabled in the repository-excluding catalog;
-- provider/profile mismatch, unknown roles, duplicate properties, unknown profiles, or statically unsupported reasoning fail startup with a sanitized actionable error;
-- one profile may serve multiple roles;
-- omitted roles preserve current selection behavior;
-- changing role routing requires process restart in this plan;
-- the TUI does not edit this configuration.
-
-Selection precedence at plan-freeze time:
-
-1. a more-specific host-authored assignment pin already authorized by the owning workflow;
-2. the trusted role-model mapping;
-3. the inherited parent/session preferred profile where that workflow permits inheritance;
-4. the existing default compatible-selection policy.
-
-The role mapping is a preferred exact route, not permission to bypass runtime policy. Selection must recheck workload, streaming, tool-call, structured-output, context, sensitivity, cost, deadline, and provider constraints. A request-specific incompatibility may use the existing compatible fallback policy, but the fallback and reason must be recorded. No request may silently use an incompatible configured profile.
-
-Resolve the role mapping against the repository-excluding catalog/provider dispatcher. Do not route a trusted role selection through a repository-added or repository-rewritten provider binding. The frozen assignment/model provenance records role, configured provider ID, configured profile ID, effective profile ID, reasoning, selection source, and bounded rationale without credentials or endpoints.
-
-Replace or retire the currently inert `agents:roleProfiles` example. Do not maintain two configuration paths with overlapping authority. Because no application code currently binds it, this is a documentation/configuration correction rather than a persisted-state migration.
-
-### 6.5 Role-aware model-selection abstraction
-
-Add one cohesive provider-neutral role policy abstraction rather than scattering role dictionary lookups across plan factories and runners. It should:
-
-- parse and validate trusted role entries once during application composition;
-- expose an immutable lookup by `AgentRole`;
-- resolve provider/profile identity against the appropriate immutable catalog;
-- produce a host-owned preference and selection-source value;
-- let `AgentModelSelector` perform final capability negotiation;
-- make the effective dispatcher explicit when trusted and effective catalogs differ;
-- preserve frozen selection/provenance across checkpoint and resume boundaries.
-
-Do not add provider-specific branches to `AgentModelSelector`. Do not inject configuration directly into the scheduler. The scheduler owns admission and concurrency, not model policy.
+If the complete stable prefix plus required assignment/evidence cannot fit the selected child model, fail before provider I/O with the exact capacity explanation. Do not silently drop prompt appends, host evidence, tool definitions, or assignment context to force a smaller request.
 
 ### 6.6 Intent-appropriate code_explore allocation
 
 Build on Plan 94's existing intent classifier and diversity rules. Do not add a second competing classifier.
 
-For each query, derive a bounded evidence allocation profile across:
+For each query, derive a size-limited evidence allocation profile across:
 
 - declaration/source excerpts;
 - call flow;
@@ -303,41 +223,25 @@ Separate semantic availability from retrieval quality in tool results and child 
 
 ### 6.9 Cohesive implementation boundaries
 
-`AdvancedSemanticQueryService` and `CodeExploreTool` are already large. New allocation, continuation-priority, and role-policy behavior must be placed in focused internal collaborators when doing so creates a real testable boundary. Candidate responsibilities include:
+`AdvancedSemanticQueryService` and `CodeExploreTool` are already large. New allocation, continuation-priority, and Explorer-efficiency behavior must be placed in focused internal collaborators when doing so creates a real testable boundary. Candidate responsibilities include:
 
 - `CodeExploreEvidenceAllocationPolicy`;
 - `CodeExploreContinuationProjectionPolicy`;
-- `AgentRoleModelPolicy`;
-- `AgentRoleModelPreferenceResolver`;
 - child convergence telemetry records/rendering.
 
 Do not perform a wholesale file split or unrelated refactor. Extract only the policy touched by this plan, use constructor injection at service boundaries, centralize constants/options, and avoid new inline magic numbers.
 
 ## 7 Public Contracts
 
-### 7.1 Configuration contract
+### 7.1 Delegation and tool contracts
 
-`agents:roleModels` is a new trusted configuration contract. It is not model-facing and not writable through TUI commands in this plan.
-
-The role entry fields are:
-
-| Field | Required | Meaning |
-|---|---|---|
-| `providerId` | Yes | Stable provider catalog ID; must match the selected profile binding |
-| `profileId` | Yes | Stable configured model-profile GUID |
-| `reasoningLevel` | No | Exact supported reasoning level; profile default when omitted |
-
-Unknown fields fail configuration binding/validation. Configuration selects only already configured catalog entries.
-
-### 7.2 Delegation and tool contracts
-
-The `delegate_agents` model-facing input remains `agents[].task`, `agents[].context`, and `agents[].toolAccess` unless measured evaluation establishes a necessary schema addition.
+The `delegate_agents` model-facing input remains `agents[].task`, `agents[].context`, `agents[].toolAccess`, and the optional `agents[].role` owned by Plan 95.1 unless measured evaluation establishes a necessary tool-argument schema addition. Ordinary final responses use the common `agent-response/1` marker without a body shape; `Response != null`, including an empty string, distinguishes an ordinary reply from legacy structured outcomes. Response claims do not become verified findings or alter host role/model/status metadata.
 
 No public tool ID, trust level, approval level, side-effect classification, or delegation depth changes.
 
-Provider/model selection rationale and effective identity may be added to existing inspection/checkpoint projections where needed, but raw endpoints, credentials, provider payloads, and hidden reasoning remain excluded.
+Explorer convergence diagnostics may be added to existing inspection/checkpoint projections where needed, but raw endpoints, credentials, provider payloads, and hidden reasoning remain excluded.
 
-### 7.3 Code explore contracts
+### 7.2 Code explore contracts
 
 Existing `CodeExploreResult`, exact source identity, source digest, continuation target, and policy omission contracts remain authoritative. A continuation cursor version may advance while retaining version-1 read compatibility.
 
@@ -345,15 +249,13 @@ Existing `CodeExploreResult`, exact source identity, source digest, continuation
 
 Expected ownership, subject to repository inspection during implementation:
 
-- `src/Threadsmith.Models/AgentModelSelection.cs` or focused adjacent files - role preference contracts, selection-source rationale, final capability negotiation.
-- `src/Threadsmith.App/ModelComposition.cs` and `ApplicationComposition.cs` - trusted configuration binding, repository-excluding catalog/provider resolution, immutable composition.
-- `src/Threadsmith.Execution/DelegateAgentsPlanning.cs` and other actual model-backed assignment factories - freeze role preference/source into assignments without changing scheduler authority.
 - `src/Threadsmith.Execution/ModelExplorerAssignmentRunner.cs`, `ChildAgentPrompt.cs`, and focused convergence helpers - evidence index, canonical request layout, cache/wire telemetry.
-- `src/Threadsmith.Execution/DelegateAgentsResultProjector.cs` - bounded overlap/convergence/selection diagnostics only if the existing result has an appropriate projection.
+- `src/Threadsmith.Execution/DelegateAgentsPlanning.cs` - improved Explorer assignment guidance and exact duplicate diagnostics.
+- `src/Threadsmith.Execution/DelegateAgentsResultProjector.cs` - compact overlap/convergence diagnostics only if the existing result has an appropriate projection.
 - `src/Threadsmith.DotNet` code-explore policy collaborators and `AdvancedSemanticQueryService.cs` - intent-appropriate evidence allocation and semantic availability classification.
 - `src/Threadsmith.Tools/CodeExploreTool.cs` or extracted renderer/cursor files - Markdown allocation, continuation priority/encoding, omission deduplication.
-- `.threadsmith/config.example`, `docs/operations/model-providers.md`, `docs/operations/parallel-agents.md`, `docs/architecture/delegate-agents-tool.md`, and `docs/user-guide.md` - implemented configuration and operational behavior.
-- Existing owning test projects under `tests/Threadsmith.ParallelAgents.Tests`, `tests/Threadsmith.ModelTooling.Tests`, `tests/Threadsmith.ContextCaching.Tests`, and `tests/Threadsmith.NativeTools.Tests`.
+- `docs/operations/parallel-agents.md`, `docs/architecture/delegate-agents-tool.md`, `docs/operations/tools.md`, and `docs/user-guide.md` - implemented Explorer and `code_explore` behavior.
+- Existing owning test projects under `tests/Threadsmith.ParallelAgents.Tests`, `tests/Threadsmith.ContextCaching.Tests`, and `tests/Threadsmith.NativeTools.Tests`.
 
 Do not add a new project unless existing dependency direction cannot express a cohesive owner.
 
@@ -362,66 +264,43 @@ Do not add a new project unless existing dependency direction cannot express a c
 ### Work group A - Baseline and observability
 
 1. Re-read the complete applicable DOX chain and C# guardrails.
-2. Capture the current paired evaluation questions, expected claims, source anchors, and quality rubric in a deterministic fixture plus an opt-in live-run procedure.
-3. Add provider-neutral convergence telemetry using existing usage and wire-estimation events where possible.
-4. Prove telemetry does not retain raw transcripts, hidden reasoning, secrets, or unbounded tool payloads.
+2. Capture paired evaluation questions, relevant source anchors, and manual utility-review guidance in a deterministic fixture plus an opt-in live-run procedure. Keep automated assertions mechanical, not ordinary-answer grades.
+3. Add convergence telemetry using existing usage and wire-estimation events where possible.
+4. Prove telemetry does not retain raw transcripts, hidden reasoning, secrets, or oversized tool payloads.
 5. Run focused tests and the opt-in comparison against at least one configured provider when credentials are explicitly available.
 6. Launch an independent read-only reviewer for work group A. Give it this plan, the exact diff, and verification output. Resolve every actionable finding and repeat review until clean.
 
-### Work group B - Role provider/model configuration
+### Work group B - Residual code_explore precision
 
-7. Define strict trusted `agents:roleModels` options and exact role-key validation.
-8. Resolve provider/profile pairs against the repository-excluding immutable catalog and validate reasoning/capabilities.
-9. Add the role-policy abstraction and freeze selection source/preference into actual model-backed assignment paths.
-10. Route trusted role selections through the matching repository-excluding provider dispatcher while preserving current fallback behavior for omitted roles.
-11. Add provenance/inspection fields needed to explain configured, effective, and fallback selection.
-12. Replace the inert `agents:roleProfiles` documentation/example and document restart-only configuration.
-13. Run focused model selection, configuration, sensitivity, provenance, and delegation tests.
-14. Launch an independent architecture/security reviewer for work group B. Resolve findings and repeat until clean.
+7. Convert the observed exact-method/tool-explanation output into stable source-shaped fixtures.
+8. Add failing tests for irrelevant automatic `.editorconfig`, non-impact project/test floods, huge class-range allocation, duplicate definition anchors, weak flow edges, cursor verbosity, and semantic-unavailable classification.
+9. Implement intent-appropriate evidence allocation using the existing Plan 94 intent classifier.
+10. Extract focused allocation/continuation policies rather than extending already oversized methods with another branch cluster.
+11. Preserve exact symbol/path/digest/continuation behavior and version-1 cursor reads.
+12. Run focused and complete code-explore/native-tool suites.
+13. Launch an independent semantic-tool reviewer for work group B. Resolve findings and repeat until clean.
 
-### Work group C - Residual code_explore precision
+### Work group C - Explorer convergence and cache efficiency
 
-15. Convert the observed exact-method/tool-explanation output into stable source-shaped fixtures.
-16. Add failing tests for irrelevant automatic `.editorconfig`, non-impact project/test floods, huge class-range allocation, duplicate definition anchors, weak flow edges, cursor verbosity, and semantic-unavailable classification.
-17. Implement intent-appropriate evidence allocation using the existing Plan 94 intent classifier.
-18. Extract focused allocation/continuation policies rather than extending already oversized methods with another branch cluster.
-19. Preserve exact symbol/path/digest/continuation behavior and version-1 cursor reads.
-20. Run focused and complete code-explore/native-tool suites.
-21. Launch an independent semantic-tool reviewer for work group C. Resolve findings and repeat until clean.
-
-### Work group D - Explorer convergence and cache efficiency
-
-22. Add the provenance-derived evidence index while retaining the complete evidence body.
-23. Canonicalize child request sections and integrate request-layout/cache-family telemetry.
-24. Improve parent delegation guidance for narrow claims and non-overlap without adding role-generic assumptions or a hard-coded retrieval sequence.
-25. Add exact-duplicate assignment diagnostics and ensure siblings remain isolated.
-26. Re-run the paired direct/single-child/multi-child evaluation set. Compare completeness first, then calls, input, cache reads, and latency.
-27. Run focused delegation, context, model-tooling, and code-explore tests plus the solution build.
-28. Launch an independent performance/architecture reviewer for work group D. Resolve findings and repeat until clean.
+14. Add the provenance-derived evidence index while retaining the complete evidence body.
+15. Canonicalize child request sections and integrate request-layout/cache-family telemetry.
+16. Improve parent delegation guidance for narrow claims and non-overlap without adding a hard-coded retrieval sequence.
+17. Add exact-duplicate assignment diagnostics and ensure siblings remain isolated.
+18. Re-run the paired direct/single-child/multi-child evaluation set. Review saved replies manually for usefulness and omissions, then compare calls, input, cache reads, and latency across comparable useful work.
+19. Run focused delegation, context, model-tooling, and code-explore tests plus the solution build.
+20. Launch an independent performance/architecture reviewer for work group C. Resolve findings and repeat until clean.
 
 ### Final integration
 
-29. Perform one blanket review of every Plan 95 change against this plan, dependency direction, security boundaries, configuration trust, cancellation, compatibility, and documentation.
-30. Iterate on blanket-review findings until the review is clean.
-31. Run the complete affected test matrix and `dotnet build src\Threadsmith.sln --no-restore`.
-32. Perform the DOX/documentation pass and update the plan status only when all acceptance criteria are met.
-33. Do not stage, commit, push, or perform destructive Git operations without explicit user authorization.
+21. Perform one blanket review of every Plan 95 change against this plan, dependency direction, security boundaries, cancellation, compatibility, and documentation.
+22. Iterate on blanket-review findings until the review is clean.
+23. Run the complete affected test matrix and `dotnet build src\Threadsmith.sln --no-restore`.
+24. Perform the DOX/documentation pass and update the plan status only when all acceptance criteria are met.
+25. Do not stage, commit, push, or perform destructive Git operations without explicit user authorization.
 
 ## 10 Testing
 
-### 10.1 Role-routing tests
-
-- Every defined `AgentRole` can resolve an explicitly configured provider/profile/reasoning mapping.
-- Omitted role entries preserve existing behavior.
-- Provider/profile mismatch fails startup.
-- Unknown role keys, unknown fields, malformed GUIDs, missing/disabled profiles, and unsupported reasoning fail startup.
-- A repository configuration cannot add or replace trusted role routing.
-- An explicit host assignment pin has the documented precedence over role configuration.
-- Runtime sensitivity or capability incompatibility never sends a request to the configured incompatible profile; fallback or explicit failure is recorded.
-- The selected provider/profile/reasoning/source/rationale survive assignment freeze and checkpoint inspection.
-- The model-facing `delegate_agents` schema does not expose routing fields.
-
-### 10.2 Efficiency and context tests
+### 10.1 Efficiency and context tests
 
 - Every eligible parent evidence item remains in the child request.
 - Every resolved `AGENTS.md` and configured prompt append remains in deterministic order.
@@ -430,11 +309,12 @@ Do not add a new project unless existing dependency direction cannot express a c
 - Tool result chronology and exact payloads are retained.
 - Cache telemetry uses reported provider values when available and host estimates otherwise.
 - No-growth feedback cannot block a different relevant tool approach.
-- Exact repeated malformed responses terminate as a state cycle; distinct corrections remain allowed until a real bound.
-- Explorer-specific guidance does not change Implementer or reviewer prompts/runners.
+- Ordinary final bodies, including empty text, JSON, missing legacy fields, and repeated wording, do not trigger parsing, answer grading, or response-format repair; failed/cancelled transport remains unsuccessful.
+- Technical tool arguments, governed evidence provenance, real request capacity, and the separate approved mutation protocol retain their validation.
+- Explorer-specific retrieval guidance does not replace other roles' prompt amendments or alter their model/tool policy.
 - Exact duplicate assignments are diagnosed without using fuzzy prose similarity as an authority decision.
 
-### 10.3 Code explore tests
+### 10.2 Code explore tests
 
 - Exact method queries still return the exact source range and identity.
 - Mixed explanation-plus-exact queries allocate primary source to the exact method and representative public tool contracts.
@@ -447,9 +327,9 @@ Do not add a new project unless existing dependency direction cannot express a c
 - Semantic confidence `None` is classified as unavailable, not as a successful empty exploration.
 - Text fallback, when allowed, is explicitly marked non-semantic.
 
-### 10.4 Evaluation acceptance
+### 10.3 Evaluation acceptance
 
-The paired live evaluation must show no required-claim or citation-quality regression. Relative to the recorded pre-change baseline, it must demonstrate improvement in at least two of these dimensions without material regression in the others:
+Review paired live responses manually for usefulness, omissions, and evidence support without assigning automated answer grades or requiring citations or a response format. For comparable useful work, the implementation comparison must demonstrate improvement in at least two of these dimensions relative to its recorded baseline without material regression in the others:
 
 - child/provider rounds;
 - tool calls;
@@ -457,15 +337,14 @@ The paired live evaluation must show no required-claim or citation-quality regre
 - cache-read reuse;
 - parent elapsed time.
 
-This is an implementation acceptance comparison, not a runtime quota. Preserve raw bounded metrics and explain provider/run variance.
+This is an implementation efficiency comparison, not a runtime quota or an ordinary-response acceptance gate. Save responses for manual utility review separately from size-limited metrics and mechanical completion/join/routing/read-only assertions; explain provider/run variance. Shorter or empty replies alone do not establish an efficiency improvement.
 
-### 10.5 Regression commands
+### 10.4 Regression commands
 
 Use current Microsoft Testing Platform syntax and narrower filters during development. Before completion run at least:
 
 ```powershell
 dotnet test --project tests\Threadsmith.ParallelAgents.Tests\Threadsmith.ParallelAgents.Tests.csproj --no-restore
-dotnet test --project tests\Threadsmith.ModelTooling.Tests\Threadsmith.ModelTooling.Tests.csproj --no-restore
 dotnet test --project tests\Threadsmith.ContextCaching.Tests\Threadsmith.ContextCaching.Tests.csproj --no-restore
 dotnet test --project tests\Threadsmith.NativeTools.Tests\Threadsmith.NativeTools.Tests.csproj --no-restore
 dotnet build src\Threadsmith.sln --no-restore
@@ -475,22 +354,16 @@ Run the full solution test set in the repository's supported serialized/module-b
 
 ## 11 Security/Permissions
 
-- Role routing selects only preconfigured profiles and never grants model, tool, path, network, process, mutation, approval, trust, or secret authority.
-- Trusted role configuration is repository-excluding. Repository content cannot reroute provider endpoints or credentials.
-- Provider/profile selection is revalidated against request sensitivity and capabilities before every child model dispatch.
 - No endpoint, credential, secret reference value, raw provider error, or request body enters child/parent projections.
 - Evidence indexes expose only provenance already eligible for that child.
 - Sibling isolation remains intact.
 - `code_explore` remains read-only, path-confined, semantic-workspace-bound, sanitized, and cancellation-aware.
-- Compact continuation encoding must remain validated, bounded, and incapable of bypassing current path/digest/workspace-generation checks.
+- Compact continuation encoding must remain validated, size-limited, and incapable of bypassing current path/digest/workspace-generation checks.
 
 ## 12 Observability
 
-Expose bounded diagnostics sufficient to answer:
+Expose compact diagnostics sufficient to answer:
 
-- which role preference was configured;
-- which provider/profile/reasoning was effective;
-- whether and why fallback occurred;
 - how many child rounds/tool calls occurred;
 - which batches expanded attributed source coverage;
 - which batches were payload-only or no-growth;
@@ -499,26 +372,20 @@ Expose bounded diagnostics sufficient to answer:
 - which output categories were suppressed by intent allocation;
 - whether child output or parent projection was truncated.
 
-Use stable IDs and classifications. Do not log raw prompts, transcripts, hidden reasoning, secrets, complete source bodies, or unbounded tool output.
+Use stable IDs and classifications. Do not log raw prompts, transcripts, hidden reasoning, secrets, complete source bodies, or oversized tool output.
 
 ## 13 Migration/Compatibility
 
-- No durable database migration is expected unless selected-model source/provenance is missing from an existing checkpoint schema that must survive restart.
-- Existing delegations without role-routing provenance restore under existing behavior.
-- Omitted `agents:roleModels` preserves current session/default model selection.
-- The inert `agents:roleProfiles` example has no implemented persisted behavior to migrate. Remove or clearly reject it rather than silently interpreting two schemas.
+- No database migration is expected.
+- Existing Core outcome/checkpoint DTOs remain deserializable for persisted inspection, including legacy structured outcomes with no `Response`. Inspection does not resume an interrupted child stream, and new ordinary replies do not require legacy role parsers. Plan 95.1 owns response/routing compatibility; the approved mutation protocol is unchanged.
 - Existing `code_explore` structured result fields and version-1 continuation cursors remain readable.
 - Model-visible Markdown may become shorter and reorder secondary sections, but primary structured evidence remains compatible.
 
 ## 14 Acceptance Criteria
 
-- Trusted configuration can select provider/profile/reasoning independently for all six defined subagent roles without TUI editing.
-- Configured role selection is frozen, observable, capability-checked, sensitivity-safe, and repository-excluding.
-- Omitted role configuration preserves current behavior.
-- The documented but inert `agents:roleProfiles` configuration ambiguity is removed.
 - Child requests still contain all eligible parent evidence, applicable `AGENTS.md`, configured prompt appends, assignment context, and exact prior tool results.
 - No arbitrary cumulative child budget is reintroduced.
-- The maintained evaluation set shows complete cited answers and measurable efficiency improvement in at least two dimensions.
+- The maintained evaluation set records manual utility observations and measurable efficiency improvement in at least two dimensions across comparable useful work, without automatic answer grading or required citation/response formats.
 - Real architecture traces no longer require repeated fallback calls because `code_explore` spent primary capacity on irrelevant artifacts, broad impact lists, huge class ranges, or weak flow edges.
 - Semantic workspace unavailability is explicit and does not cause repeated equivalent semantic attempts.
 - Exact `code_explore` anchor/source/digest/continuation behavior remains correct.
@@ -527,33 +394,27 @@ Use stable IDs and classifications. Do not log raw prompts, transcripts, hidden 
 
 ## 15 Risks
 
-- **Role configuration silently ignored:** fail startup for malformed/static incompatibility and record effective selection/fallback rationale.
-- **Repository model rerouting:** resolve positive role mappings only from repository-excluding trusted catalog/provider state.
-- **Smaller role model cannot fit complete context:** fail preflight with exact capacity; never trim required context to make it fit.
-- **Over-optimization for Explorer behavior:** keep convergence changes in the Explorer runner and role-generic changes in model policy only.
+- **Required context is accidentally trimmed:** keep evidence and instructions complete; improve layout and indexing instead.
+- **Selected child model cannot fit complete context:** fail preflight with exact capacity; never trim required context to make it fit.
+- **Over-optimization for Explorer behavior:** keep convergence changes in the Explorer runner and leave general role work to Plan 95.1.
 - **Evaluation overfitting:** include several assignment kinds and compare direct, single-child, and multi-child behavior.
 - **Code explore under-reporting:** suppress secondary categories by intent, not primary source or explicit user requests.
 - **Cursor compatibility regression:** version encoding and retain version-1 readers.
 - **Large-class refactor churn:** extract only touched policies and avoid wholesale service reorganization.
-- **Live-run variance:** require quality invariants and paired metrics, not one fixed latency/token threshold.
+- **Live-run variance:** use manual utility review and paired metrics, not automatic answer grades or one fixed latency/token threshold.
 - **Telemetry privacy:** retain classifications and counts, not prompts, transcripts, or source bodies.
 
 ## 16 Documentation
 
 On implementation:
 
-- document trusted `agents:roleModels` configuration and restart behavior in model-provider and parallel-agent operations;
-- update the user guide with role-routing precedence, fallback, and inspection behavior;
-- replace the inert `agents:roleProfiles` example;
 - update `delegate_agents` architecture documentation for canonical child request layout, evidence index, and convergence telemetry;
-- update code-explore documentation only for durable output/continuation/availability behavior;
-- update acceptance scenarios or the manual test plan only when their owning observable behavior or executable procedure changes;
-- update DOX only for durable ownership or implementation guidance changes.
+- update code-explore documentation only for long-term output/continuation/availability behavior;
+- update acceptance scenarios or the manual test plan only when their observable behavior or executable procedure changes;
+- update DOX only for long-term ownership or implementation guidance changes.
 
 ## 17 Open Decisions
 
-- Whether effective role-model selection source fits the existing `AgentPolicySnapshot` or requires one new provider-neutral enum/field.
-- Whether a trusted role preference that becomes request-incompatible should always use normal compatible fallback or support a future explicit fail-closed preference. Plan 95 defaults to existing compatible fallback with visible rationale.
-- Whether compact continuation version 2 can remain stateless or whether measurements justify a host-owned short-handle store. Prefer stateless compatibility unless the measured benefit is material.
-- Whether convergence telemetry belongs only in diagnostics/events or also in the bounded `delegate_agents` structured result.
+- Whether compact continuation version 2 can remain stateless or whether measurements justify a short-handle store. Prefer stateless compatibility unless the measured benefit is material.
+- Whether convergence telemetry belongs only in diagnostics/events or also in the `delegate_agents` structured result.
 - Whether the semantic full-solution `None` repro is a deterministic loader defect or an environment/resource condition; implementation must establish this before changing loader behavior.

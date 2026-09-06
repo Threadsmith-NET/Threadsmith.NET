@@ -1,39 +1,49 @@
 namespace Threadsmith.Execution;
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Channels;
 using Threadsmith.Core;
 
 /// <summary>Conservative configured limits for in-process child scheduling.</summary>
 public sealed record AgentSchedulerOptions
 {
-    /// <summary>Maximum queued assignments accepted for one scheduler.</summary>
+    /// <summary>Maximum admitted and queued assignments; zero disables this admission backpressure.</summary>
     public int QueueCapacity { get; init; } = 32;
 
-    /// <summary>Maximum active children across all parents.</summary>
+    /// <summary>Maximum active children across all parents; zero disables this concurrency limit.</summary>
     public int MaximumActiveChildren { get; init; } = 4;
 
-    /// <summary>Maximum active children within one parent.</summary>
+    /// <summary>Maximum active children within one parent; zero disables this concurrency limit.</summary>
     public int MaximumActiveChildrenPerParent { get; init; } = 3;
 
-    /// <summary>Maximum active implementation workers.</summary>
+    /// <summary>Maximum active implementation children; zero disables this concurrency limit.</summary>
     public int MaximumActiveImplementers { get; init; } = 2;
 
-    /// <summary>Maximum duration allowed for bounded shutdown joins.</summary>
+    /// <summary>Maximum shutdown join duration; zero waits until children finish or caller cancellation is observed.</summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Rejects negative scheduler settings without imposing a compiled operational ceiling.</summary>
+    public void Validate()
+    {
+        if (QueueCapacity < 0 || MaximumActiveChildren < 0 || MaximumActiveChildrenPerParent < 0
+            || MaximumActiveImplementers < 0 || ShutdownTimeout < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(AgentSchedulerOptions), "Agent scheduler limits must be non-negative.");
+        }
+    }
 }
 
 /// <summary>Validates and freezes one-level delegation contracts.</summary>
 public static class DelegationPlanValidator
 {
-    private const int MaximumAssignments = 16;
-    private const int MaximumContextCharacters = 8_192;
-    private const int MaximumTextCharacters = 4_096;
-
     /// <summary>Validates identities, graph shape, modes, authority, budgets, and bounds.</summary>
     public static void Validate(DelegationPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(plan.AssignmentLimits);
+        plan.AssignmentLimits.Validate();
+        var maximumText = plan.AssignmentLimits.EffectiveLimit(plan.AssignmentLimits.MaximumTextCharacters);
         if (plan.SchemaVersion != 1
             || plan.DelegationId == default
             || plan.Provenance.SessionId == default
@@ -45,8 +55,8 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Delegation identity, schema, attempt, or generation is invalid.");
         }
 
-        ValidateText(plan.Provenance.RepositoryIdentity, nameof(plan.Provenance.RepositoryIdentity));
-        ValidateText(plan.Provenance.BaselineIdentity, nameof(plan.Provenance.BaselineIdentity));
+        ValidateText(plan.Provenance.RepositoryIdentity, nameof(plan.Provenance.RepositoryIdentity), maximumText);
+        ValidateText(plan.Provenance.BaselineIdentity, nameof(plan.Provenance.BaselineIdentity), maximumText);
         var approvedPlanIdentity = plan.Provenance.ApprovedPlanIdentity;
         var hasApprovedPlanIdentity = approvedPlanIdentity is not null;
         var hasApprovedPlanRevision = plan.Provenance.ApprovedPlanRevision.HasValue;
@@ -61,13 +71,15 @@ public static class DelegationPlanValidator
         {
             ValidateText(
                 approvedPlanIdentity,
-                nameof(plan.Provenance.ApprovedPlanIdentity));
+                nameof(plan.Provenance.ApprovedPlanIdentity),
+                maximumText);
         }
 
         ValidateBudget(plan.ParentBudget);
-        if (plan.Assignments.Count is < 1 or > MaximumAssignments)
+        if (plan.Assignments.Count < 1
+            || Exceeds(plan.Assignments.Count, plan.AssignmentLimits.EffectiveLimit(plan.AssignmentLimits.MaximumAssignments)))
         {
-            throw new InvalidDataException($"A delegation must contain 1-{MaximumAssignments} assignments.");
+            throw new InvalidDataException("A delegation must contain assignments within its configured count limit.");
         }
 
         var assignments = new Dictionary<AgentAssignmentId, AgentAssignment>();
@@ -102,30 +114,42 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Every assignment requires stable assignment and child-run ids.");
         }
 
-        ValidateText(assignment.Objective, nameof(assignment.Objective));
-        ValidateText(assignment.OutputSchema, nameof(assignment.OutputSchema));
-        ValidateText(assignment.StoppingCondition, nameof(assignment.StoppingCondition));
-        ValidateText(assignment.Policy.ModelSelectionRationale, nameof(assignment.Policy.ModelSelectionRationale));
-        ValidateText(assignment.Policy.ContextPolicyVersion, nameof(assignment.Policy.ContextPolicyVersion));
-        ValidateText(assignment.Policy.ToolPolicyVersion, nameof(assignment.Policy.ToolPolicyVersion));
-        if (assignment.Deadline <= plan.AcceptedAt || assignment.Tasks.Count is < 1 or > 32)
+        if (!Enum.IsDefined(assignment.Role)
+            || !Enum.IsDefined(assignment.Mode)
+            || !Enum.IsDefined(assignment.FailurePolicy)
+            || assignment.RoleRunnerVersion != 1)
+        {
+            throw new InvalidDataException("The assignment role, mode, failure policy, or runner version is unsupported.");
+        }
+
+        var limits = plan.AssignmentLimits;
+        var maximumText = limits.EffectiveLimit(limits.MaximumTextCharacters);
+        ValidateText(assignment.Objective, nameof(assignment.Objective), maximumText);
+        ValidateText(assignment.OutputSchema, nameof(assignment.OutputSchema), maximumText);
+        ValidateText(assignment.StoppingCondition, nameof(assignment.StoppingCondition), maximumText);
+        ValidateText(assignment.Policy.ModelSelectionRationale, nameof(assignment.Policy.ModelSelectionRationale), maximumText);
+        ValidateText(assignment.Policy.ContextPolicyVersion, nameof(assignment.Policy.ContextPolicyVersion), maximumText);
+        ValidateText(assignment.Policy.ToolPolicyVersion, nameof(assignment.Policy.ToolPolicyVersion), maximumText);
+        assignment.Policy.ResultLimits.Validate();
+        if (assignment.Deadline <= plan.AcceptedAt || assignment.Tasks.Count < 1
+            || Exceeds(assignment.Tasks.Count, limits.EffectiveLimit(limits.MaximumTasksPerAssignment)))
         {
             throw new InvalidDataException("Every assignment needs tasks and a deadline after plan acceptance.");
         }
 
-        if (assignment.Tasks.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > MaximumTextCharacters))
+        if (assignment.Tasks.Any(item => string.IsNullOrWhiteSpace(item) || Exceeds(item.Length, maximumText)))
         {
             throw new InvalidDataException("Assignment tasks must be bounded non-empty text.");
         }
 
-        if (assignment.InitialContext.Length > MaximumContextCharacters)
+        if (Exceeds(assignment.InitialContext.Length, limits.EffectiveLimit(limits.MaximumContextCharacters)))
         {
             throw new InvalidDataException("Assignment context exceeds the bounded text limit.");
         }
 
         var implementer = assignment.Role == AgentRole.Implementer;
-        if (implementer != (assignment.Mode == AgentRunMode.IsolatedWorktreeMutation)
-            || (implementer && (!plan.ImplementationAuthorized || assignment.PlanStepIds.Count == 0)))
+        var mutationWorker = assignment.Mode == AgentRunMode.IsolatedWorktreeMutation;
+        if (mutationWorker && (!implementer || !plan.ImplementationAuthorized || assignment.PlanStepIds.Count == 0))
         {
             throw new UnauthorizedAccessException(
                 "Only explicitly authorized implementers may use isolated-worktree mutation mode.");
@@ -145,21 +169,21 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Explorers require read-only baseline mode.");
         }
 
-        if (!implementer && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
+        if (!mutationWorker && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation trust.");
         }
 
-        if (!implementer && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
+        if (!mutationWorker && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation tools.");
         }
 
         ValidateBudget(assignment.Budget);
-        ValidateScope(assignment.Scope);
+        ValidateScope(assignment.Scope, limits.EffectiveLimit(limits.MaximumScopeCharacters));
     }
 
-    private static void ValidateScope(AgentAssignmentScope scope)
+    private static void ValidateScope(AgentAssignmentScope scope, int maximumCharacters)
     {
         ArgumentNullException.ThrowIfNull(scope);
         var values = scope.Files
@@ -169,7 +193,7 @@ public static class DelegationPlanValidator
             .Concat(scope.SharedSurfaces);
         foreach (var value in values)
         {
-            if (string.IsNullOrWhiteSpace(value) || value.Length > 1_024 || Path.IsPathRooted(value))
+            if (string.IsNullOrWhiteSpace(value) || Exceeds(value.Length, maximumCharacters) || Path.IsPathRooted(value))
             {
                 throw new InvalidDataException("Assignment ownership must be bounded and repository-relative.");
             }
@@ -194,37 +218,34 @@ public static class DelegationPlanValidator
 
     private static void DetectCycles(IReadOnlyDictionary<AgentAssignmentId, AgentAssignment> assignments)
     {
-        var visiting = new HashSet<AgentAssignmentId>();
-        var visited = new HashSet<AgentAssignmentId>();
-        foreach (var id in assignments.Keys)
+        var remaining = assignments.ToDictionary(item => item.Key, item => item.Value.Dependencies.Count);
+        var dependents = assignments.Keys.ToDictionary(id => id, _ => new List<AgentAssignmentId>());
+        foreach (var assignment in assignments.Values)
         {
-            Visit(id, assignments, visiting, visited);
-        }
-    }
-
-    private static void Visit(
-        AgentAssignmentId id,
-        IReadOnlyDictionary<AgentAssignmentId, AgentAssignment> assignments,
-        HashSet<AgentAssignmentId> visiting,
-        HashSet<AgentAssignmentId> visited)
-    {
-        if (visited.Contains(id))
-        {
-            return;
+            foreach (var dependency in assignment.Dependencies)
+            {
+                dependents[dependency].Add(assignment.AssignmentId);
+            }
         }
 
-        if (!visiting.Add(id))
+        var pending = new Queue<AgentAssignmentId>(remaining.Where(item => item.Value == 0).Select(item => item.Key));
+        var visited = 0;
+        while (pending.TryDequeue(out var id))
+        {
+            visited++;
+            foreach (var dependent in dependents[id])
+            {
+                if (--remaining[dependent] == 0)
+                {
+                    pending.Enqueue(dependent);
+                }
+            }
+        }
+
+        if (visited != assignments.Count)
         {
             throw new InvalidDataException("Delegation dependency graph contains a cycle.");
         }
-
-        foreach (var dependency in assignments[id].Dependencies)
-        {
-            Visit(dependency, assignments, visiting, visited);
-        }
-
-        visiting.Remove(id);
-        visited.Add(id);
     }
 
     private static void ValidateAggregateBudget(DelegationPlan plan)
@@ -244,7 +265,8 @@ public static class DelegationPlanValidator
                     || total.Builds > plan.ParentBudget.Builds
                     || total.Tests > plan.ParentBudget.Tests
                     || total.Corrections > plan.ParentBudget.Corrections))
-            || total.WallTime > plan.ParentBudget.WallTime)
+            || (plan.ParentBudget.WallTime > TimeSpan.Zero
+                && (total.WallTime == TimeSpan.Zero || total.WallTime > plan.ParentBudget.WallTime)))
         {
             throw new InvalidDataException("Child budget reservations exceed the dominating parent budget.");
         }
@@ -258,7 +280,7 @@ public static class DelegationPlanValidator
             || budget.EvidenceItems < 0
             || budget.Files < 0 || budget.Bytes < 0 || budget.Mutations < 0
             || budget.Processes < 0 || budget.Builds < 0 || budget.Tests < 0
-            || budget.Corrections < 0 || budget.WallTime <= TimeSpan.Zero
+            || budget.Corrections < 0 || budget.WallTime < TimeSpan.Zero
             || (!budget.EnforceLimits
                 && (budget.ModelTokens != 0
                     || budget.ToolCalls != 0
@@ -271,18 +293,20 @@ public static class DelegationPlanValidator
                     || budget.Tests != 0
                     || budget.Corrections != 0)))
         {
-            throw new InvalidDataException("Agent resource budgets must be finite and non-negative.");
+            throw new InvalidDataException("Agent resource budgets must be non-negative and telemetry-only quotas must be zero.");
         }
     }
 
-    private static void ValidateText(string value, string name)
+    private static void ValidateText(string value, string name, int maximumCharacters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, name);
-        if (value.Length > MaximumTextCharacters)
+        if (Exceeds(value.Length, maximumCharacters))
         {
             throw new InvalidDataException($"{name} exceeds the bounded text limit.");
         }
     }
+
+    private static bool Exceeds(int value, int maximum) => maximum > 0 && value > maximum;
 }
 
 /// <summary>Conservatively partitions assignment ownership and falls back to serial execution.</summary>
@@ -456,23 +480,21 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
 public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<(DelegationId, AgentAssignmentId), CancellationTokenSource> _children = new();
-    private readonly SemaphoreSlim _global;
-    private readonly SemaphoreSlim _implementers;
+    private readonly SemaphoreSlim? _global;
+    private readonly SemaphoreSlim? _implementers;
     private readonly ConcurrentDictionary<RunId, ParentLimiter> _parents = new();
     private readonly AgentSchedulerOptions _options;
     private readonly CancellationTokenSource _shutdown = new();
-    private int _admittedOrQueued;
+    private long _admittedOrQueued;
     private int _stopped;
 
     /// <summary>Initializes a new instance of the <see cref="AgentRunScheduler"/> class.</summary>
     public AgentRunScheduler(AgentSchedulerOptions? options = null)
     {
         _options = options ?? new AgentSchedulerOptions();
-        ValidateOptions(_options);
-        _global = new SemaphoreSlim(_options.MaximumActiveChildren, _options.MaximumActiveChildren);
-        _implementers = new SemaphoreSlim(
-            _options.MaximumActiveImplementers,
-            _options.MaximumActiveImplementers);
+        _options.Validate();
+        _global = CreateLimiter(_options.MaximumActiveChildren);
+        _implementers = CreateLimiter(_options.MaximumActiveImplementers);
     }
 
     /// <inheritdoc />
@@ -485,7 +507,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(runner);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _stopped) != 0, this);
         var admitted = Interlocked.Add(ref _admittedOrQueued, plan.Assignments.Count);
-        if (admitted > _options.QueueCapacity)
+        if (_options.QueueCapacity > 0 && admitted > _options.QueueCapacity)
         {
             Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
             throw new AgentQueueCapacityException();
@@ -571,8 +593,9 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             await child.CancelAsync();
         }
 
-        var deadline = DateTimeOffset.UtcNow + _options.ShutdownTimeout;
-        while (!_children.IsEmpty && DateTimeOffset.UtcNow < deadline)
+        var started = Stopwatch.GetTimestamp();
+        while (!_children.IsEmpty
+            && (_options.ShutdownTimeout == TimeSpan.Zero || Stopwatch.GetElapsedTime(started) < _options.ShutdownTimeout))
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
         }
@@ -583,8 +606,8 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
     {
         await StopAsync();
         _shutdown.Dispose();
-        _global.Dispose();
-        _implementers.Dispose();
+        _global?.Dispose();
+        _implementers?.Dispose();
         foreach (var limiter in _parents.Values)
         {
             limiter.Dispose();
@@ -602,7 +625,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         IAgentAssignmentRunner runner,
         IReadOnlyDictionary<AgentAssignmentId, TaskCompletionSource<AgentRunOutcome>> completions,
         CancellationTokenSource parentCancellation,
-        SemaphoreSlim parentLimiter,
+        SemaphoreSlim? parentLimiter,
         CancellationToken cancellationToken)
     {
         AgentRunOutcome outcome;
@@ -635,9 +658,11 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 {
                     Status = AgentRunStatus.Discarded,
                     Reason = "late result from an obsolete generation",
+                    Response = null,
                     Findings = null,
                     ChangeSet = null,
                     Review = null,
+                    Implementation = null,
                 };
             }
 
@@ -647,13 +672,22 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 await ApplyFailurePolicyAsync(plan, assignment, parentCancellation);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             outcome = CreateTerminal(
                 plan,
                 assignment,
                 AgentRunStatus.Cancelled,
                 "child cancellation observed");
+            if (ChildAgentFailureDetails.TryGet(exception, out var failure))
+            {
+                outcome = outcome with
+                {
+                    Usage = failure.Usage,
+                    ModelProfileId = failure.ModelProfileId,
+                    ModelSelection = failure.ModelSelection,
+                };
+            }
         }
         catch (Exception exception)
         {
@@ -666,6 +700,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 {
                     Usage = failure.Usage,
                     ModelProfileId = failure.ModelProfileId,
+                    ModelSelection = failure.ModelSelection,
                 }
                 : CreateTerminal(
                     plan,
@@ -683,10 +718,9 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         DelegationPlan plan,
         AgentAssignment assignment,
         IAgentAssignmentRunner runner,
-        SemaphoreSlim parent,
+        SemaphoreSlim? parent,
         CancellationToken cancellationToken)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var remaining = assignment.Deadline - DateTimeOffset.UtcNow;
         if (remaining <= TimeSpan.Zero)
         {
@@ -697,40 +731,67 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 "assignment deadline elapsed");
         }
 
-        deadline.CancelAfter(remaining < assignment.Budget.WallTime ? remaining : assignment.Budget.WallTime);
-        _children[(plan.DelegationId, assignment.AssignmentId)] = deadline;
+        var timeout = assignment.Deadline == DateTimeOffset.MaxValue ? TimeSpan.Zero : remaining;
+        if (assignment.Budget.WallTime > TimeSpan.Zero
+            && (timeout == TimeSpan.Zero || assignment.Budget.WallTime < timeout))
+        {
+            timeout = assignment.Budget.WallTime;
+        }
+
+        await using var deadline = new AgentTimeoutScope(timeout, cancellationToken);
+        _children[(plan.DelegationId, assignment.AssignmentId)] = deadline.Source;
         var globalHeld = false;
         var parentHeld = false;
         var implementerHeld = false;
         try
         {
-            await _global.WaitAsync(deadline.Token);
-            globalHeld = true;
-            await parent.WaitAsync(deadline.Token);
-            parentHeld = true;
-            if (assignment.Role == AgentRole.Implementer)
+            if (_global is not null)
+            {
+                await _global.WaitAsync(deadline.Token);
+                globalHeld = true;
+            }
+
+            if (parent is not null)
+            {
+                await parent.WaitAsync(deadline.Token);
+                parentHeld = true;
+            }
+
+            if (assignment.Role == AgentRole.Implementer && _implementers is not null)
             {
                 await _implementers.WaitAsync(deadline.Token);
                 implementerHeld = true;
             }
 
-            return await runner.RunAsync(plan, assignment, deadline.Token);
+            var outcome = await runner.RunAsync(plan, assignment, deadline.Token);
+            return deadline.Token.IsCancellationRequested
+                ? outcome with
+                {
+                    Status = AgentRunStatus.Cancelled,
+                    Reason = "child cancellation observed",
+                    Response = null,
+                    Findings = null,
+                    ChangeSet = null,
+                    Review = null,
+                    Implementation = null,
+                }
+                : outcome;
         }
         finally
         {
             if (implementerHeld)
             {
-                _implementers.Release();
+                _implementers?.Release();
             }
 
             if (parentHeld)
             {
-                parent.Release();
+                parent?.Release();
             }
 
             if (globalHeld)
             {
-                _global.Release();
+                _global?.Release();
             }
 
             _children.TryRemove((plan.DelegationId, assignment.AssignmentId), out _);
@@ -817,20 +878,26 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         if (outcome.Status == AgentRunStatus.Completed)
         {
-            var resultCount = (outcome.Findings is null ? 0 : 1)
-                + (outcome.ChangeSet is null ? 0 : 1)
-                + (outcome.Review is null ? 0 : 1);
-            if (resultCount != 1)
+            if (DelegationOutcomeClassifier.HasNaturalResponse(assignment, outcome))
             {
-                throw new InvalidDataException("A completed child must return exactly one structured result.");
+                return;
             }
 
-            if ((assignment.Role == AgentRole.Explorer && outcome.Findings is null)
-                || (assignment.Role == AgentRole.Implementer && outcome.ChangeSet is null)
-                || (assignment.Role is AgentRole.SecurityReviewer
-                    or AgentRole.TestReviewer
-                    or AgentRole.PerformanceReviewer
-                    or AgentRole.ArchitectureReviewer && outcome.Review is null))
+            var validResult = assignment.Role switch
+            {
+                AgentRole.Explorer => outcome.Findings is not null
+                    && outcome.Review is null && outcome.ChangeSet is null && outcome.Implementation is null,
+                AgentRole.Implementer when assignment.Mode == AgentRunMode.IsolatedWorktreeMutation =>
+                    outcome.ChangeSet is not null && outcome.Findings is null
+                    && outcome.Review is null && outcome.Implementation is null,
+                AgentRole.Implementer => outcome.Implementation is not null && outcome.Findings is not null
+                    && outcome.ChangeSet is null && outcome.Review is null,
+                AgentRole.SecurityReviewer or AgentRole.TestReviewer
+                    or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer =>
+                    outcome.Review is not null && outcome.ChangeSet is null && outcome.Implementation is null,
+                _ => false,
+            };
+            if (!validResult)
             {
                 throw new InvalidDataException("Child result type does not match the assigned role.");
             }
@@ -852,21 +919,12 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             Status = status,
             Usage = new AgentResourceUsage(),
             Reason = reason,
+            ModelSelection = assignment.Policy.ModelSelection,
+            ModelProfileId = assignment.Policy.ModelSelection?.EffectiveProfileId,
         };
     }
 
-    private static void ValidateOptions(AgentSchedulerOptions options)
-    {
-        if (options.QueueCapacity < 1 || options.MaximumActiveChildren < 1
-            || options.MaximumActiveChildrenPerParent < 1
-            || options.MaximumActiveChildrenPerParent > options.MaximumActiveChildren
-            || options.MaximumActiveImplementers < 1
-            || options.MaximumActiveImplementers > options.MaximumActiveChildren
-            || options.ShutdownTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "Agent scheduler limits are invalid.");
-        }
-    }
+    private static SemaphoreSlim? CreateLimiter(int limit) => limit == 0 ? null : new SemaphoreSlim(limit, limit);
 
     private sealed class ParentLimiter : IDisposable
     {
@@ -876,14 +934,14 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         internal ParentLimiter(int maximumConcurrency)
         {
-            Semaphore = new SemaphoreSlim(maximumConcurrency, maximumConcurrency);
+            Semaphore = CreateLimiter(maximumConcurrency);
         }
 
-        internal SemaphoreSlim Semaphore { get; }
+        internal SemaphoreSlim? Semaphore { get; }
 
         public void Dispose()
         {
-            Semaphore.Dispose();
+            Semaphore?.Dispose();
         }
 
         internal bool TryAcquireReference()
@@ -951,8 +1009,7 @@ public sealed class DelegationCoordinator :
         ArgumentNullException.ThrowIfNull(checkpoints);
         ArgumentNullException.ThrowIfNull(events);
         var effectiveProgressTimeout = progressCheckpointTimeout ?? DefaultProgressCheckpointTimeout;
-        if (effectiveProgressTimeout <= TimeSpan.Zero
-            || effectiveProgressTimeout > TimeSpan.FromSeconds(30))
+        if (effectiveProgressTimeout < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(progressCheckpointTimeout));
         }
@@ -1296,9 +1353,11 @@ public sealed class DelegationCoordinator :
                 {
                     Status = AgentRunStatus.Cancelled,
                     Reason = CancellationReason,
+                    Response = null,
                     Findings = null,
                     ChangeSet = null,
                     Review = null,
+                    Implementation = null,
                 }
                 : outcome)
             .ToArray();
@@ -1341,9 +1400,11 @@ public sealed class DelegationCoordinator :
                     ? AgentRunStatus.Failed
                     : outcome.Status,
                 Reason = outcome.Status == AgentRunStatus.Completed ? reason : outcome.Reason,
+                Response = null,
                 Findings = null,
                 ChangeSet = null,
                 Review = null,
+                Implementation = null,
             }),
         ];
     }
@@ -1366,9 +1427,11 @@ public sealed class DelegationCoordinator :
                     or AgentRunStatus.Completed
                         ? reason
                         : outcome.Reason,
+                Response = null,
                 Findings = null,
                 ChangeSet = null,
                 Review = null,
+                Implementation = null,
             }),
         ];
     }
@@ -1386,6 +1449,21 @@ public sealed class DelegationCoordinator :
             Provenance = plan.Provenance,
             Phase = phase,
             ChildOutcomes = outcomes,
+            AssignmentLimits = plan.AssignmentLimits,
+            Assignments = plan.Assignments.Select(assignment =>
+            {
+                var selection = outcomes.FirstOrDefault(outcome =>
+                    outcome.AssignmentId == assignment.AssignmentId)?.ModelSelection;
+                return selection is null ? assignment : assignment with
+                {
+                    Policy = assignment.Policy with
+                    {
+                        ModelSelection = selection,
+                        ModelProfileId = selection.EffectiveProfileId,
+                        ReasoningLevel = selection.EffectiveReasoningLevel,
+                    },
+                };
+            }).ToArray(),
             NextAction = nextAction,
             RecordedAt = DateTimeOffset.UtcNow,
             Revision = revision,
@@ -1407,12 +1485,14 @@ public sealed class DelegationCoordinator :
             Status = status,
             Usage = new AgentResourceUsage(),
             Reason = reason,
+            ModelSelection = assignment.Policy.ModelSelection,
+            ModelProfileId = assignment.Policy.ModelSelection?.EffectiveProfileId,
         };
     }
 
     private static DelegationCheckpointPhase ResolveJoinPhase(DelegationPlan plan)
     {
-        if (plan.Assignments.Any(item => item.Role == AgentRole.Implementer))
+        if (plan.Assignments.Any(item => item.Mode == AgentRunMode.IsolatedWorktreeMutation))
         {
             return DelegationCheckpointPhase.WorkersFrozen;
         }
@@ -1507,24 +1587,26 @@ public sealed class DelegationCoordinator :
             AgentAssignment assignment,
             CancellationToken cancellationToken = default)
         {
-            await RecordAsync(CreateProgressOutcome(
+            var running = CreateProgressOutcome(
                 plan,
                 assignment,
                 AgentRunStatus.Running,
-                "child assignment running"));
+                "child assignment running");
+            await RecordAsync(running, cancellationToken);
             try
             {
                 var outcome = await _inner.RunAsync(plan, assignment, cancellationToken);
-                await RecordAsync(outcome);
+                await RecordAsync(outcome, cancellationToken);
                 return outcome;
             }
             catch (OperationCanceledException)
             {
-                await RecordAsync(CreateProgressOutcome(
+                var cancelled = CreateProgressOutcome(
                     plan,
                     assignment,
                     AgentRunStatus.Cancelled,
-                    "child cancellation observed"));
+                    "child cancellation observed");
+                await RecordAsync(cancelled, cancellationToken);
                 throw;
             }
             catch (Exception exception)
@@ -1538,23 +1620,26 @@ public sealed class DelegationCoordinator :
                     {
                         Usage = failure.Usage,
                         ModelProfileId = failure.ModelProfileId,
+                        ModelSelection = failure.ModelSelection,
                     }
                     : CreateProgressOutcome(
                         plan,
                         assignment,
                         AgentRunStatus.Failed,
                         $"{exception.GetType().Name}: child execution failed");
-                await RecordAsync(outcome);
+                await RecordAsync(outcome, cancellationToken);
                 throw;
             }
         }
 
-        private async Task RecordAsync(AgentRunOutcome outcome)
+        private async Task RecordAsync(AgentRunOutcome outcome, CancellationToken cancellationToken)
         {
-            var acquired = await _gate.WaitAsync(
-                _owner._progressCheckpointTimeout,
-                CancellationToken.None);
-            if (!acquired)
+            await using var gateTimeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, cancellationToken);
+            try
+            {
+                await _gate.WaitAsync(gateTimeout.Token);
+            }
+            catch (OperationCanceledException) when (gateTimeout.Token.IsCancellationRequested)
             {
                 return;
             }
@@ -1563,7 +1648,7 @@ public sealed class DelegationCoordinator :
             {
                 outcome = DelegationOutcomeClassifier.Normalize(_plan, outcome);
                 _progress[outcome.AssignmentId] = outcome;
-                using var timeout = new CancellationTokenSource(_owner._progressCheckpointTimeout);
+                await using var timeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, cancellationToken);
                 var saveTask = _owner.SaveAsync(
                     CreateCheckpoint(
                         _plan,
@@ -1575,17 +1660,10 @@ public sealed class DelegationCoordinator :
                     [outcome]);
                 try
                 {
-                    await saveTask.WaitAsync(
-                        _owner._progressCheckpointTimeout,
-                        CancellationToken.None);
+                    await saveTask.WaitAsync(timeout.Token);
                 }
-                catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+                catch (OperationCanceledException) when (timeout.Token.IsCancellationRequested)
                 {
-                    _ = ObserveLateAsync(saveTask);
-                }
-                catch (TimeoutException)
-                {
-                    await timeout.CancelAsync();
                     _ = ObserveLateAsync(saveTask);
                 }
             }

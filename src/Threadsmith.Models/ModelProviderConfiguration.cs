@@ -76,8 +76,14 @@ public abstract record ModelConfiguration
     /// <summary>Optional sampling temperature.</summary>
     public decimal? Temperature { get; init; }
 
-    /// <summary>Request timeout in seconds.</summary>
+    /// <summary>Request timeout in seconds; zero disables the provider deadline.</summary>
     public int TimeoutSeconds { get; init; } = 120;
+
+    /// <summary>Maximum streamed UTF-8 output bytes; zero disables this local resource limit.</summary>
+    public long MaximumStreamedBytes { get; init; } = ModelProfile.DefaultMaximumStreamedBytes;
+
+    /// <summary>Maximum returned tool calls per response; zero disables this local resource limit.</summary>
+    public int MaximumToolCalls { get; init; } = ModelProfile.DefaultMaximumToolCalls;
 
     /// <summary>Maximum retry attempts, including the initial request.</summary>
     public int RetryMaxAttempts { get; init; } = 3;
@@ -434,12 +440,12 @@ public sealed record ModelHttpTransportOptions
             120,
             10,
             3600);
-        var connectTimeoutSeconds = ReadBounded(
-            configuration,
-            "model:http:connectTimeoutSeconds",
-            30,
-            1,
-            300);
+        var connectTimeoutSeconds = configuration.GetValue("model:http:connectTimeoutSeconds", 30);
+        if (connectTimeoutSeconds < 0)
+        {
+            throw new InvalidOperationException("Configuration 'model:http:connectTimeoutSeconds' must be nonnegative; zero disables the timeout.");
+        }
+
         var maxConnectionsPerServer = ReadBounded(
             configuration,
             "model:http:maxConnectionsPerServer",
@@ -450,7 +456,7 @@ public sealed record ModelHttpTransportOptions
         {
             PooledConnectionLifetime = TimeSpan.FromSeconds(pooledLifetimeSeconds),
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(pooledIdleSeconds),
-            ConnectTimeout = TimeSpan.FromSeconds(connectTimeoutSeconds),
+            ConnectTimeout = connectTimeoutSeconds == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(connectTimeoutSeconds),
             MaxConnectionsPerServer = maxConnectionsPerServer,
         };
     }

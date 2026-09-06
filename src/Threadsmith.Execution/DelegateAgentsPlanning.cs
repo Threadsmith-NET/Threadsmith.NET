@@ -1,6 +1,7 @@
 namespace Threadsmith.Execution;
 
 using Threadsmith.Core;
+using Threadsmith.Models;
 using Threadsmith.Tools;
 
 /// <summary>Builds one immutable Plan 91 delegation from validated model-facing input.</summary>
@@ -14,6 +15,7 @@ public sealed class DelegateAgentsPlanFactory
     private readonly IPromptLoader _prompts;
     private readonly IConversationToolSnapshotStore _toolSnapshots;
     private readonly ITransactionalWorkspaceResolver _workspaces;
+    private readonly AgentModelSelector? _models;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsPlanFactory"/> class.</summary>
     public DelegateAgentsPlanFactory(
@@ -21,7 +23,8 @@ public sealed class DelegateAgentsPlanFactory
         SessionModelPreferences preferences,
         IConversationToolSnapshotStore toolSnapshots,
         IPromptLoader prompts,
-        DelegateAgentsOptions? options = null)
+        DelegateAgentsOptions? options = null,
+        AgentModelSelector? models = null)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(preferences);
@@ -33,6 +36,7 @@ public sealed class DelegateAgentsPlanFactory
         _preferences = preferences;
         _prompts = prompts;
         _toolSnapshots = toolSnapshots;
+        _models = models;
     }
 
     /// <summary>Validates, captures, and freezes one fork/join plan.</summary>
@@ -69,6 +73,7 @@ public sealed class DelegateAgentsPlanFactory
                 WorkspaceId = workspaceId,
             },
             Assignments = assignments,
+            AssignmentLimits = _options.CreateAssignmentLimits(),
             ParentBudget = SumBudgets(assignments),
             AcceptedAt = acceptedAt,
         };
@@ -85,18 +90,20 @@ public sealed class DelegateAgentsPlanFactory
         var definitions = ResolveDefinitions(request.ToolAccess, context);
         var allowNetwork = request.ToolAccess == DelegateAgentToolAccess.Inherit
             && definitions.Any(definition => definition.Category == ToolCategory.ExternalSearch);
-        return new AgentAssignment
+        var assignment = new AgentAssignment
         {
             AssignmentId = AgentAssignmentId.New(),
             ChildRunId = RunId.New(),
-            Role = AgentRole.Explorer,
-            Mode = AgentRunMode.ReadOnlyBaseline,
+            Role = request.Role,
+            Mode = request.Role is AgentRole.Explorer or AgentRole.Implementer
+                ? AgentRunMode.ReadOnlyBaseline
+                : AgentRunMode.ReadOnlyReview,
             Objective = request.Task.Trim(),
             Tasks = [_prompts.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask)],
             InitialContext = request.Context.Trim(),
-            OutputSchema = DelegateAgentsContract.FindingSchema,
+            OutputSchema = DelegateAgentsContract.ResponseSchema,
             StoppingCondition = "Stop after the assigned question is answered or the bounded evidence surface is exhausted.",
-            Deadline = acceptedAt + _options.ChildBudget.WallTime,
+            Deadline = _options.EffectiveChildBudget.CreateDeadline(acceptedAt),
             Scope = CreateScope(context.Invocation),
             Policy = new AgentPolicySnapshot
             {
@@ -109,18 +116,20 @@ public sealed class DelegateAgentsPlanFactory
                 AllowProcesses = false,
                 ProhibitedPaths = context.Invocation.ProhibitedPaths.ToArray(),
                 Sensitivity = context.Invocation.Sensitivity,
+                ResultLimits = _options.ResultLimits,
                 ModelProfileId = preference.ProfileId ?? default,
                 ReasoningLevel = preference.Reasoning.ToString(),
                 ModelSelectionRationale = preference.ProfileId is null
-                    ? "Host model selection will resolve an Explorer-compatible profile."
-                    : "Prefer the frozen parent profile, subject to Explorer capability and sensitivity policy.",
+                    ? "Select a compatible profile for the child role."
+                    : "Prefer the frozen parent profile, subject to role configuration and request compatibility.",
                 ContextPolicyVersion = ContextPolicyVersion,
                 ToolPolicyVersion = request.ToolAccess == DelegateAgentToolAccess.ReadOnly
                     ? ReadOnlyToolPolicyVersion
                     : InheritToolPolicyVersion,
             },
-            Budget = _options.ChildBudget,
+            Budget = _options.EffectiveChildBudget,
         };
+        return _models is null ? assignment : assignment with { Policy = _models.FreezePolicy(assignment) };
     }
 
     private ToolDefinition[] ResolveDefinitions(

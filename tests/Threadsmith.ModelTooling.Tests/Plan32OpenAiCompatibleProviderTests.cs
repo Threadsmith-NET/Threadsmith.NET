@@ -218,6 +218,108 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.IsType<OpenAiCompatibleModelConfiguration>(definition.ModelConfiguration);
     }
 
+    /// <summary>Finite runtime limits retain exact configured values through profile and legacy projection.</summary>
+    [Fact]
+    public static void RuntimeLimits_ConfiguredValuesSurviveProfileAndLegacyProjection()
+    {
+        var model = CreateModel(FirstModelId, "runtime-limits") with
+        {
+            TimeoutSeconds = 600,
+            MaximumStreamedBytes = 32L * 1024 * 1024,
+            MaximumToolCalls = 1_000,
+        };
+        var catalog = CreateEffectiveCatalog(model);
+        var profile = catalog.ModelCatalog.Get(FirstModelId);
+        Assert.Equal(TimeSpan.FromSeconds(600), profile.Timeout);
+        Assert.Equal(model.MaximumStreamedBytes, profile.MaximumStreamedBytes);
+        Assert.Equal(model.MaximumToolCalls, profile.MaximumToolCalls);
+        var adapted = new OpenAiCompatibleProviderRegistration().CreateLegacyCatalog(catalog.ModelCatalog);
+        Assert.Equal(profile.MaximumStreamedBytes, adapted.ModelCatalog.Get(profile.Id).MaximumStreamedBytes);
+        Assert.Equal(profile.MaximumToolCalls, adapted.ModelCatalog.Get(profile.Id).MaximumToolCalls);
+    }
+
+    /// <summary>Configured stream byte limits count UTF-8 text rather than UTF-16 characters or tokens.</summary>
+    [Theory]
+    [InlineData(4, true)]
+    [InlineData(6, false)]
+    public static async Task RuntimeLimits_StreamBytesAreEnforced(long maximumBytes, bool rejected)
+    {
+        const string content = "\u00e9\u00e9\u00e9";
+        var payload = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content }, finish_reason = "stop" } } });
+        using var http = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: " + payload + "\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
+        }));
+        var model = CreateModel(FirstModelId, "byte-limit") with { MaximumStreamedBytes = maximumBytes };
+        var profile = CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId);
+        var provider = new OpenAiCompatibleModelProvider(http, profile);
+        var request = new ModelStreamRequest { RunId = RunId.New(), Input = "Inspect the source." };
+        if (rejected)
+        {
+            await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
+                await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            var chunks = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(content, string.Concat(chunks.Select(chunk => chunk.Text)));
+        }
+    }
+
+    /// <summary>The configured finite tool-call limit may exceed the former compiled maximum.</summary>
+    [Theory]
+    [InlineData(1, 2, true)]
+    [InlineData(300, 257, false)]
+    public static async Task RuntimeLimits_ToolCallCountUsesConfiguredLimit(int maximum, int count, bool rejected)
+    {
+        var calls = Enumerable.Range(0, count).Select(index => new
+        {
+            index,
+            id = "call_" + index,
+            function = new { name = "inspect", arguments = "{}" },
+        }).ToArray();
+        var payload = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { tool_calls = calls }, finish_reason = "tool_calls" } } });
+        using var http = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: " + payload + "\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
+        }));
+        var model = CreateModel(FirstModelId, "tool-limit") with
+        {
+            MaximumToolCalls = maximum,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
+        };
+        var provider = new OpenAiCompatibleModelProvider(http, CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId));
+        var request = new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "Inspect source.",
+            Tools = [new ModelToolDefinition { Name = "inspect", Description = "Inspect source.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}" }],
+        };
+        if (rejected)
+        {
+            await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
+                await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            var chunks = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(count, chunks.Count(chunk => chunk.Output is ToolRequestModelOutput));
+        }
+    }
+
+    /// <summary>A finite connection timeout may exceed the former five-minute product ceiling.</summary>
+    [Fact]
+    public static void HttpTransportOptions_FiniteConnectionTimeoutHasNoProductMaximum()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["model:http:connectTimeoutSeconds"] = "600",
+        }).Build();
+        var options = ModelHttpTransportOptions.Load(configuration);
+        using var handler = new SocketsHttpHandler { ConnectTimeout = options.ConnectTimeout };
+        Assert.Equal(TimeSpan.FromMinutes(10), handler.ConnectTimeout);
+    }
+
     /// <summary>Normal layered configuration controls bounded shared HTTP transport settings.</summary>
     [Fact]
     public static void HttpTransportOptions_LayeredValues_AreLoaded()
@@ -244,7 +346,7 @@ public static class Plan32OpenAiCompatibleProviderTests
     [Theory]
     [InlineData("model:http:pooledConnectionLifetimeSeconds", "59")]
     [InlineData("model:http:pooledConnectionIdleTimeoutSeconds", "3601")]
-    [InlineData("model:http:connectTimeoutSeconds", "0")]
+    [InlineData("model:http:connectTimeoutSeconds", "-1")]
     [InlineData("model:http:maxConnectionsPerServer", "1025")]
     public static void HttpTransportOptions_OutOfBoundsValue_IsRejected(string key, string value)
     {
@@ -253,6 +355,98 @@ public static class Plan32OpenAiCompatibleProviderTests
             .Build();
 
         Assert.Throws<InvalidOperationException>(() => ModelHttpTransportOptions.Load(configuration));
+    }
+
+    /// <summary>JSON mode is used only for structured responses without native tools.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static async Task StructuredOutput_NativeTools_DoNotConstrainToolCallsToJson(
+        bool structuredOutput,
+        bool nativeTools)
+    {
+        string? requestJson = null;
+        using var handler = new RecordingHandler(request =>
+        {
+            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            var stream = nativeTools
+                ? "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"inspect_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n"
+                : "data: {\"choices\":[{\"delta\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+        using var http = new HttpClient(handler);
+        var model = CreateModel(FirstModelId, "json-tool-compatibility") with
+        {
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+                StructuredOutput = true,
+            },
+        };
+        var provider = new ConfiguredModelProvider(
+            http,
+            CreateEffectiveCatalog(model),
+            (_, _) => Task.FromResult<string?>(null));
+        var chunks = new List<ModelChunk>();
+        var tool = new ModelToolDefinition
+        {
+            Name = "inspect_file",
+            Description = "Inspect one repository file.",
+            ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}",
+        };
+
+        await foreach (var chunk in provider.StreamAsync(
+            new ModelStreamRequest
+            {
+                RunId = RunId.New(),
+                Input = "Inspect the file, then return a JSON object.",
+                RequiredCapabilities = new ModelCapabilitySet
+                {
+                    Streaming = true,
+                    ToolCalls = true,
+                    StructuredOutput = structuredOutput,
+                },
+                Tools = nativeTools ? [tool] : [],
+                AllowMultipleToolCalls = true,
+            },
+            TestContext.Current.CancellationToken))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.NotNull(requestJson);
+        using var request = JsonDocument.Parse(requestJson);
+        var body = request.RootElement;
+        Assert.Equal(structuredOutput && !nativeTools, body.TryGetProperty("response_format", out var format));
+        if (structuredOutput && !nativeTools)
+        {
+            Assert.Equal("json_object", format.GetProperty("type").GetString());
+        }
+
+        if (nativeTools)
+        {
+            var function = Assert.Single(body.GetProperty("tools").EnumerateArray()).GetProperty("function");
+            Assert.Equal(tool.Name, function.GetProperty("name").GetString());
+            Assert.Equal("string", function.GetProperty("parameters").GetProperty("properties").GetProperty("path").GetProperty("type").GetString());
+            Assert.Equal("auto", body.GetProperty("tool_choice").GetString());
+            Assert.True(body.GetProperty("parallel_tool_calls").GetBoolean());
+            var output = Assert.IsType<ToolRequestModelOutput>(Assert.Single(chunks, chunk => chunk.Output is not null).Output);
+            Assert.Equal(tool.Name, output.ToolName);
+            Assert.Equal("{\"path\":\"README.md\"}", output.ArgumentsJson);
+        }
+        else
+        {
+            Assert.False(body.TryGetProperty("tools", out _));
+            Assert.False(body.TryGetProperty("tool_choice", out _));
+            Assert.False(body.TryGetProperty("parallel_tool_calls", out _));
+            Assert.Equal("{}", string.Concat(chunks.Select(chunk => chunk.Text)));
+        }
     }
 
     /// <summary>The repository-owned Plan 46 fixture set contains every normative profile exactly once.</summary>
@@ -876,9 +1070,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.True(request.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
         Assert.Equal(4000, request.GetProperty("max_completion_tokens").GetInt32());
         Assert.Equal(0.25m, request.GetProperty("temperature").GetDecimal());
-        Assert.Equal(
-            "json_object",
-            request.GetProperty("response_format").GetProperty("type").GetString());
+        Assert.False(request.TryGetProperty("response_format", out _));
     }
 
     private static void AssertReasoningFragment(

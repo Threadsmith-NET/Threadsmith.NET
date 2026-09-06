@@ -2,7 +2,6 @@ namespace Threadsmith.Execution;
 
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Context;
@@ -10,11 +9,12 @@ using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Tools;
 
-/// <summary>One admitted Explorer result plus measured child resource usage.</summary>
+/// <summary>One child response plus independently collected usage, evidence, and model metadata.</summary>
 internal sealed record ChildAgentModelResult(
-    AgentFindingSet Findings,
+    string Response,
     AgentResourceUsage Usage,
-    IReadOnlyList<EvidenceId> DeliveredEvidenceIds);
+    IReadOnlyList<EvidenceId> DeliveredEvidenceIds,
+    AgentModelSelection Model);
 
 /// <summary>Runs bounded child model continuations and exact pipeline-fenced tool batches.</summary>
 internal sealed class ChildAgentModelLoop
@@ -27,9 +27,9 @@ internal sealed class ChildAgentModelLoop
     private const int MaximumModelToolRequestsPerRound = 32;
     private readonly IEvidenceStore _evidence;
     private readonly IModelProvider _models;
-    private readonly DelegateAgentsOptions _options;
+    private readonly IModelProvider? _trustedModels;
+    private readonly AgentModelSelector? _selection;
     private readonly IReadOnlyList<ToolRegistration> _parentRegistrations;
-    private readonly ChildAgentPrompt _prompt;
     private readonly IOutputSanitizer _sanitizer;
     private readonly IPromptLoader _prompts;
     private readonly SessionUsageProjection? _sessionUsage;
@@ -46,7 +46,9 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ToolRegistration> parentRegistrations,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null)
+        RunSteeringCoordinator? steering = null,
+        AgentModelSelector? selection = null,
+        IModelProvider? trustedModels = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -60,14 +62,14 @@ internal sealed class ChildAgentModelLoop
         _evidence = evidence;
         _sanitizer = sanitizer;
         _prompts = prompts;
-        _options = options;
         _parentRegistrations = parentRegistrations.ToArray();
-        _prompt = new ChildAgentPrompt(prompts);
         _sessionUsage = sessionUsage;
         _steering = steering;
+        _selection = selection;
+        _trustedModels = trustedModels;
     }
 
-    /// <summary>Runs until one valid finding set is returned or a child bound is exhausted.</summary>
+    /// <summary>Runs advertised tools until the model returns its response, without imposing an answer format.</summary>
     public async Task<ChildAgentModelResult> RunAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
@@ -86,21 +88,11 @@ internal sealed class ChildAgentModelLoop
         var registrationById = registrations.ToDictionary(
             registration => registration.Tool.Definition.Id,
             StringComparer.OrdinalIgnoreCase);
-        var desiredOutputTokens = ResolveDesiredOutputTokens(model);
-        var initialRequest = ChildAgentRequestFitter.Create(
-            context,
-            instructions,
-            toolWireEstimate,
-            model,
-            desiredOutputTokens,
-            _prompt);
-        var messages = initialRequest.Messages;
-        var deliveredEvidenceIds = initialRequest.DeliveredEvidenceIds.ToHashSet();
+        var prompt = new ChildAgentPrompt(_prompts, assignment.Role);
+        var messages = prompt.CreateMessages(context, instructions);
+        var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId).ToHashSet();
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
-        var rejectedResponseDigests = new HashSet<string>(StringComparer.Ordinal);
-        var initialWireEstimate = initialRequest.WireEstimate;
         var ledger = new AgentBudgetLedger(assignment.Budget);
-        var parser = new ChildAgentFindingParser(_options, _sanitizer);
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -119,46 +111,27 @@ internal sealed class ChildAgentModelLoop
                         cancellationToken);
                     if (steering.Count > 0)
                     {
-                        messages.AddRange(steering.Select(_prompt.CreateSteeringMessage));
-                        initialWireEstimate = null;
+                        messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
                     }
                 }
 
-                var unreservedEstimate = initialWireEstimate is null
-                    ? ModelWireEstimator.Estimate(
-                        messages,
-                        toolWireEstimate,
-                        stablePrefixMessageCount: 0,
-                        outputReserveTokens: 0,
-                        model.ProviderInstructions)
-                    : initialWireEstimate with { OutputReserveTokens = 0 };
-                initialWireEstimate = null;
-                var availableOutputTokens = model.ContextWindowTokens
-                    - unreservedEstimate.WireInputTokens;
-                if (availableOutputTokens <= 0)
+                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round);
+                model = fitted.Model;
+                childToolContext = childToolContext with
                 {
-                    throw new InvalidOperationException("The child request exceeds its model context bound.");
-                }
-
-                var maximumOutputTokens = checked((int)Math.Min(
-                    availableOutputTokens,
-                    desiredOutputTokens));
-                var wireEstimate = unreservedEstimate with
-                {
-                    OutputReserveTokens = maximumOutputTokens,
+                    ModelContextWindowTokens = model.ContextWindowTokens,
+                    ModelRequestOutputReserveTokens = model.OutputReserveTokens,
+                    ModelEffectiveInputBudgetTokens = model.ContextWindowTokens - model.OutputReserveTokens,
                 };
 
                 var response = await StreamAsync(
                     plan.Provenance.SessionId,
                     assignment,
                     model,
-                    messages,
-                    toolDefinitions,
-                    maximumOutputTokens,
-                    wireEstimate,
-                    round,
+                    fitted.Request,
                     cancellationToken);
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
+                cancellationToken.ThrowIfCancellationRequested();
                 if (response.ToolRequests.Count > 0)
                 {
                     if (_steering is not null)
@@ -170,7 +143,7 @@ internal sealed class ChildAgentModelLoop
                             cancellationToken);
                         if (steering.Count > 0)
                         {
-                            messages.AddRange(steering.Select(_prompt.CreateSteeringMessage));
+                            messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
                             continue;
                         }
                     }
@@ -180,6 +153,7 @@ internal sealed class ChildAgentModelLoop
                         var continuation = await InvokeToolsAsync(
                             plan,
                             assignment,
+                            model.ProfileId,
                             response.ToolRequests,
                             childToolContext,
                             registrationById,
@@ -188,60 +162,45 @@ internal sealed class ChildAgentModelLoop
                             round,
                             cancellationToken);
                         messages.AddRange(continuation.Messages);
-                        messages.Add(_prompt.CreateEvidenceProgressMessage(continuation.Progress));
+                        messages.Add(prompt.CreateEvidenceProgressMessage(continuation.Progress));
                         deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
                     }
                     catch (Exception exception) when (exception is InvalidDataException
                         or ToolArgumentValidationException
                         or UnauthorizedAccessException)
                     {
-                        AddCorrection(messages, ledger, exception.Message);
+                        AddCorrection(
+                            messages,
+                            ledger,
+                            exception.Message,
+                            prompt,
+                            response.ToolRequests,
+                            registrationById,
+                            assignment,
+                            round);
                     }
 
                     continue;
                 }
 
-                try
-                {
-                    var findings = parser.Parse(response.Text, plan, assignment, childToolContext);
-                    if (findings.Findings.Count > 0)
-                    {
-                        AgentFindingAdmission.Validate(
-                            plan,
-                            assignment,
-                            findings,
-                            deliveredEvidenceIds);
-                    }
-
-                    ledger.Charge(new AgentResourceUsage { EvidenceItems = findings.Findings.Count });
-                    stopwatch.Stop();
-                    return new ChildAgentModelResult(
-                        findings,
-                        ledger.Snapshot with { WallTime = stopwatch.Elapsed },
-                        deliveredEvidenceIds
-                            .OrderBy(item => item.Value)
-                            .ToArray());
-                }
-                catch (Exception exception) when (exception is InvalidDataException
-                    or UnauthorizedAccessException)
-                {
-                    var digest = Convert.ToHexStringLower(
-                        SHA256.HashData(Encoding.UTF8.GetBytes(response.Text)));
-                    if (!rejectedResponseDigests.Add(digest))
-                    {
-                        throw new InvalidDataException(
-                            "The child repeated a previously rejected finding response.",
-                            exception);
-                    }
-
-                    AddCorrection(messages, ledger, exception.Message);
-                }
+                stopwatch.Stop();
+                return new ChildAgentModelResult(
+                    _sanitizer.Sanitize(response.Text),
+                    ledger.Snapshot with { WallTime = stopwatch.Elapsed },
+                    deliveredEvidenceIds.OrderBy(item => item.Value).ToArray(),
+                    model);
             }
 
             throw new InvalidOperationException("The child model-turn limit is exhausted.");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            ChildAgentFailureDetails.Attach(
+                exception,
+                "child cancellation observed",
+                ledger.Snapshot with { WallTime = stopwatch.Elapsed },
+                model.ProfileId,
+                model.Provenance);
             throw;
         }
         catch (Exception exception)
@@ -251,7 +210,8 @@ internal sealed class ChildAgentModelLoop
                 exception,
                 ResolveSafeFailureReason(exception),
                 ledger.Snapshot with { WallTime = stopwatch.Elapsed },
-                model.ProfileId);
+                model.ProfileId,
+                model.Provenance);
             throw;
         }
     }
@@ -270,17 +230,91 @@ internal sealed class ChildAgentModelLoop
         };
     }
 
-    private async Task<ModelRoundResponse> StreamAsync(
-        SessionId sessionId,
+    private (AgentModelSelection Model, ModelStreamRequest Request) FitRequest(
         AgentAssignment assignment,
         AgentModelSelection model,
         IReadOnlyList<ModelMessage> messages,
         IReadOnlyList<ModelToolDefinition> tools,
-        int maximumOutputTokens,
-        ModelWireEstimate wireEstimate,
-        int round,
+        ModelWireToolEstimate toolEstimate,
+        int round)
+    {
+        var attempted = new HashSet<ModelProfileId>();
+        while (attempted.Add(model.ProfileId))
+        {
+            var outputTokens = ResolveDesiredOutputTokens(model);
+            var estimate = ModelWireEstimator.Estimate(
+                messages,
+                toolEstimate,
+                stablePrefixMessageCount: 0,
+                outputReserveTokens: outputTokens,
+                model.ProviderInstructions);
+            var request = new ModelStreamRequest
+            {
+                RunId = assignment.ChildRunId,
+                Input = assignment.Objective,
+                Seed = HashCode.Combine(assignment.AssignmentId.Value, round),
+                ToolContinuationRound = round,
+                WorkloadClass = assignment.Role switch
+                {
+                    AgentRole.Explorer => WorkloadClass.General,
+                    AgentRole.Implementer => WorkloadClass.CodeEdit,
+                    _ => WorkloadClass.Review,
+                },
+                ContainsSensitiveData = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive,
+                RequiredCapabilities = new ModelCapabilitySet
+                {
+                    Streaming = true,
+                    ToolCalls = tools.Count > 0,
+                    StructuredOutput = false,
+                },
+                SelectionConstraints = new ModelSelectionConstraints
+                {
+                    ContainsSensitiveData = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive,
+                },
+                ResolvedProfileId = model.ProfileId,
+                MaximumOutputTokens = outputTokens,
+                ReasoningLevel = model.ReasoningLevel,
+                Tools = tools,
+                AllowMultipleToolCalls = true,
+                Messages = messages,
+                WireEstimate = estimate,
+                ProviderInstructions = model.ProviderInstructions,
+            };
+            var effectiveAssignment = assignment with
+            {
+                Policy = assignment.Policy with { ModelSelection = model.Provenance },
+            };
+            var selected = _selection?.SelectForRequest(effectiveAssignment, request, useProfileOutputReserve: true) ?? model;
+            if (selected.ProfileId == model.ProfileId)
+            {
+                if (estimate.TotalCapacityTokens > selected.ContextWindowTokens)
+                {
+                    throw new InvalidOperationException("The complete child context exceeds the selected model context window.");
+                }
+
+                return (selected, request);
+            }
+
+            model = selected;
+        }
+
+        throw new InvalidOperationException("The child model fallback repeated without finding a compatible request.");
+    }
+
+    private async Task<ModelRoundResponse> StreamAsync(
+        SessionId sessionId,
+        AgentAssignment assignment,
+        AgentModelSelection model,
+        ModelStreamRequest request,
         CancellationToken cancellationToken)
     {
+        var maximumOutputTokens = request.MaximumOutputTokens
+            ?? throw new InvalidOperationException("The child request has no output limit.");
+        var wireEstimate = request.WireEstimate
+            ?? throw new InvalidOperationException("The child request has no capacity estimate.");
+        var provider = model.UsesTrustedCatalog
+            ? _trustedModels ?? throw new InvalidOperationException("The trusted child model provider is unavailable.")
+            : _models;
         var text = new StringBuilder();
         var toolRequests = new List<ToolRequestModelOutput>();
         var toolArgumentBytes = 0;
@@ -291,42 +325,12 @@ internal sealed class ChildAgentModelLoop
         var usageRequestId = new ModelRequestUsageId(
             assignment.ChildRunId,
             "delegate-agent",
-            round,
+            request.ToolContinuationRound,
             Guid.NewGuid());
         try
         {
-            await foreach (var chunk in _models.StreamAsync(
-                new ModelStreamRequest
-                {
-                    RunId = assignment.ChildRunId,
-                    Input = assignment.Objective,
-                    Seed = HashCode.Combine(assignment.AssignmentId.Value, round),
-                    ToolContinuationRound = round,
-                    WorkloadClass = WorkloadClass.General,
-                    ContainsSensitiveData = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive,
-                    RequiredCapabilities = new ModelCapabilitySet
-                    {
-                        Streaming = true,
-                        ToolCalls = tools.Count > 0,
-                        StructuredOutput = true,
-                    },
-                    SelectionConstraints = new ModelSelectionConstraints
-                    {
-                        MinimumContextWindow = checked((int)Math.Min(
-                            wireEstimate.TotalCapacityTokens,
-                            int.MaxValue)),
-                        ContainsSensitiveData = assignment.Policy.Sensitivity
-                            == ConversationSensitivity.Sensitive,
-                    },
-                    ResolvedProfileId = model.ProfileId,
-                    MaximumOutputTokens = maximumOutputTokens,
-                    ReasoningLevel = model.ReasoningLevel,
-                    Tools = tools,
-                    AllowMultipleToolCalls = true,
-                    Messages = messages,
-                    WireEstimate = wireEstimate,
-                    ProviderInstructions = model.ProviderInstructions,
-                },
+            await foreach (var chunk in provider.StreamAsync(
+                request,
                 cancellationToken))
             {
                 if (chunk.Text is { } delta)
@@ -377,7 +381,7 @@ internal sealed class ChildAgentModelLoop
                         break;
                     default:
                         throw new InvalidDataException(
-                            "The Explorer returned an unsupported structured output type.");
+                            "The child returned an unsupported structured output type.");
                 }
 
                 if (chunk.Usage is not null)
@@ -391,11 +395,8 @@ internal sealed class ChildAgentModelLoop
                     throw new InvalidDataException("The child response exceeds its output bound.");
                 }
 
-                var estimatedOutputTokens = checked(
-                    EstimateCharacterTokens(text.Length)
-                    + reasoningTokens
-                    + toolRequestTokens);
-                if (estimatedOutputTokens > maximumOutputTokens)
+                // Character estimates are telemetry, not an exact tokenizer. Keep the independent size cap above.
+                if (usage?.OutputTokens > maximumOutputTokens)
                 {
                     throw new InvalidDataException("The child response exceeds its output token bound.");
                 }
@@ -424,7 +425,7 @@ internal sealed class ChildAgentModelLoop
             throw new InvalidDataException("The child provider returned invalid usage.");
         }
 
-        return new ModelRoundResponse(responseText.Trim(), toolRequests, modelTokens);
+        return new ModelRoundResponse(responseText, toolRequests, modelTokens);
     }
 
     private static int ResolveDesiredOutputTokens(AgentModelSelection model)
@@ -442,6 +443,7 @@ internal sealed class ChildAgentModelLoop
     private async Task<ToolContinuation> InvokeToolsAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
+        ModelProfileId modelProfileId,
         IReadOnlyList<ToolRequestModelOutput> requests,
         ToolInvocationContext childContext,
         IReadOnlyDictionary<string, ToolRegistration> registrations,
@@ -486,7 +488,10 @@ internal sealed class ChildAgentModelLoop
         if (!preflight.Succeeded || preflight.Preparation is null)
         {
             throw new InvalidDataException(
-                preflight.SafeReason ?? "The child tool batch failed host preflight.");
+                $"The tool batch was not executed. Call {preflight.FailedOrdinal + 1} "
+                + $"({preflight.FailedToolId}) failed validation: "
+                + (preflight.SafeReason ?? "Tool arguments could not be validated.")
+                + " Other calls in this batch were not executed; this does not mean their paths or arguments were invalid.");
         }
 
         var results = await _tools.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
@@ -500,6 +505,7 @@ internal sealed class ChildAgentModelLoop
             var evidence = await StoreToolEvidenceAsync(
                 plan,
                 assignment,
+                modelProfileId,
                 result.Result,
                 ledger,
                 evidenceProgress,
@@ -520,6 +526,7 @@ internal sealed class ChildAgentModelLoop
     private async Task<StoredToolEvidence> StoreToolEvidenceAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
+        ModelProfileId modelProfileId,
         ToolInvocationResult result,
         AgentBudgetLedger ledger,
         ChildAgentEvidenceProgressTracker evidenceProgress,
@@ -562,9 +569,7 @@ internal sealed class ChildAgentModelLoop
                     ToolInvocationId = result.ToolInvocationId,
                     ChildRunId = assignment.ChildRunId,
                     AgentAssignmentId = assignment.AssignmentId,
-                    ModelProfileId = assignment.Policy.ModelProfileId == default
-                        ? null
-                        : assignment.Policy.ModelProfileId,
+                    ModelProfileId = modelProfileId,
                     BaselineIdentity = plan.Provenance.BaselineIdentity,
                 },
                 CollectedAt = DateTimeOffset.UtcNow,
@@ -580,10 +585,23 @@ internal sealed class ChildAgentModelLoop
         {
             evidenceId = evidenceId.Value.ToString("D"),
             succeeded = result.Succeeded,
-            content,
+            content = CreateModelVisibleToolContent(content),
             truncated = result.IsTruncated,
         });
         return new StoredToolEvidence(evidenceId, modelContent);
+    }
+
+    private static object CreateModelVisibleToolContent(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return content;
+        }
     }
 
     private IReadOnlyList<ToolRegistration> ResolveRegistrations(AgentAssignment assignment)
@@ -620,14 +638,33 @@ internal sealed class ChildAgentModelLoop
     private void AddCorrection(
         ICollection<ModelMessage> messages,
         AgentBudgetLedger ledger,
-        string reason)
+        string reason,
+        ChildAgentPrompt prompt,
+        IReadOnlyList<ToolRequestModelOutput> requests,
+        IReadOnlyDictionary<string, ToolRegistration> registrations,
+        AgentAssignment assignment,
+        int round)
     {
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
         var sanitized = BoundedText.Truncate(
             _sanitizer.Sanitize(reason),
             MaximumCorrectionReasonCharacters,
             out _);
-        messages.Add(_prompt.CreateCorrectionMessage(sanitized));
+        var error = JsonSerializer.Serialize(new { succeeded = false, executed = false, error = sanitized });
+        for (var ordinal = 0; ordinal < requests.Count; ordinal++)
+        {
+            var request = requests[ordinal];
+            if (!registrations.ContainsKey(request.ToolName))
+            {
+                continue;
+            }
+
+            var correlationId = CreateToolCallId(assignment, round, ordinal);
+            messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, request));
+            messages.Add(ChildAgentPrompt.CreateToolResultMessage(correlationId, request.ToolName, error));
+        }
+
+        messages.Add(prompt.CreateCorrectionMessage(sanitized));
     }
 
     private static string CreateToolCallId(
@@ -655,7 +692,8 @@ internal sealed class ChildAgentModelLoop
 internal sealed record ChildAgentFailureDetails(
     string SafeReason,
     AgentResourceUsage Usage,
-    ModelProfileId ModelProfileId)
+    ModelProfileId ModelProfileId,
+    AgentModelProvenance? ModelSelection)
 {
     private const string ExceptionDataKey = "Threadsmith.Execution.ChildAgentFailureDetails";
 
@@ -664,12 +702,14 @@ internal sealed record ChildAgentFailureDetails(
         Exception exception,
         string safeReason,
         AgentResourceUsage usage,
-        ModelProfileId modelProfileId)
+        ModelProfileId modelProfileId,
+        AgentModelProvenance? modelSelection = null)
     {
         exception.Data[ExceptionDataKey] = new ChildAgentFailureDetails(
             safeReason,
             usage,
-            modelProfileId);
+            modelProfileId,
+            modelSelection);
     }
 
     /// <summary>Attempts to read attached child failure details.</summary>

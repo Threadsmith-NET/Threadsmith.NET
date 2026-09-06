@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Renders complete model-visible detail blocks within a fixed character budget.</summary>
@@ -24,8 +25,8 @@ internal sealed class DelegateAgentsResultRenderer
         var builder = new StringBuilder(MaximumModelProjectionCharacters);
         var maximumOmittedBlocks = checked(
             2
-            + (result.Children.Count * 2)
-            + result.Children.Sum(child => child.Findings.Count + child.Omissions.Count)
+            + (result.Children.Count * 3)
+            + result.Children.Sum(child => (child.Findings.Count * 2) + child.Omissions.Count)
             + result.Disagreements.Count
             + result.Omissions.Count);
         var maximumFooter = RenderTruncationFooter(maximumOmittedBlocks);
@@ -65,6 +66,19 @@ internal sealed class DelegateAgentsResultRenderer
                     ("ModelTokens", $"{child.Usage.ModelTokens}"),
                     ("ToolCalls", $"{child.Usage.ToolCalls}")));
             AppendCompleteBlockOrCountOmission(summaryBlock);
+            if (child.ModelSelection is not null || child.Implementation is not null)
+            {
+                var details = JsonSerializer.Serialize(new
+                {
+                    modelSelection = child.ModelSelection,
+                    implementation = child.Implementation,
+                });
+                AppendCompleteBlockOrCountOmission(_prompts.Render(
+                    PromptFileNames.ToolDelegateAgentsChildDetails,
+                    Tokens(
+                        ("AssignmentId", child.AssignmentId),
+                        ("DetailsJson", details))));
+            }
         }
 
         var maximumFindings = result.Children.Max(child => child.Findings.Count);
@@ -73,6 +87,24 @@ internal sealed class DelegateAgentsResultRenderer
             foreach (var child in result.Children.Where(item => index < item.Findings.Count))
             {
                 AppendCompleteBlockOrCountOmission(RenderFinding(child, child.Findings[index]));
+                var finding = child.Findings[index];
+                if (finding.Severity is not null)
+                {
+                    var details = JsonSerializer.Serialize(new
+                    {
+                        finding.Title,
+                        finding.Category,
+                        finding.Severity,
+                        finding.Line,
+                        finding.Consequence,
+                        finding.Recommendation,
+                    });
+                    AppendCompleteBlockOrCountOmission(_prompts.Render(
+                        PromptFileNames.ToolDelegateAgentsReviewDetails,
+                        Tokens(
+                            ("AssignmentId", child.AssignmentId),
+                            ("DetailsJson", details))));
+                }
             }
         }
 

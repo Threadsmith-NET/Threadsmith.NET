@@ -3735,9 +3735,22 @@ public sealed class InteractionCoordinator
             + string.Join(
                 string.Empty,
                 checkpoint.ChildOutcomes.Select(outcome =>
-                    $"  {outcome.AssignmentId.Value:D} {outcome.Status}; "
-                    + $"tools {outcome.Usage.ToolCalls}; tokens {outcome.Usage.ModelTokens}; {outcome.Reason}\n"));
+                    $"  {outcome.AssignmentId.Value:D} {outcome.Role} {outcome.Status}; "
+                    + $"tools {outcome.Usage.ToolCalls}; tokens {outcome.Usage.ModelTokens}; {outcome.Reason}\n"
+                    + FormatAgentModelSelection(outcome.ModelSelection)));
         await _surface.WriteAsync(output, PresentationTextRole.Status, cancellationToken);
+    }
+
+    private static string FormatAgentModelSelection(AgentModelProvenance? selection)
+    {
+        if (selection is null)
+        {
+            return string.Empty;
+        }
+
+        return $"    model {selection.EffectiveProviderId}/{selection.EffectiveProfileId.Value:D}; "
+            + $"reasoning {selection.EffectiveReasoningLevel}; source {selection.Source}\n"
+            + (selection.FallbackReason is null ? string.Empty : $"    fallback: {selection.FallbackReason}\n");
     }
 
     private static string FormatRepositoryMemorySnapshot(RepositoryMemorySnapshot snapshot)

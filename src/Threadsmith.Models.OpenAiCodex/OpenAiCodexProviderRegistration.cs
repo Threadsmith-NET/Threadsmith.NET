@@ -58,7 +58,9 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                 || codex.EffectiveRequestOutputTokenReserve <= 0
                 || codex.EffectiveRequestOutputTokenReserve >= codex.ContextWindow
                 || codex.EffectiveRequestOutputTokenReserve > codex.MaximumOutputTokens
-                || codex.TimeoutSeconds <= 0
+                || codex.TimeoutSeconds < 0
+                || codex.MaximumStreamedBytes < 0
+                || codex.MaximumToolCalls < 0
                 || codex.RetryMaxAttempts <= 0))
         {
             throw new InvalidOperationException("The authenticated Codex model catalog is invalid or empty.");
@@ -100,6 +102,8 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                     DefaultLevel = model.DefaultReasoningLevel,
                 },
                 Timeout = TimeSpan.FromSeconds(model.TimeoutSeconds),
+                MaximumStreamedBytes = model.MaximumStreamedBytes,
+                MaximumToolCalls = model.MaximumToolCalls,
                 RetryPolicy = new ModelRetryPolicy
                 {
                     MaxAttempts = model.RetryMaxAttempts,

@@ -36,22 +36,28 @@ internal sealed class DelegateAgentsResultProjector
     private const int MaximumSymbolCharacters = 1_024;
     private readonly DelegateAgentsProjectionLimits _limits;
     private readonly DelegateAgentsOptions _options;
+    private readonly string _implementationOmission;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultProjector"/> class.</summary>
-    public DelegateAgentsResultProjector(DelegateAgentsOptions options)
-        : this(options, DelegateAgentsProjectionLimits.Production)
+    public DelegateAgentsResultProjector(DelegateAgentsOptions options, IPromptLoader prompts)
+        : this(options, DelegateAgentsProjectionLimits.Production, prompts)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultProjector"/> class under explicit immutable host bounds.</summary>
     internal DelegateAgentsResultProjector(
         DelegateAgentsOptions options,
-        DelegateAgentsProjectionLimits limits)
+        DelegateAgentsProjectionLimits limits,
+        IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(limits);
+        ArgumentNullException.ThrowIfNull(prompts);
         _options = options;
         _limits = limits;
+        _implementationOmission = ProjectText(
+            prompts.Get(PromptFileNames.ToolDelegateAgentsImplementationOmitted).Trim(),
+            MaximumOmissionCharacters).Value;
     }
 
     /// <summary>Creates the complete bounded host result.</summary>
@@ -62,19 +68,59 @@ internal sealed class DelegateAgentsResultProjector
         var outcomeById = checkpoint.ChildOutcomes
             .Select(outcome => DelegationOutcomeClassifier.Normalize(plan, outcome))
             .ToDictionary(outcome => outcome.AssignmentId);
-        ChildProjection[] projections = [.. plan.Assignments.Select(assignment =>
+        var findingsByContent = new Dictionary<string, AgentAssignmentId>(StringComparer.Ordinal);
+        ChildProjection[] projections = [.. plan.Assignments.OrderBy(assignment => assignment.Role).Select(assignment =>
         {
             var outcome = outcomeById.TryGetValue(assignment.AssignmentId, out var resolved)
                 ? resolved
                 : CreateMissingOutcome(plan, assignment);
-            FindingProjection[] findingProjections = [.. outcome.Findings?.Findings
-                .Select(ProjectFinding)
-                ?? []];
+            var duplicateAssignments = new HashSet<AgentAssignmentId>();
+            AgentFinding[] uniqueFindings = [.. (outcome.Findings?.Findings ?? []).Where(finding =>
+            {
+                var review = outcome.Review?.Findings.FirstOrDefault(item => item.FindingId == finding.FindingId);
+                var key = JsonSerializer.Serialize(new
+                {
+                    finding.Category,
+                    finding.Summary,
+                    finding.Confidence,
+                    finding.Recommendation,
+                    finding.Risk,
+                    finding.Uncertainty,
+                    evidence = finding.EvidenceIds.OrderBy(id => id.Value),
+                    locations = finding.Locations.Order(StringComparer.Ordinal),
+                    symbols = finding.Symbols.Order(StringComparer.Ordinal),
+                    severity = review?.Severity,
+                    line = review?.StartLine,
+                });
+                if (findingsByContent.TryAdd(key, assignment.AssignmentId))
+                {
+                    return true;
+                }
+
+                duplicateAssignments.Add(findingsByContent[key]);
+                return false;
+            })];
+            FindingProjection[] findingProjections = [.. uniqueFindings.Select(finding =>
+            {
+                var review = outcome.Review?.Findings.FirstOrDefault(item => item.FindingId == finding.FindingId);
+                return ProjectFinding(finding, review);
+            })];
             DelegateAgentFindingSummary[] candidates =
             [
                 .. findingProjections.Select(projection => projection.Value),
             ];
             var omissions = ResolveOmissions(outcome);
+            if (duplicateAssignments.Count > 0)
+            {
+                string[] references = [.. duplicateAssignments.OrderBy(id => id.Value)
+                    .Select(id => $"Matching finding details are included under assignment {id.Value:D}.")];
+                omissions = omissions with
+                {
+                    Values = [.. omissions.Values, .. references],
+                    TotalCount = omissions.TotalCount + references.Length,
+                };
+            }
+
             var summary = ResolveSummary(outcome);
             return new ChildProjection(
                 assignment,
@@ -82,11 +128,12 @@ internal sealed class DelegateAgentsResultProjector
                 summary.Value,
                 summary.IsTruncated,
                 candidates,
-                outcome.Findings?.Findings.Count ?? 0,
+                uniqueFindings.Length,
                 omissions.Values,
                 omissions.TotalCount,
                 findingProjections.Any(projection => projection.IsTruncated),
-                omissions.IsTruncated);
+                omissions.IsTruncated,
+                _implementationOmission);
         })];
         var outcomes = projections.Select(item => item.Outcome).ToArray();
         var disagreementCandidates = DelegateAgentDisagreementDetector.Detect(outcomes);
@@ -168,6 +215,16 @@ internal sealed class DelegateAgentsResultProjector
                 serializationBuffer))
             {
                 retainedDisagreements.RemoveAt(retainedDisagreements.Count - 1);
+                truncated = true;
+            }
+        }
+
+        foreach (var projection in projections.Where(item => item.Outcome.Implementation is not null))
+        {
+            projection.ImplementationRetained = true;
+            if (!Fits(CreateResult(plan, checkpoint.Phase, outcomes, projections, retainedDisagreements, omissions), serializationBuffer))
+            {
+                projection.ImplementationRetained = false;
                 truncated = true;
             }
         }
@@ -260,7 +317,7 @@ internal sealed class DelegateAgentsResultProjector
             []);
     }
 
-    private static FindingProjection ProjectFinding(AgentFinding finding)
+    private static FindingProjection ProjectFinding(AgentFinding finding, ReviewFinding? review)
     {
         var confidence = finding.Confidence switch
         {
@@ -281,11 +338,15 @@ internal sealed class DelegateAgentsResultProjector
         var uncertainty = ProjectOptionalText(
             finding.Uncertainty,
             MaximumOmissionCharacters);
+        var recommendation = ProjectOptionalText(review?.Recommendation, MaximumOmissionCharacters);
+        var consequence = ProjectOptionalText(review?.Consequence, MaximumOmissionCharacters);
         var isTruncated = title.IsTruncated
             || location.IsTruncated
             || symbol.IsTruncated
             || evidence.IsTruncated
             || uncertainty.IsTruncated
+            || recommendation.IsTruncated
+            || consequence.IsTruncated
             || finding.Locations.Count > 1
             || finding.Symbols.Count > 1;
         return new FindingProjection(
@@ -295,7 +356,14 @@ internal sealed class DelegateAgentsResultProjector
                 symbol.Value,
                 evidence.Value,
                 confidence,
-                uncertainty.Value),
+                uncertainty.Value)
+            {
+                Category = review?.Category,
+                Severity = review?.Severity,
+                Line = review?.StartLine,
+                Recommendation = recommendation.Value,
+                Consequence = consequence.Value,
+            },
             isTruncated);
     }
 
@@ -316,6 +384,11 @@ internal sealed class DelegateAgentsResultProjector
 
     private SummaryProjection ResolveSummary(AgentRunOutcome outcome)
     {
+        if (outcome.Response is { } response)
+        {
+            return new SummaryProjection(response, false);
+        }
+
         var summary = outcome.Findings?.Summary;
         if (string.IsNullOrWhiteSpace(summary))
         {
@@ -388,6 +461,8 @@ internal sealed class DelegateAgentsResultProjector
 
     private sealed class ChildProjection
     {
+        private readonly string _implementationOmission;
+
         public ChildProjection(
             AgentAssignment assignment,
             AgentRunOutcome outcome,
@@ -398,7 +473,8 @@ internal sealed class DelegateAgentsResultProjector
             IReadOnlyList<string> omissionCandidates,
             int totalOmissionCount,
             bool findingFieldsWereTruncated,
-            bool omissionFieldsWereTruncated)
+            bool omissionFieldsWereTruncated,
+            string implementationOmission)
         {
             Assignment = assignment;
             Outcome = outcome;
@@ -410,6 +486,7 @@ internal sealed class DelegateAgentsResultProjector
             TotalOmissionCount = totalOmissionCount;
             FindingFieldsWereTruncated = findingFieldsWereTruncated;
             OmissionFieldsWereTruncated = omissionFieldsWereTruncated;
+            _implementationOmission = implementationOmission;
         }
 
         public AgentAssignment Assignment { get; }
@@ -417,6 +494,7 @@ internal sealed class DelegateAgentsResultProjector
         public IReadOnlyList<DelegateAgentFindingSummary> Candidates { get; }
 
         public bool HasOmittedContent => SummaryWasTruncated
+            || (Outcome.Implementation is not null && !ImplementationRetained)
             || FindingFieldsWereTruncated
             || OmissionFieldsWereTruncated
             || !SummaryRetained
@@ -441,6 +519,8 @@ internal sealed class DelegateAgentsResultProjector
 
         public bool SummaryRetained { get; set; }
 
+        public bool ImplementationRetained { get; set; }
+
         public int TotalFindingCount { get; }
 
         public int TotalOmissionCount { get; }
@@ -454,6 +534,7 @@ internal sealed class DelegateAgentsResultProjector
         public void ResetRetainedContent()
         {
             SummaryRetained = false;
+            ImplementationRetained = false;
             RetainedFindings.Clear();
             RetainedOmissions.Clear();
         }
@@ -461,6 +542,7 @@ internal sealed class DelegateAgentsResultProjector
         public void RetainAll()
         {
             SummaryRetained = true;
+            ImplementationRetained = true;
             RetainedFindings.AddRange(Candidates);
             RetainedOmissions.AddRange(OmissionCandidates);
         }
@@ -468,6 +550,11 @@ internal sealed class DelegateAgentsResultProjector
         public DelegateAgentOutcomeSummary ToSummary()
         {
             var omissions = RetainedOmissions.ToList();
+            if (Outcome.Implementation is not null && !ImplementationRetained)
+            {
+                omissions.Add(_implementationOmission);
+            }
+
             if (!SummaryRetained)
             {
                 omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -533,7 +620,19 @@ internal sealed class DelegateAgentsResultProjector
                 omissions,
                 new DelegateAgentUsageSummary(
                     Outcome.Usage.ModelTokens,
-                    Outcome.Usage.ToolCalls));
+                    Outcome.Usage.ToolCalls))
+            {
+                ModelSelection = Outcome.ModelSelection is { } model ? new DelegateAgentModelSummary(
+                    model.EffectiveProviderId,
+                    model.EffectiveProfileId.Value.ToString("D"),
+                    model.EffectiveReasoningLevel,
+                    model.Source.ToString(),
+                    model.ConfiguredProviderId,
+                    model.ConfiguredProfileId?.Value.ToString("D"),
+                    model.ConfiguredReasoningLevel,
+                    model.FallbackReason) : null,
+                Implementation = ImplementationRetained ? Outcome.Implementation : null,
+            };
         }
     }
 }

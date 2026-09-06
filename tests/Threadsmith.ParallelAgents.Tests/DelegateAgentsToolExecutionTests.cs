@@ -38,7 +38,7 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
 
         // Act
         var definition = fixture.Tool.Definition;
@@ -66,8 +66,10 @@ public sealed class DelegateAgentsToolExecutionTests
             == JsonValueKind.False);
         Assert.Equal(["agents"], inputProperties.EnumerateObject().Select(item => item.Name));
         Assert.Equal(
-            ["context", "task", "toolAccess"],
+            ["context", "role", "task", "toolAccess"],
             agentProperties.EnumerateObject().Select(item => item.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(6, agentProperties.GetProperty("role").GetProperty("enum").GetArrayLength());
+        Assert.Equal("explorer", agentProperties.GetProperty("role").GetProperty("default").GetString());
         Assert.False(agentProperties.TryGetProperty("model", out _));
         Assert.False(agentProperties.TryGetProperty("budget", out _));
         Assert.False(agentProperties.TryGetProperty("allowedToolIds", out _));
@@ -94,7 +96,7 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new ConcurrentFindingRunner(TimeSpan.FromMilliseconds(100));
+        var runner = new ConcurrentResponseRunner(TimeSpan.FromMilliseconds(100));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var input = CreateInput(2);
 
@@ -112,29 +114,29 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Contains(result.DelegationId, execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("raw child transcript sentinel", execution.ModelResultContent, StringComparison.Ordinal);
         var firstChild = result.Children[0];
-        var firstFinding = Assert.Single(firstChild.Findings);
+        Assert.Equal("The assigned area has bounded evidence.", firstChild.Summary);
+        Assert.Empty(firstChild.Findings);
         Assert.Contains(
-            PromptAssetRenderer.RenderWithPlatformLineEndings(
-                TestPromptLoader.Instance,
-                PromptFileNames.ToolDelegateAgentsFinding,
+            TestPromptLoader.Instance.Render(
+                PromptFileNames.ToolDelegateAgentsChildSummary,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["AssignmentId"] = $"{firstChild.AssignmentId}",
-                    ["Title"] = firstFinding.Title,
-                    ["FilePathBlock"] = firstFinding.FilePath is null
-                        ? string.Empty
-                        : $" [{firstFinding.FilePath}]",
-                    ["SymbolBlock"] = firstFinding.Symbol is null
-                        ? string.Empty
-                        : $" symbol={firstFinding.Symbol}",
-                    ["Evidence"] = firstFinding.Evidence,
-                    ["Confidence"] = $"{firstFinding.Confidence}",
-                    ["UncertaintyBlock"] = string.Empty,
+                    ["Summary"] = firstChild.Summary,
+                    ["ModelTokens"] = $"{firstChild.Usage.ModelTokens}",
+                    ["ToolCalls"] = $"{firstChild.Usage.ToolCalls}",
                 }),
             execution.ModelResultContent,
             StringComparison.Ordinal);
         Assert.NotNull(inspected);
         Assert.Equal(DelegationCheckpointPhase.ResearchJoined, inspected.Phase);
+        Assert.All(inspected.Assignments, assignment =>
+            Assert.Equal(AgentAssignment.ResponseSchema, assignment.OutputSchema));
+        Assert.All(inspected.ChildOutcomes, outcome =>
+        {
+            Assert.Equal("The assigned area has bounded evidence.", outcome.Response);
+            Assert.Null(outcome.Findings);
+        });
         Assert.Contains(checkpoints.History, checkpoint =>
             checkpoint.Phase == DelegationCheckpointPhase.Accepted);
         Assert.Contains(checkpoints.History, checkpoint =>
@@ -154,9 +156,9 @@ public sealed class DelegateAgentsToolExecutionTests
             domainEvent => Assert.True(domainEvent.Revision > 0));
     }
 
-    /// <summary>Verifies finding uncertainty uses the exact conditional prompt block.</summary>
+    /// <summary>Verifies legacy finding uncertainty uses the exact conditional prompt block.</summary>
     [Fact]
-    public async Task ExecuteAsync_FindingUncertainty_RendersExactConditionalPromptBlock()
+    public async Task Project_LegacyFindingUncertainty_RendersExactConditionalPromptBlock()
     {
         // Arrange
         const string uncertainty = "bounded uncertainty";
@@ -164,12 +166,16 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(
-            coordinator,
-            new FixedRunnerFactory(new UncertainFindingRunner(uncertainty)));
+        var runner = new UncertainFindingRunner(uncertainty);
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
+        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+        var outcome = await runner.RunAsync(plan, Assert.Single(plan.Assignments));
+        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+            .Project(plan, CreateJoinedCheckpoint(plan, outcome));
+        var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
+            .Render(projection.Result, out var truncated);
 
         // Assert
         var expected = PromptAssetRenderer.RenderWithPlatformLineEndings(
@@ -179,7 +185,9 @@ public sealed class DelegateAgentsToolExecutionTests
             {
                 ["Uncertainty"] = uncertainty,
             });
-        Assert.Contains(expected, execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Contains(expected, modelContent, StringComparison.Ordinal);
+        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
+        Assert.False(truncated);
     }
 
     /// <summary>Verifies an active delegation can be inspected while its child is still running.</summary>
@@ -191,7 +199,7 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new ReleasableFindingRunner();
+        var runner = new ReleasableResponseRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
 
         // Act
@@ -340,7 +348,7 @@ public sealed class DelegateAgentsToolExecutionTests
         using var scheduler = new CancellationDisposalRaceScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new CompletedFindingRunner();
+        var runner = new CompletedResponseRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var plan = fixture.Plans.Create(CreateInput(1), fixture.Context);
         var executionTask = coordinator.StartAsync(plan, runner);
@@ -377,7 +385,7 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = fixture.Plans.Create(CreateInput(2), fixture.Context);
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
@@ -385,7 +393,7 @@ public sealed class DelegateAgentsToolExecutionTests
         // Act
         var checkpoint = await coordinator.StartAsync(
             plan,
-            new CompletedFindingRunner(),
+            new CompletedResponseRunner(),
             cancellation.Token);
 
         // Assert
@@ -398,7 +406,7 @@ public sealed class DelegateAgentsToolExecutionTests
             Assert.Equal(AgentRunStatus.Cancelled, outcome.Status));
     }
 
-    /// <summary>Verifies an uncommitted delivery claim cannot make child findings authoritative.</summary>
+    /// <summary>Verifies an uncommitted delivery claim cannot make child responses authoritative.</summary>
     [Fact]
     public async Task ExecuteAsync_JoinFailure_ReturnsFailedResultWithPreservedChildren()
     {
@@ -424,9 +432,10 @@ public sealed class DelegateAgentsToolExecutionTests
         });
         Assert.Equal(1, runner.JoinCalls);
         Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History.Last().Phase);
+        Assert.All(checkpoints.History.Last().ChildOutcomes, outcome => Assert.Null(outcome.Response));
     }
 
-    /// <summary>Verifies a committed evidence join survives failure in a later event subscriber.</summary>
+    /// <summary>Verifies a host-owned evidence commit and ordinary response survive later subscriber failure.</summary>
     [Fact]
     public async Task ExecuteAsync_PostCommitSubscriberFailure_RetainsJoinedResultAndEvidence()
     {
@@ -449,12 +458,17 @@ public sealed class DelegateAgentsToolExecutionTests
 
         // Assert
         Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
-        Assert.Single(Assert.Single(execution.Value.Children).Findings);
-        Assert.Single(evidence.Snapshot(fixture.Context.SessionId));
+        var child = Assert.Single(execution.Value.Children);
+        Assert.Equal("The assigned area has bounded evidence.", child.Summary);
+        Assert.Empty(child.Findings);
+        var committed = Assert.Single(evidence.Snapshot(fixture.Context.SessionId));
+        Assert.Equal("joined child evidence", committed.Content);
+        Assert.Equal("delegate_agents test join", committed.Provenance.Source);
         Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
+        Assert.Equal(child.Summary, Assert.Single(checkpoints.History.Last().ChildOutcomes).Response);
     }
 
-    /// <summary>Verifies usable sibling evidence joins as partial instead of becoming a failed checkpoint.</summary>
+    /// <summary>Verifies a completed sibling response joins as partial instead of becoming a failed checkpoint.</summary>
     [Fact]
     public async Task ExecuteAsync_MixedOutcomes_PersistsJoinedPartialResult()
     {
@@ -470,32 +484,66 @@ public sealed class DelegateAgentsToolExecutionTests
 
         // Assert
         Assert.Equal(DelegateAgentsStatus.Partial, execution.Value.Status);
-        Assert.Equal(["Completed", "Failed"], execution.Value.Children.Select(child => child.Status));
+        Assert.Equal(["Completed", "Failed"], execution.Value.Children.Select(child => child.Status).Order(StringComparer.Ordinal));
         Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
+        Assert.Equal("The assigned area has bounded evidence.", Assert.Single(execution.Value.Children, child => child.Status == "Completed").Summary);
+        Assert.Null(Assert.Single(checkpoints.History.Last().ChildOutcomes, outcome => outcome.Status == AgentRunStatus.Failed).Response);
     }
 
-    /// <summary>Verifies an Explorer with an empty finding set is not reported as completed.</summary>
-    [Fact]
-    public async Task ExecuteAsync_EmptyFindingSet_IsFailedAtCheckpointAndResultBoundaries()
+    /// <summary>Verifies ordinary completion accepts any present response without legacy finding fields.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData("{\"findings\":[]}")]
+    [InlineData("All tests passed. This is an unverified child claim.")]
+    public async Task ExecuteAsync_PresentResponse_CompletesWithoutFindings(string response)
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new EmptyFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new ResponseRunner(response)));
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
 
         // Assert
+        Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
+        var child = Assert.Single(execution.Value.Children);
+        Assert.Equal("Completed", child.Status);
+        Assert.Equal(response, child.Summary);
+        Assert.Empty(child.Findings);
+        Assert.Empty(execution.Value.Disagreements);
+        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
+        var outcome = Assert.Single(checkpoints.History.Last().ChildOutcomes);
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(response, outcome.Response);
+        Assert.Null(outcome.Findings);
+    }
+
+    /// <summary>Verifies legacy findings cannot substitute for a missing ordinary response.</summary>
+    [Fact]
+    public async Task ExecuteAsync_MissingResponseWithLegacyFindings_FailsAtCheckpointAndResultBoundaries()
+    {
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new UncertainFindingRunner("legacy fixture")));
+
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+
         Assert.Equal(DelegateAgentsStatus.Failed, execution.Value.Status);
         Assert.Equal("Failed", Assert.Single(execution.Value.Children).Status);
         Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History.Last().Phase);
-        Assert.Equal(AgentRunStatus.Failed, Assert.Single(checkpoints.History.Last().ChildOutcomes).Status);
+        var outcome = Assert.Single(checkpoints.History.Last().ChildOutcomes);
+        Assert.Equal(AgentRunStatus.Failed, outcome.Status);
+        Assert.Null(outcome.Response);
+        Assert.Equal(AgentAssignment.ResponseSchema, Assert.Single(checkpoints.History.Last().Assignments).OutputSchema);
     }
 
-    /// <summary>Verifies approved-plan preflight may complete with coverage and no findings.</summary>
+    /// <summary>Verifies the legacy approved-plan preflight may complete with coverage and no findings.</summary>
     [Fact]
     public async Task StartAsync_ApprovedPlanPreflightWithCoverageOnly_RemainsCompleted()
     {
@@ -504,8 +552,8 @@ public sealed class DelegateAgentsToolExecutionTests
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new EmptyFindingRunner()));
-        var basePlan = fixture.Plans.Create(CreateInput(1), fixture.Context);
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
+        var basePlan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
         var plan = basePlan with
         {
             Provenance = basePlan.Provenance with
@@ -522,6 +570,7 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoint.Phase);
         var outcome = Assert.Single(checkpoint.ChildOutcomes);
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Null(outcome.Response);
         Assert.Empty(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings);
         Assert.NotEmpty(outcome.Findings.CoverageNotes);
     }
@@ -537,7 +586,7 @@ public sealed class DelegateAgentsToolExecutionTests
             scheduler,
             new RecordingCheckpointStore(),
             events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = fixture.Plans.Create(CreateInput(1), fixture.Context);
 
         // Act / Assert
@@ -551,45 +600,136 @@ public sealed class DelegateAgentsToolExecutionTests
         }));
     }
 
-    /// <summary>Verifies bounded opposing conclusions over one subject are called out explicitly.</summary>
+    /// <summary>Repeated legacy cited findings appear once while every assignment remains visible.</summary>
     [Fact]
-    public async Task ExecuteAsync_OpposingConclusions_ReportsDisagreement()
+    public async Task Project_DuplicateFindings_RetainsAssignmentReferencesWithoutTruncation()
+    {
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
+        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(2), fixture.Context));
+        var first = CreateLegacyCompletedOutcome(plan, plan.Assignments[0]);
+        var second = CreateLegacyCompletedOutcome(plan, plan.Assignments[1]);
+        var sharedFindings = Assert.IsType<AgentFindingSet>(first.Findings).Findings;
+        second = second with
+        {
+            Findings = Assert.IsType<AgentFindingSet>(second.Findings) with
+            {
+                Findings = sharedFindings.Select(item => item with { FindingId = Guid.NewGuid() }).ToArray(),
+            },
+        };
+        var checkpoint = CreateJoinedCheckpoint(plan, first, second);
+
+        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance).Project(plan, checkpoint);
+
+        Assert.Equal(2, projection.Result.Children.Count);
+        Assert.Single(projection.Result.Children[0].Findings);
+        Assert.Empty(projection.Result.Children[1].Findings);
+        Assert.Contains(projection.Result.Children[1].Omissions, item =>
+            item.Contains(plan.Assignments[0].AssignmentId.Value.ToString("D"), StringComparison.Ordinal));
+        Assert.False(projection.IsTruncated);
+        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
+    }
+
+    /// <summary>Verifies legacy structured findings retain conservative opposing-conclusion projection.</summary>
+    [Theory]
+    [InlineData("A bug makes Shared.Symbol unsafe.")]
+    [InlineData("Shared.Symbol is not safe.")]
+    public async Task Project_LegacyOpposingConclusions_ReportsDisagreement(string concern)
+    {
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
+        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(2), fixture.Context));
+        var outcomes = plan.Assignments.Select((assignment, index) =>
+        {
+            var outcome = CreateLegacyCompletedOutcome(plan, assignment);
+            var findings = Assert.IsType<AgentFindingSet>(outcome.Findings);
+            return outcome with
+            {
+                Findings = findings with
+                {
+                    Findings =
+                    [
+                        Assert.Single(findings.Findings) with
+                        {
+                            Summary = index == 0 ? concern : "No issue exists; Shared.Symbol is safe.",
+                            Symbols = ["Shared.Symbol"],
+                        },
+                    ],
+                },
+            };
+        }).ToArray();
+
+        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+            .Project(plan, CreateJoinedCheckpoint(plan, outcomes));
+        var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
+            .Render(projection.Result, out var truncated);
+
+        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
+        Assert.Contains("Shared.Symbol", Assert.Single(projection.Result.Disagreements), StringComparison.Ordinal);
+        Assert.Contains("Disagreement:", modelContent, StringComparison.Ordinal);
+        Assert.False(truncated);
+    }
+
+    /// <summary>Verifies ordinary opposing replies remain intact without host-invented findings or disagreements.</summary>
+    [Fact]
+    public async Task ExecuteAsync_OpposingConclusions_PreservesResponsesWithoutSemanticGrading()
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new OpposingFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new OpposingResponseRunner()));
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(2), fixture.Context);
 
         // Assert
-        var disagreement = Assert.Single(execution.Value.Disagreements);
-        Assert.Contains("Shared.Symbol", disagreement, StringComparison.Ordinal);
-        Assert.Contains("Disagreement:", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
+        Assert.Equal(
+            ["A bug makes Shared.Symbol unsafe.", "No issue exists; Shared.Symbol is safe."],
+            execution.Value.Children.Select(child => child.Summary).Order(StringComparer.Ordinal));
+        Assert.All(execution.Value.Children, child =>
+        {
+            Assert.Equal("Completed", child.Status);
+            Assert.Empty(child.Findings);
+            Assert.Contains(child.Summary, execution.ModelResultContent, StringComparison.Ordinal);
+        });
+        Assert.Empty(execution.Value.Disagreements);
+        Assert.All(execution.Value.Children, child => Assert.Equal(
+            child.Summary,
+            Assert.Single(checkpoints.History.Last().ChildOutcomes, outcome =>
+                outcome.AssignmentId.Value.ToString("D") == child.AssignmentId).Response));
     }
 
-    /// <summary>Verifies a negated safety statement is classified as a concern.</summary>
+    /// <summary>Verifies negated safety wording remains ordinary text rather than a classified concern.</summary>
     [Fact]
-    public async Task ExecuteAsync_NegatedSafetyAndSafeConclusion_ReportsDisagreement()
+    public async Task ExecuteAsync_NegatedSafetyAndSafeConclusion_PreservesUnverifiedResponses()
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new NegatedConcernRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new NegatedResponseRunner()));
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(2), fixture.Context);
 
         // Assert
-        Assert.Single(execution.Value.Disagreements);
+        Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
+        Assert.Equal(
+            ["Shared.Symbol is not safe.", "No issue exists; Shared.Symbol is safe."],
+            execution.Value.Children.Select(child => child.Summary));
+        Assert.All(execution.Value.Children, child => Assert.Empty(child.Findings));
+        Assert.Empty(execution.Value.Disagreements);
     }
 
-    /// <summary>A small structured bound retains child statuses while omitting excess deterministic detail.</summary>
+    /// <summary>A small envelope retains response statuses while omitting host-populated legacy finding metadata.</summary>
     [Fact]
     public async Task ExecuteAsync_SmallStructuredLimit_RetainsStatusesAndBoundsStructuredResult()
     {
@@ -630,7 +770,7 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.True(execution.IsTruncated);
     }
 
-    /// <summary>The production envelope retains every status at the maximum eight-agent boundary.</summary>
+    /// <summary>The production envelope retains eight response statuses with host-populated legacy finding metadata.</summary>
     [Fact]
     public async Task ExecuteAsync_ProductionEnvelope_RetainsStatusesAndBoundsStructuredResult()
     {
@@ -665,52 +805,58 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.True(execution.IsTruncated);
     }
 
-    /// <summary>Verifies clipping a retained finding field is reflected in truncation metadata.</summary>
+    /// <summary>Verifies clipping a retained legacy finding field is reflected in truncation metadata.</summary>
     [Fact]
-    public async Task ExecuteAsync_OversizedFindingField_ReportsStructuredTruncation()
+    public async Task Project_LegacyOversizedFindingField_ReportsStructuredTruncation()
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(
-            coordinator,
-            new FixedRunnerFactory(new OversizedFindingFieldRunner()));
+        var runner = new OversizedFindingFieldRunner();
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
+        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+        var outcome = await runner.RunAsync(plan, Assert.Single(plan.Assignments));
+        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+            .Project(plan, CreateJoinedCheckpoint(plan, outcome));
 
         // Assert
-        var child = Assert.Single(execution.Value.Children);
+        var child = Assert.Single(projection.Result.Children);
         var finding = Assert.Single(child.Findings);
-        Assert.True(execution.IsTruncated);
+        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
+        Assert.True(projection.IsTruncated);
         Assert.True(finding.Title.Length <= 1_024);
         Assert.Contains(child.Omissions, omission => omission.Contains(
             "finding fields were truncated",
             StringComparison.Ordinal));
     }
 
-    /// <summary>Verifies projecting one location and symbol reports additional values as truncation.</summary>
+    /// <summary>Verifies projecting one legacy location and symbol reports additional values as truncation.</summary>
     [Fact]
-    public async Task ExecuteAsync_MultipleLocationsAndSymbols_ReportsStructuredTruncation()
+    public async Task Project_LegacyMultipleLocationsAndSymbols_ReportsStructuredTruncation()
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(
-            coordinator,
-            new FixedRunnerFactory(new MultiLocationFindingRunner()));
+        var runner = new MultiLocationFindingRunner();
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
+        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+        var outcome = await runner.RunAsync(plan, Assert.Single(plan.Assignments));
+        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+            .Project(plan, CreateJoinedCheckpoint(plan, outcome));
 
         // Assert
-        var child = Assert.Single(execution.Value.Children);
+        var child = Assert.Single(projection.Result.Children);
         var finding = Assert.Single(child.Findings);
-        Assert.True(execution.IsTruncated);
+        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
+        Assert.True(projection.IsTruncated);
         Assert.Equal("src/first.cs", finding.FilePath);
         Assert.Equal("First.Symbol", finding.Symbol);
         Assert.Contains(child.Omissions, omission => omission.Contains(
@@ -737,7 +883,7 @@ public sealed class DelegateAgentsToolExecutionTests
                 new string('c', 100_000) + "{{AssignmentId}}{{Role}}{{ToolAccess}}{{Status}}");
         var fixture = CreateTool(
             coordinator,
-            new FixedRunnerFactory(new CompletedFindingRunner()),
+            new FixedRunnerFactory(new CompletedResponseRunner()),
             prompts: prompts);
 
         // Act
@@ -767,7 +913,7 @@ public sealed class DelegateAgentsToolExecutionTests
             "{{OmittedBlockCount}}" + new string('t', 100_000));
         var fixture = CreateTool(
             coordinator,
-            new FixedRunnerFactory(new CompletedFindingRunner()),
+            new FixedRunnerFactory(new CompletedResponseRunner()),
             prompts: prompts);
 
         // Act and assert
@@ -789,7 +935,7 @@ public sealed class DelegateAgentsToolExecutionTests
             checkpoints,
             events,
             TimeSpan.FromMilliseconds(50));
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context)
@@ -821,7 +967,7 @@ public sealed class DelegateAgentsToolExecutionTests
             checkpoints,
             events,
             TimeSpan.FromMilliseconds(50));
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedFindingRunner()));
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context)
@@ -930,6 +1076,44 @@ public sealed class DelegateAgentsToolExecutionTests
             Status = AgentRunStatus.Completed,
             Usage = new AgentResourceUsage { ModelTokens = 20 },
             Reason = "raw child transcript sentinel",
+            Response = "The assigned area has bounded evidence.",
+        };
+    }
+
+    private static DelegationPlan CreateLegacyPlan(DelegationPlan plan)
+    {
+        return plan with
+        {
+            Assignments = plan.Assignments.Select(assignment => assignment with
+            {
+                OutputSchema = "agent-findings/1",
+            }).ToArray(),
+        };
+    }
+
+    private static DelegationCheckpoint CreateJoinedCheckpoint(
+        DelegationPlan plan,
+        params AgentRunOutcome[] outcomes)
+    {
+        return new DelegationCheckpoint
+        {
+            DelegationId = plan.DelegationId,
+            Provenance = plan.Provenance,
+            Phase = DelegationCheckpointPhase.ResearchJoined,
+            ChildOutcomes = outcomes,
+            Assignments = plan.Assignments,
+            NextAction = "Review the results.",
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private static AgentRunOutcome CreateLegacyCompletedOutcome(
+        DelegationPlan plan,
+        AgentAssignment assignment)
+    {
+        return CreateCompletedOutcome(plan, assignment) with
+        {
+            Response = null,
             Findings = new AgentFindingSet
             {
                 AssignmentId = assignment.AssignmentId,
@@ -966,7 +1150,7 @@ public sealed class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class CompletedFindingRunner : IAgentAssignmentRunner
+    private sealed class CompletedResponseRunner : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -986,7 +1170,7 @@ public sealed class DelegateAgentsToolExecutionTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var completed = CreateCompletedOutcome(plan, assignment);
+            var completed = CreateLegacyCompletedOutcome(plan, assignment);
             var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
             var finding = Assert.Single(findings.Findings) with { Uncertainty = uncertainty };
             return Task.FromResult(completed with
@@ -1274,7 +1458,7 @@ public sealed class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class EmptyFindingRunner : IAgentAssignmentRunner
+    private sealed class ResponseRunner(string response) : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -1282,16 +1466,14 @@ public sealed class DelegateAgentsToolExecutionTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var completed = CreateCompletedOutcome(plan, assignment);
-            var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
-            return Task.FromResult(completed with
+            return Task.FromResult(CreateCompletedOutcome(plan, assignment) with
             {
-                Findings = findings with { Findings = [] },
+                Response = response,
             });
         }
     }
 
-    private sealed class OpposingFindingRunner : IAgentAssignmentRunner
+    private sealed class OpposingResponseRunner : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -1300,24 +1482,16 @@ public sealed class DelegateAgentsToolExecutionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             var concern = assignment.AssignmentId == plan.Assignments[0].AssignmentId;
-            var completed = CreateCompletedOutcome(plan, assignment);
-            var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
-            var finding = Assert.Single(findings.Findings) with
+            return Task.FromResult(CreateCompletedOutcome(plan, assignment) with
             {
-                Summary = concern
+                Response = concern
                     ? "A bug makes Shared.Symbol unsafe."
                     : "No issue exists; Shared.Symbol is safe.",
-                Symbols = ["Shared.Symbol"],
-                Risk = concern ? "Unsafe behavior can fail." : "No risk found.",
-            };
-            return Task.FromResult(completed with
-            {
-                Findings = findings with { Findings = [finding] },
             });
         }
     }
 
-    private sealed class NegatedConcernRunner : IAgentAssignmentRunner
+    private sealed class NegatedResponseRunner : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -1326,18 +1500,11 @@ public sealed class DelegateAgentsToolExecutionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             var concern = assignment.AssignmentId == plan.Assignments[0].AssignmentId;
-            var completed = CreateCompletedOutcome(plan, assignment);
-            var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
-            var finding = Assert.Single(findings.Findings) with
+            return Task.FromResult(CreateCompletedOutcome(plan, assignment) with
             {
-                Summary = concern
+                Response = concern
                     ? "Shared.Symbol is not safe."
                     : "No issue exists; Shared.Symbol is safe.",
-                Symbols = ["Shared.Symbol"],
-            };
-            return Task.FromResult(completed with
-            {
-                Findings = findings with { Findings = [finding] },
             });
         }
     }
@@ -1376,6 +1543,7 @@ public sealed class DelegateAgentsToolExecutionTests
                 Status = AgentRunStatus.Completed,
                 Usage = new AgentResourceUsage { ModelTokens = 30, ToolCalls = 1 },
                 Reason = "bounded deterministic result",
+                Response = "Three deterministic observations.",
                 Findings = new AgentFindingSet
                 {
                     AssignmentId = assignment.AssignmentId,
@@ -1422,6 +1590,7 @@ public sealed class DelegateAgentsToolExecutionTests
                 Status = AgentRunStatus.Completed,
                 Usage = new AgentResourceUsage { ModelTokens = 16_000, ToolCalls = 12 },
                 Reason = "bounded production-envelope result",
+                Response = text,
                 Findings = new AgentFindingSet
                 {
                     AssignmentId = assignment.AssignmentId,
@@ -1444,7 +1613,7 @@ public sealed class DelegateAgentsToolExecutionTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var completed = CreateCompletedOutcome(plan, assignment);
+            var completed = CreateLegacyCompletedOutcome(plan, assignment);
             var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
             var finding = Assert.Single(findings.Findings) with
             {
@@ -1465,7 +1634,7 @@ public sealed class DelegateAgentsToolExecutionTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var completed = CreateCompletedOutcome(plan, assignment);
+            var completed = CreateLegacyCompletedOutcome(plan, assignment);
             var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
             var finding = Assert.Single(findings.Findings) with
             {
@@ -1479,7 +1648,7 @@ public sealed class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class ConcurrentFindingRunner(TimeSpan delay) : IAgentAssignmentRunner
+    private sealed class ConcurrentResponseRunner(TimeSpan delay) : IAgentAssignmentRunner
     {
         private int _active;
         private int _maximumActive;
@@ -1518,7 +1687,7 @@ public sealed class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class ReleasableFindingRunner : IAgentAssignmentRunner
+    private sealed class ReleasableResponseRunner : IAgentAssignmentRunner
     {
         private readonly TaskCompletionSource _entered = new(
             TaskCreationOptions.RunContinuationsAsynchronously);

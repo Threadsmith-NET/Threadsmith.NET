@@ -20,6 +20,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly IEvidenceStore _evidence;
     private readonly IChildAgentInstructionProvider _instructions;
     private readonly IModelProvider _models;
+    private readonly IModelProvider? _trustedModels;
     private readonly DelegateAgentsOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
@@ -43,7 +44,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         DelegateAgentsOptions options,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null)
+        RunSteeringCoordinator? steering = null,
+        IModelProvider? trustedModels = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -60,6 +62,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _admission = admission;
         _selection = selection;
         _models = models;
+        _trustedModels = trustedModels;
         _tools = tools;
         _evidence = evidence;
         _instructions = instructions;
@@ -82,7 +85,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             snapshotId,
             parentContext.SessionId,
             parentContext.RunId);
-        return new ModelExplorerAssignmentRunner(
+        var execution = new ModelExplorerAssignmentRunner(
             _contexts,
             _admission,
             _selection,
@@ -96,11 +99,15 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             registrations,
             _prompts,
             _sessionUsage,
-            _steering);
+            _steering,
+            _trustedModels);
+        return new AgentRoleRunnerRegistry(
+            Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, execution)),
+            execution);
     }
 }
 
-/// <summary>Runs one transcript-free Explorer through a bounded model/tool/evidence loop.</summary>
+/// <summary>Runs role-specific children through shared model, tool, and evidence services.</summary>
 public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAgentOutcomeJoiner
 {
     private readonly AgentFindingAdmission _admission;
@@ -126,7 +133,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         IReadOnlyList<ToolRegistration> registrations,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null)
+        RunSteeringCoordinator? steering = null,
+        IModelProvider? trustedModels = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -155,7 +163,9 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             registrations,
             prompts,
             sessionUsage,
-            steering);
+            steering,
+            selection,
+            trustedModels);
     }
 
     /// <inheritdoc />
@@ -168,10 +178,12 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             candidate => candidate.AssignmentId == assignment.AssignmentId);
         if (frozen is null
             || frozen.ChildRunId != assignment.ChildRunId
-            || frozen.Role != AgentRole.Explorer
-            || frozen.Mode != AgentRunMode.ReadOnlyBaseline)
+            || frozen.Role != assignment.Role
+            || !Enum.IsDefined(frozen.Role)
+            || frozen.Mode != assignment.Mode
+            || frozen.Mode == AgentRunMode.IsolatedWorktreeMutation)
         {
-            throw new UnauthorizedAccessException("The Explorer assignment is not owned by this delegation.");
+            throw new UnauthorizedAccessException("The read-only assignment is not owned by this delegation.");
         }
 
         try
@@ -184,6 +196,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
                     ModelProfileId = model.ProfileId,
                     ReasoningLevel = model.ReasoningLevel.ToString(),
                     ModelSelectionRationale = string.Join("; ", model.Rationale),
+                    ModelSelection = model.Provenance,
                 },
             };
             var context = _contexts.Assemble(plan, frozen);
@@ -220,9 +233,10 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
                 Generation = plan.Provenance.Generation,
                 Status = AgentRunStatus.Completed,
                 Usage = result.Usage,
-                Reason = "structured Explorer findings collected",
-                ModelProfileId = model.ProfileId,
-                Findings = result.Findings,
+                Reason = $"{frozen.Role} response collected",
+                ModelProfileId = result.Model.ProfileId,
+                ModelSelection = result.Model.Provenance,
+                Response = result.Response,
                 DeliveredEvidenceIds = result.DeliveredEvidenceIds,
             };
         }

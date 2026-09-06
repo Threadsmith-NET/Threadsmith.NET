@@ -14,6 +14,9 @@ public static class DelegateAgentsContract
     /// <summary>Structured Explorer finding schema id.</summary>
     public const string FindingSchema = "agent-findings/1";
 
+    /// <summary>Host response envelope identity; the model's response has no required format.</summary>
+    public const string ResponseSchema = AgentAssignment.ResponseSchema;
+
     /// <summary>Hard tool-result byte ceiling enforced by the invocation pipeline.</summary>
     public const int MaximumOutputBytes = 256 * 1024;
 
@@ -32,9 +35,14 @@ public enum DelegateAgentToolAccess
     Inherit,
 }
 
-/// <summary>One requested Explorer assignment.</summary>
+/// <summary>One requested role-specific assignment.</summary>
 public sealed record DelegateAgentRequest
 {
+    /// <summary>Requested role; omitted roles retain Explorer behavior.</summary>
+    [JsonPropertyName("role")]
+    [JsonConverter(typeof(DelegateAgentRoleJsonConverter))]
+    public AgentRole Role { get; init; } = AgentRole.Explorer;
+
     /// <summary>Bounded child objective.</summary>
     [JsonPropertyName("task")]
     public required string Task { get; init; }
@@ -51,7 +59,7 @@ public sealed record DelegateAgentRequest
 /// <summary>Strict model-facing request for one bounded fork/join delegation.</summary>
 public sealed record DelegateAgentsInput
 {
-    /// <summary>Explorer assignments to run concurrently.</summary>
+    /// <summary>Role-specific assignments to run concurrently.</summary>
     [JsonPropertyName("agents")]
     public required IReadOnlyList<DelegateAgentRequest> Agents { get; init; }
 }
@@ -110,6 +118,26 @@ internal sealed class DelegateAgentToolAccessJsonConverter : JsonConverter<Deleg
     }
 }
 
+/// <summary>Accepts only documented role names at the model boundary.</summary>
+internal sealed class DelegateAgentRoleJsonConverter : JsonConverter<AgentRole>
+{
+    /// <inheritdoc />
+    public override AgentRole Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        return reader.TokenType == JsonTokenType.String
+            && AgentRoleNames.TryParse(reader.GetString(), out var role)
+                ? role
+                : throw new JsonException(
+                    "role must be explorer, implementer, securityReviewer, testReviewer, performanceReviewer, or architectureReviewer.");
+    }
+
+    /// <inheritdoc />
+    public override void Write(Utf8JsonWriter writer, AgentRole value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(AgentRoleNames.GetName(value));
+    }
+}
+
 /// <summary>Bounded usage retained for one child.</summary>
 public sealed record DelegateAgentUsageSummary(
     [property: JsonPropertyName("modelTokens")] long ModelTokens,
@@ -122,7 +150,44 @@ public sealed record DelegateAgentFindingSummary(
     [property: JsonPropertyName("symbol")] string? Symbol,
     [property: JsonPropertyName("evidence")] string Evidence,
     [property: JsonPropertyName("confidence")] string Confidence,
-    [property: JsonPropertyName("uncertainty")] string? Uncertainty);
+    [property: JsonPropertyName("uncertainty")] string? Uncertainty)
+{
+    /// <summary>Reviewer category, when this is a review finding.</summary>
+    [JsonPropertyName("category")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Category { get; init; }
+
+    /// <summary>Reviewer severity, when this is a review finding.</summary>
+    [JsonPropertyName("severity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Severity { get; init; }
+
+    /// <summary>First affected line identified by the review.</summary>
+    [JsonPropertyName("line")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Line { get; init; }
+
+    /// <summary>Suggested correction or test assertion.</summary>
+    [JsonPropertyName("recommendation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Recommendation { get; init; }
+
+    /// <summary>Impact described by the reviewer.</summary>
+    [JsonPropertyName("consequence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Consequence { get; init; }
+}
+
+/// <summary>Secret-free model selection included in the joined result.</summary>
+public sealed record DelegateAgentModelSummary(
+    [property: JsonPropertyName("providerId")] string ProviderId,
+    [property: JsonPropertyName("profileId")] string ProfileId,
+    [property: JsonPropertyName("reasoningLevel")] string ReasoningLevel,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("configuredProviderId")] string? ConfiguredProviderId,
+    [property: JsonPropertyName("configuredProfileId")] string? ConfiguredProfileId,
+    [property: JsonPropertyName("configuredReasoningLevel")] string? ConfiguredReasoningLevel,
+    [property: JsonPropertyName("fallbackReason")] string? FallbackReason);
 
 /// <summary>One child terminal projection without transcript or provider payloads.</summary>
 public sealed record DelegateAgentOutcomeSummary(
@@ -133,7 +198,18 @@ public sealed record DelegateAgentOutcomeSummary(
     [property: JsonPropertyName("summary")] string Summary,
     [property: JsonPropertyName("findings")] IReadOnlyList<DelegateAgentFindingSummary> Findings,
     [property: JsonPropertyName("omissions")] IReadOnlyList<string> Omissions,
-    [property: JsonPropertyName("usage")] DelegateAgentUsageSummary Usage);
+    [property: JsonPropertyName("usage")] DelegateAgentUsageSummary Usage)
+{
+    /// <summary>Configured and effective model selection when model execution was attempted.</summary>
+    [JsonPropertyName("modelSelection")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DelegateAgentModelSummary? ModelSelection { get; init; }
+
+    /// <summary>Implementation proposal, retained when it fits the result envelope.</summary>
+    [JsonPropertyName("implementation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentImplementationHandoff? Implementation { get; init; }
+}
 
 /// <summary>Active-run steering delivery accounting for one joined delegation.</summary>
 public sealed record DelegationSteeringSummary(
@@ -153,6 +229,12 @@ public sealed record DelegateAgentsResult(
 /// <summary>Host-owned limits for one model-callable delegation.</summary>
 public sealed record DelegateAgentsOptions
 {
+    private readonly int _maximumSummaryCharacters = 1_024;
+    private readonly AgentResultLimits _resultLimits = new();
+
+    /// <summary>Whether operational limits are enforced; authority and semantic validation are never disabled.</summary>
+    public bool EnforceOperationalLimits { get; init; } = true;
+
     /// <summary>Maximum children in one tool call.</summary>
     public int MaximumAgents { get; init; } = 3;
 
@@ -163,23 +245,113 @@ public sealed record DelegateAgentsOptions
     public int MaximumContextCharacters { get; init; } = 8_192;
 
     /// <summary>Maximum characters retained for one compact child summary.</summary>
-    public int MaximumSummaryCharacters { get; init; } = 1_024;
+    public int MaximumSummaryCharacters
+    {
+        get => EffectiveLimit(_maximumSummaryCharacters);
+        init => _maximumSummaryCharacters = value;
+    }
+
+    /// <summary>Maximum tasks in one host-created assignment; zero disables this limit.</summary>
+    public int MaximumTasksPerAssignment { get; init; } = 32;
+
+    /// <summary>Maximum characters in one ownership path or symbol; zero disables only the length bound.</summary>
+    public int MaximumScopeCharacters { get; init; } = 1_024;
+
+    /// <summary>Maximum child output characters; zero disables this limit.</summary>
+    public int MaximumChildOutputCharacters { get; init; } = 131_072;
+
+    /// <summary>Maximum tool name characters; zero disables this limit.</summary>
+    public int MaximumToolNameCharacters { get; init; } = 256;
+
+    /// <summary>Maximum bytes in one tool argument payload; zero disables this limit.</summary>
+    public int MaximumToolArgumentBytes { get; init; } = 32_768;
+
+    /// <summary>Maximum aggregate tool argument bytes per round; zero disables this limit.</summary>
+    public int MaximumToolArgumentsAggregateBytes { get; init; } = 98_304;
+
+    /// <summary>Maximum tool requests per child round; zero disables this limit.</summary>
+    public int MaximumToolRequestsPerRound { get; init; } = 32;
+
+    /// <summary>Maximum corrective reason characters; zero disables this limit.</summary>
+    public int MaximumCorrectionReasonCharacters { get; init; } = 512;
+
+    /// <summary>Maximum delegation tool result bytes; zero disables this limit.</summary>
+    public int MaximumOutputBytes { get; init; } = 262_144;
+
+    /// <summary>Maximum structured delegation result bytes; zero disables this limit.</summary>
+    public int MaximumStructuredResultBytes { get; init; } = 196_608;
+
+    /// <summary>Maximum parent-model projection characters; zero disables this limit.</summary>
+    public int MaximumModelProjectionCharacters { get; init; } = 49_152;
+
+    /// <summary>Maximum projected detail characters; zero disables this limit.</summary>
+    public int MaximumProjectedDetailCharacters { get; init; } = 2_048;
+
+    /// <summary>Maximum projected omission characters; zero disables this limit.</summary>
+    public int MaximumProjectedOmissionCharacters { get; init; } = 512;
+
+    /// <summary>Maximum prepared validation-plan entries; zero disables this handoff projection limit.</summary>
+    public int MaximumPreparedValidationItems { get; init; } = 16;
+
+    /// <summary>Maximum characters in a prepared validation-plan entry; zero disables this projection limit.</summary>
+    public int MaximumPreparedValidationCharacters { get; init; } = 512;
+
+    /// <summary>Best-effort progress persistence timeout; zero disables the timeout, not caller cancellation.</summary>
+    public TimeSpan ProgressCheckpointTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Trusted child-result limits, with enforcement disabled when all operational limits are disabled.</summary>
+    public AgentResultLimits ResultLimits
+    {
+        get => EnforceOperationalLimits ? _resultLimits : _resultLimits with { EnforceLimits = false };
+        init => _resultLimits = value;
+    }
 
     /// <summary>Reserved resources for each Explorer child.</summary>
     public AgentResourceBudget ChildBudget { get; init; } =
         AgentResourceBudget.CreateTelemetryOnly(TimeSpan.FromMinutes(5));
 
+    /// <summary>Effective child budget after applying the global operational-limit switch.</summary>
+    public AgentResourceBudget EffectiveChildBudget => EnforceOperationalLimits
+        ? ChildBudget : ChildBudget with { WallTime = TimeSpan.Zero };
+
+    /// <summary>Returns an operational limit or zero when all operational limits are disabled.</summary>
+    public int EffectiveLimit(int value) => EnforceOperationalLimits ? value : 0;
+
+    /// <summary>Freezes request validation limits so scheduling does not reintroduce compiled defaults.</summary>
+    public AgentAssignmentLimits CreateAssignmentLimits()
+    {
+        return new AgentAssignmentLimits
+        {
+            EnforceLimits = EnforceOperationalLimits,
+            MaximumAssignments = MaximumAgents,
+            MaximumTextCharacters = MaximumTaskCharacters,
+            MaximumContextCharacters = MaximumContextCharacters,
+            MaximumTasksPerAssignment = MaximumTasksPerAssignment,
+            MaximumScopeCharacters = MaximumScopeCharacters,
+        };
+    }
+
     /// <summary>Validates configuration before it becomes execution policy.</summary>
     public void Validate()
     {
-        if (MaximumAgents is < 1 or > 8
-            || MaximumTaskCharacters is < 1 or > 4_096
-            || MaximumContextCharacters is < 1 or > 8_192
-            || MaximumSummaryCharacters is < 1 or > 4_096)
+        int[] limits =
+        [
+            MaximumAgents, MaximumTaskCharacters, MaximumContextCharacters, _maximumSummaryCharacters,
+            MaximumTasksPerAssignment, MaximumScopeCharacters, MaximumChildOutputCharacters,
+            MaximumToolNameCharacters, MaximumToolArgumentBytes, MaximumToolArgumentsAggregateBytes,
+            MaximumToolRequestsPerRound, MaximumCorrectionReasonCharacters, MaximumOutputBytes,
+            MaximumStructuredResultBytes, MaximumModelProjectionCharacters,
+            MaximumProjectedDetailCharacters, MaximumProjectedOmissionCharacters,
+            MaximumPreparedValidationItems, MaximumPreparedValidationCharacters,
+        ];
+        if (limits.Any(value => value < 0) || ProgressCheckpointTimeout < TimeSpan.Zero)
         {
-            throw new InvalidOperationException("Delegate-agent limits are outside supported bounds.");
+            throw new InvalidOperationException("Delegate-agent operational limits must be non-negative.");
         }
 
+        ArgumentNullException.ThrowIfNull(ChildBudget);
+        ArgumentNullException.ThrowIfNull(_resultLimits);
+        _resultLimits.Validate();
         if (ChildBudget.EnforceLimits
             || ChildBudget.ModelTokens != 0
             || ChildBudget.ToolCalls != 0
@@ -191,8 +363,7 @@ public sealed record DelegateAgentsOptions
             || ChildBudget.Builds != 0
             || ChildBudget.Tests != 0
             || ChildBudget.Corrections != 0
-            || ChildBudget.WallTime <= TimeSpan.Zero
-            || ChildBudget.WallTime > TimeSpan.FromMinutes(30))
+            || ChildBudget.WallTime < TimeSpan.Zero)
         {
             throw new InvalidOperationException("Delegate-agent child budgets are outside supported bounds.");
         }
@@ -209,10 +380,11 @@ internal static class DelegateAgentsInputValidator
         ArgumentNullException.ThrowIfNull(options);
         if (input.Agents is null
             || input.Agents.Count is < 1
-            || input.Agents.Count > options.MaximumAgents)
+            || (options.EffectiveLimit(options.MaximumAgents) is > 0 and var maximumAgents
+                && input.Agents.Count > maximumAgents))
         {
             throw new ToolArgumentValidationException(
-                $"agents must contain 1-{options.MaximumAgents} items.");
+                "agents must contain at least one item and fit the configured assignment count limit.");
         }
 
         foreach (var agent in input.Agents)
@@ -228,18 +400,25 @@ internal static class DelegateAgentsInputValidator
                     "agents[].toolAccess must be readOnly or inherit.");
             }
 
+            if (!Enum.IsDefined(agent.Role))
+            {
+                throw new ToolArgumentValidationException("agents[].role must name a supported subagent role.");
+            }
+
             if (string.IsNullOrWhiteSpace(agent.Task)
-                || agent.Task.Length > options.MaximumTaskCharacters)
+                || (options.EffectiveLimit(options.MaximumTaskCharacters) is > 0 and var maximumTask
+                    && agent.Task.Length > maximumTask))
             {
                 throw new ToolArgumentValidationException(
-                    $"agents[].task must contain 1-{options.MaximumTaskCharacters} characters.");
+                    "agents[].task must contain non-empty text within the configured task length limit.");
             }
 
             if (string.IsNullOrWhiteSpace(agent.Context)
-                || agent.Context.Length > options.MaximumContextCharacters)
+                || (options.EffectiveLimit(options.MaximumContextCharacters) is > 0 and var maximumContext
+                    && agent.Context.Length > maximumContext))
             {
                 throw new ToolArgumentValidationException(
-                    $"agents[].context must contain 1-{options.MaximumContextCharacters} characters.");
+                    "agents[].context must contain non-empty text within the configured context length limit.");
             }
         }
     }

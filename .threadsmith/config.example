@@ -103,23 +103,27 @@
   "agents": {
     // Bounded fair admission queue across parents.
     "queueCapacity": 32,
-    // Concurrent child limits; implementation workers also require an approved
-    // non-overlapping partition and a managed detached Git worktree.
+    // Concurrent child limits, including read-only implementer proposals.
+    // Worktree workers require separate approved ownership and host APIs.
     "maxActiveGlobal": 4,
     "maxActivePerParent": 3,
     "maxActiveImplementers": 2,
     // Bounded host-shutdown join/cleanup backstop.
-    "shutdownTimeoutSeconds": 30,
-    // Advisory configured profile preferences. Host capability, sensitivity,
-    // context, budget, and provider constraints remain authoritative.
-    "roleProfiles": {
-      "explorer": "default",
-      "implementer": "default",
-      "securityReviewer": "default",
-      "testReviewer": "default",
-      "performanceReviewer": "default",
-      "architectureReviewer": "default"
-    }
+    "shutdownTimeoutSeconds": 30
+    // Role routing belongs only in trusted user/machine configuration, never
+    // repository config. In ~/.threadsmith/config.json, agents.roleModels may
+    // contain, for example, "testReviewer": { "providerId": "primary",
+    // "profileId": "2cf1cbbe-ef74-454a-817b-79898ba6337f", "reasoningLevel": "high" }.
+    // The provider/profile must already exist in the trusted catalog. Omit
+    // reasoningLevel to use the profile default. Exact roles: explorer,
+    // implementer, securityReviewer, testReviewer, performanceReviewer,
+    // architectureReviewer. Restart after changes; there is no TUI editor.
+    // Role and field names are case-sensitive; provider IDs and supported
+    // reasoning names are case-insensitive. Invalid entries fail startup.
+    // Omitted roles keep ordinary model selection and repository layering;
+    // inherited models do not gain the trusted role catalog's authority.
+    // Legacy agents.roleProfiles is rejected in trusted configuration.
+    // See docs/operations/model-providers.md for complete user JSON.
   },
 
   // ── Governed skills and reusable workflows (M12 / plan 39) ───────────

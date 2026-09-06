@@ -44,22 +44,24 @@ public static partial class SecretRedactor
     {
         ArgumentNullException.ThrowIfNull(value);
         var redacted = QualifiedEnvironmentCredentialPattern().Replace(value, "$1[REDACTED]");
-        redacted = QualifiedQuotedCredentialPattern().Replace(redacted, "$1[REDACTED]");
-        redacted = ContainsSourceCredentialArgumentCandidate(redacted)
-            ? CredentialPattern().Replace(redacted, RedactCredentialMatch)
-            : CredentialPattern().Replace(redacted, "${lead}${prefix}[REDACTED]");
+        var credentialInput = QualifiedQuotedCredentialPattern().Replace(redacted, "$1[REDACTED]");
+        var preserveSourceArguments = ContainsSourceCredentialArgumentCandidate(credentialInput);
+        redacted = preserveSourceArguments
+            || credentialInput.Contains("```cs", StringComparison.OrdinalIgnoreCase)
+            ? RedactSourceCredentialMatches(credentialInput, preserveSourceArguments)
+            : CredentialPattern().Replace(credentialInput, "${lead}${prefix}[REDACTED]");
         redacted = ConnectionStringPasswordPattern().Replace(redacted, "$1[REDACTED]");
         redacted = UriUserInfoPattern().Replace(redacted, "$1[REDACTED]@");
         return StandaloneCredentialPattern().Replace(redacted, "[REDACTED]");
     }
 
     [GeneratedRegex(
-        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*[:=]\\s*)(?<value>\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*(?::|=(?!>))\\s*)(?<value>\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex CredentialPattern();
 
     [GeneratedRegex(
-        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=(?!>)\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex QualifiedEnvironmentCredentialPattern();
 
@@ -141,11 +143,49 @@ public static partial class SecretRedactor
         return false;
     }
 
-    private static string RedactCredentialMatch(Match match)
+    private static string RedactSourceCredentialMatches(string input, bool preserveSourceArguments)
     {
-        return IsIdentifierEcho(match)
+        return CredentialPattern().Replace(input, match => RedactCredentialMatch(match, input, preserveSourceArguments));
+    }
+
+    private static string RedactCredentialMatch(Match match, string input, bool preserveSourceArguments)
+    {
+        return (preserveSourceArguments && IsIdentifierEcho(match)) || IsSourceFenceHeader(match, input)
             ? match.Value
             : match.Groups["lead"].Value + match.Groups["prefix"].Value + "[REDACTED]";
+    }
+
+    private static bool IsSourceFenceHeader(Match match, string input)
+    {
+        var value = match.Groups["value"].ValueSpan;
+        if (!value.Equals("```csharp", StringComparison.OrdinalIgnoreCase)
+            && !value.Equals("```cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var prefix = match.Groups["prefix"];
+        if (prefix.Index != match.Groups["key"].Index
+            || !prefix.ValueSpan.Contains(':')
+            || prefix.ValueSpan.IndexOfAny('\r', '\n') < 0)
+        {
+            return false;
+        }
+
+        foreach (var character in input.AsSpan(match.Index + match.Length))
+        {
+            if (character is '\r' or '\n')
+            {
+                return true;
+            }
+
+            if (character is not (' ' or '\t'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsIdentifierEcho(Match match)
@@ -243,7 +283,7 @@ public static partial class SecretRedactor
     }
 
     [GeneratedRegex(
-        "(?i)((?:^|;)\\s*(?:Password|Pwd)\\s*=\\s*)[^;]*",
+        "(?i)((?:^|;)\\s*(?:Password|Pwd)\\s*=(?!>)\\s*)[^;]*",
         RegexOptions.CultureInvariant)]
     private static partial Regex ConnectionStringPasswordPattern();
 

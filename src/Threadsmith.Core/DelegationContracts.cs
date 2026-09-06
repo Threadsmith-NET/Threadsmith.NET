@@ -138,7 +138,7 @@ public sealed record AgentResourceBudget
     /// <summary>Creates a usage-metering policy with no cumulative quota enforcement.</summary>
     public static AgentResourceBudget CreateTelemetryOnly(TimeSpan wallTime)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(wallTime, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(wallTime, TimeSpan.Zero);
         return new AgentResourceBudget
         {
             EnforceLimits = false,
@@ -166,7 +166,24 @@ public sealed record AgentResourceBudget
             throw new ArgumentException("Resource policies cannot contain null entries.", nameof(budgets));
         }
 
-        var wallTime = TimeSpan.FromTicks(checked(budgets.Sum(item => item.WallTime.Ticks)));
+        var wallTime = TimeSpan.Zero;
+        foreach (var budget in budgets)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(budget.WallTime, TimeSpan.Zero);
+        }
+
+        if (budgets.All(item => item.WallTime > TimeSpan.Zero))
+        {
+            var ticks = 0L;
+            foreach (var budget in budgets)
+            {
+                ticks = budget.WallTime.Ticks > TimeSpan.MaxValue.Ticks - ticks
+                    ? TimeSpan.MaxValue.Ticks : ticks + budget.WallTime.Ticks;
+            }
+
+            wallTime = TimeSpan.FromTicks(ticks);
+        }
+
         if (budgets.Any(item => !item.EnforceLimits))
         {
             return CreateTelemetryOnly(wallTime);
@@ -221,8 +238,16 @@ public sealed record AgentResourceBudget
     /// <summary>Maximum correction attempts.</summary>
     public int Corrections { get; init; } = 1;
 
-    /// <summary>Maximum wall-clock duration.</summary>
+    /// <summary>Maximum wall-clock duration; zero disables the child timeout, not caller cancellation.</summary>
     public TimeSpan WallTime { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Creates a representable deadline, using the maximum value for an unlimited or overflowing duration.</summary>
+    public DateTimeOffset CreateDeadline(DateTimeOffset acceptedAt)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(WallTime, TimeSpan.Zero);
+        return WallTime == TimeSpan.Zero || WallTime >= DateTimeOffset.MaxValue - acceptedAt
+            ? DateTimeOffset.MaxValue : acceptedAt + WallTime;
+    }
 }
 
 /// <summary>Measured usage charged to both child and parent ledgers.</summary>
@@ -292,6 +317,12 @@ public sealed record AgentPolicySnapshot
     /// <summary>Selected reasoning level.</summary>
     public string ReasoningLevel { get; init; } = "none";
 
+    /// <summary>Frozen routing preference and effective model selection for this child.</summary>
+    public AgentModelProvenance? ModelSelection { get; init; }
+
+    /// <summary>Trusted result limits frozen for this child; disabling them never changes authority.</summary>
+    public AgentResultLimits ResultLimits { get; init; } = new();
+
     /// <summary>Host rationale for the model selection.</summary>
     public required string ModelSelectionRationale { get; init; }
 
@@ -305,6 +336,9 @@ public sealed record AgentPolicySnapshot
 /// <summary>One immutable host-approved child assignment.</summary>
 public sealed record AgentAssignment
 {
+    /// <summary>Ordinary instruction-and-response contract marker; the response content has no required structured shape.</summary>
+    public const string ResponseSchema = "agent-response/1";
+
     /// <summary>Stable assignment identity.</summary>
     public required AgentAssignmentId AssignmentId { get; init; }
 
@@ -312,7 +346,7 @@ public sealed record AgentAssignment
     public required RunId ChildRunId { get; init; }
 
     /// <summary>Child role.</summary>
-    public required AgentRole Role { get; init; }
+    public AgentRole Role { get; init; } = AgentRole.Explorer;
 
     /// <summary>Repository authority mode.</summary>
     public required AgentRunMode Mode { get; init; }
@@ -328,6 +362,9 @@ public sealed record AgentAssignment
 
     /// <summary>Structured output schema id and version.</summary>
     public required string OutputSchema { get; init; }
+
+    /// <summary>Role implementation version used to validate restored assignments.</summary>
+    public int RoleRunnerVersion { get; init; } = 1;
 
     /// <summary>Explicit stopping condition.</summary>
     public required string StoppingCondition { get; init; }
@@ -385,6 +422,41 @@ public sealed record DelegationProvenance
     public int Generation { get; init; } = 1;
 }
 
+/// <summary>Trusted operational request limits; each zero value disables only its corresponding bound.</summary>
+public sealed record AgentAssignmentLimits
+{
+    /// <summary>Whether operational request limits are enforced.</summary>
+    public bool EnforceLimits { get; init; } = true;
+
+    /// <summary>Maximum assignments in a host plan.</summary>
+    public int MaximumAssignments { get; init; } = 16;
+
+    /// <summary>Maximum characters in assignment and provenance text.</summary>
+    public int MaximumTextCharacters { get; init; } = 4_096;
+
+    /// <summary>Maximum characters in initial child context.</summary>
+    public int MaximumContextCharacters { get; init; } = 8_192;
+
+    /// <summary>Maximum tasks in one assignment.</summary>
+    public int MaximumTasksPerAssignment { get; init; } = 32;
+
+    /// <summary>Maximum characters in one ownership path or symbol; path confinement remains mandatory.</summary>
+    public int MaximumScopeCharacters { get; init; } = 1_024;
+
+    /// <summary>Returns an operational limit or zero when all request limits are disabled.</summary>
+    public int EffectiveLimit(int value) => EnforceLimits ? value : 0;
+
+    /// <summary>Rejects malformed negative configuration even when enforcement is disabled.</summary>
+    public void Validate()
+    {
+        if (MaximumAssignments < 0 || MaximumTextCharacters < 0 || MaximumContextCharacters < 0
+            || MaximumTasksPerAssignment < 0 || MaximumScopeCharacters < 0)
+        {
+            throw new InvalidDataException("Agent assignment limits must be non-negative.");
+        }
+    }
+}
+
 /// <summary>Validated and frozen one-level delegation plan.</summary>
 public sealed record DelegationPlan
 {
@@ -399,6 +471,9 @@ public sealed record DelegationPlan
 
     /// <summary>Bounded child assignments.</summary>
     public required IReadOnlyList<AgentAssignment> Assignments { get; init; }
+
+    /// <summary>Trusted request-limit snapshot used for this plan, including restored validation.</summary>
+    public AgentAssignmentLimits AssignmentLimits { get; init; } = new();
 
     /// <summary>Aggregate parent budget dominating child reservations.</summary>
     public required AgentResourceBudget ParentBudget { get; init; }
@@ -475,6 +550,12 @@ public sealed record AgentFindingSet
 /// <summary>One advisory independent review finding.</summary>
 public sealed record ReviewFinding
 {
+    /// <summary>Concise description of the review issue.</summary>
+    public string Title { get; init; } = string.Empty;
+
+    /// <summary>First affected source line, when the supplied evidence identifies it.</summary>
+    public int? StartLine { get; init; }
+
     /// <summary>Stable finding identity.</summary>
     public required Guid FindingId { get; init; }
 
@@ -621,8 +702,14 @@ public sealed record AgentRunOutcome
     /// <summary>Sanitized terminal reason.</summary>
     public required string Reason { get; init; }
 
+    /// <summary>Optional ordinary child response; absent in older checkpoints and never proof of authorized mutations.</summary>
+    public string? Response { get; init; }
+
     /// <summary>Effective selected model retained for provenance and inspection.</summary>
     public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Configured and effective routing retained across checkpoint inspection.</summary>
+    public AgentModelProvenance? ModelSelection { get; init; }
 
     /// <summary>Exact parent and child-tool evidence identities rendered to this child.</summary>
     public IReadOnlyList<EvidenceId> DeliveredEvidenceIds { get; init; } = [];
@@ -635,6 +722,9 @@ public sealed record AgentRunOutcome
 
     /// <summary>Review findings when produced.</summary>
     public ReviewFindingSet? Review { get; init; }
+
+    /// <summary>Implementation proposal and evidence; this payload does not authorize writes.</summary>
+    public AgentImplementationHandoff? Implementation { get; init; }
 }
 
 /// <summary>Durable delegation checkpoint and inspectable run tree.</summary>
@@ -642,6 +732,9 @@ public sealed record DelegationCheckpoint
 {
     /// <summary>Current schema version.</summary>
     public int SchemaVersion { get; init; } = 1;
+
+    /// <summary>Trusted request-limit snapshot retained with the accepted assignments.</summary>
+    public AgentAssignmentLimits AssignmentLimits { get; init; } = new();
 
     /// <summary>Monotonic write revision used to reject late stale checkpoint saves.</summary>
     public long Revision { get; init; } = 1;
@@ -657,6 +750,9 @@ public sealed record DelegationCheckpoint
 
     /// <summary>Latest child outcomes.</summary>
     public IReadOnlyList<AgentRunOutcome> ChildOutcomes { get; init; } = [];
+
+    /// <summary>Frozen assignments, including role, schema, tool policy, and model preference.</summary>
+    public IReadOnlyList<AgentAssignment> Assignments { get; init; } = [];
 
     /// <summary>Conflict decisions.</summary>
     public IReadOnlyList<AgentConflict> Conflicts { get; init; } = [];

@@ -303,6 +303,13 @@ public sealed class ContextAssembler : IContextAssembler
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Task);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Task.Intent);
+        if (request.DeferAgentModelCapacityValidation
+            && (request.Phase is not RunPhase.ImplementationModelTurn and not RunPhase.CorrectionModelTurn
+                || request.ApprovedPlan is null || request.MutationBaseline is null))
+        {
+            throw new InvalidOperationException("Deferred agent capacity validation requires approved implementation or correction context.");
+        }
+
         using var activity = _activitySource.StartActivity("context.assemble");
         activity?.SetTag("threadsmith.session.id", request.SessionId.Value.ToString("D"));
         activity?.SetTag("threadsmith.run.id", request.RunId.Value.ToString("D"));
@@ -545,7 +552,8 @@ public sealed class ContextAssembler : IContextAssembler
             outputSchema,
             additionalMessageContent);
         var totalTokens = EstimateCompleteInputTokens(modelInput, evidenceContent);
-        while (totalTokens > tokenBudget
+        while (!request.DeferAgentModelCapacityValidation
+            && totalTokens > tokenBudget
             && (conversation.CanReduce || repositoryMemory.CanReduce || selected.Count > 0))
         {
             if (conversation.TryReduce() || repositoryMemory.TryReduce())
@@ -625,7 +633,7 @@ public sealed class ContextAssembler : IContextAssembler
             return Math.Max(legacyTokens, wireTokens);
         }
 
-        if (totalTokens > tokenBudget)
+        if (!request.DeferAgentModelCapacityValidation && totalTokens > tokenBudget)
         {
             throw new InvalidOperationException(
                 $"Governed request framing requires {totalTokens} tokens but the budget is "
@@ -698,7 +706,7 @@ public sealed class ContextAssembler : IContextAssembler
             modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
             providerInstructions,
             _prompts);
-        if (wireEstimate.WireInputTokens > tokenBudget)
+        if (!request.DeferAgentModelCapacityValidation && wireEstimate.WireInputTokens > tokenBudget)
         {
             throw new InvalidOperationException(
                 $"Structured provider wire input requires {wireEstimate.WireInputTokens} tokens but the budget is "

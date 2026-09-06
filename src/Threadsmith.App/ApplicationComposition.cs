@@ -40,6 +40,9 @@ internal static class ApplicationComposition
         var providerInstructionResolver = new ModelProviderInstructionResolver(
             integration.Models.Catalog,
             host.PromptLoader);
+        var trustedProviderInstructionResolver = new ModelProviderInstructionResolver(
+            integration.Models.TrustedCatalog,
+            host.PromptLoader);
         var conversationPolicy = host.Configuration
             .GetSection("context:conversation")
             .Get<ConversationContextPolicy>() ?? new ConversationContextPolicy();
@@ -49,6 +52,13 @@ internal static class ApplicationComposition
             .Get<string[]>() ?? [];
         var repositoryInstructionResolver = new RepositoryInstructionResolver(host.Sanitizer);
         var conversationToolSnapshots = new ConversationToolSnapshotStore();
+        var contextOptions = new ContextAssemblerOptions
+        {
+            PromptAppendFiles = promptAppendFiles,
+            Conversation = conversationPolicy,
+            RepositoryMemory = host.Configuration.GetSection("context:repositoryMemory")
+                .Get<RepositoryMemoryContextPolicy>() ?? new RepositoryMemoryContextPolicy(),
+        };
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
             new TokenEstimator(),
@@ -57,19 +67,30 @@ internal static class ApplicationComposition
             host.Sanitizer,
             host.Events,
             host.PromptLoader,
-            new ContextAssemblerOptions
-            {
-                PromptAppendFiles = promptAppendFiles,
-                Conversation = conversationPolicy,
-                RepositoryMemory = host.Configuration.GetSection("context:repositoryMemory")
-                    .Get<RepositoryMemoryContextPolicy>() ?? new RepositoryMemoryContextPolicy(),
-            },
+            contextOptions,
             modelResolver,
             persistence.ConversationStore,
             conversationRetriever,
             repositoryInstructionResolver,
             persistence.RepositoryMemoryStore,
             providerInstructionResolver: providerInstructionResolver);
+        var trustedAgentContextAssembler = integration.Models.RoleModels.Get(AgentRole.Implementer) is null
+            ? null
+            : new ContextAssembler(
+                persistence.EvidenceStore,
+                new TokenEstimator(),
+                new ContextPolicy(),
+                host.PromptAppendLoader,
+                host.Sanitizer,
+                host.Events,
+                host.PromptLoader,
+                contextOptions,
+                new ModelResolver(integration.Models.TrustedCatalog, modelHints),
+                persistence.ConversationStore,
+                conversationRetriever,
+                repositoryInstructionResolver,
+                persistence.RepositoryMemoryStore,
+                providerInstructionResolver: trustedProviderInstructionResolver);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -322,7 +343,9 @@ internal static class ApplicationComposition
                 semanticMutations: semantic.SemanticMutations,
                 preMutationAnalyzer: semantic.SemanticEngines,
                 correctiveMessages: correctiveMessages,
-                prompts: host.PromptLoader);
+                prompts: host.PromptLoader,
+                trustedAgentContextAssembler: trustedAgentContextAssembler,
+                trustedAgentModelProvider: integration.Models.TrustedProvider);
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -352,8 +375,54 @@ internal static class ApplicationComposition
                     host.Events,
                     semantic.SemanticEngines),
                 tools.HookCoordinator);
+            var delegateAgentsOptions = host.TrustedConfiguration
+                .GetSection("agents:delegation")
+                .Get<DelegateAgentsOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new DelegateAgentsOptions();
+            delegateAgentsOptions.Validate();
+            var agentSchedulerOptions = new AgentSchedulerOptions
+            {
+                QueueCapacity = host.TrustedConfiguration.GetValue("agents:queueCapacity", 32),
+                MaximumActiveChildren = host.TrustedConfiguration.GetValue("agents:maxActiveGlobal", 4),
+                MaximumActiveChildrenPerParent = host.TrustedConfiguration.GetValue("agents:maxActivePerParent", 3),
+                MaximumActiveImplementers = host.TrustedConfiguration.GetValue("agents:maxActiveImplementers", 2),
+                ShutdownTimeout = TimeSpan.FromSeconds(
+                    host.TrustedConfiguration.GetValue("agents:shutdownTimeoutSeconds", 30d)),
+            };
+            agentSchedulerOptions.Validate();
+            if (!delegateAgentsOptions.EnforceOperationalLimits)
+            {
+                agentSchedulerOptions = agentSchedulerOptions with
+                {
+                    QueueCapacity = 0,
+                    MaximumActiveChildren = 0,
+                    MaximumActiveChildrenPerParent = 0,
+                    MaximumActiveImplementers = 0,
+                    ShutdownTimeout = TimeSpan.Zero,
+                };
+            }
+
+            var agentScheduler = new AgentRunScheduler(agentSchedulerOptions);
+            var delegationCoordinator = new DelegationCoordinator(
+                agentScheduler,
+                persistence.DelegationCheckpoints,
+                host.Events,
+                delegateAgentsOptions.EnforceOperationalLimits ? delegateAgentsOptions.ProgressCheckpointTimeout : TimeSpan.Zero);
+            var childModelSelection = new AgentModelSelector(
+                integration.Models.Catalog,
+                new DefaultModelSelectionPolicy(integration.Models.Catalog),
+                providerInstructionResolver,
+                integration.Models.RoleModels,
+                trustedProviderInstructionResolver);
             var executionOrchestrator = new ExecutionOrchestrator(
-                mutationProposals,
+                integration.Models.Catalog.Profiles.Count == 0
+                    ? mutationProposals
+                    : new ApprovedImplementerProposalApplication(
+                        mutationProposals,
+                        delegationCoordinator,
+                        childModelSelection,
+                        mutationCoordinator,
+                        delegateAgentsOptions,
+                        preferences),
                 mutationCoordinator,
                 validationApplication,
                 validationApplication,
@@ -364,32 +433,12 @@ internal static class ApplicationComposition
                 host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
                 correctiveMessages);
-            var agentScheduler = new AgentRunScheduler(new AgentSchedulerOptions
-            {
-                QueueCapacity = host.Configuration.GetValue("agents:queueCapacity", 32),
-                MaximumActiveChildren = host.Configuration.GetValue("agents:maxActiveGlobal", 4),
-                MaximumActiveChildrenPerParent = host.Configuration.GetValue("agents:maxActivePerParent", 3),
-                MaximumActiveImplementers = host.Configuration.GetValue("agents:maxActiveImplementers", 2),
-                ShutdownTimeout = TimeSpan.FromSeconds(
-                    host.Configuration.GetValue("agents:shutdownTimeoutSeconds", 30)),
-            });
-            var delegationCoordinator = new DelegationCoordinator(
-                agentScheduler,
-                persistence.DelegationCheckpoints,
-                host.Events);
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
-                var delegateAgentsOptions = host.TrustedConfiguration
-                    .GetSection("agents:delegation")
-                    .Get<DelegateAgentsOptions>() ?? new DelegateAgentsOptions();
-                delegateAgentsOptions.Validate();
-                var childModelSelection = new AgentModelSelector(
-                    integration.Models.Catalog,
-                    new DefaultModelSelectionPolicy(integration.Models.Catalog),
-                    providerInstructionResolver);
-                if (childModelSelection.CanSelectExplorer(
-                    delegateAgentsOptions.ChildBudget,
-                    ConversationSensitivity.None))
+                if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(
+                    role,
+                    delegateAgentsOptions.EffectiveChildBudget,
+                    ConversationSensitivity.None)))
                 {
                     var childInstructions = new ChildAgentInstructionProvider(
                         repositoryInstructionResolver,
@@ -408,14 +457,16 @@ internal static class ApplicationComposition
                         delegateAgentsOptions,
                         host.PromptLoader,
                         usage,
-                        runSteering);
+                        runSteering,
+                        integration.Models.TrustedProvider);
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
                             preferences,
                             conversationToolSnapshots,
                             host.PromptLoader,
-                            delegateAgentsOptions),
+                            delegateAgentsOptions,
+                            childModelSelection),
                         explorerRunners,
                         delegationCoordinator,
                         delegateAgentsOptions,
@@ -429,11 +480,7 @@ internal static class ApplicationComposition
                 }
             }
 
-            var delegatingExecutionOrchestrator = new ApprovedPlanDelegatingOrchestrator(
-                executionOrchestrator,
-                delegationCoordinator,
-                new ApprovedPlanAssignmentRunner());
-            executionRouter.Attach(delegatingExecutionOrchestrator);
+            executionRouter.Attach(executionOrchestrator);
 
             // Skill discovery remains metadata-only until an explicit verify or invoke boundary.
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

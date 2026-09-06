@@ -3,7 +3,7 @@ namespace Threadsmith.Execution;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 
-/// <summary>Runs one bounded host-owned Explorer fork/join from an ordinary model tool call.</summary>
+/// <summary>Runs role-directed children and returns their responses from an ordinary model tool call.</summary>
 public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgentsResult>
 {
     private const string OutputSchemaJson = """
@@ -22,7 +22,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 "required": ["assignmentId", "role", "toolAccess", "status", "summary", "findings", "omissions", "usage"],
                 "properties": {
                   "assignmentId": { "type": "string", "format": "uuid" },
-                  "role": { "type": "string", "enum": ["Explorer"] },
+                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer"] },
                   "toolAccess": { "type": "string", "enum": ["readOnly", "inherit"] },
                   "status": { "type": "string", "enum": ["Completed", "Failed", "Cancelled", "Discarded"] },
                   "summary": { "type": "string" },
@@ -38,10 +38,31 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                         "symbol": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
                         "evidence": { "type": "string" },
                         "confidence": { "type": "string", "enum": ["High", "Medium", "Low"] },
-                        "uncertainty": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                        "uncertainty": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "category": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["info", "warning", "blocking"] },
+                        "line": { "type": "integer", "minimum": 1 },
+                        "recommendation": { "type": "string" },
+                        "consequence": { "type": "string" }
                       }
                     }
                   },
+                  "modelSelection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["providerId", "profileId", "reasoningLevel", "source", "configuredProviderId", "configuredProfileId", "configuredReasoningLevel", "fallbackReason"],
+                    "properties": {
+                      "providerId": { "type": "string" },
+                      "profileId": { "type": "string", "format": "uuid" },
+                      "reasoningLevel": { "type": "string" },
+                      "source": { "type": "string" },
+                      "configuredProviderId": { "type": ["string", "null"] },
+                      "configuredProfileId": { "type": ["string", "null"] },
+                      "configuredReasoningLevel": { "type": ["string", "null"] },
+                      "fallbackReason": { "type": ["string", "null"] }
+                    }
+                  },
+                  "implementation": { "type": "object" },
                   "omissions": { "type": "array", "items": { "type": "string" } },
                   "usage": {
                     "type": "object",
@@ -121,7 +142,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         _coordinator = coordinator;
         _options = options;
         _steering = steering;
-        _projector = new DelegateAgentsResultProjector(options, projectionLimits);
+        _projector = new DelegateAgentsResultProjector(options, projectionLimits, prompts);
         _renderer = new DelegateAgentsResultRenderer(prompts);
         _definition = CreateDefinition(options, prompts);
     }
@@ -189,7 +210,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
     /// <inheritdoc />
     protected override string DescribeActivity(DelegateAgentsInput input)
     {
-        return $"{input.Agents.Count} Explorer assignment(s)";
+        return $"{input.Agents.Count} assignment(s): {string.Join(", ", input.Agents.Select(agent => agent.Role).Distinct())}";
     }
 
     /// <inheritdoc />
@@ -217,11 +238,12 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                     "additionalProperties": false,
                     "required": ["task", "context", "toolAccess"],
                     "properties": {
+                      "role": { "type": "string", "enum": ["explorer", "implementer", "securityReviewer", "testReviewer", "performanceReviewer", "architectureReviewer"], "default": "explorer" },
                       "task": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": {{options.MaximumTaskCharacters}},
-                        "description": "One narrow, non-overlapping research objective with explicit claims and expected citations."
+                        "description": "The task or question for this child."
                       },
                       "context": {
                         "type": "string",
@@ -242,7 +264,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             DisplayName = "Delegate agents",
             Source = "Built-in",
             EnabledByDefault = true,
-            Version = "1.0.0",
+            Version = "1.1.0",
             Description = prompts.Render(
                 PromptFileNames.ToolDelegateAgentsDescription,
                 new Dictionary<string, string>(StringComparer.Ordinal)

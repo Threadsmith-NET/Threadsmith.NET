@@ -85,6 +85,12 @@ public sealed record ModelRetryPolicy
 /// <summary>A host-configured model endpoint and its policy metadata.</summary>
 public sealed record ModelProfile
 {
+    /// <summary>Default local streamed-output byte limit.</summary>
+    public const long DefaultMaximumStreamedBytes = 8 * 1024 * 1024;
+
+    /// <summary>Default local returned-tool-call limit.</summary>
+    public const int DefaultMaximumToolCalls = 256;
+
     /// <summary>Stable profile identifier recorded in execution history.</summary>
     public required ModelProfileId Id { get; init; }
 
@@ -151,8 +157,14 @@ public sealed record ModelProfile
     /// <summary>Optional sampling temperature.</summary>
     public decimal? Temperature { get; init; }
 
-    /// <summary>Per-request timeout.</summary>
+    /// <summary>Per-request timeout; zero disables the provider deadline.</summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>Maximum streamed UTF-8 output bytes; zero disables this local resource limit.</summary>
+    public long MaximumStreamedBytes { get; init; } = DefaultMaximumStreamedBytes;
+
+    /// <summary>Maximum returned tool calls per response; zero disables this local resource limit.</summary>
+    public int MaximumToolCalls { get; init; } = DefaultMaximumToolCalls;
 
     /// <summary>Bounded transient retry policy.</summary>
     public ModelRetryPolicy RetryPolicy { get; init; } = new();
@@ -270,7 +282,9 @@ public sealed class ConfiguredModelCatalog
                 || profile.EffectiveRequestOutputTokenReserve > profile.MaximumOutputTokens
                 || profile.Cost.InputPerMillionTokens < 0
                 || profile.Cost.OutputPerMillionTokens < 0
-                || profile.Timeout <= TimeSpan.Zero
+                || profile.Timeout < TimeSpan.Zero
+                || profile.MaximumStreamedBytes < 0
+                || profile.MaximumToolCalls < 0
                 || profile.RetryPolicy.MaxAttempts <= 0
                 || profile.RetryPolicy.Delay < TimeSpan.Zero
                 || profile.SupportedReasoningLevels.Count == 0
@@ -541,6 +555,8 @@ public static class ModelProfileConfigurationLoader
                 },
                 Temperature = section.GetValue<decimal?>("temperature"),
                 Timeout = TimeSpan.FromSeconds(section.GetValue("timeoutSeconds", 120)),
+                MaximumStreamedBytes = section.GetValue("maximumStreamedBytes", ModelProfile.DefaultMaximumStreamedBytes),
+                MaximumToolCalls = section.GetValue("maximumToolCalls", ModelProfile.DefaultMaximumToolCalls),
                 RetryPolicy = new ModelRetryPolicy
                 {
                     MaxAttempts = section.GetValue("retry:maxAttempts", 3),

@@ -3,10 +3,11 @@
   "additionalProperties": false,
   "required": ["status", "answer", "citations", "gaps"],
   "properties": {
-    "status": { "type": "string", "enum": ["answered", "partial", "unavailable"] },
+    "status": { "type": "string", "enum": ["answered", "partial", "unavailable"], "description": "Use partial when relevant cited evidence exists but is incomplete. Use unavailable only when citations is empty." },
     "answer": { "type": "string", "minLength": 1, "maxLength": 8000 },
     "citations": {
       "type": "array",
+      "description": "Exact supporting evidence. This array must be empty when status is unavailable.",
       "maxItems": 8,
       "items": {
         "type": "object",

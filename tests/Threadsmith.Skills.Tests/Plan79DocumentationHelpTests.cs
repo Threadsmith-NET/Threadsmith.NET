@@ -60,15 +60,26 @@ public sealed class Plan79DocumentationHelpTests
                 {"status":"answered","answer":"Use /compact.","citations":[{"path":"guide.md","heading":"# Guide","lineStart":1,"lineEnd":2,"snippet":"Use /compact"}],"gaps":[]}
                 """;
 
-            await PackagedDocumentationPolicy.ValidateAnswerAsync(valid, root);
+            var normalized = await PackagedDocumentationPolicy.ValidateAnswerAsync(valid, root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalized))
+            {
+                Assert.Equal(
+                    "# Guide",
+                    normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("heading").GetString());
+            }
 
             var escaping = valid.Replace("guide.md", "../guide.md", StringComparison.Ordinal);
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 PackagedDocumentationPolicy.ValidateAnswerAsync(escaping, root));
 
             var wrongHeading = valid.Replace("# Guide", "# Other", StringComparison.Ordinal);
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
-                PackagedDocumentationPolicy.ValidateAnswerAsync(wrongHeading, root));
+            var normalizedHeading = await PackagedDocumentationPolicy.ValidateAnswerAsync(wrongHeading, root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalizedHeading))
+            {
+                Assert.Equal(
+                    "# Guide",
+                    normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("heading").GetString());
+            }
 
             await File.WriteAllTextAsync(
                 Path.Combine(root, "sections.md"),

@@ -19,6 +19,7 @@ Own frontend-neutral interactive coordination over existing host commands and pr
 - This project coordinates authority but does not own it. Trust, policy, approval, mutation, validation, repository, session, tool, and execution decisions continue through typed host commands and projections.
 - Treat all surface results as untrusted. Unknown option identities, stale decisions, malformed commands, and impossible active-run signals fail closed.
 - Preserve exact command text, visible wording, roles, spacing, ordering, Markdown limits, fallback behavior, and cancellation semantics during refactors.
+- Completed interactive skill commands render their bounded terminal output after the invocation summary; waiting and failed invocations retain their status/action presentation without inventing output.
 - Parsed Markdown is presentation-only; raw Markdown remains authoritative in events, transcript, persistence, context, and headless output.
 - Frontend-local command contributions are fixed by application composition, presentation-only, and receive no general dispatcher or service provider.
 

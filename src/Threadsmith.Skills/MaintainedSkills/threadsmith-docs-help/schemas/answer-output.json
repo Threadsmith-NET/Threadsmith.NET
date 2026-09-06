@@ -15,7 +15,7 @@
         "required": ["path", "heading", "lineStart", "lineEnd", "snippet"],
         "properties": {
           "path": { "type": "string", "minLength": 1, "maxLength": 512 },
-          "heading": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "heading": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Closest governing Markdown heading exactly as read, including its # markers. The host canonicalizes this value from the cited range." },
           "lineStart": { "type": "integer", "minimum": 1, "maximum": 1000000 },
           "lineEnd": { "type": "integer", "minimum": 1, "maximum": 1000000 },
           "snippet": { "type": "string", "minLength": 1, "maxLength": 500 }

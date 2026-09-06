@@ -3654,6 +3654,9 @@ public sealed class InteractionCoordinator
 
     private static string FormatSkillInvocation(SkillInvocationResult result)
     {
+        var output = string.IsNullOrWhiteSpace(result.OutputJson)
+            ? string.Empty
+            : $"\n{result.OutputJson}";
         var actions = result.HostActions.Count == 0
             ? string.Empty
             : "\n" + string.Join(
@@ -3662,7 +3665,7 @@ public sealed class InteractionCoordinator
                     $"  proposed {item.Kind} ({item.StepId}): {item.PayloadJson}"));
         return $"Skill invocation {result.InvocationId.Value:D}: {result.Status}; "
             + $"{result.Package.SkillId.Value}@{result.Package.Version}; "
-            + $"{result.Reason}; next={result.Checkpoint.NextAction}{actions}\n";
+            + $"{result.Reason}; next={result.Checkpoint.NextAction}{actions}{output}\n";
     }
 
     private async Task HandleAgentsCommandAsync(

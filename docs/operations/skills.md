@@ -67,7 +67,7 @@ A trusted signature establishes origin/integrity but does not automatically enab
 /skills cancel <invocation-id>
 ```
 
-`use` validates input against the package's bounded schema, resolves current phase/trust/tool/model/host requirements, pins the immutable package, and loads only the current step's verified assets. If a required asset cannot fit the content budget, invocation fails; optional reference material is omitted deterministically.
+`use` validates input against the package's bounded schema, resolves current phase/trust/tool/model/host requirements, pins the immutable package, and loads only the current step's verified assets. If a required asset cannot fit the content budget, invocation fails; optional reference material is omitted deterministically. A completed interactive invocation prints its bounded output after the status summary.
 
 A waiting invocation reports a typed host action. The action remains governed by the normal host boundary. `continue` accepts only host-owned result JSON validated against the waiting step's declared result schema. It must not be used to fabricate approval or validation; adapters call it after the corresponding host command completes.
 
@@ -86,7 +86,7 @@ A skill can produce only a typed proposal. Repository mutation still requires go
 - `fix-analyzer-warnings` — verifies supplied diagnostics and proposes a bounded remediation plan; it never adds blanket suppression or edits directly.
 - `upgrade-package` — assesses a Central Package Management upgrade and proposes compatibility, rollback, build, and test steps; it never restores or accesses the network implicitly.
 - `review-pr` — produces and deduplicates bounded security/test/performance/architecture findings; it never publishes, approves, merges, or mutates.
-- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns exact local path/heading/line/snippet citations or an explicit documentation gap.
+- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns exact local path/heading/line/snippet citations or an explicit documentation gap. The host validates every cited range and snippet against the Markdown source and replaces supplied heading text with the exact governing heading.
 
 They use the same manifest, hash, schema, content loader, model/tool, workflow, persistence, and event pipeline as third-party packages.
 

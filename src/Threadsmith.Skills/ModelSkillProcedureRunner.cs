@@ -164,7 +164,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     plan.Package.SkillId.Value))
                 {
                     var documentationContext = await CreateToolContextAsync(plan, cancellationToken);
-                    await PackagedDocumentationPolicy.ValidateAnswerAsync(
+                    output = await PackagedDocumentationPolicy.ValidateAnswerAsync(
                         output,
                         documentationContext.RepositoryPath,
                         cancellationToken);

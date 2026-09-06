@@ -18,15 +18,15 @@
   "assets": [
     {
       "path": "instructions/answer.md",
-      "bytes": 2029,
-      "sha256": "0d7bd97cec9ce69dc96ce2e3f943cbb41d1e8dc39513aa04b49be5e62aed6648",
+      "bytes": 2243,
+      "sha256": "6e645855cff2cc9f33dbad9d0fdb4c157df4bc69ce79fc3b0ec4655cfe3827a9",
       "required": true,
       "kind": "instructions"
     },
     {
       "path": "schemas/answer-output.json",
-      "bytes": 1279,
-      "sha256": "9b410ce7488a280a5fbe5386d39faaac65061c893a99e5853fda30017505d968",
+      "bytes": 1430,
+      "sha256": "fdb382b79cb4a07c641dde7851cb9a656ada03753cc1f0683f88020e87511281",
       "required": true,
       "kind": "output-schema"
     },

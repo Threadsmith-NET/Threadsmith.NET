@@ -1,6 +1,7 @@
 namespace Threadsmith.Skills;
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 
@@ -52,7 +53,7 @@ public static class PackagedDocumentationPolicy
     }
 
     /// <summary>Validates that a completed docs answer cites exact bounded evidence from the packaged bundle.</summary>
-    public static async Task ValidateAnswerAsync(
+    public static async Task<string> ValidateAnswerAsync(
         string outputJson,
         string bundleRoot,
         CancellationToken cancellationToken = default)
@@ -84,13 +85,34 @@ public static class PackagedDocumentationPolicy
         }
 
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(bundleRoot));
+        var governingHeadings = new List<string>();
         foreach (var citation in citationsElement.EnumerateArray())
         {
-            await ValidateCitationAsync(citation, normalizedRoot, cancellationToken);
+            governingHeadings.Add(await ValidateCitationAsync(citation, normalizedRoot, cancellationToken));
         }
+
+        var normalizedNode = JsonNode.Parse(outputJson);
+        if (normalizedNode is not JsonObject normalizedObject
+            || normalizedObject["citations"] is not JsonArray normalizedCitations
+            || normalizedCitations.Count != governingHeadings.Count)
+        {
+            throw new InvalidDataException("Documentation skill output cannot be normalized.");
+        }
+
+        for (var index = 0; index < normalizedCitations.Count; index++)
+        {
+            if (normalizedCitations[index] is not JsonObject normalizedCitation)
+            {
+                throw new InvalidDataException("Documentation citation cannot be normalized.");
+            }
+
+            normalizedCitation["heading"] = governingHeadings[index];
+        }
+
+        return normalizedObject.ToJsonString();
     }
 
-    private static async Task ValidateCitationAsync(
+    private static async Task<string> ValidateCitationAsync(
         JsonElement citation,
         string normalizedRoot,
         CancellationToken cancellationToken)
@@ -171,9 +193,9 @@ public static class PackagedDocumentationPolicy
             }
         }
 
-        if (!string.Equals(governingHeading, heading.Trim(), StringComparison.Ordinal))
+        if (governingHeading is null)
         {
-            throw new InvalidDataException("Documentation citation heading does not govern the cited line range.");
+            throw new InvalidDataException("Documentation citation line range has no governing Markdown heading.");
         }
 
         for (int index = lineStart; index < lineEnd; index++)
@@ -189,6 +211,8 @@ public static class PackagedDocumentationPolicy
         {
             throw new InvalidDataException("Documentation citation snippet is not present in the cited range.");
         }
+
+        return governingHeading;
     }
 
     private static bool TryGetMarkdownHeading(string line, out string heading)

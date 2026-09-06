@@ -232,7 +232,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
                 expectedReplacements);
             _generationRegistrations[generation.GenerationId] = [.. registrations];
             _registrationOrder.AddRange(registrations);
-            for (int index = 0; index < registrations.Length; index++)
+            for (var index = 0; index < registrations.Length; index++)
             {
                 _capabilities.AddOrUpdate(
                     generation.Tools[index].Descriptor.Id,
@@ -242,7 +242,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
 
             foreach (var contributor in generation.ModelPreferenceContributors)
             {
-                string key = $"{generation.GenerationId.Value:N}:{contributor.Descriptor.Id}";
+                var key = $"{generation.GenerationId.Value:N}:{contributor.Descriptor.Id}";
                 _contributors[key] = new ModelPreferenceContributorRegistration
                 {
                     GenerationId = generation.GenerationId,
@@ -264,7 +264,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
             ExtensionId = generation.ExtensionId,
             Contributor = contributor,
         };
-        string key = $"{generation.GenerationId.Value:N}:{contributor.Descriptor.Id}";
+        var key = $"{generation.GenerationId.Value:N}:{contributor.Descriptor.Id}";
         if (!_contributors.TryAdd(key, registration))
         {
             throw new ArgumentException(
@@ -276,7 +276,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
     /// <inheritdoc />
     public int RemoveGeneration(ExtensionGenerationId generationId)
     {
-        int removed = 0;
+        var removed = 0;
         lock (_gate)
         {
             if (_generationRegistrations.Remove(
@@ -286,7 +286,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
                 _registrationOrder.RemoveAll(registration => registration.GenerationId == generationId);
                 foreach (var registration in generationRegistrations)
                 {
-                    string capabilityId = registration.Capability.Descriptor.Id;
+                    var capabilityId = registration.Capability.Descriptor.Id;
                     if (_capabilities.TryGetValue(capabilityId, out var current)
                         && ReferenceEquals(current, registration))
                     {

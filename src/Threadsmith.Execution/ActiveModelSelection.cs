@@ -245,11 +245,11 @@ public sealed class ActiveModelSelectionService :
             var reasoning = definition.Profile.SupportedReasoningLevels.Contains(prior.Reasoning)
                 ? prior.Reasoning
                 : ReasoningLevel.None;
-            bool reasoningPreserved = reasoning == prior.Reasoning;
-            bool changed = prior.ProfileId != profileId || prior.Reasoning != reasoning;
+            var reasoningPreserved = reasoning == prior.Reasoning;
+            var changed = prior.ProfileId != profileId || prior.Reasoning != reasoning;
             _preferences.SetReasoning(profileId, reasoning);
             _source = ActiveModelSelectionSource.Explicit;
-            (bool persisted, string? diagnostic) = await PersistAsync(definition, reasoning, cancellationToken);
+            (var persisted, var diagnostic) = await PersistAsync(definition, reasoning, cancellationToken);
             return new ActiveModelSelectionResult
             {
                 Selection = Current,
@@ -280,10 +280,10 @@ public sealed class ActiveModelSelectionService :
                     $"Reasoning level '{reasoningLevel}' is not supported by model '{current.Profile.Name}'.");
             }
 
-            bool changed = current.ReasoningLevel != reasoningLevel;
+            var changed = current.ReasoningLevel != reasoningLevel;
             _preferences.SetReasoning(current.Profile.Id, reasoningLevel);
             var definition = _catalog.Get(current.Profile.Id);
-            (bool persisted, string? diagnostic) = await PersistAsync(definition, reasoningLevel, cancellationToken);
+            (var persisted, var diagnostic) = await PersistAsync(definition, reasoningLevel, cancellationToken);
             return new ActiveModelSelectionResult
             {
                 Selection = Current,
@@ -323,7 +323,7 @@ public sealed class ActiveModelSelectionService :
                 return "The session provider/profile binding is no longer compatible. Run /models before the next model-backed turn.";
             }
 
-            bool parsed = Enum.TryParse(
+            var parsed = Enum.TryParse(
                 selection.ReasoningLevel,
                 ignoreCase: true,
                 out ReasoningLevel persistedReasoning)
@@ -350,14 +350,14 @@ public sealed class ActiveModelSelectionService :
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        string configurationPath = Path.Combine(
+        var configurationPath = Path.Combine(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
             ".threadsmith",
             "config.json");
         await _stateGate.WaitAsync(cancellationToken);
         try
         {
-            bool applied = ApplyRepositorySelectionIfPresent(configurationPath);
+            var applied = ApplyRepositorySelectionIfPresent(configurationPath);
             if (!applied)
             {
                 _preferences.SetReasoning(_defaultProfileId, _defaultReasoningLevel);
@@ -424,13 +424,13 @@ public sealed class ActiveModelSelectionService :
             throw new InvalidDataException("Repository configuration exceeds the model-selection size limit.");
         }
 
-        JsonNode? root = JsonNode.Parse(
+        var root = JsonNode.Parse(
             File.ReadAllText(configurationPath, new UTF8Encoding(false, true)),
             documentOptions: RepositorySettingsCoordinator.DocumentOptions);
-        JsonObject? model = FindProperty(root as JsonObject, "model")?.Value as JsonObject;
-        string? providerId = GetString(model, "providerId");
-        string? profileText = GetString(model, "profileId");
-        bool hasIntent = providerId is not null || profileText is not null;
+        var model = FindProperty(root as JsonObject, "model")?.Value as JsonObject;
+        var providerId = GetString(model, "providerId");
+        var profileText = GetString(model, "profileId");
+        var hasIntent = providerId is not null || profileText is not null;
         if (!hasIntent)
         {
             return false;
@@ -462,7 +462,7 @@ public sealed class ActiveModelSelectionService :
         }
 
         var reasoning = ReasoningLevel.None;
-        string? reasoningText = GetString(model, "reasoningLevel");
+        var reasoningText = GetString(model, "reasoningLevel");
         if (reasoningText is not null
             && (!Enum.TryParse(reasoningText, true, out reasoning)
                 || !Enum.IsDefined(reasoning)
@@ -481,14 +481,14 @@ public sealed class ActiveModelSelectionService :
         ReasoningLevel reasoning,
         CancellationToken cancellationToken)
     {
-        string configurationPath = _configurationPath;
+        var configurationPath = _configurationPath;
         try
         {
             await RepositorySettingsCoordinator.ExecuteWriteAsync(
                 configurationPath,
                 async token =>
                 {
-                    string directory = Path.GetDirectoryName(configurationPath)
+                    var directory = Path.GetDirectoryName(configurationPath)
                         ?? throw new InvalidOperationException(
                             "Repository configuration path has no parent directory.");
 
@@ -496,13 +496,13 @@ public sealed class ActiveModelSelectionService :
                     Directory.CreateDirectory(directory);
                     RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
                     var root = await LoadRootAsync(configurationPath, token);
-                    (string modelName, var model) = GetOrCreateObject(root, "model");
+                    (var modelName, var model) = GetOrCreateObject(root, "model");
                     SetScalar(model, "providerId", definition.ProviderId);
                     SetScalar(model, "profileId", definition.Profile.Id.Value.ToString("D"));
                     SetScalar(model, "reasoningLevel", reasoning.ToString().ToLowerInvariant());
                     root[modelName] = model;
 
-                    string temporaryPath = Path.Combine(
+                    var temporaryPath = Path.Combine(
                         directory,
                         $".{Path.GetFileName(configurationPath)}.{Guid.NewGuid():N}.tmp");
                     try
@@ -563,7 +563,7 @@ public sealed class ActiveModelSelectionService :
             throw new InvalidDataException("Repository configuration exceeds the model-selection size limit.");
         }
 
-        string json = await File.ReadAllTextAsync(
+        var json = await File.ReadAllTextAsync(
             configurationPath,
             new UTF8Encoding(false, true),
             cancellationToken);
@@ -580,7 +580,7 @@ public sealed class ActiveModelSelectionService :
             return null;
         }
 
-        foreach ((string name, var node) in value)
+        foreach ((var name, var node) in value)
         {
             if (string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase))
             {

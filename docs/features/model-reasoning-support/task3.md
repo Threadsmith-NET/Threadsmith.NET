@@ -38,6 +38,6 @@ Owner: implementer. Depends on task1. Parallel with task2. Files: Threadsmith.Tu
 
 ## Verify
 - `dotnet build src\Threadsmith.sln`
-- `dotnet test tests\Threadsmith.Milestone1.Tests` (transcript projection tests, if any, still pass)
+- `dotnet test tests\Threadsmith.CoreRuntime.Tests` (transcript projection tests, if any, still pass)
 - Manual smoke (after full integration): `/reasoning` shows model + levels; `/reasoning medium` then
   `hello` streams reasoning then content.

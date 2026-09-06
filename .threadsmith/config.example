@@ -97,13 +97,6 @@
     ]
   },
 
-  // ── Approved-plan execution orchestration (M11 / plan 37) ─────────────
-  "execution": {
-    // Combined compiler/test correction attempts. Every attempt repeats exact
-    // diff, policy, transactional apply, and validation gates.
-    "correctionBudget": 3
-  },
-
   // ── Parallel agents and isolated workers (M11.1 / plan 38) ────────────
   // Delegation is one level deep. Children are in-process asynchronous runs;
   // these limits never authorize mutation, process, network, or model access.
@@ -265,6 +258,14 @@
   "context": {
     // Maximum tokens per request before the governor trims evidence.
     "maxTokensPerRequest": 32000,
+    // Optional active-turn summary model. This setting is honored only from
+    // repository-excluding machine/user/environment configuration; repository
+    // configuration and repository provider-catalog overrides cannot choose,
+    // rewrite, or reroute the model that receives candidate evidence.
+    // Null preserves the active main profile as the candidate fallback.
+    "activeTurnCompaction": {
+      "profileId": null
+    },
     // Bounded cross-turn continuity (plans 33-35). Historical content remains
     // untrusted, sanitized, provenance-linked, and subject to these hard bounds.
     "conversation": {
@@ -288,6 +289,15 @@
         "maximumProviderCalls": 2,
         "maximumInputTokens": 16000
       }
+    },
+    // Local repository-scoped cross-session memory retrieval (plan-78). Items
+    // remain in the ignored .threadsmith/threadsmith.db repository database and
+    // are treated as untrusted prompt data when selected.
+    "repositoryMemory": {
+      "maximumItems": 12,
+      "maximumTokens": 2000,
+      "minimumRelevanceScore": 0.2,
+      "automaticMemoryMaximumAge": "2.00:00:00"
     },
     // Phase-specific evidence inclusion toggles (plan-09 §14).
     "phases": {
@@ -340,8 +350,9 @@
     },
     "readFile": {
       "maxBytes": 1048576,
-      "defaultLines": 200,
-      "maxLines": 1000
+      "defaultLines": 2000,
+      "maxLines": 2000,
+      "maxContentBytes": 51200
     },
     "search": {
       "maxBytes": 1048576,
@@ -351,6 +362,10 @@
     "findSymbol": { "maxResults": 1000 },
     "findReferences": { "maxResults": 1000 },
     "findImplementations": { "maxResults": 1000 },
+    "codeExplore": {
+      // TUI-only diagnostic switch that includes future code_explore output in tool completion blocks.
+      "inspectCodeExploreOutput": false
+    },
     "runProcess": {
       "defaultTimeoutSeconds": 30,
       "maxTimeoutSeconds": 60,
@@ -430,20 +445,14 @@
   // Host-owned operational limits for the execution subsystem. Override the
   // compiled defaults at the machine/user/repo/session layer as needed.
   "execution": {
-    // Maximum model continuation rounds within one plan-generation cycle.
-    "maxModelRounds": 16,
-    // Initial evidence-collection rounds that may advertise repository inspection
-    // tools. Later rounds retain propose_plan only so planning must converge.
-    "maxPlanningToolRounds": 4,
-    // Automatic malformed propose_plan argument repair attempts before the host
-    // fails closed.
-    "maxPlanProposalRepairAttempts": 3,
-    // Automatic repair attempts when plan sanity checks find repairable scope
-    // problems before any manual plan prompt or policy auto-approval.
-    "maxPlanRevisionRepairAttempts": 3,
-    // Automatic mutation-proposal repair attempts after repairable schema,
-    // exact-text, or pre-mutation validation failures before staging.
-    "maxMutationProposalRepairAttempts": 3,
+    // Optional model continuation-round cutoff. 0 disables the separate cutoff.
+    "maxModelRounds": 0,
+    // Optional initial evidence-collection inspection-tool cutoff. 0 disables the
+    // separate cutoff so exploration can use the full model-round budget.
+    "maxPlanningToolRounds": 0,
+    // Active-turn corrective attempts for recoverable malformed or invalid
+    // model-authored requests before the host fails closed.
+    "maxCorrectiveTurns": 3,
     // Maximum structured (JSON) mutation output characters accumulated from a
     // streaming model before it is rejected as malformed.
     "maxStructuredOutputCharacters": 8388608,
@@ -594,13 +603,18 @@
           "Authorization": "secrets:MCP_HTTP_TOKEN",
           "X-Tenant-Id": "example"
         },
-        // Interactive authorization-code + PKCE for HTTP/SSE. clientId must be
-        // pre-registered; redirectPort 0 selects an ephemeral localhost port.
+        // Interactive authorization-code + PKCE for HTTP/SSE. Use either a
+        // pre-registered clientId/clientSecret pair, a public client metadata
+        // document URI, or URL-only dynamic registration fallback. A client
+        // metadata document requires a fixed redirectPort that exactly matches
+        // the document's redirect_uris entry; redirectPort 0 selects an
+        // ephemeral localhost port only for dynamic registration.
         "oauth": {
           "enabled": false,
           "scopes": [ "tools.read" ],
           "clientId": "threadsmith",
           "clientSecret": "secrets:MCP_OAUTH_CLIENT_SECRET",
+          "clientMetadataDocumentUri": null,
           "redirectPort": 8400
         },
         "startupTimeoutSeconds": 30,

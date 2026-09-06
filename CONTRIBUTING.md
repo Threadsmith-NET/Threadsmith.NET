@@ -79,7 +79,7 @@ Before changing files:
 1. Read the root [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
 2. Follow its DOX chain by reading every closer `AGENTS.md` that owns the files you will touch.
 3. Before writing or modifying C#, read the [portable C# guardrails](docs/guardrails/portable-csharp-guardrails.md).
-4. Review applicable architecture decisions and implementation plans from the [`docs` index](docs/README.md).
+4. Review applicable architecture decisions and implementation plans from the [documentation index](docs/index.md).
 
 Important repository conventions include:
 

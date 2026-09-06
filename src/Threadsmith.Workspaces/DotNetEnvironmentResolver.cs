@@ -85,7 +85,7 @@ public sealed class DotNetEnvironmentResolver
                 FileShare.Read,
                 81920,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using JsonDocument globalJson = await JsonDocument.ParseAsync(
+            using var globalJson = await JsonDocument.ParseAsync(
                 globalJsonStream,
                 new JsonDocumentOptions
                 {
@@ -93,8 +93,8 @@ public sealed class DotNetEnvironmentResolver
                     CommentHandling = JsonCommentHandling.Skip,
                 },
                 cancellationToken);
-            if (globalJson.RootElement.TryGetProperty("sdk", out JsonElement sdk)
-                && sdk.TryGetProperty("version", out JsonElement version)
+            if (globalJson.RootElement.TryGetProperty("sdk", out var sdk)
+                && sdk.TryGetProperty("version", out var version)
                 && version.ValueKind == JsonValueKind.String)
             {
                 configuredSdkVersion = version.GetString();
@@ -104,7 +104,7 @@ public sealed class DotNetEnvironmentResolver
         var versionWorkingDirectory = allowRepositorySdkResolution
             ? repositoryPath
             : hostDirectory;
-        DotNetProcessResult versionResult = await RunDotNetAsync(
+        var versionResult = await RunDotNetAsync(
             dotNetPath,
             versionWorkingDirectory,
             ["--version"],
@@ -168,7 +168,7 @@ public sealed class DotNetEnvironmentResolver
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(solutionPath);
-        DotNetProcessResult result = await RunDotNetAsync(
+        var result = await RunDotNetAsync(
             environment.DotNetPath,
             repositoryPath,
             ["restore", solutionPath, "--nologo"],
@@ -209,8 +209,8 @@ public sealed class DotNetEnvironmentResolver
             return new DotNetProcessResult(-1, string.Empty, "The dotnet process did not start.");
         }
 
-        Task<string> standardOutput = ReadBoundedAsync(process.StandardOutput);
-        Task<string> standardError = ReadBoundedAsync(process.StandardError);
+        var standardOutput = ReadBoundedAsync(process.StandardOutput);
+        var standardError = ReadBoundedAsync(process.StandardError);
         try
         {
             await process.WaitForExitAsync(cancellationToken);

@@ -1,0 +1,1 @@
+- **Boundary {{BoundaryKind}}:** {{Symbol}} — {{Reason}}

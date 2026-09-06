@@ -89,7 +89,8 @@ src/
   Threadsmith.Extensions.Runtime/        Discovery, loading, collectible ALC, capability registration, draining, unload, replacement
   Threadsmith.Persistence/               SQLite schema, event store, artifact storage, migrations, retention, session restore
   Threadsmith.Telemetry/                 Logging, metrics, tracing, redaction, diagnostic exports
-  Threadsmith.Tui/                       Inline conversation, presenter/controller, input, prompts, projections, UI tests
+  Threadsmith.Interaction/               Frontend-neutral commands, coordination, status, semantic presentation, Markdown generation
+  Threadsmith.Tui/                       PrettyPrompt/Spectre input, terminal layout/rendering, themes, compatibility facades
   Threadsmith.Cli/                       Headless commands, scripting output, CI behavior
   Threadsmith.Mcp/                       MCP client adapters, connection lifecycle, tool/resource import, policy
 tests/  (per-subsystem .Tests + IntegrationTests + EndToEndTests)
@@ -99,13 +100,15 @@ docs/   (architecture | extension-authoring | operations | testing)
 
 **Dependency rules (§8.1):**
 - `Threadsmith.Core` references no UI, no Roslyn, no terminal library, no model-provider SDK, and no extension implementations.
+- `Threadsmith.Interaction` references Core, Context, Tools, and Execution; it owns frontend-neutral coordination and Markdig parsing but no terminal packages or authority.
+- Interactive frontends depend on `Threadsmith.Interaction`; the interaction layer never depends on a frontend.
 - `Threadsmith.Tui` may reference application contracts + projections, **not** internal persistence implementations.
 - `Threadsmith.Extensions.Abstractions` stays small + stable.
 - Extension implementations reference `Threadsmith.Extensions.Abstractions`, **not** `Threadsmith.Extensions.Runtime`.
 - Built-in capabilities use the same capability contracts as extensions where practical.
 - External SDKs isolated behind internal adapters; each compiled model provider owns its adapter and provider-specific dependencies in a dedicated project.
 - Model provider and model configuration use allowlisted polymorphic records; user/repository provider arrays merge by stable ID, never by array index or arbitrary CLR type name (plans 31–32).
-- Terminal-library types never appear in core interfaces.
+- Terminal-library and parser-library types never appear in public interaction or core interfaces.
 - Roslyn types don't leak across boundaries unless the consumer is explicitly compiler-aware.
 - Extension-owned types never in durable host state or public projections.
 

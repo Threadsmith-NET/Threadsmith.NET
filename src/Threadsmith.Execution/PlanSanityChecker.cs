@@ -6,6 +6,14 @@ using Threadsmith.Core;
 public sealed class PlanSanityChecker : IPlanSanityChecker
 {
     private const int MaximumIssues = 32;
+    private readonly IPromptLoader _prompts;
+
+    /// <summary>Initializes a new instance of the <see cref="PlanSanityChecker"/> class.</summary>
+    public PlanSanityChecker(IPromptLoader prompts)
+    {
+        ArgumentNullException.ThrowIfNull(prompts);
+        _prompts = prompts;
+    }
 
     /// <inheritdoc />
     public Task<PlanSanityCheckResult> CheckAsync(
@@ -45,7 +53,12 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                     Kind = PlanSanityIssueKind.EmptyFileIntents,
                     IsRepairable = true,
                     IsBlocking = true,
-                    Message = $"Step '{step.Title}' must declare concrete structured file intents.",
+                    Message = RenderPromptValue(
+                        PromptFileNames.CorrectionPlanSanityIssueEmptyFileIntents,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["StepTitle"] = step.Title,
+                        }),
                 });
                 risk = Max(risk, PlanRiskClassification.High);
                 continue;
@@ -119,7 +132,19 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
         });
     }
 
-    private static NormalizedPlanFileIntent? NormalizeIntent(
+    private string GetPromptValue(string promptFileName)
+    {
+        return _prompts.Get(promptFileName).TrimEnd('\r', '\n');
+    }
+
+    private string RenderPromptValue(
+        string promptFileName,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        return _prompts.Render(promptFileName, tokens).TrimEnd('\r', '\n');
+    }
+
+    private NormalizedPlanFileIntent? NormalizeIntent(
         PlanFileIntent intent,
         string repositoryRoot,
         StringComparison pathComparison,
@@ -156,8 +181,18 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                 IsRepairable = true,
                 IsBlocking = true,
                 Message = requiresDestination
-                    ? $"File-intent kind '{intent.Kind}' requires a destination path."
-                    : $"File-intent kind '{intent.Kind}' must not declare a destination path.",
+                    ? RenderPromptValue(
+                        PromptFileNames.CorrectionPlanSanityIssueRequiresDestination,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["IntentKind"] = intent.Kind.ToString(),
+                        })
+                    : RenderPromptValue(
+                        PromptFileNames.CorrectionPlanSanityIssueForbidsDestination,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["IntentKind"] = intent.Kind.ToString(),
+                        }),
             });
             risk = Max(risk, PlanRiskClassification.High);
             return null;
@@ -212,7 +247,7 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
         };
     }
 
-    private static NormalizedPath? NormalizeDeclaredPath(
+    private NormalizedPath? NormalizeDeclaredPath(
         string rawPath,
         string repositoryRoot,
         StringComparison pathComparison,
@@ -235,7 +270,7 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                 Kind = PlanSanityIssueKind.InvalidPath,
                 IsRepairable = true,
                 IsBlocking = true,
-                Message = "File-intent path entries must not be empty.",
+                Message = GetPromptValue(PromptFileNames.CorrectionPlanSanityIssueEmptyPath),
             });
             return null;
         }
@@ -248,7 +283,12 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                 RelativePath = trimmed,
                 IsRepairable = true,
                 IsBlocking = true,
-                Message = $"File-intent path '{trimmed}' is glob-like; replace it with exact repository-relative files.",
+                Message = RenderPromptValue(
+                    PromptFileNames.CorrectionPlanSanityIssueGlobLikeExactFiles,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["Path"] = trimmed,
+                    }),
             });
             risk = Max(risk, PlanRiskClassification.High);
             return null;
@@ -306,7 +346,13 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                 RelativePath = trimmed,
                 IsRepairable = true,
                 IsBlocking = true,
-                Message = $"File-intent path '{trimmed}' normalizes to '{relativePath}'; publish the exact normalized repository-relative path.",
+                Message = RenderPromptValue(
+                    PromptFileNames.CorrectionPlanSanityIssueNormalizedPath,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["DeclaredPath"] = trimmed,
+                        ["NormalizedPath"] = relativePath,
+                    }),
             });
             risk = Max(risk, PlanRiskClassification.High);
             return null;
@@ -335,7 +381,12 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                 RelativePath = relativePath,
                 IsRepairable = true,
                 IsBlocking = true,
-                Message = $"File-intent path '{relativePath}' is a directory; declare concrete repository-relative files.",
+                Message = RenderPromptValue(
+                    PromptFileNames.CorrectionPlanSanityIssueDirectoryExactFiles,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["Path"] = relativePath,
+                    }),
             });
             risk = Max(risk, PlanRiskClassification.High);
             return null;
@@ -357,7 +408,13 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                     RelativePath = relativePath,
                     IsRepairable = true,
                     IsBlocking = true,
-                    Message = $"Bare file-intent path '{relativePath}' resolves to '{matches[0]}'; publish that exact repository-relative path.",
+                    Message = RenderPromptValue(
+                        PromptFileNames.CorrectionPlanSanityIssueBarePathResolved,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["DeclaredPath"] = relativePath,
+                            ["ResolvedPath"] = matches[0],
+                        }),
                 });
                 risk = Max(risk, PlanRiskClassification.High);
                 return null;
@@ -371,7 +428,12 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
                     RelativePath = relativePath,
                     IsRepairable = true,
                     IsBlocking = true,
-                    Message = $"Bare file-intent path '{relativePath}' is ambiguous; use an exact relative path.",
+                    Message = RenderPromptValue(
+                        PromptFileNames.CorrectionPlanSanityIssueBarePathAmbiguous,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["Path"] = relativePath,
+                        }),
                 });
                 risk = Max(risk, PlanRiskClassification.High);
                 return null;

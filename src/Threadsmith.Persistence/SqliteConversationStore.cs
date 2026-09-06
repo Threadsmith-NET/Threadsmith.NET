@@ -57,7 +57,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var inlineBody = sanitized;
         if (sanitized.Length > _artifactThresholdCharacters)
         {
-            ArtifactMetadata artifact = await _artifactStore.StoreAsync(
+            var artifact = await _artifactStore.StoreAsync(
                 sanitized,
                 "conversation-message",
                 message.SessionId,
@@ -66,7 +66,7 @@ public sealed class SqliteConversationStore : IConversationStore
             inlineBody = null;
         }
 
-        SemaphoreSlim archiveGate = _archiveGates.GetOrAdd(message.SessionId, static _ => new SemaphoreSlim(1, 1));
+        var archiveGate = _archiveGates.GetOrAdd(message.SessionId, static _ => new SemaphoreSlim(1, 1));
         await archiveGate.WaitAsync(cancellationToken);
         try
         {
@@ -91,7 +91,7 @@ public sealed class SqliteConversationStore : IConversationStore
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO conversation_sessions(session_id, mode, updated_at)
             VALUES($session, $mode, $updatedAt)
@@ -121,10 +121,10 @@ public sealed class SqliteConversationStore : IConversationStore
         ValidateSummary(sessionId, items, snapshot);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await EnsureSessionAsync(connection, transaction, sessionId, cancellationToken);
         var newlyPromoted = new List<ConversationMemoryItem>();
-        foreach (ConversationMemoryItem item in items)
+        foreach (var item in items)
         {
             if (!await MemoryExistsAsync(connection, transaction, item.Id, cancellationToken))
             {
@@ -135,7 +135,7 @@ public sealed class SqliteConversationStore : IConversationStore
         }
 
         var memoryIndex = JsonSerializer.Serialize(snapshot.MemoryIdsByKind);
-        await using (SqliteCommand command = connection.CreateCommand())
+        await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
             command.CommandText = """
@@ -164,7 +164,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await transaction.CommitAsync(cancellationToken);
         if (_events is not null)
         {
-            foreach (ConversationMemoryItem item in newlyPromoted)
+            foreach (var item in newlyPromoted)
             {
                 await _events.PublishAsync(
                     new ConversationMemoryPromoted(sessionId, item.CreatedAt, item.Id, item.Kind),
@@ -201,7 +201,7 @@ public sealed class SqliteConversationStore : IConversationStore
         ValidateMemory(item);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await UpsertMemoryAsync(connection, transaction, item, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         if (_events is not null && item.Validity is MemoryValidity.Stale or MemoryValidity.Invalid)
@@ -225,19 +225,19 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         var warnings = new List<string>();
-        ConversationContextMode mode = await ReadModeAsync(connection, sessionId, warnings, cancellationToken);
-        IReadOnlyList<ConversationMessage> messages = await ReadMessagesAsync(
+        var mode = await ReadModeAsync(connection, sessionId, warnings, cancellationToken);
+        var messages = await ReadMessagesAsync(
             connection,
             sessionId,
             includeBodies,
             warnings,
             cancellationToken);
-        IReadOnlyList<ConversationMemoryItem> memory = await ReadMemoryAsync(
+        var memory = await ReadMemoryAsync(
             connection,
             sessionId,
             warnings,
             cancellationToken);
-        ConversationSummarySnapshot? summary = await ReadSummaryAsync(
+        var summary = await ReadSummaryAsync(
             connection,
             sessionId,
             warnings,
@@ -266,7 +266,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         string[] artifactIds;
-        await using (SqliteCommand select = connection.CreateCommand())
+        await using (var select = connection.CreateCommand())
         {
             select.CommandText = """
                 SELECT DISTINCT artifact_id FROM conversation_messages
@@ -274,7 +274,7 @@ public sealed class SqliteConversationStore : IConversationStore
                 """;
             select.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
             var candidates = new List<string>();
-            await using SqliteDataReader reader = await select.ExecuteReaderAsync(cancellationToken);
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
                 candidates.Add(reader.GetString(0));
@@ -284,7 +284,7 @@ public sealed class SqliteConversationStore : IConversationStore
         }
 
         int removed;
-        await using (SqliteCommand command = connection.CreateCommand())
+        await using (var command = connection.CreateCommand())
         {
             command.CommandText = """
                 UPDATE conversation_messages SET body = NULL, artifact_id = NULL
@@ -296,7 +296,7 @@ public sealed class SqliteConversationStore : IConversationStore
 
         foreach (var artifactId in artifactIds)
         {
-            await using SqliteCommand referenceCheck = connection.CreateCommand();
+            await using var referenceCheck = connection.CreateCommand();
             referenceCheck.CommandText = """
                 SELECT EXISTS(
                     SELECT 1 FROM conversation_messages WHERE artifact_id = $artifact LIMIT 1);
@@ -322,9 +322,9 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         var sequence = await GetNextSequenceAsync(connection, transaction, message.SessionId, cancellationToken);
-        ConversationMessage archived = message with
+        var archived = message with
         {
             Sequence = sequence,
             Content = inlineBody,
@@ -334,7 +334,7 @@ public sealed class SqliteConversationStore : IConversationStore
             SchemaVersion = ConversationSchemaVersions.Message,
         };
         await EnsureSessionAsync(connection, transaction, message.SessionId, cancellationToken);
-        await using (SqliteCommand command = connection.CreateCommand())
+        await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
             command.CommandText = """
@@ -399,7 +399,7 @@ public sealed class SqliteConversationStore : IConversationStore
         SessionId sessionId,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             INSERT OR IGNORE INTO conversation_sessions(session_id, mode, updated_at)
@@ -417,7 +417,7 @@ public sealed class SqliteConversationStore : IConversationStore
         SessionId sessionId,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             SELECT COALESCE(MAX(sequence), 0) + 1
@@ -434,7 +434,7 @@ public sealed class SqliteConversationStore : IConversationStore
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT mode FROM conversation_sessions WHERE session_id = $session;";
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
         var result = await command.ExecuteScalarAsync(cancellationToken);
@@ -461,14 +461,14 @@ public sealed class SqliteConversationStore : IConversationStore
         CancellationToken cancellationToken)
     {
         var messages = new List<ConversationMessage>();
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT message_id, run_id, sequence, role, body, artifact_id, content_hash,
                    estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version
             FROM conversation_messages WHERE session_id = $session ORDER BY sequence;
             """;
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var schemaVersion = reader.GetInt32(11);
@@ -530,14 +530,14 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         var sourceMap = await ReadSourcesAsync(connection, sessionId, cancellationToken);
         var items = new List<ConversationMemoryItem>();
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT memory_id, kind, content, repository_revision, repository_dependent,
                    supersedes_id, validity, created_at, updated_at, schema_version
             FROM conversation_memory WHERE session_id = $session ORDER BY created_at, memory_id;
             """;
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var schemaVersion = reader.GetInt32(9);
@@ -548,7 +548,7 @@ public sealed class SqliteConversationStore : IConversationStore
             }
 
             var id = new ConversationMemoryId(Guid.Parse(reader.GetString(0)));
-            sourceMap.TryGetValue(id, out MemorySources? sources);
+            sourceMap.TryGetValue(id, out var sources);
             items.Add(new ConversationMemoryItem
             {
                 Id = id,
@@ -580,7 +580,7 @@ public sealed class SqliteConversationStore : IConversationStore
         CancellationToken cancellationToken)
     {
         var raw = new Dictionary<ConversationMemoryId, List<(string Kind, string Id, int Ordinal)>>();
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT s.memory_id, s.source_kind, s.source_id, s.ordinal
             FROM conversation_memory_sources s
@@ -588,11 +588,11 @@ public sealed class SqliteConversationStore : IConversationStore
             WHERE m.session_id = $session ORDER BY s.memory_id, s.source_kind, s.ordinal;
             """;
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var memoryId = new ConversationMemoryId(Guid.Parse(reader.GetString(0)));
-            if (!raw.TryGetValue(memoryId, out List<(string Kind, string Id, int Ordinal)>? sources))
+            if (!raw.TryGetValue(memoryId, out var sources))
             {
                 sources = [];
                 raw.Add(memoryId, sources);
@@ -620,14 +620,14 @@ public sealed class SqliteConversationStore : IConversationStore
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT version, through_message_sequence, repository_revision, memory_index_json,
                    created_at, schema_version
             FROM conversation_summaries WHERE session_id = $session;
             """;
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
             return null;
@@ -670,7 +670,7 @@ public sealed class SqliteConversationStore : IConversationStore
         ConversationMemoryId memoryId,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT 1 FROM conversation_memory WHERE memory_id = $id LIMIT 1;";
         command.Parameters.AddWithValue("$id", memoryId.Value.ToString("D"));
@@ -684,7 +684,7 @@ public sealed class SqliteConversationStore : IConversationStore
         CancellationToken cancellationToken)
     {
         ValidateMemory(item);
-        await using (SqliteCommand command = connection.CreateCommand())
+        await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
             command.CommandText = """
@@ -714,7 +714,7 @@ public sealed class SqliteConversationStore : IConversationStore
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (SqliteCommand delete = connection.CreateCommand())
+        await using (var delete = connection.CreateCommand())
         {
             delete.Transaction = transaction;
             delete.CommandText = "DELETE FROM conversation_memory_sources WHERE memory_id = $id;";
@@ -739,7 +739,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var ordinal = 0;
         foreach (var id in ids)
         {
-            await using SqliteCommand command = connection.CreateCommand();
+            await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)

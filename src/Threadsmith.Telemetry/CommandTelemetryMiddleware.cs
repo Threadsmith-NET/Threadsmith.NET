@@ -35,10 +35,10 @@ public sealed class CommandTelemetryMiddleware : ICommandMiddleware
         ArgumentNullException.ThrowIfNull(next);
         var commandType = command.GetType().Name;
         var startTimestamp = Stopwatch.GetTimestamp();
-        Activity? activity = ThreadsmithActivity.Source.StartActivity(ActivityName);
+        var activity = ThreadsmithActivity.Source.StartActivity(ActivityName);
         try
         {
-            TResponse response = await next(cancellationToken).ConfigureAwait(false);
+            var response = await next(cancellationToken).ConfigureAwait(false);
             Record(commandType, CommandDispatchOutcome.Success, startTimestamp, activity);
             return response;
         }
@@ -68,7 +68,7 @@ public sealed class CommandTelemetryMiddleware : ICommandMiddleware
 
     private void Record(string commandType, string outcome, long startTimestamp, Activity? activity)
     {
-        TimeSpan elapsed = Stopwatch.GetElapsedTime(startTimestamp);
+        var elapsed = Stopwatch.GetElapsedTime(startTimestamp);
         var elapsedMilliseconds = (long)elapsed.TotalMilliseconds;
         activity?.SetTag("threadsmith.command.type", commandType);
         activity?.SetTag("threadsmith.command.outcome", outcome);

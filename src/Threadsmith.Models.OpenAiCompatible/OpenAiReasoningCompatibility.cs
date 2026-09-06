@@ -35,6 +35,12 @@ public enum OpenAiReasoningResponseMode
 
     /// <summary>Accepts the legacy <c>reasoning</c> alias.</summary>
     Reasoning,
+
+    /// <summary>Accepts <c>reasoning_text</c>.</summary>
+    ReasoningText,
+
+    /// <summary>Accepts the first non-empty known reasoning field in Pi-compatible order.</summary>
+    KnownFields,
 }
 
 /// <summary>Compiled chat-template request shapes needed by supported endpoints.</summary>

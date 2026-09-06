@@ -131,7 +131,7 @@ public sealed class SkillApplication :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        string installedPath = await _installer.InstallArchiveAsync(
+        var installedPath = await _installer.InstallArchiveAsync(
             command.ArchivePath,
             _verifier,
             SkillScope.User,
@@ -166,7 +166,7 @@ public sealed class SkillApplication :
                 "Pinned packages and packages retained by active workflows cannot be uninstalled.");
         }
 
-        bool removed = await _installer.UninstallAsync(candidate, cancellationToken);
+        var removed = await _installer.UninstallAsync(candidate, cancellationToken);
         if (removed)
         {
             _ = await _catalog.RefreshAsync(cancellationToken);

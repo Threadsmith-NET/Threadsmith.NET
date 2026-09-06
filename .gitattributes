@@ -18,6 +18,9 @@
 *.sh    text eol=lf
 *.ps1   text eol=lf
 
+# Preserve exact, hash-verified upstream license/header evidence.
+eng/release/legal/TUIKit-0.10.1-candidate/*.txt whitespace=-trailing-space
+
 # Binary assets — never normalize.
 *.png   binary
 *.jpg   binary

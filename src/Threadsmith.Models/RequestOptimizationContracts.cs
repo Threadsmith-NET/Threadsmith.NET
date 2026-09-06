@@ -44,6 +44,9 @@ public sealed record ModelContentPart
 
     /// <summary>Sanitized content.</summary>
     public required string Content { get; init; }
+
+    /// <summary>Whether the part is sent to the model provider.</summary>
+    public bool IsModelVisible { get; init; } = true;
 }
 
 /// <summary>One immutable chronological provider-neutral model message.</summary>
@@ -63,6 +66,18 @@ public sealed record ModelMessage
 
     /// <summary>Optional stable tool name for assistant calls and tool results.</summary>
     public string? ToolName { get; init; }
+
+    /// <summary>Returns the provider-visible content text in part order.</summary>
+    public string GetModelVisibleContent()
+    {
+        return string.Concat(Content.Where(static part => part.IsModelVisible).Select(static part => part.Content));
+    }
+
+    /// <summary>Returns the provider-visible content character count.</summary>
+    public int GetModelVisibleContentLength()
+    {
+        return Content.Where(static part => part.IsModelVisible).Sum(static part => part.Content.Length);
+    }
 }
 
 /// <summary>How tool schemas are transported to an adapter.</summary>
@@ -147,6 +162,9 @@ public sealed record ModelWireEstimate
     /// <summary>Estimated provider framing tokens.</summary>
     public int FramingTokens { get; init; }
 
+    /// <summary>Estimated exact request-owned provider-instruction tokens.</summary>
+    public int ProviderInstructionTokens { get; init; }
+
     /// <summary>Host-reserved output/reasoning tokens.</summary>
     public int OutputReserveTokens { get; init; }
 
@@ -156,6 +174,16 @@ public sealed record ModelWireEstimate
 
     /// <summary>Overflow-safe total capacity consumed by input plus reserve.</summary>
     public long TotalCapacityTokens => (long)WireInputTokens + OutputReserveTokens;
+}
+
+/// <summary>Immutable wire-token estimate for one canonical tool inventory.</summary>
+public readonly record struct ModelWireToolEstimate
+{
+    /// <summary>Estimated native tool-schema tokens.</summary>
+    public int NativeToolTokens { get; init; }
+
+    /// <summary>Estimated textual tool-schema tokens.</summary>
+    public int TextToolTokens { get; init; }
 }
 
 /// <summary>Whether and how a provider reports cache token counters.</summary>
@@ -344,18 +372,26 @@ public static class ModelToolCanonicalizer
     public static string ComputeDigest(IReadOnlyList<ModelToolDefinition> definitions)
     {
         ArgumentNullException.ThrowIfNull(definitions);
-        string encoded = JsonSerializer.Serialize(definitions, JsonOptions);
+        var encoded = JsonSerializer.Serialize(definitions, JsonOptions);
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(encoded)));
     }
 
     /// <summary>Renders a single deterministic textual fallback inventory.</summary>
-    public static string RenderText(IReadOnlyList<ModelToolDefinition> definitions)
+    public static string RenderText(
+        IReadOnlyList<ModelToolDefinition> definitions,
+        IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(definitions);
+        ArgumentNullException.ThrowIfNull(prompts);
         return string.Join('\n', definitions.Select(definition =>
-            $"<tool id=\"{System.Security.SecurityElement.Escape(definition.Name)}\">"
-            + $"<description>{System.Security.SecurityElement.Escape(definition.Description)}</description>"
-            + $"<schema>{System.Security.SecurityElement.Escape(definition.ArgumentsJsonSchema)}</schema></tool>"));
+            prompts.Render(
+                PromptFileNames.SystemToolInventoryTextFallback,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ToolId"] = System.Security.SecurityElement.Escape(definition.Name),
+                    ["Description"] = System.Security.SecurityElement.Escape(definition.Description),
+                    ["Schema"] = System.Security.SecurityElement.Escape(definition.ArgumentsJsonSchema),
+                })));
     }
 
     private static string CanonicalizeSchema(string toolName, string schemaJson)
@@ -379,7 +415,7 @@ public static class ModelToolCanonicalizer
             throw new InvalidOperationException($"Tool '{toolName}' argument schema must be a JSON object.");
         }
 
-        using (JsonDocument document = JsonDocument.Parse(schemaJson))
+        using (var document = JsonDocument.Parse(schemaJson))
         {
             ValidateNoDuplicateProperties(toolName, document.RootElement, "$");
         }
@@ -393,7 +429,7 @@ public static class ModelToolCanonicalizer
         if (node is JsonObject jsonObject)
         {
             var result = new JsonObject();
-            foreach ((string key, var value) in jsonObject.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            foreach ((var key, var value) in jsonObject.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 result.Add(key, value is null ? null : CanonicalizeNode(value, key));
             }
@@ -444,7 +480,7 @@ public static class ModelToolCanonicalizer
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
-            int index = 0;
+            var index = 0;
             foreach (var item in element.EnumerateArray())
             {
                 ValidateNoDuplicateProperties(toolName, item, $"{path}[{index}]");
@@ -455,7 +491,7 @@ public static class ModelToolCanonicalizer
 
     private static string ResolveGroup(string toolName)
     {
-        int separator = toolName.IndexOfAny([':', '.', '/']);
+        var separator = toolName.IndexOfAny([':', '.', '/']);
         return separator > 0 ? toolName[..separator] : "core";
     }
 }
@@ -463,28 +499,90 @@ public static class ModelToolCanonicalizer
 /// <summary>Provider-neutral wire estimator over canonical structured messages and tools.</summary>
 public static class ModelWireEstimator
 {
+    /// <summary>Estimates one canonical tool inventory for reuse across continuation rounds.</summary>
+    public static ModelWireToolEstimate EstimateTools(
+        IReadOnlyList<ModelToolDefinition> tools,
+        ToolTransportMode toolTransportMode,
+        IPromptLoader? prompts = null)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        var textToolTokens = 0;
+        if (toolTransportMode == ToolTransportMode.Text)
+        {
+            var textPrompts = prompts
+                ?? throw new InvalidOperationException("Text tool transport requires the deployed prompt catalog.");
+            textToolTokens = EstimateCharacters(ModelToolCanonicalizer.RenderText(tools, textPrompts).Length);
+        }
+
+        return new ModelWireToolEstimate
+        {
+            NativeToolTokens = toolTransportMode == ToolTransportMode.Native
+                ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
+                : 0,
+            TextToolTokens = textToolTokens,
+        };
+    }
+
     /// <summary>Estimates deterministic framing and content capacity.</summary>
     public static ModelWireEstimate Estimate(
         IReadOnlyList<ModelMessage> messages,
         IReadOnlyList<ModelToolDefinition> tools,
         ToolTransportMode toolTransportMode,
         int stablePrefixMessageCount,
-        int outputReserveTokens)
+        int outputReserveTokens,
+        ModelProviderInstructions? providerInstructions = null,
+        IPromptLoader? prompts = null)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        return Estimate(
+            messages,
+            EstimateTools(tools, toolTransportMode, prompts),
+            stablePrefixMessageCount,
+            outputReserveTokens,
+            providerInstructions);
+    }
+
+    /// <summary>Estimates deterministic framing and content capacity from a reusable tool estimate.</summary>
+    public static ModelWireEstimate Estimate(
+        IReadOnlyList<ModelMessage> messages,
+        ModelWireToolEstimate tools,
+        int stablePrefixMessageCount,
+        int outputReserveTokens,
+        ModelProviderInstructions? providerInstructions = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        ArgumentNullException.ThrowIfNull(tools);
         ArgumentOutOfRangeException.ThrowIfNegative(stablePrefixMessageCount);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(stablePrefixMessageCount, messages.Count);
         ArgumentOutOfRangeException.ThrowIfNegative(outputReserveTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(tools.NativeToolTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(tools.TextToolTokens);
+        if (providerInstructions is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(providerInstructions.SectionId);
+            ArgumentNullException.ThrowIfNull(providerInstructions.Content);
+        }
 
         var sections = new Dictionary<string, int>(StringComparer.Ordinal);
-        int logicalTokens = 0;
-        int stablePrefixTokens = 0;
-        for (int index = 0; index < messages.Count; index++)
+        var logicalTokens = 0;
+        var stablePrefixTokens = 0;
+        var providerInstructionTokens = providerInstructions is null
+            ? 0
+            : EstimateCharacters(providerInstructions.Content.Length);
+        if (providerInstructions is not null)
+        {
+            sections[providerInstructions.SectionId] = providerInstructionTokens;
+            logicalTokens = providerInstructionTokens;
+            stablePrefixTokens = checked(providerInstructionTokens + 3);
+        }
+
+        for (var index = 0; index < messages.Count; index++)
         {
             var message = messages[index];
-            int tokens = EstimateCharacters(message.Content.Sum(part => part.Content.Length));
-            sections[message.SectionId] = sections.TryGetValue(message.SectionId, out int current)
+            var tokens = checked(
+                EstimateCharacters(message.GetModelVisibleContentLength())
+                + EstimateCharacters(message.ToolCallId?.Length ?? 0)
+                + EstimateCharacters(message.ToolName?.Length ?? 0));
+            sections[message.SectionId] = sections.TryGetValue(message.SectionId, out var current)
                 ? checked(current + tokens)
                 : tokens;
             logicalTokens = checked(logicalTokens + tokens);
@@ -494,22 +592,21 @@ public static class ModelWireEstimator
             }
         }
 
-        int nativeToolTokens = toolTransportMode == ToolTransportMode.Native
-            ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
-            : 0;
-        int textToolTokens = toolTransportMode == ToolTransportMode.Text
-            ? EstimateCharacters(ModelToolCanonicalizer.RenderText(tools).Length)
-            : 0;
-        int framingTokens = checked((messages.Count * 3) + 3);
-        int wireInputTokens = checked(logicalTokens + nativeToolTokens + textToolTokens + framingTokens);
+        var framingTokens = checked((messages.Count * 3) + 3 + (providerInstructions is null ? 0 : 3));
+        var wireInputTokens = checked(
+            logicalTokens
+            + tools.NativeToolTokens
+            + tools.TextToolTokens
+            + framingTokens);
         return new ModelWireEstimate
         {
             LogicalTokens = logicalTokens,
             WireInputTokens = wireInputTokens,
             StablePrefixTokens = stablePrefixTokens,
-            NativeToolTokens = nativeToolTokens,
-            TextToolTokens = textToolTokens,
+            NativeToolTokens = tools.NativeToolTokens,
+            TextToolTokens = tools.TextToolTokens,
             FramingTokens = framingTokens,
+            ProviderInstructionTokens = providerInstructionTokens,
             OutputReserveTokens = outputReserveTokens,
             SectionTokens = new ReadOnlyDictionary<string, int>(sections),
         };

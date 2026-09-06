@@ -1,0 +1,1 @@
+Primary semantic tool for generated C# documents already present in the semantic workspace. MUST use before search and fall back only if this tool fails or reports incomplete evidence.

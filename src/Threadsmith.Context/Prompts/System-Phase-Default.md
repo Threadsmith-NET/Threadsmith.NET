@@ -1,0 +1,1 @@
+Use only the governed state supplied for the current phase.

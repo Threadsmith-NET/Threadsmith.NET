@@ -28,6 +28,7 @@ try {
         $payload = $hosts[0].Directory.FullName
     } else { throw 'The artifact type is not supported for payload compliance inspection.' }
 
+    Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier $RuntimeIdentifier
     foreach ($stagedFile in Get-ChildItem -LiteralPath $stage -File -Recurse) {
         $relative = [IO.Path]::GetRelativePath($stage, $stagedFile.FullName)
         $packagedFile = Join-Path $payload $relative

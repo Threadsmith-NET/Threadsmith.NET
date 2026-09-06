@@ -362,7 +362,7 @@ Restored historical transcript is not automatically reparsed because the current
 | Event projection | `TuiShell.cs`, `TuiEventSegments.cs`, collector file | Raw append plus default rendered/source-mode branching and ordered block closure |
 | Console surface | `ConversationalShell.cs` or extracted adapter files | Gated semantic-document/output-item operation and Spectre mapping |
 | Configuration/composition | existing TUI display-options and App composition files | Default-on scalar setting and turn snapshot |
-| Tests | `Threadsmith.Milestone1.Tests`, `Threadsmith.Milestone3.Tests`, `Threadsmith.Milestone8.Tests`, `Threadsmith.Milestone9.Tests`, architecture tests, focused M22.3 suite if justified | Parser, structure, layout, ordering, fallback, security, configuration, terminal seams, plus unchanged Plan 26/49 duration/activity/detail/status regressions |
+| Tests | `Threadsmith.CoreRuntime.Tests`, `Threadsmith.ModelTooling.Tests`, `Threadsmith.PersistenceMcpHardening.Tests`, `Threadsmith.McpTransports.Tests`, architecture tests, focused M22.3 suite if justified | Parser, structure, layout, ordering, fallback, security, configuration, terminal seams, plus unchanged Plan 26/49 duration/activity/detail/status regressions |
 | Docs/config | `.threadsmith/config.example`, user guide, manual plan, source/test/root DOX | Implemented behavior and changed visible-streaming contract when code lands |
 
 Follow local composition and file-organization precedent after structural inspection; do not create abstractions with only one trivial use unless they establish the parser/adapter test boundary described above.
@@ -458,7 +458,7 @@ Cover:
 - raw persistence/context/restoration/headless authority;
 - Markdig/TUI and terminal-library dependency isolation.
 
-At minimum, run the existing Plan 49 owners—`Threadsmith.Milestone1.Tests` (including `OperationDurationFormatterTests` and activity projection), `Threadsmith.Milestone3.Tests` (including `Plan49ToolTimingTests` and reviewed activity-detail fixtures), relevant Milestone 8/9 MCP timing suites, and architecture tests—plus the new Plan 63 suite. Retain their existing assertions. Only the final-visible-answer activity-stop fixture may gain additive source-mode (first streamed chunk) and rendered-mode (immediately before document write) expectations; deleting or weakening duration/detail/status/configuration assertions is not acceptable.
+At minimum, run the existing Plan 49 owners—`Threadsmith.CoreRuntime.Tests` (including `OperationDurationFormatterTests` and activity projection), `Threadsmith.ModelTooling.Tests` (including `Plan49ToolTimingTests` and reviewed activity-detail fixtures), relevant Milestone 8/9 MCP timing suites, and architecture tests—plus the new Plan 63 suite. Retain their existing assertions. Only the final-visible-answer activity-stop fixture may gain additive source-mode (first streamed chunk) and rendered-mode (immediately before document write) expectations; deleting or weakening duration/detail/status/configuration assertions is not acceptable.
 
 ### Task 9 — Real-terminal verification
 
@@ -484,7 +484,7 @@ Testing is layered and deterministic:
 - Fake-time concurrency tests run multiple 250 ms `THINKING` refresh callbacks during one accumulating answer and prove they update elapsed activity without classifying an event, flushing, fragmenting, or reparsing the block. Separate fixtures cover real activity start/stop/replacement boundaries.
 - Adapter tests prove one serialized gate, semantic/style-free text parity, current-width layout, interactive raw-control rejection, and capability-gated exact redirected output.
 - Existing Plan 26 and Plan 49 suites retain their status, timing, detail, source, outcome, configuration, restoration, and MCP-deduplication assertions. Only final-visible-answer termination gains explicit source/rendered branches.
-- At minimum run `Threadsmith.Milestone1.Tests`, `Threadsmith.Milestone3.Tests`, relevant `Threadsmith.Milestone7_1.Tests`, `Threadsmith.Milestone8.Tests`, `Threadsmith.Milestone9.Tests`, `Threadsmith.Architecture.Tests`, and the focused Plan 63 suite selected during implementation.
+- At minimum run `Threadsmith.CoreRuntime.Tests`, `Threadsmith.ModelTooling.Tests`, relevant `Threadsmith.SessionStatus.Tests`, `Threadsmith.PersistenceMcpHardening.Tests`, `Threadsmith.McpTransports.Tests`, `Threadsmith.Architecture.Tests`, and the focused Plan 63 suite selected during implementation.
 - Scenario AC and maintained Windows/Linux/macOS/SSH/multiplexer checks remain milestone gates. Task 8 and Task 9 define the complete automated and real-terminal matrix.
 
 ## 11 Security/Permissions

@@ -168,6 +168,149 @@ public sealed record ConversationContextItemProjection
     public double? Score { get; init; }
 }
 
+/// <summary>One repository-scoped memory inclusion or omission decision.</summary>
+public sealed record RepositoryMemoryContextItemProjection
+{
+    /// <summary>Stable repository-memory identifier.</summary>
+    public required RepositoryMemoryId Id { get; init; }
+
+    /// <summary>Repository-memory category.</summary>
+    public required RepositoryMemoryKind Kind { get; init; }
+
+    /// <summary>Authority supporting the memory item.</summary>
+    public required RepositoryMemoryAuthority Authority { get; init; }
+
+    /// <summary>Current validity state.</summary>
+    public required RepositoryMemoryValidity Validity { get; init; }
+
+    /// <summary>Whether the item entered the assembled request.</summary>
+    public required bool Included { get; init; }
+
+    /// <summary>Host-owned inclusion or omission rationale.</summary>
+    public required string Rationale { get; init; }
+
+    /// <summary>Estimated tokens charged to repository-memory context.</summary>
+    public required int EstimatedTokens { get; init; }
+
+    /// <summary>Deterministic retrieval score when eligible.</summary>
+    public double? Score { get; init; }
+}
+
+/// <summary>Closed active-turn pressure and compaction assessment states.</summary>
+public enum ActiveTurnCompactionInspectionStatus
+{
+    /// <summary>The active-turn feature is disabled by host policy.</summary>
+    Disabled,
+
+    /// <summary>The complete request is below the pressure target.</summary>
+    BelowPressure,
+
+    /// <summary>Pressure was reached but no complete delivered prefix is eligible.</summary>
+    NoEligiblePrefix,
+
+    /// <summary>A prior failure is under bounded round backoff.</summary>
+    Backoff,
+
+    /// <summary>A validated summary replaced an eligible prefix.</summary>
+    Completed,
+
+    /// <summary>Candidate validation rejected the replacement.</summary>
+    ValidationRejected,
+
+    /// <summary>Candidate generation failed within its bounded call budget.</summary>
+    ProviderFailure,
+
+    /// <summary>Cancellation retained the original continuation.</summary>
+    Cancelled,
+
+    /// <summary>A valid candidate did not provide the configured minimum reduction.</summary>
+    InsufficientSavings,
+
+    /// <summary>The emergency compatibility reducer was required.</summary>
+    EmergencyReduction,
+
+    /// <summary>The unchanged request could not fit without reducing a never-delivered group.</summary>
+    CapacityExceeded,
+}
+
+/// <summary>Bounded active-turn pressure and compaction inspection metadata.</summary>
+public sealed record ActiveTurnCompactionInspectionProjection
+{
+    /// <summary>Monotonic pre-sampling assessment sequence.</summary>
+    public required int AssessmentSequence { get; init; }
+
+    /// <summary>Closed assessment outcome.</summary>
+    public required ActiveTurnCompactionInspectionStatus Status { get; init; }
+
+    /// <summary>Canonical complete-request input estimate before replacement.</summary>
+    public required int BeforeInputTokens { get; init; }
+
+    /// <summary>Canonical complete-request input estimate after replacement, when attempted.</summary>
+    public int? AfterInputTokens { get; init; }
+
+    /// <summary>Selected-model emergency input boundary.</summary>
+    public required int MaximumInputTokens { get; init; }
+
+    /// <summary>Configured operational trigger below the emergency boundary.</summary>
+    public required int PressureTargetTokens { get; init; }
+
+    /// <summary>Output reserve included by pressure assessment.</summary>
+    public required int OutputReserveTokens { get; init; }
+
+    /// <summary>Host-configured newest-raw retention target before profile scaling.</summary>
+    public required int ConfiguredRetentionTargetTokens { get; init; }
+
+    /// <summary>Request-specific newest-raw target remaining under activation gates.</summary>
+    public required int EffectiveRetentionTargetTokens { get; init; }
+
+    /// <summary>Complete delivered groups eligible for a prefix cut.</summary>
+    public required int EligibleGroupCount { get; init; }
+
+    /// <summary>Groups replaced by the activated summary.</summary>
+    public required int CompactedGroupCount { get; init; }
+
+    /// <summary>Raw recent groups retained exactly.</summary>
+    public required int RetainedGroupCount { get; init; }
+
+    /// <summary>Estimated tokens in the exact retained raw groups.</summary>
+    public required int RetainedGroupTokens { get; init; }
+
+    /// <summary>Active cumulative summary version.</summary>
+    public required int SummaryVersion { get; init; }
+
+    /// <summary>Cumulative oldest prior-summary items pruned under active bounds.</summary>
+    public required int PrunedPriorItemCount { get; init; }
+
+    /// <summary>Provider-neutral generation that fences rewritten request history.</summary>
+    public required long HistoryRewriteGeneration { get; init; }
+
+    /// <summary>Active summary hash without summary content.</summary>
+    public string? SummaryContentHash { get; init; }
+
+    /// <summary>Candidate profile identity without provider credentials.</summary>
+    public Guid? CandidateProfileId { get; init; }
+
+    /// <summary>First compacted group sequence for the latest successful cut.</summary>
+    public long? CompactedFromGroupSequence { get; init; }
+
+    /// <summary>Last compacted group sequence for the latest successful cut.</summary>
+    public long? CompactedThroughGroupSequence { get; init; }
+
+    /// <summary>Remaining bounded backoff rounds.</summary>
+    public required int BackoffRoundsRemaining { get; init; }
+
+    /// <summary>Bounded host rationale without summary or tool content.</summary>
+    public required string Rationale { get; init; }
+}
+
+/// <summary>Inspectable source-frontier counts for request-local code-explore deduplication.</summary>
+public sealed record VisibleSourceFrontierInspectionProjection(
+    int EntryCount,
+    int RangeCount,
+    int SourceCharacters,
+    long FrontierGeneration,
+    string Rationale);
+
 /// <summary>Inspectable record of one governed context assembly.</summary>
 public sealed record ContextInspectionProjection
 {
@@ -221,11 +364,20 @@ public sealed record ContextInspectionProjection
     /// <summary>Recent-message, summary, retrieval, stale, superseded, and mode decisions.</summary>
     public IReadOnlyList<ConversationContextItemProjection> ConversationItems { get; init; } = [];
 
+    /// <summary>Repository-scoped memory inclusion, omission, staleness, and pressure decisions.</summary>
+    public IReadOnlyList<RepositoryMemoryContextItemProjection> RepositoryMemoryItems { get; init; } = [];
+
     /// <summary>Estimated percentage of the selected model context window used.</summary>
     public double ContextPressurePercent { get; init; }
 
+    /// <summary>Latest pre-sampling active-turn continuation assessment.</summary>
+    public ActiveTurnCompactionInspectionProjection? ActiveTurnCompaction { get; init; }
+
     /// <summary>Whether compaction should run at the next safe turn boundary.</summary>
     public bool CompactionRecommended { get; init; }
+
+    /// <summary>Request-local visible source frontier used for conservative code-explore deduplication.</summary>
+    public VisibleSourceFrontierInspectionProjection? VisibleSourceFrontier { get; init; }
 
     /// <summary>Inspectable reason for the next compaction decision.</summary>
     public string? CompactionRationale { get; init; }
@@ -262,6 +414,9 @@ public sealed record ContextInspectionProjection
 
     /// <summary>Estimated provider framing tokens.</summary>
     public int FramingTokens { get; init; }
+
+    /// <summary>Estimated exact request-owned provider-instruction tokens.</summary>
+    public int ProviderInstructionTokens { get; init; }
 
     /// <summary>Whether native or textual tool transport is used.</summary>
     public string ToolTransportMode { get; init; } = "unknown";

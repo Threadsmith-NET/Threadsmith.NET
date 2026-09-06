@@ -1,0 +1,1 @@
+Use these Markdown headings in this order: ## Goal; ## Constraints & Preferences; ## Progress with ### Done, ### In Progress, and ### Blocked; ## Key Decisions; ## Next Steps; ## Critical Context. Do not emit JSON or a code fence. Stay within requiredOutput.maximumModelOutputTokens. The host appends Files read and Files changed sections, so do not emit those sections.

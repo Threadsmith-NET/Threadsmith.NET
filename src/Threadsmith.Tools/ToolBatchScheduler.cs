@@ -40,6 +40,60 @@ public sealed record ToolBatchRequest(int Ordinal, string CorrelationId, ToolInv
 /// <param name="Result">Terminal invocation result.</param>
 public sealed record ToolBatchResult(int Ordinal, string CorrelationId, ToolInvocationResult Result);
 
+/// <summary>Opaque prepared snapshot produced by preflight and consumed by batch invocation.</summary>
+public sealed class ToolBatchPreparation
+{
+    /// <summary>Empty prepared snapshot.</summary>
+    public static ToolBatchPreparation Empty { get; } = new(Array.Empty<IReadOnlyList<PlannedToolInvocation>>());
+
+    /// <summary>Initializes a new instance of the <see cref="ToolBatchPreparation"/> class.</summary>
+    internal ToolBatchPreparation(IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> waves)
+    {
+        ArgumentNullException.ThrowIfNull(waves);
+        Waves = waves;
+        Requests = waves
+            .SelectMany(static wave => wave)
+            .Select(static planned => planned.Request)
+            .OrderBy(static request => request.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>Gets the original model-ordered requests represented by this preparation.</summary>
+    internal IReadOnlyList<ToolBatchRequest> Requests { get; }
+
+    /// <summary>Gets the prepared conflict-free waves.</summary>
+    internal IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> Waves { get; }
+}
+
+/// <summary>No-side-effect validation result for a complete sibling tool batch.</summary>
+public sealed record ToolBatchPreflightResult
+{
+    /// <summary>Successful preflight result.</summary>
+    public static ToolBatchPreflightResult Success { get; } = new()
+    {
+        Succeeded = true,
+        Preparation = ToolBatchPreparation.Empty,
+    };
+
+    /// <summary>Whether the entire batch can enter the invocation pipeline.</summary>
+    public bool Succeeded { get; init; }
+
+    /// <summary>Original model ordinal of the first failed sibling when known.</summary>
+    public int? FailedOrdinal { get; init; }
+
+    /// <summary>Tool id of the first failed sibling when known.</summary>
+    public string? FailedToolId { get; init; }
+
+    /// <summary>Normalized error classification for the preflight failure.</summary>
+    public ToolErrorClassification ErrorClassification { get; init; }
+
+    /// <summary>Sanitized, bounded reason that excludes raw arguments and secrets.</summary>
+    public string? SafeReason { get; init; }
+
+    /// <summary>Prepared registration snapshot to invoke when preflight succeeds.</summary>
+    public ToolBatchPreparation? Preparation { get; init; }
+}
+
 /// <summary>One validated invocation and its immutable scheduling snapshot.</summary>
 /// <param name="Request">Original request.</param>
 /// <param name="Registration">Generation-fenced registration, or <see langword="null" /> when preparation failed.</param>
@@ -74,7 +128,7 @@ internal sealed class ToolSourceConcurrencyLimiter
                     _states.Add(source, state);
                 }
 
-                int effectiveMaximum = state.ActiveCaps.Count == 0
+                var effectiveMaximum = state.ActiveCaps.Count == 0
                     ? maximumConcurrency
                     : Math.Min(maximumConcurrency, state.ActiveCaps.Min());
                 if (state.ActiveCaps.Count < effectiveMaximum)
@@ -167,7 +221,7 @@ internal sealed class ToolConflictPlanner
         foreach (var request in requests.OrderBy(item => item.Ordinal))
         {
             var planned = Prepare(request);
-            int earliestWave = FindEarliestAllowedWave(waves, planned);
+            var earliestWave = FindEarliestAllowedWave(waves, planned);
             var selected = _options.Enabled
                 ? waves
                     .Skip(earliestWave)
@@ -189,8 +243,16 @@ internal sealed class ToolConflictPlanner
     {
         try
         {
-            var registration = _registry.GetRegistration(request.Invocation.ToolId);
-            object input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
+            var current = _registry.GetRegistration(request.Invocation.ToolId);
+            var expected = request.Invocation.ExpectedRegistration;
+            if (expected is not null && !ToolRegistrationIdentity.Matches(current, expected))
+            {
+                throw new ToolArgumentValidationException(
+                    $"Tool '{request.Invocation.ToolId}' no longer matches the approved capability identity.");
+            }
+
+            var registration = expected ?? current;
+            var input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
             IReadOnlyList<ToolResourceClaim> claims = registration.Tool
                 .GetSchedulingClaims(input, request.Invocation.Context)
                 .OrderBy(claim => claim.ResourceKind)
@@ -198,9 +260,17 @@ internal sealed class ToolConflictPlanner
                 .ToArray();
             return new PlannedToolInvocation(request, registration, claims);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is KeyNotFoundException or ToolArgumentValidationException)
         {
             return new PlannedToolInvocation(request, null, [], exception.Message);
+        }
+        catch (Exception)
+        {
+            return new PlannedToolInvocation(
+                request,
+                null,
+                [],
+                "Tool arguments do not match the declared input schema or host invariants.");
         }
     }
 
@@ -208,8 +278,8 @@ internal sealed class ToolConflictPlanner
         IReadOnlyList<List<PlannedToolInvocation>> waves,
         PlannedToolInvocation planned)
     {
-        int earliestWave = 0;
-        for (int waveIndex = 0; waveIndex < waves.Count; waveIndex++)
+        var earliestWave = 0;
+        for (var waveIndex = 0; waveIndex < waves.Count; waveIndex++)
         {
             if (waves[waveIndex].Any(existing => Conflicts(existing, planned)))
             {
@@ -233,7 +303,7 @@ internal sealed class ToolConflictPlanner
 
         var source = planned.Registration.Source;
         PlannedToolInvocation[] sameSource = [.. wave.Where(existing => existing.Registration?.Source == source)];
-        int sourceCount = sameSource.Length + 1;
+        var sourceCount = sameSource.Length + 1;
         return sourceCount <= planned.Registration.Tool.Definition.Scheduling.MaximumSourceConcurrency
             && sameSource.All(existing => existing.Registration is { } registration
                 && sourceCount <= registration.Tool.Definition.Scheduling.MaximumSourceConcurrency);
@@ -290,8 +360,8 @@ internal sealed class ToolConflictPlanner
             return false;
         }
 
-        string leftPath = Path.TrimEndingDirectorySeparator(left.CanonicalIdentity);
-        string rightPath = Path.TrimEndingDirectorySeparator(right.CanonicalIdentity);
+        var leftPath = Path.TrimEndingDirectorySeparator(left.CanonicalIdentity);
+        var rightPath = Path.TrimEndingDirectorySeparator(right.CanonicalIdentity);
         return leftPath.StartsWith(string.Concat(rightPath, Path.DirectorySeparatorChar), comparison)
             || rightPath.StartsWith(string.Concat(leftPath, Path.DirectorySeparatorChar), comparison);
     }

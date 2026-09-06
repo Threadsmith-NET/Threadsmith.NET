@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: The previous approved mutation was applied and then rejected by host validation. {{Reason}} Propose a correction mutation only within the approved plan scope; it will still require exact diff approval.

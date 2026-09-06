@@ -24,7 +24,7 @@ public static class RepositorySettingsCoordinator
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
         ArgumentNullException.ThrowIfNull(writeAsync);
         var normalizedPath = Path.GetFullPath(configurationPath);
-        SemaphoreSlim gate = Gates.GetOrAdd(normalizedPath, static _ => new SemaphoreSlim(1, 1));
+        var gate = Gates.GetOrAdd(normalizedPath, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
         try
         {

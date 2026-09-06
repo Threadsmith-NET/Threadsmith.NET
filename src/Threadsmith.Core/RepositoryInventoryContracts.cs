@@ -33,12 +33,6 @@ public sealed record GitDiffRequest
 
     /// <summary>Optional repository-relative literal path filter.</summary>
     public string? Path { get; init; }
-
-    /// <summary>Maximum changed paths returned. Defaults to 200 when omitted or null.</summary>
-    public int? MaximumEntries { get; init; } = 200;
-
-    /// <summary>Maximum patch characters returned. Defaults to 131072 when omitted or null.</summary>
-    public int? MaximumPatchCharacters { get; init; } = 131072;
 }
 
 /// <summary>One normalized changed path.</summary>
@@ -106,9 +100,6 @@ public sealed record GitShowRequest
 
     /// <summary>Optional repository-relative literal path within the revision.</summary>
     public string? Path { get; init; }
-
-    /// <summary>Maximum returned characters. Defaults to 131072 when omitted or null.</summary>
-    public int? MaximumCharacters { get; init; } = 131072;
 }
 
 /// <summary>Bounded normalized Git object output.</summary>
@@ -128,9 +119,6 @@ public sealed record GitBlameRequest
 
     /// <summary>Optional one-based last line.</summary>
     public int? EndLine { get; init; }
-
-    /// <summary>Maximum blamed lines returned. Defaults to 500 when omitted or null.</summary>
-    public int? MaximumLines { get; init; } = 500;
 }
 
 /// <summary>One normalized blamed line range.</summary>
@@ -153,9 +141,6 @@ public sealed record GitBranchComparisonRequest
 
     /// <summary>Validated target endpoint.</summary>
     public required string TargetRevision { get; init; }
-
-    /// <summary>Maximum changed paths returned. Defaults to 500 when omitted or null.</summary>
-    public int? MaximumPaths { get; init; } = 500;
 }
 
 /// <summary>Normalized branch comparison output.</summary>
@@ -214,9 +199,6 @@ public sealed record DotNetInventoryRequest
 
     /// <summary>Repository root.</summary>
     public required string RepositoryPath { get; init; }
-
-    /// <summary>Selected solution or project path.</summary>
-    public required string SelectedSolutionPath { get; init; }
 }
 
 /// <summary>One target-framework inventory entry.</summary>

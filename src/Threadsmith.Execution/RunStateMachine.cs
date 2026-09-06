@@ -77,13 +77,13 @@ public sealed class RunStateMachine : IStateMachine
         ArgumentException.ThrowIfNullOrWhiteSpace(trigger);
         cancellationToken.ThrowIfCancellationRequested();
         var source = Phase;
-        bool generalTerminal = destination is RunPhase.Failed or RunPhase.Cancelled;
-        bool sourceIsTerminal = _terminalPhases.Contains(source);
-        bool specificallyAllowed = _allowed.TryGetValue(source, out var destinations)
+        var generalTerminal = destination is RunPhase.Failed or RunPhase.Cancelled;
+        var sourceIsTerminal = _terminalPhases.Contains(source);
+        var specificallyAllowed = _allowed.TryGetValue(source, out var destinations)
             && destinations.Contains(destination);
         if (sourceIsTerminal || (!specificallyAllowed && !generalTerminal))
         {
-            string reason = $"Transition {source} -> {destination} is not legal.";
+            var reason = $"Transition {source} -> {destination} is not legal.";
             await _events.PublishAsync(
                 new RunTransitionFailed(
                     _sessionId,

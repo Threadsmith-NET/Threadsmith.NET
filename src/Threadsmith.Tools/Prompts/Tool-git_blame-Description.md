@@ -1,0 +1,1 @@
+Gets bounded line attribution for a repository file.

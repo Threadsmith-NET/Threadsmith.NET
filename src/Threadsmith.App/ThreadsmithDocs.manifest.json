@@ -8,12 +8,12 @@
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE",
-    "docs/README.md",
+    "docs/index.md",
     "docs/user-guide.md",
+    "docs/prompt-file-reference.md",
     "docs/skill-authoring.md",
     "docs/skill-compatibility-spec-v1.md",
-    "docs/hook-authoring.md",
-    "docs/third-party-license-inventory-status.md"
+    "docs/hook-authoring.md"
   ],
   "includedPrefixes": [
     "docs/operations/",
@@ -27,7 +27,7 @@
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "LICENSE",
-    "docs/README.md",
+    "docs/index.md",
     "docs/user-guide.md",
     "docs/skill-authoring.md",
     "docs/skill-compatibility-spec-v1.md",

@@ -122,7 +122,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         }
 
         var ids = new HashSet<ModelProfileId>();
-        foreach (ModelConfiguration model in configured.Models)
+        foreach (var model in configured.Models)
         {
             if (model is not OpenAiCompatibleModelConfiguration openAiModel)
             {
@@ -179,11 +179,11 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         }
 
         var profiles = new List<ModelProfile>();
-        foreach (OpenAiCompatibleModelConfiguration model in configured.Models
+        foreach (var model in configured.Models
             .Where(model => model.Enabled)
             .Cast<OpenAiCompatibleModelConfiguration>())
         {
-            Uri endpoint = model.LegacyEndpointOverride
+            var endpoint = model.LegacyEndpointOverride
                 ?? ComposeEndpoint(configured.BaseUri, configured.ChatCompletionsPath, configured.Id);
             profiles.Add(new ModelProfile
             {
@@ -259,7 +259,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
     {
         ArgumentNullException.ThrowIfNull(legacyCatalog);
         var providers = new List<ModelProviderConfiguration>(legacyCatalog.Profiles.Count);
-        foreach (ModelProfile profile in legacyCatalog.Profiles)
+        foreach (var profile in legacyCatalog.Profiles)
         {
             if (!string.Equals(profile.Provider, TypeDiscriminator, StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(profile.Provider, "openai", StringComparison.OrdinalIgnoreCase))
@@ -313,7 +313,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         string providerId,
         OpenAiCompatibleModelConfiguration model)
     {
-        OpenAiReasoningCompatibilityConfiguration? compatibility = model.ReasoningCompatibility;
+        var compatibility = model.ReasoningCompatibility;
         if (compatibility is null)
         {
             if (model.LegacyReasoningCapability is { } legacyCapability)
@@ -332,7 +332,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             };
         }
 
-        ReasoningControllability controllability = compatibility.Mode switch
+        var controllability = compatibility.Mode switch
         {
             OpenAiReasoningControlMode.AlwaysOn or OpenAiReasoningControlMode.Fixed
                 => ReasoningControllability.AlwaysOn,
@@ -359,7 +359,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         string providerId,
         OpenAiCompatibleModelConfiguration model)
     {
-        OpenAiReasoningCompatibilityConfiguration? compatibility = model.ReasoningCompatibility;
+        var compatibility = model.ReasoningCompatibility;
         if (compatibility is null)
         {
             return;

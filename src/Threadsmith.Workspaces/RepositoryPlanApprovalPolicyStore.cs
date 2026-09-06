@@ -91,7 +91,7 @@ internal sealed class RepositoryPlanApprovalPolicyStore : IRepositoryPlanApprova
         JsonObject root,
         CancellationToken cancellationToken)
     {
-        string temporaryPath = binding.ConfigurationPath + $".{Guid.NewGuid():N}.tmp";
+        var temporaryPath = binding.ConfigurationPath + $".{Guid.NewGuid():N}.tmp";
         Exception? primaryException = null;
         try
         {

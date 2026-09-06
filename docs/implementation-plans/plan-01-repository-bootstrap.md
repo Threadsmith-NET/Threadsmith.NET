@@ -1,4 +1,4 @@
-﻿# Implementation Plan 01: Repository Bootstrap and Architecture Enforcement
+# Implementation Plan 01: Repository Bootstrap and Architecture Enforcement
 
 **Product name:** **Threadsmith.NET** — a .NET-native coding harness. This plan bootstraps the repo that will become Threadsmith.NET.
 **Milestone:** M0 — Architecture Spikes and Repository Bootstrap
@@ -44,7 +44,7 @@ Implemented. `src/Threadsmith.sln` contains the 16 product projects with central
 - CI pipeline definition
 - `docs/architecture/` seeded with ADRs 1–6
 - **Root `AGENTS.md`** — the behavioral contract for AI coding agents working in this repo (see task 6). States the product name is **Threadsmith.NET**.
-- `docs/guardrails/portable-csharp-guardrails.md` — the portable C# guardrails copied from the Inference repo's guardrails (source: `.inbox/dotnet-native-coding-harness-implementation-plans/portable-csharp-guardrails.md`), referenced by `AGENTS.md`
+- `docs/guardrails/portable-csharp-guardrails.md` — the portable C# guardrails copied from external source guardrails (source: `.inbox/dotnet-native-coding-harness-implementation-plans/portable-csharp-guardrails.md`), referenced by `AGENTS.md`
 - **Repository configuration schema** including the **project-level system-prompt-append option** (§21.2 "Prompt append files") — see task 7
 - `.threadsmith/` repo-config layout (config file + `prompts/` directory for append files) — see task 7
 

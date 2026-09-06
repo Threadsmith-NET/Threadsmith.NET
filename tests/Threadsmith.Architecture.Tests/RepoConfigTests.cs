@@ -9,6 +9,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Context;
+using Threadsmith.Execution;
 using Xunit;
 
 /// <summary>
@@ -71,7 +73,7 @@ public static class RepoConfigTests
     [Fact]
     public static void ConfigExampleLoadsWithoutError()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.NotNull(config);
         // The config must not be empty (proves the JSON-with-comments parsed).
         var children = config.GetChildren().ToList();
@@ -82,8 +84,20 @@ public static class RepoConfigTests
     [Fact]
     public static void ConfigExampleContainsNestedSolutionPath()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.Equal("src/Threadsmith.sln", config["solution:path"]);
+    }
+
+    /// <summary>Repository-memory relevance and recency settings bind from the reference configuration.</summary>
+    [Fact]
+    public static void RepositoryMemoryAdmissionSettingsBind()
+    {
+        var config = LoadConfigExample();
+        var policy = config.GetSection("context:repositoryMemory").Get<RepositoryMemoryContextPolicy>();
+
+        Assert.NotNull(policy);
+        Assert.Equal(0.2d, policy.MinimumRelevanceScore);
+        Assert.Equal(TimeSpan.FromDays(2), policy.AutomaticMemoryMaximumAge);
     }
 
     /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>
@@ -91,8 +105,8 @@ public static class RepoConfigTests
     [MemberData(nameof(RequiredKeyData))]
     public static void ConfigExampleContainsRequiredKey(string key)
     {
-        IConfigurationRoot config = LoadConfigExample();
-        IConfigurationSection section = config.GetSection(key);
+        var config = LoadConfigExample();
+        var section = config.GetSection(key);
         Assert.True(
             section.Exists() || config.GetChildren().Any(c => c.Key == key),
             $"Config example is missing required §21.2 key '{key}'.");
@@ -102,7 +116,7 @@ public static class RepoConfigTests
     [Fact]
     public static void PromptAppendFilesKeyResolvesToList()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         var appendFiles = config.GetSection("prompt append files").Get<string[]>();
         Assert.NotNull(appendFiles);
         Assert.NotEmpty(appendFiles);
@@ -113,7 +127,7 @@ public static class RepoConfigTests
     [Fact]
     public static void TuiFooterSettingBindsToConfiguredValue()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.True(config.GetValue("tui:footer:enabled", false));
     }
 
@@ -121,7 +135,7 @@ public static class RepoConfigTests
     [Fact]
     public static void TuiMarkdownRenderingSettingBindsToConfiguredValue()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.True(config.GetValue("tui:renderMarkdown", false));
     }
 
@@ -129,15 +143,25 @@ public static class RepoConfigTests
     [Fact]
     public static void TuiOperationDurationSettingBindsToConfiguredValue()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.True(config.GetValue("tui:showOperationDurations", false));
+    }
+
+    /// <summary>The optional active-turn compaction profile is documented as a trusted null fallback.</summary>
+    [Fact]
+    public static void ActiveTurnCompactionProfileDefaultsToActiveModelFallback()
+    {
+        var config = LoadConfigExample();
+
+        Assert.Null(config["context:activeTurnCompaction:profileId"]);
+        Assert.True(config.GetSection("context:activeTurnCompaction").Exists());
     }
 
     /// <summary>Plan-08 policy and plan-27 availability lists bind to explicit arrays.</summary>
     [Fact]
     public static void ToolPolicyKeysResolveToLists()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         var enabled = config.GetSection("tools:enabled").Get<string[]>() ?? [];
         Assert.NotEmpty(enabled);
         Assert.Contains("invoke_skill", enabled);
@@ -161,7 +185,7 @@ public static class RepoConfigTests
     [Fact]
     public static void NuGetAdvisorySourcesAreHttps()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         IConfigurationSection[] sources = [.. config.GetSection("nuget:advisorySources").GetChildren()];
         Assert.NotEmpty(sources);
         Assert.All(sources, source =>
@@ -177,18 +201,20 @@ public static class RepoConfigTests
     [Fact]
     public static void ToolOperationalLimitsBindToConfiguredValues()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.Equal(200, config.GetValue("tools:listFiles:defaultEntries", 0));
         Assert.Equal(2000, config.GetValue("tools:listFiles:maxEntries", 0));
         Assert.Equal(1_048_576L, config.GetValue<long>("tools:readFile:maxBytes", 0));
-        Assert.Equal(200, config.GetValue("tools:readFile:defaultLines", 0));
-        Assert.Equal(1000, config.GetValue("tools:readFile:maxLines", 0));
+        Assert.Equal(2000, config.GetValue("tools:readFile:defaultLines", 0));
+        Assert.Equal(2000, config.GetValue("tools:readFile:maxLines", 0));
+        Assert.Equal(51_200, config.GetValue("tools:readFile:maxContentBytes", 0));
         Assert.Equal(1_048_576L, config.GetValue<long>("tools:search:maxBytes", 0));
         Assert.Equal(100, config.GetValue("tools:search:defaultMatches", 0));
         Assert.Equal(500, config.GetValue("tools:search:maxMatches", 0));
         Assert.Equal(1000, config.GetValue("tools:findSymbol:maxResults", 0));
         Assert.Equal(1000, config.GetValue("tools:findReferences:maxResults", 0));
         Assert.Equal(1000, config.GetValue("tools:findImplementations:maxResults", 0));
+        Assert.False(config.GetValue("tools:codeExplore:inspectCodeExploreOutput", true));
         Assert.Equal(30, config.GetValue("tools:runProcess:defaultTimeoutSeconds", 0));
         Assert.Equal(60, config.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
         Assert.Equal(5000, config.GetValue("tools:config:csharp_script:timeout_ms", 0));
@@ -202,7 +228,7 @@ public static class RepoConfigTests
     [Fact]
     public static void MutationApprovalPolicyBindsToSafeDefaults()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.Equal("reviewAll", config["mutation:approvalPolicy"]);
         Assert.Equal(500, config.GetValue("mutation:largeDiffThreshold", 0));
     }
@@ -211,7 +237,7 @@ public static class RepoConfigTests
     [Fact]
     public static void PlanApprovalPolicyBindsToSafeDefaults()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         Assert.Equal("reviewAll", config["planning:approvalPolicy"]);
         Assert.Null(config["planning:approvalRepositoryIdentity"]);
     }
@@ -220,13 +246,10 @@ public static class RepoConfigTests
     [Fact]
     public static void ExecutionAndRepositoryLimitsBindToConfiguredValues()
     {
-        IConfigurationRoot config = LoadConfigExample();
-        Assert.Equal(16, config.GetValue("execution:maxModelRounds", 0));
-        Assert.Equal(4, config.GetValue("execution:maxPlanningToolRounds", 0));
-        Assert.Equal(3, config.GetValue("execution:maxPlanProposalRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:maxPlanRevisionRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:maxMutationProposalRepairAttempts", 0));
-        Assert.Equal(3, config.GetValue("execution:correctionBudget", 0));
+        var config = LoadConfigExample();
+        Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, config.GetValue("execution:maxModelRounds", 0));
+        Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, config.GetValue("execution:maxPlanningToolRounds", 0));
+        Assert.Equal(3, config.GetValue("execution:maxCorrectiveTurns", 0));
         Assert.Equal(32, config.GetValue("agents:queueCapacity", 0));
         Assert.Equal(4, config.GetValue("agents:maxActiveGlobal", 0));
         Assert.Equal(3, config.GetValue("agents:maxActivePerParent", 0));
@@ -242,25 +265,23 @@ public static class RepoConfigTests
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
     }
 
-    /// <summary>The production composition root binds the documented model-repair limit keys.</summary>
+    /// <summary>The production composition root binds the documented corrective-turn limit key.</summary>
     [Fact]
-    public static void HostFoundationBindsModelRepairLimits()
+    public static void HostFoundationBindsCorrectiveTurnLimit()
     {
         var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ConfigExamplePath) ?? ".", ".."));
         var source = File.ReadAllText(Path.Combine(repoRoot, "src", "Threadsmith.App", "HostFoundation.cs"));
-        Assert.Contains("MaxPlanProposalRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxPlanProposalRepairAttempts", source, StringComparison.Ordinal);
-        Assert.Contains("MaxPlanRevisionRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxPlanRevisionRepairAttempts", source, StringComparison.Ordinal);
-        Assert.Contains("MaxMutationProposalRepairAttempts = configuration.GetValue(", source, StringComparison.Ordinal);
-        Assert.Contains("execution:maxMutationProposalRepairAttempts", source, StringComparison.Ordinal);
+        Assert.Contains("execution:maxCorrectiveTurns", source, StringComparison.Ordinal);
+        Assert.Contains("MaxCorrectiveTurns = maximumCorrectiveTurns", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("execution:maxPlanProposalRepairAttempts", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("execution:maxMutationProposalRepairAttempts", source, StringComparison.Ordinal);
     }
 
     /// <summary>M8 persistence, retention, MCP, and diagnostic keys bind to their documented values (plan-18/19/20).</summary>
     [Fact]
     public static void Milestone8ConfigurationKeysBindToConfiguredValues()
     {
-        IConfigurationRoot config = LoadConfigExample();
+        var config = LoadConfigExample();
         // Persistence + artifacts (plan-18).
         Assert.Equal(".threadsmith/threadsmith.db", config["persistence:path"]);
         Assert.Equal(".threadsmith/artifacts", config["persistence:artifactDirectory"]);
@@ -274,7 +295,7 @@ public static class RepoConfigTests
         // MCP (plan-19, §20).
         Assert.Equal(10, config.GetValue("mcp:defaultDrainKillTimeoutSeconds", 0));
         Assert.NotEmpty(config.GetSection("mcp:profiles").GetChildren());
-        IConfigurationSection firstProfile = config.GetSection("mcp:profiles:0");
+        var firstProfile = config.GetSection("mcp:profiles:0");
         Assert.Equal("example-stdio", firstProfile["id"]);
         Assert.Equal("TrustedRead", firstProfile["trust"]);
         Assert.Equal("stdio", firstProfile["transport"]);
@@ -284,7 +305,7 @@ public static class RepoConfigTests
         Assert.Equal(60, firstProfile.GetValue("requestTimeoutSeconds", 0));
         Assert.Equal(10, firstProfile.GetValue("drainKillTimeoutSeconds", 0));
         // Real HTTP transport + static-token/OAuth-stub configuration (plan-22).
-        IConfigurationSection httpProfile = config.GetSection("mcp:profiles:1");
+        var httpProfile = config.GetSection("mcp:profiles:1");
         Assert.Equal("example-http", httpProfile["id"]);
         Assert.Equal("http", httpProfile["transport"]);
         Assert.Equal("secrets:MCP_HTTP_TOKEN", httpProfile["headers:Authorization"]);
@@ -292,6 +313,7 @@ public static class RepoConfigTests
         Assert.False(httpProfile.GetValue("oauth:enabled", true));
         Assert.Equal("threadsmith", httpProfile["oauth:clientId"]);
         Assert.Equal("secrets:MCP_OAUTH_CLIENT_SECRET", httpProfile["oauth:clientSecret"]);
+        Assert.Null(httpProfile["oauth:clientMetadataDocumentUri"]);
         Assert.Equal(8400, httpProfile.GetValue("oauth:redirectPort", 0));
         Assert.Null(httpProfile["oauth:discoveryUrl"]);
         // Diagnostic bundles (plan-20, §23.4).
@@ -317,12 +339,12 @@ public static class RepoConfigTests
             // First launch: the file does not exist, so it is scaffolded from the shipped catalog.
             Threadsmith.App.Program.ScaffoldUserConfigurationIfMissing(userConfig);
             Assert.True(File.Exists(userConfig), $"Expected scaffolded user config at {userConfig}");
-            IConfigurationRoot scaffolded = new ConfigurationBuilder()
+            var scaffolded = new ConfigurationBuilder()
                 .AddJsonFile(userConfig, optional: false)
                 .Build();
             // The scaffold carries the documented defaults, so the catalog keys bind.
-            Assert.Equal(16, scaffolded.GetValue("execution:maxModelRounds", 0));
-            Assert.Equal(4, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
+            Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, scaffolded.GetValue("execution:maxModelRounds", 0));
+            Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Equal(60, scaffolded.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
 
@@ -330,13 +352,13 @@ public static class RepoConfigTests
             // successful parse proves no // or /* */ comments survived the copy. (Glob values
             // such as "**/*.env" legitimately contain "/*" inside string literals.)
             var written = File.ReadAllText(userConfig);
-            using JsonDocument parsed = JsonDocument.Parse(written);
+            using var parsed = JsonDocument.Parse(written);
             Assert.NotEmpty(parsed.RootElement.EnumerateObject());
 
             // A user edit must be preserved: re-scaffolding must not overwrite an existing file.
             File.WriteAllText(userConfig, "{ \"execution\": { \"maxModelRounds\": 3 } }\n");
             Threadsmith.App.Program.ScaffoldUserConfigurationIfMissing(userConfig);
-            IConfigurationRoot preserved = new ConfigurationBuilder()
+            var preserved = new ConfigurationBuilder()
                 .AddJsonFile(userConfig, optional: false)
                 .Build();
             Assert.Equal(3, preserved.GetValue("execution:maxModelRounds", 0));

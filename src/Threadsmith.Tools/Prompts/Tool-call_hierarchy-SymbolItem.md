@@ -1,0 +1,1 @@
+- {{SymbolName}} ({{SymbolKind}}, depth {{Depth}}){{Location}}

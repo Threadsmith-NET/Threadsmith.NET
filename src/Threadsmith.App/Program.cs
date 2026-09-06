@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Extensions.Runtime;
 using Threadsmith.Hooks;
@@ -21,6 +22,25 @@ public static class Program
     /// <returns>Process exit code.</returns>
     public static async Task<int> Main(string[] args)
     {
+        try
+        {
+            return await RunAsync(args);
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync("Threadsmith was canceled.");
+            return 130;
+        }
+        catch (Exception exception)
+        {
+            await Console.Error.WriteLineAsync(FormatFatalError(exception));
+            return 1;
+        }
+    }
+
+    /// <summary>Runs the composed application after the process-level failure boundary.</summary>
+    internal static async Task<int> RunAsync(string[] args)
+    {
         ArgumentNullException.ThrowIfNull(args);
 
         // Parse host-owned switches before configuration so invalid command lines fail without side effects.
@@ -35,7 +55,7 @@ public static class Program
             ?? throw new InvalidOperationException("Successful command-line parsing did not produce options.");
         if (commandLine.ShowVersion)
         {
-            string informationalVersion = typeof(Program).Assembly
+            var informationalVersion = typeof(Program).Assembly
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
                 .InformationalVersion
                 ?? typeof(Program).Assembly.GetName().Version?.ToString()
@@ -47,14 +67,14 @@ public static class Program
         if (commandLine.ShowHelp)
         {
             await Console.Out.WriteLineAsync(
-                "Threadsmith.NET\nUsage: threadsmith [--tui] [--repository PATH] [--solution PATH] [--trust LEVEL] [--raw-model-log PATH] [REQUEST]\n"
+                "Threadsmith.NET\nUsage: threadsmith [--tui[=tuikit|original]] [--repository PATH] [--solution PATH] [--trust LEVEL] [--raw-model-log PATH] [REQUEST]\n"
                 + "       threadsmith --mcp ACTION [PROFILE] [CAPABILITY] [key=value ...] [--confirm] [--revoke-current] [--allow-local-cleanup]\n"
-                + "       threadsmith [--tui] --codex-login | --codex-status | --codex-logout\n"
+                + "       threadsmith [--tui[=tuikit|original]] --codex-login | --codex-status | --codex-logout\n"
                 + "       threadsmith --version");
             return 0;
         }
 
-        string? codexAuthenticationAction = commandLine.CodexAuthenticationAction;
+        var codexAuthenticationAction = commandLine.CodexAuthenticationAction;
         if (codexAuthenticationAction is null
             && commandLine.RequestArguments.Count is 2 or 3
             && string.Equals(commandLine.RequestArguments[0], "/auth", StringComparison.OrdinalIgnoreCase)
@@ -92,18 +112,27 @@ public static class Program
         }
 
         // Use concise phase-local aliases while retaining normalized values from the immutable startup records.
-        string repositoryRoot = paths.RepositoryRoot;
-        bool useInteractiveTerminal = commandLine.UseInteractiveTerminal
+        var repositoryRoot = paths.RepositoryRoot;
+        var useInteractiveTerminal = commandLine.UseInteractiveTerminal
             && commandLine.McpAction is null;
 
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
+        var promptLoader = await DeployedPromptLoader.LoadAsync(
+            AppContext.BaseDirectory,
+            CancellationToken.None);
+        loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts").LogInformation(
+            "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
+            promptLoader.Assets.Count,
+            promptLoader.TotalBytes,
+            promptLoader.CatalogDigest);
 
         // Initialize durable state and shared host services before composing applications that consume them.
         await using var foundation = await HostFoundation.CreateAsync(
             configuration,
             trustedConfiguration,
             paths,
-            loggerFactory);
+            loggerFactory,
+            promptLoader);
 
         // Compose model transport, catalogs, migration, selection, and offline fallback as one owned phase.
         ModelServices composedModels;
@@ -114,7 +143,8 @@ public static class Program
                 paths,
                 foundation.SecretResolver,
                 loggerFactory,
-                commandLine.RawModelLogPath);
+                commandLine.RawModelLogPath,
+                trustedConfiguration);
         }
         catch (InvalidOperationException exception) when (!string.IsNullOrWhiteSpace(commandLine.RawModelLogPath))
         {
@@ -151,6 +181,7 @@ public static class Program
             foundation.ToolPipeline,
             paths.RepositoryRoot,
             loggerFactory,
+            foundation.PromptLoader,
             foundation.HookCoordinator,
             processCancellation.Token);
 
@@ -169,11 +200,13 @@ public static class Program
                     ExecutionLimits = foundation.ExecutionLimits,
                     Sanitizer = foundation.Sanitizer,
                     PromptAppendLoader = foundation.PromptAppendLoader,
+                    PromptLoader = foundation.PromptLoader,
                     Budget = foundation.Budget,
                 },
                 Persistence = new PersistenceCompositionInputs
                 {
                     ConversationStore = foundation.ConversationStore,
+                    RepositoryMemoryStore = foundation.RepositoryMemoryStore,
                     SessionLifecycleStore = foundation.SessionLifecycleStore,
                     SessionRestorer = foundation.SessionRestorer,
                     ArtifactStore = foundation.ArtifactStore,
@@ -189,6 +222,7 @@ public static class Program
                     ToolPipeline = foundation.ToolPipeline,
                     ToolRegistry = foundation.ToolRegistry,
                     ToolStateManager = foundation.ToolStateManager,
+                    CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
                     WebFetchAuthorization = foundation.WebFetchAuthorization,
                     RepositorySecretProvider = foundation.RepositorySecretProvider,
                     ProcessManager = foundation.ProcessManager,
@@ -198,6 +232,8 @@ public static class Program
                 {
                     SemanticEngines = foundation.SemanticEngines,
                     SemanticMutations = foundation.SemanticMutations,
+                    SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
+                    SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
                 },
                 Integration = new IntegrationCompositionInputs
                 {
@@ -236,10 +272,30 @@ public static class Program
                 Applications = applications,
                 ExtensionHost = extensionHost,
                 ToolStateManager = foundation.ToolStateManager,
+                CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
                 WebFetchAuthorization = foundation.WebFetchAuthorization,
                 DirectFetchApprovalPrompt = foundation.DirectFetchApprovalPrompt,
             },
             processCancellation);
+    }
+
+    /// <summary>Formats a bounded single-line fatal error without exposing a stack trace.</summary>
+    internal static string FormatFatalError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var message = string.Join(
+            ' ',
+            exception.Message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (message.Length == 0)
+        {
+            message = "An unexpected error occurred.";
+        }
+        else if (message.Length > 512)
+        {
+            message = message[..512] + "…";
+        }
+
+        return $"Threadsmith could not start or continue: {message}";
     }
 
     /// <summary>Runs the standalone host-owned Codex authentication surface.</summary>
@@ -286,7 +342,7 @@ public static class Program
                     await oauth.CompleteDeviceAsync(challenge, TimeSpan.FromMinutes(10), cancellationToken);
                 }
 
-                string accessToken = await oauth.GetAccessTokenAsync(cancellationToken)
+                var accessToken = await oauth.GetAccessTokenAsync(cancellationToken)
                     ?? throw new InvalidOperationException("Codex authentication completed without an access token.");
                 var catalog = await new OpenAiCodexCatalogClient(httpClient)
                     .DiscoverAsync(accessToken, cancellationToken: cancellationToken);
@@ -316,7 +372,7 @@ public static class Program
         HookInvocationEnvelope envelope,
         CancellationToken cancellationToken)
     {
-        (string toolId, var registration) = ResolveCapabilityHookRegistration(
+        (var toolId, var registration) = ResolveCapabilityHookRegistration(
             toolPipeline,
             descriptor);
         var result = await toolPipeline.InvokeAsync(
@@ -348,7 +404,7 @@ public static class Program
             ?? new HookFailureResult("malformed-capability-result", "The capability hook returned malformed output.");
     }
 
-    private static (string ToolId, ITool Registration) ResolveCapabilityHookRegistration(
+    private static (string ToolId, ToolRegistration Registration) ResolveCapabilityHookRegistration(
         IToolInvocationPipeline toolPipeline,
         HookHandlerDescriptor descriptor)
     {
@@ -357,18 +413,18 @@ public static class Program
             throw new InvalidOperationException("Capability hooks require the host-owned tool pipeline.");
         }
 
-        string[] target = descriptor.Target.Split("::", StringSplitOptions.None);
-        string toolId = descriptor.AdapterKind switch
+        var target = descriptor.Target.Split("::", StringSplitOptions.None);
+        var toolId = descriptor.AdapterKind switch
         {
             HookAdapterKind.Mcp when target.Length == 4 => target[3],
             HookAdapterKind.Extension when target.Length == 2 => target[1],
             _ => throw new InvalidOperationException(
                 "MCP hook targets must be 'profile::server::schema-digest::tool' and extension hook targets must be 'generation::tool'."),
         };
-        var registration = concretePipeline.Registry.Get(toolId);
-        bool identityMatches = descriptor.AdapterKind switch
+        var registration = concretePipeline.Registry.GetRegistration(toolId);
+        var identityMatches = descriptor.AdapterKind switch
         {
-            HookAdapterKind.Mcp when registration is McpImportedTool mcp =>
+            HookAdapterKind.Mcp when registration.Tool is McpImportedTool mcp =>
                 string.Equals(mcp.Profile.Id, target[0], StringComparison.Ordinal)
                 && string.Equals(mcp.Capability.ServerName, target[1], StringComparison.Ordinal)
                 && string.Equals(
@@ -376,7 +432,7 @@ public static class Program
                         .ToLowerInvariant(),
                     target[2],
                     StringComparison.Ordinal),
-            HookAdapterKind.Extension when registration is CapabilityProxy extension =>
+            HookAdapterKind.Extension when registration.Tool is CapabilityProxy extension =>
                 Guid.TryParse(target[0], out var generationId)
                 && extension.GenerationId == new ExtensionGenerationId(generationId),
             _ => false,

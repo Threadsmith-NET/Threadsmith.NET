@@ -1,125 +1,11 @@
 namespace Threadsmith.Tui;
 
 using System.Collections.Concurrent;
-using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
-
-/// <summary>Validated theme-owned UI presentation settings.</summary>
-/// <param name="Spinner">Validated spinner id.</param>
-/// <param name="SelectionMarker">Marker reserved for selector rendering.</param>
-/// <param name="FooterSeparator">Separator reserved for footer rendering.</param>
-internal sealed record TuiThemeUi(string Spinner, string SelectionMarker, string FooterSeparator)
-{
-    /// <summary>Gets the compiled UI defaults.</summary>
-    internal static TuiThemeUi Default { get; } = new("dots", ">", " | ");
-}
-
-/// <summary>Combines a validated theme with its display metadata.</summary>
-/// <param name="Name">Bounded display name.</param>
-/// <param name="Theme">Validated semantic theme.</param>
-/// <param name="Ui">Validated UI settings.</param>
-/// <param name="IsBuiltIn">Whether the entry is supplied by the host.</param>
-internal sealed record ConfiguredTheme(string Name, TuiTheme Theme, TuiThemeUi Ui, bool IsBuiltIn);
-
-/// <summary>Provides the ordered built-in and configured theme universe.</summary>
-internal sealed class ConfiguredThemeCatalog
-{
-    private readonly FrozenDictionary<string, ConfiguredTheme> _byId;
-
-    /// <summary>Initializes a new instance of the <see cref="ConfiguredThemeCatalog"/> class.</summary>
-    internal ConfiguredThemeCatalog(IEnumerable<ConfiguredTheme> themes, IEnumerable<string>? warnings = null)
-    {
-        ArgumentNullException.ThrowIfNull(themes);
-        var ordered = themes.ToArray();
-        if (ordered.Length == 0)
-        {
-            throw new ArgumentException("At least one theme is required.", nameof(themes));
-        }
-
-        Themes = ordered;
-        _byId = ordered.ToFrozenDictionary(item => item.Theme.Id, StringComparer.OrdinalIgnoreCase);
-        Warnings = warnings?.ToArray() ?? [];
-    }
-
-    /// <summary>Gets themes in deterministic display order.</summary>
-    internal IReadOnlyList<ConfiguredTheme> Themes { get; }
-
-    /// <summary>Gets safe catalog construction warnings.</summary>
-    internal IReadOnlyList<string> Warnings { get; }
-
-    /// <summary>Finds a theme by its case-insensitive stable id.</summary>
-    internal bool TryGet(string id, out ConfiguredTheme? theme)
-    {
-        return _byId.TryGetValue(id, out theme);
-    }
-}
-
-/// <summary>Owns the active process-local theme preference.</summary>
-internal sealed class SessionThemePreferences
-{
-    private readonly Lock _gate = new();
-    private ConfiguredTheme _activeTheme;
-
-    /// <summary>Initializes a new instance of the <see cref="SessionThemePreferences"/> class.</summary>
-    internal SessionThemePreferences(ConfiguredThemeCatalog catalog, string? defaultThemeId)
-    {
-        ArgumentNullException.ThrowIfNull(catalog);
-        Catalog = catalog;
-        if (!string.IsNullOrWhiteSpace(defaultThemeId)
-            && catalog.TryGet(defaultThemeId, out var configured)
-            && configured is not null)
-        {
-            _activeTheme = configured;
-        }
-        else
-        {
-            _activeTheme = catalog.Themes[0];
-        }
-    }
-
-    /// <summary>Gets the selectable theme catalog.</summary>
-    internal ConfiguredThemeCatalog Catalog { get; }
-
-    /// <summary>Gets the active theme snapshot.</summary>
-    internal ConfiguredTheme ActiveTheme
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _activeTheme;
-            }
-        }
-    }
-
-    /// <summary>Changes the active theme when the id is known.</summary>
-    internal bool TrySelect(string id, out ConfiguredTheme? selected)
-    {
-        if (!Catalog.TryGet(id, out var configured) || configured is null)
-        {
-            selected = null;
-            return false;
-        }
-
-        lock (_gate)
-        {
-            _activeTheme = configured;
-        }
-
-        selected = configured;
-        return true;
-    }
-}
-
-/// <summary>Persists the selected theme outside process-local presentation state.</summary>
-internal interface IThemePreferenceStore
-{
-    /// <summary>Sets the user-level default theme while preserving unrelated configuration.</summary>
-    Task SetDefaultThemeAsync(string themeId, CancellationToken cancellationToken = default);
-}
+using Threadsmith.Interaction.Presentation;
 
 /// <summary>Atomically persists the default theme in the ordinary user configuration file.</summary>
 internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceStore
@@ -143,22 +29,22 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         await gate.WaitAsync(cancellationToken);
         try
         {
-            string directory = Path.GetDirectoryName(_configurationPath)
+            var directory = Path.GetDirectoryName(_configurationPath)
                 ?? throw new InvalidOperationException("The user configuration path has no parent directory.");
             Directory.CreateDirectory(directory);
             RejectReparsePoint(directory);
             RejectReparsePoint(_configurationPath);
 
-            (byte[] original, var root) = await ReadRootAsync(cancellationToken).ConfigureAwait(false);
+            (var original, var root) = await ReadRootAsync(cancellationToken).ConfigureAwait(false);
             var tui = GetOrCreateObject(root, "tui");
             SetProperty(tui, "defaultTheme", themeId);
-            byte[] updated = UpdateThemeDefault(original, themeId);
+            var updated = UpdateThemeDefault(original, themeId);
             if (updated.Length > MaximumConfigurationBytes)
             {
                 throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
             }
 
-            string temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
+            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
             try
             {
                 await File.WriteAllBytesAsync(
@@ -231,19 +117,19 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
     private static byte[] UpdateThemeDefault(byte[] original, string themeId)
     {
         var location = LocateTheme(original);
-        byte[] serializedTheme = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(themeId));
+        var serializedTheme = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(themeId));
         if (location.DefaultTheme is ValueLocation existing)
         {
             return ReplaceRange(original, existing.Start, existing.End, serializedTheme);
         }
 
-        byte[] property = Combine(Encoding.UTF8.GetBytes("\"defaultTheme\":"), serializedTheme);
+        var property = Combine(Encoding.UTF8.GetBytes("\"defaultTheme\":"), serializedTheme);
         if (location.Tui is ObjectLocation tui)
         {
             return InsertProperty(original, tui, property);
         }
 
-        byte[] tuiProperty = Combine(
+        var tuiProperty = Combine(
             Encoding.UTF8.GetBytes("\"tui\":{"),
             property,
             Encoding.UTF8.GetBytes("}"));
@@ -252,7 +138,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static ThemeJsonLocation LocateTheme(byte[] original)
     {
-        int prefixLength = original.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
+        var prefixLength = GetUtf8BomPrefixLength(original);
         var reader = new Utf8JsonReader(original.AsSpan(prefixLength), new JsonReaderOptions
         {
             AllowTrailingCommas = true,
@@ -273,15 +159,15 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         ObjectPurpose purpose,
         int prefixLength)
     {
-        bool hasProperties = false;
-        int lastValueEnd = checked((int)reader.BytesConsumed) + prefixLength;
+        var hasProperties = false;
+        var lastValueEnd = checked((int)reader.BytesConsumed) + prefixLength;
         ObjectLocation? tui = null;
         ValueLocation? defaultTheme = null;
         while (ReadSignificantToken(ref reader))
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
-                int closingBrace = checked((int)reader.TokenStartIndex) + prefixLength;
+                var closingBrace = checked((int)reader.TokenStartIndex) + prefixLength;
                 return new ObjectScanResult(
                     new ObjectLocation(closingBrace, hasProperties, lastValueEnd),
                     tui,
@@ -294,17 +180,17 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             }
 
             hasProperties = true;
-            string propertyName = reader.GetString()
+            var propertyName = reader.GetString()
                 ?? throw new InvalidOperationException("The user configuration property name is invalid.");
             if (!ReadSignificantToken(ref reader))
             {
                 throw new InvalidOperationException("The user configuration property has no value.");
             }
 
-            int valueStart = checked((int)reader.TokenStartIndex) + prefixLength;
-            bool isTui = purpose == ObjectPurpose.Root
+            var valueStart = checked((int)reader.TokenStartIndex) + prefixLength;
+            var isTui = purpose == ObjectPurpose.Root
                 && string.Equals(propertyName, "tui", StringComparison.OrdinalIgnoreCase);
-            bool isDefaultTheme = purpose == ObjectPurpose.Tui
+            var isDefaultTheme = purpose == ObjectPurpose.Tui
                 && string.Equals(propertyName, "defaultTheme", StringComparison.OrdinalIgnoreCase);
             if (isTui && reader.TokenType == JsonTokenType.StartObject)
             {
@@ -336,7 +222,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             return;
         }
 
-        int depth = 1;
+        var depth = 1;
         while (depth > 0 && reader.Read())
         {
             if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
@@ -370,7 +256,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static byte[] InsertProperty(byte[] original, ObjectLocation location, byte[] property)
     {
-        bool hasTrailingComma = location.HasProperties
+        var hasTrailingComma = location.HasProperties
             && HasTrailingComma(original.AsSpan(location.LastValueEnd, location.ClosingBrace - location.LastValueEnd));
         byte[] separator = location.HasProperties && !hasTrailingComma ? [(byte)','] : [];
         return ReplaceRange(
@@ -382,10 +268,10 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static bool HasTrailingComma(ReadOnlySpan<byte> trailingTrivia)
     {
-        int index = 0;
+        var index = 0;
         while (index < trailingTrivia.Length)
         {
-            byte current = trailingTrivia[index];
+            var current = trailingTrivia[index];
             if (current is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
             {
                 index++;
@@ -440,10 +326,10 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
 
     private static byte[] Combine(params byte[][] segments)
     {
-        int length = segments.Sum(segment => segment.Length);
+        var length = segments.Sum(segment => segment.Length);
         var combined = new byte[length];
-        int offset = 0;
-        foreach (byte[] segment in segments)
+        var offset = 0;
+        foreach (var segment in segments)
         {
             segment.CopyTo(combined, offset);
             offset += segment.Length;
@@ -456,7 +342,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
     {
         if (!File.Exists(_configurationPath))
         {
-            byte[] emptyRoot = Encoding.UTF8.GetBytes("{}");
+            var emptyRoot = Encoding.UTF8.GetBytes("{}");
             return (emptyRoot, new JsonObject());
         }
 
@@ -466,8 +352,9 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             throw new InvalidOperationException("The user configuration exceeds the supported size.");
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(_configurationPath, cancellationToken).ConfigureAwait(false);
-        JsonNode? node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions
+        var bytes = await File.ReadAllBytesAsync(_configurationPath, cancellationToken).ConfigureAwait(false);
+        var prefixLength = GetUtf8BomPrefixLength(bytes);
+        var node = JsonNode.Parse(bytes.AsSpan(prefixLength), documentOptions: new JsonDocumentOptions
         {
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
@@ -476,6 +363,11 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         return node is JsonObject root
             ? (bytes, root)
             : throw new InvalidOperationException("The user configuration root must be an object.");
+    }
+
+    private static int GetUtf8BomPrefixLength(byte[] bytes)
+    {
+        return bytes.AsSpan().StartsWith([(byte)0xEF, (byte)0xBB, (byte)0xBF]) ? 3 : 0;
     }
 
     private enum ObjectPurpose
@@ -520,8 +412,8 @@ internal static class TuiThemeConfigurationLoader
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
             var themes = BuiltInThemes.Create();
-            string detail = SafeMessage(exception.Message);
-            string warning = $"Configured themes are invalid; using system. {detail}";
+            var detail = SafeMessage(exception.Message);
+            var warning = $"Configured themes are invalid; using system. {detail}";
             return (new ConfiguredThemeCatalog(themes, [warning]), "system");
         }
     }
@@ -541,14 +433,14 @@ internal static class TuiThemeConfigurationLoader
                 var layerValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 var pendingPaths = new Stack<string>();
                 pendingPaths.Push("tui:themes");
-                while (pendingPaths.TryPop(out string? parentPath))
+                while (pendingPaths.TryPop(out var parentPath))
                 {
-                    foreach (string childKey in provider
+                    foreach (var childKey in provider
                         .GetChildKeys([], parentPath)
                         .Distinct(StringComparer.OrdinalIgnoreCase))
                     {
-                        string childPath = ConfigurationPath.Combine(parentPath, childKey);
-                        if (provider.TryGet(childPath, out string? value))
+                        var childPath = ConfigurationPath.Combine(parentPath, childKey);
+                        if (provider.TryGet(childPath, out var value))
                         {
                             layerValues[childPath] = value;
                         }
@@ -589,7 +481,7 @@ internal static class TuiThemeConfigurationLoader
 
         foreach (var theme in configuredThemes)
         {
-            if (positions.TryGetValue(theme.Theme.Id, out int existingIndex))
+            if (positions.TryGetValue(theme.Theme.Id, out var existingIndex))
             {
                 themes[existingIndex] = theme;
                 warnings.Add($"Theme '{theme.Theme.Id}' replaced an earlier definition.");
@@ -602,7 +494,7 @@ internal static class TuiThemeConfigurationLoader
         }
 
         var catalog = new ConfiguredThemeCatalog(themes, warnings);
-        string requestedDefault = configuration?["tui:defaultTheme"] ?? "system";
+        var requestedDefault = configuration?["tui:defaultTheme"] ?? "system";
         if (!catalog.TryGet(requestedDefault, out _))
         {
             warnings.Add($"Unknown default theme '{SafeId(requestedDefault)}'; using system.");
@@ -626,7 +518,7 @@ internal static class TuiThemeConfigurationLoader
             }
             catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
             {
-                string configuredId = section["id"] ?? section.Key;
+                var configuredId = section["id"] ?? section.Key;
                 warnings.Add(
                     $"Configured theme '{SafeId(configuredId)}' is invalid and was ignored. {SafeMessage(exception.Message)}");
             }
@@ -635,32 +527,32 @@ internal static class TuiThemeConfigurationLoader
 
     private static ConfiguredTheme ParseTheme(IConfigurationSection section)
     {
-        string id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
-        string name = section["name"] ?? id;
+        var id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
+        var name = section["name"] ?? id;
         ValidateText(name, MaximumNameLength, "Theme names");
-        var styles = new List<KeyValuePair<TuiTextRole, TuiTextStyle>>();
+        var styles = new List<KeyValuePair<PresentationTextRole, TuiTextStyle>>();
         foreach (var styleSection in section.GetSection("styles").GetChildren())
         {
             string[] supportedStyleSettings =
             [
                 "foreground", "background", "bold", "dim", "italic", "underline", "strikethrough", "invert",
             ];
-            string? unknownStyleSetting = styleSection.GetChildren().Select(child => child.Key)
+            var unknownStyleSetting = styleSection.GetChildren().Select(child => child.Key)
                 .FirstOrDefault(key => !supportedStyleSettings.Contains(key, StringComparer.OrdinalIgnoreCase));
             if (unknownStyleSetting is not null)
             {
                 throw new InvalidOperationException($"Unsupported theme style setting '{SafeId(unknownStyleSetting)}'.");
             }
 
-            if (!Enum.TryParse(styleSection.Key, ignoreCase: true, out TuiTextRole role)
+            if (!Enum.TryParse(styleSection.Key, ignoreCase: true, out PresentationTextRole role)
                 || !Enum.IsDefined(role))
             {
                 throw new InvalidOperationException($"Unknown semantic theme role '{SafeId(styleSection.Key)}'.");
             }
 
-            bool hasDecorationSetting = Decorations.Any(item => styleSection[item.Key] is not null);
+            var hasDecorationSetting = Decorations.Any(item => styleSection[item.Key] is not null);
             TuiTextDecoration? decorations = hasDecorationSetting ? TuiTextDecoration.None : null;
-            foreach ((string key, var decoration) in Decorations)
+            foreach ((var key, var decoration) in Decorations)
             {
                 if (styleSection.GetValue<bool?>(key) == true)
                 {
@@ -668,7 +560,7 @@ internal static class TuiThemeConfigurationLoader
                 }
             }
 
-            styles.Add(new KeyValuePair<TuiTextRole, TuiTextStyle>(
+            styles.Add(new KeyValuePair<PresentationTextRole, TuiTextStyle>(
                 role,
                 new TuiTextStyle(
                     ParseOptionalColor(styleSection["foreground"]),
@@ -678,16 +570,16 @@ internal static class TuiThemeConfigurationLoader
 
         var uiSection = section.GetSection("ui");
         string[] supportedUi = ["spinner", "selectionMarker", "footerSeparator"];
-        string? unknownUi = uiSection.GetChildren().Select(child => child.Key)
+        var unknownUi = uiSection.GetChildren().Select(child => child.Key)
             .FirstOrDefault(key => !supportedUi.Contains(key, StringComparer.OrdinalIgnoreCase));
         if (unknownUi is not null)
         {
             throw new InvalidOperationException($"Unsupported theme UI setting '{SafeId(unknownUi)}'.");
         }
 
-        string spinner = uiSection["spinner"] ?? TuiThemeUi.Default.Spinner;
-        string marker = uiSection["selectionMarker"] ?? TuiThemeUi.Default.SelectionMarker;
-        string separator = uiSection["footerSeparator"] ?? TuiThemeUi.Default.FooterSeparator;
+        var spinner = uiSection["spinner"] ?? TuiThemeUi.Default.Spinner;
+        var marker = uiSection["selectionMarker"] ?? TuiThemeUi.Default.SelectionMarker;
+        var separator = uiSection["footerSeparator"] ?? TuiThemeUi.Default.FooterSeparator;
         ValidateText(spinner, MaximumUiValueLength, "Theme spinner names");
         ValidateText(marker, MaximumUiValueLength, "Theme selection markers");
         ValidateText(separator, MaximumUiValueLength, "Theme footer separators");
@@ -730,53 +622,5 @@ internal static class TuiThemeConfigurationLoader
     private static string SafeMessage(string value)
     {
         return new([.. value.Where(character => !char.IsControl(character)).Take(160)]);
-    }
-}
-
-/// <summary>Defines the compiled theme collection.</summary>
-internal static class BuiltInThemes
-{
-    /// <summary>Creates the ordered built-in theme collection.</summary>
-    internal static IReadOnlyList<ConfiguredTheme> Create()
-    {
-        return [
-        new("System", TuiTheme.System, TuiThemeUi.Default, true),
-        Create("forge-dark", "Forge Dark", "#D0D0D0", "#5FAFFF", "brightmagenta", "brightcyan", "brightgreen", "brightred"),
-        Create("ocean", "Ocean", "#C6E7FF", "brightcyan", "#FF9FD6", "#5FAFFF", "#67E480", "#FF6B81"),
-        Create("high-contrast", "High Contrast", "brightwhite", "brightcyan", "brightyellow", "brightmagenta", "brightgreen", "brightred", accessible: true),
-    ];
-    }
-
-    private static ConfiguredTheme Create(
-        string id,
-        string name,
-        string foreground,
-        string accent,
-        string thinking,
-        string composerPrompt,
-        string success,
-        string failure,
-        bool accessible = false)
-    {
-        var emphasis = accessible ? TuiTextDecoration.Bold | TuiTextDecoration.Underline : TuiTextDecoration.Bold;
-        KeyValuePair<TuiTextRole, TuiTextStyle>[] styles =
-        [
-            new(TuiTextRole.Default, new TuiTextStyle(TuiColor.Parse(foreground))),
-            new(TuiTextRole.Brand, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Bold)),
-            new(TuiTextRole.Hyperlink, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Underline)),
-            new(TuiTextRole.ComposerPrompt, new TuiTextStyle(TuiColor.Parse(composerPrompt), Decorations: TuiTextDecoration.Bold)),
-            new(TuiTextRole.ThinkingIndicator, new TuiTextStyle(TuiColor.Parse(thinking), Decorations: emphasis)),
-            new(TuiTextRole.SessionStatus, new TuiTextStyle(Decorations: TuiTextDecoration.Invert)),
-            new(TuiTextRole.SelectionHighlight, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse(accent), emphasis)),
-            new(TuiTextRole.Success, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
-            new(TuiTextRole.ToolSuccess, new TuiTextStyle(TuiColor.Parse(success), Decorations: emphasis)),
-            new(TuiTextRole.Error, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
-            new(TuiTextRole.ToolFailure, new TuiTextStyle(TuiColor.Parse(failure), Decorations: emphasis)),
-            new(TuiTextRole.Warning, new TuiTextStyle(TuiColor.Parse("brightyellow"), Decorations: emphasis)),
-            new(TuiTextRole.DiffAdded, new TuiTextStyle(TuiColor.Parse(success))),
-            new(TuiTextRole.DiffRemoved, new TuiTextStyle(TuiColor.Parse(failure))),
-            new(TuiTextRole.DiffContext, new TuiTextStyle(TuiColor.Parse(foreground))),
-        ];
-        return new ConfiguredTheme(name, new TuiTheme(id, styles), TuiThemeUi.Default, true);
     }
 }

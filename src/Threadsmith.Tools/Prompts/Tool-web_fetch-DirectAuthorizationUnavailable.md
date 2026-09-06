@@ -1,0 +1,1 @@
+DirectAuthorizationRequired: explicit exact-URL authority is required for origin {{Origin}}; path {{Path}}; exact digest {{UrlDigest}}. Use /fetch-authorize or the headless authorization input and retry.

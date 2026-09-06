@@ -43,9 +43,9 @@ public sealed class SessionRestorer : ISessionRestorer
         var rows = await _eventStore.ReadRowsAsync(
             sessionId,
             cancellationToken);
-        int replayed = 0;
-        int migrated = 0;
-        int legacy = 0;
+        var replayed = 0;
+        var migrated = 0;
+        var legacy = 0;
         var warnings = new List<string>();
         foreach (var row in rows)
         {

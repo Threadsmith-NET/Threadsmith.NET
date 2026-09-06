@@ -124,6 +124,24 @@ public interface IEvidenceStore
     /// <summary>Adds or replaces one evidence item.</summary>
     Task AddAsync(Evidence evidence, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Prepares every admission event, then adds or replaces the complete batch at one commit gate before
+    /// subscribers observe it. Pre-commit failure or cancellation leaves the store unchanged; cancellation
+    /// after commit does not roll producer state back.
+    /// </summary>
+    Task AddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Adds a complete batch only when the caller's synchronous commit arbiter succeeds at the same commit gate.
+    /// </summary>
+    /// <returns>Whether both the caller disposition and evidence batch committed.</returns>
+    Task<bool> TryAddBatchAsync(
+        IReadOnlyList<Evidence> evidence,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Gets a detached session evidence snapshot.</summary>
     IReadOnlyList<Evidence> Snapshot(SessionId sessionId);
 
@@ -140,7 +158,11 @@ public interface IEvidenceStore
 }
 
 /// <summary>One model-visible tool contract included in governed context.</summary>
-public sealed record ContextToolSchema(string Id, string Description, string JsonSchema);
+public sealed record ContextToolSchema(
+    string Id,
+    string Description,
+    string JsonSchema,
+    bool PreferStrictArguments = false);
 
 /// <summary>Input state for one phase-specific context assembly.</summary>
 public sealed record ContextAssemblyRequest
@@ -159,6 +181,9 @@ public sealed record ContextAssemblyRequest
 
     /// <summary>Normalized repository root used to resolve append files.</summary>
     public required string RepositoryPath { get; init; }
+
+    /// <summary>Stable repository identity used for repository-scoped local memory.</summary>
+    public string? RepositoryIdentity { get; init; }
 
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
@@ -196,6 +221,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Transient host context visible only to the current assembled request.</summary>
     public IReadOnlyList<string> CurrentTurnHostContext { get; init; } = [];
 
+    /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
+    public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
+
     /// <summary>Authoritative archived current user message.</summary>
     public ConversationMessageId? CurrentMessageId { get; init; }
 
@@ -218,7 +246,8 @@ public sealed record ContextAssemblyResult(
     ModelRequestLayout? Layout = null,
     ModelWireEstimate? WireEstimate = null,
     string? ToolInventoryDigest = null,
-    string? InstructionBundleDigest = null);
+    string? InstructionBundleDigest = null,
+    ModelProviderInstructions? ProviderInstructions = null);
 
 /// <summary>Assembles model input from explicit state rather than transcript replay.</summary>
 public interface IContextAssembler
@@ -230,6 +259,28 @@ public interface IContextAssembler
 
     /// <summary>Gets the most recent detached inspection record for a run.</summary>
     ContextInspectionProjection? GetInspection(RunId runId);
+
+    /// <summary>Records one bounded pre-sampling active-turn assessment.</summary>
+    Task UpdateActiveTurnInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        ActiveTurnCompactionInspectionProjection activeTurn,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Records request-local visible source frontier counts without source content.</summary>
+    Task UpdateVisibleSourceFrontierInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        VisibleSourceFrontierInspectionProjection visibleSourceFrontier,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 
     /// <summary>Invalidates every cached inspection after a shared model-selection change.</summary>
     void InvalidateInspections();

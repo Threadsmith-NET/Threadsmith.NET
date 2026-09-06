@@ -1,0 +1,1 @@
+Create a context checkpoint from the current task and new tool activity. Record what the user wants, constraints, completed and current work, blockers, decisions, next steps, and critical details needed to continue. Keep every section concise. Preserve exact file paths, symbol names, commands, errors, and unresolved questions when they matter.

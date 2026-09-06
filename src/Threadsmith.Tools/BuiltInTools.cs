@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.ComponentModel;
 using System.IO.Enumeration;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -37,21 +38,22 @@ public sealed record ListFilesOutput(
 /// <summary>Lists repository files without following reparse points.</summary>
 public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
-        "list_files",
-        "Lists repository files under a bounded approved root.",
-        ToolCategory.RepositoryInspection,
-        RepositoryTrustLevel.UntrustedInspection,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(10),
-        128 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="ListFilesTool"/> class.</summary>
-    public ListFilesTool(ToolLimits? limits = null)
+    public ListFilesTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
+            "list_files",
+            promptLoader.Get(PromptFileNames.ToolListFilesDescription),
+            ToolCategory.RepositoryInspection,
+            RepositoryTrustLevel.UntrustedInspection,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(10),
+            128 * 1024);
         _limits = limits ?? ToolLimits.Default;
     }
 
@@ -154,32 +156,61 @@ public sealed record ReadFileInput
     public int MaximumLines { get; init; } = 0;
 }
 
-/// <summary>Bounded file content with an explicit range.</summary>
+/// <summary>Reason one bounded file read stopped before the end of the file.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ReadFileTruncationReason>))]
+public enum ReadFileTruncationReason
+{
+    /// <summary>The configured or requested line limit was reached.</summary>
+    LineLimit,
+
+    /// <summary>The host textual-content byte limit was reached.</summary>
+    ContentByteLimit,
+}
+
+/// <summary>Bounded file content with explicit range and continuation metadata.</summary>
 public sealed record ReadFileOutput(
     string Path,
     int StartLine,
+    int? EndLine,
+    int TotalLines,
     IReadOnlyList<string> Lines,
-    bool IsTruncated);
+    bool IsTruncated,
+    int? NextStartLine,
+    ReadFileTruncationReason? TruncationReason);
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
-        "read_file",
-        "Reads a bounded range from an approved repository file.",
-        ToolCategory.FileRead,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(10),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="ReadFileTool"/> class.</summary>
-    public ReadFileTool(ToolLimits? limits = null)
+    public ReadFileTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
+            "read_file",
+            promptLoader.Get(PromptFileNames.ToolReadFileDescription),
+            ToolCategory.FileRead,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(10),
+            384 * 1024);
         _limits = limits ?? ToolLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaxLines,
+            ToolLimits.ReadFileLineLimitCeiling);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileDefaultLines,
+            _limits.ReadFileMaxLines);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumContentBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            _limits.ReadFileMaximumContentBytes,
+            ToolLimits.ReadFileContentByteLimitCeiling);
     }
 
     /// <inheritdoc />
@@ -207,15 +238,53 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         var lines = await File.ReadAllLinesAsync(path, cancellationToken);
         var startIndex = Math.Min(input.StartLine - 1, lines.Length);
         var maximumLines = ResolveMaximumLines(input);
-        string[] selected = [.. lines.Skip(startIndex).Take(maximumLines)];
-        var truncated = startIndex + selected.Length < lines.Length;
+        var selected = new List<string>(Math.Min(maximumLines, lines.Length - startIndex));
+        var selectedContentBytes = 0;
+        var contentLimitReached = false;
+        for (var index = startIndex; index < lines.Length && selected.Count < maximumLines; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
+            var separatorBytes = selected.Count == 0 ? 0 : 1;
+            if (selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
+            {
+                if (selected.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Line {index + 1} exceeds the {_limits.ReadFileMaximumContentBytes}-byte read content limit.");
+                }
+
+                contentLimitReached = true;
+                break;
+            }
+
+            selected.Add(lines[index]);
+            selectedContentBytes += separatorBytes + lineBytes;
+        }
+
+        int? endLine = selected.Count == 0 ? null : input.StartLine + selected.Count - 1;
+        var truncated = startIndex + selected.Count < lines.Length;
+        ReadFileTruncationReason? truncationReason = truncated
+            ? contentLimitReached
+                ? ReadFileTruncationReason.ContentByteLimit
+                : ReadFileTruncationReason.LineLimit
+            : null;
+        int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
         var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
-        var source = new ToolProvenanceSource(
-            "file",
-            relative,
-            $"L{input.StartLine}-L{input.StartLine + Math.Max(0, selected.Length - 1)}");
+        var sourceLocation = endLine is null
+            ? $"L{input.StartLine}"
+            : $"L{input.StartLine}-L{endLine.Value}";
+        var source = new ToolProvenanceSource("file", relative, sourceLocation);
         return new ToolExecution<ReadFileOutput>(
-            new ReadFileOutput(relative, input.StartLine, selected, truncated),
+            new ReadFileOutput(
+                relative,
+                input.StartLine,
+                endLine,
+                lines.Length,
+                selected,
+                truncated,
+                nextStartLine,
+                truncationReason),
             [source],
             truncated);
     }
@@ -259,6 +328,9 @@ public sealed record SearchTextInput
     /// <summary>Text or regex pattern.</summary>
     public required string Query { get; init; }
 
+    /// <summary>Repository-relative file or directory to search; defaults to the repository root.</summary>
+    public string? Path { get; init; }
+
     /// <summary>Simple repository-relative glob.</summary>
     public string Glob { get; init; } = "*";
 
@@ -284,16 +356,6 @@ public sealed record SearchTextOutput(
 /// <summary>Searches bounded text without executing repository code.</summary>
 public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
-        "search",
-        "Fallback repository text search for exact literals, configuration keys, routes, log messages, comments, and docs. MUST NOT replace an advertised semantic tool: use semantic tools first for C# symbols, references, implementations, call relationships, impact, syntax shapes, and generated code; use search only when no semantic tool applies or the attempted semantic tool fails or explicitly reports incomplete evidence.",
-        ToolCategory.FileSearch,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
     private static readonly string[] _searchExcludedDirectories =
     [
         ".codegraph",
@@ -308,17 +370,31 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     ];
 
     private readonly ToolLimits _limits;
+    private readonly IPromptLoader _prompts;
     private readonly IProcessManager? _processManager;
     private readonly string _ripgrepExecutable;
+    private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="SearchTextTool"/> class.</summary>
     public SearchTextTool(
+        IPromptLoader promptLoader,
         ToolLimits? limits = null,
         IProcessManager? processManager = null,
         string ripgrepExecutable = "rg")
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
         ArgumentException.ThrowIfNullOrWhiteSpace(ripgrepExecutable);
+        _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
+            "search",
+            promptLoader.Get(PromptFileNames.ToolSearchDescription),
+            ToolCategory.FileSearch,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _limits = limits ?? ToolLimits.Default;
+        _prompts = promptLoader;
         _processManager = processManager;
         _ripgrepExecutable = ripgrepExecutable;
     }
@@ -335,18 +411,25 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         var matches = new List<TextSearchMatch>();
         var sources = new List<ToolProvenanceSource>();
         var truncated = false;
-        Regex? regex = input.UseRegularExpression
+        var regex = input.UseRegularExpression
             ? new Regex(
                 input.Query,
                 RegexOptions.CultureInvariant,
                 TimeSpan.FromMilliseconds(250))
             : null;
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
+        var searchPath = ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context.Invocation);
+        if (!File.Exists(searchPath) && !Directory.Exists(searchPath))
+        {
+            throw new FileNotFoundException("The search path does not exist.", searchPath);
+        }
+
         var maximumMatches = ResolveMaximumMatches(input);
-        RipgrepSearchAttempt ripgrepAttempt = await TryExecuteRipgrepAsync(
+        var ripgrepAttempt = await TryExecuteRipgrepAsync(
             input,
             context,
             repositoryPath,
+            searchPath,
             maximumMatches,
             cancellationToken);
         if (ripgrepAttempt.Execution is not null)
@@ -354,8 +437,9 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             return ripgrepAttempt.Execution;
         }
 
-        SearchFileSet fileSet = await GetManagedSearchFilesAsync(
+        var fileSet = await GetManagedSearchFilesAsync(
             repositoryPath,
+            searchPath,
             context,
             cancellationToken);
         truncated = fileSet.IsTruncated;
@@ -368,10 +452,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative)
                 || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths)
                 || IsUnsupportedSearchFile(path)
-                || !FileSystemName.MatchesSimpleExpression(
-                    input.Glob,
-                    relative,
-                    ignoreCase: OperatingSystem.IsWindows()))
+                || !MatchesSearchGlob(input.Glob, relative))
             {
                 continue;
             }
@@ -388,7 +469,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 await foreach (var line in File.ReadLinesAsync(path, cancellationToken))
                 {
                     lineNumber++;
-                    Match? match = regex?.Match(line);
+                    var match = regex?.Match(line);
                     var column = regex is null
                         ? line.IndexOf(input.Query, StringComparison.OrdinalIgnoreCase)
                         : match is { Success: true }
@@ -443,7 +524,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     /// <inheritdoc />
     protected override string DescribeActivity(SearchTextInput input)
     {
-        return input.Query;
+        return $"{input.Query} in {input.Path ?? "."}";
     }
 
     /// <inheritdoc />
@@ -451,10 +532,21 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Glob);
+        if (input.Path is not null && string.IsNullOrWhiteSpace(input.Path))
+        {
+            throw new ToolArgumentValidationException("path cannot be empty when supplied.");
+        }
+
         if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(
-                $"query is limited to 500 characters and maximumMatches to 0..{_limits.SearchMaxMatches} (0 uses the host default).");
+                _prompts.Render(
+                    PromptFileNames.CorrectionSearchBounds,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["MaximumMatches"] = _limits.SearchMaxMatches.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture),
+                    }));
         }
 
         if (input.UseRegularExpression)
@@ -475,7 +567,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         SearchTextInput input,
         ToolInvocationContext context)
     {
-        return [context.RepositoryPath];
+        return [ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context)];
     }
 
     private int ResolveMaximumMatches(SearchTextInput input)
@@ -487,6 +579,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         SearchTextInput input,
         ToolExecutionContext context,
         string repositoryPath,
+        string searchPath,
         int maximumMatches,
         CancellationToken cancellationToken)
     {
@@ -497,18 +590,15 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 "Ripgrep process execution is unavailable; used the managed text-search fallback.");
         }
 
-        if (context.Invocation.ProhibitedPaths.Count > 0 || input.Glob.StartsWith('!'))
+        if (input.Glob.StartsWith('!'))
         {
-            return new RipgrepSearchAttempt(null, null);
+            throw new ToolArgumentValidationException("glob must be an inclusion pattern, not an exclusion pattern.");
         }
 
         var arguments = new List<string>
         {
-            "--line-number",
-            "--column",
-            "--no-heading",
+            "--json",
             "--color=never",
-            "--null",
             "--hidden",
             $"--max-filesize={_limits.SearchMaximumBytes}",
             $"--max-count={maximumMatches}",
@@ -521,6 +611,14 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         foreach (var excludedDirectory in _searchExcludedDirectories)
         {
             arguments.Add($"--iglob=!**/{excludedDirectory}/**");
+        }
+
+        foreach (var prohibitedPath in context.Invocation.ProhibitedPaths)
+        {
+            if (TryCreateRipgrepExclusionGlob(prohibitedPath, out var exclusionGlob))
+            {
+                arguments.Add($"--iglob=!{exclusionGlob}");
+            }
         }
 
         if (!input.UseRegularExpression)
@@ -536,7 +634,8 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         arguments.Add("--regexp");
         arguments.Add(input.Query);
-        arguments.Add(".");
+        arguments.Add("--");
+        arguments.Add(Path.GetRelativePath(repositoryPath, searchPath));
 
         ProcessExecutionResult result;
         try
@@ -551,6 +650,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                     WorkingDirectory = repositoryPath,
                     Timeout = TimeSpan.FromSeconds(25),
                     MaximumOutputCharacters = Definition.MaximumOutputBytes,
+                    StandardOutputFormat = ProcessStandardOutputFormat.RipgrepJsonLines,
                     Origin = ProcessRequestOrigin.Host,
                 },
                 cancellationToken);
@@ -575,56 +675,86 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
         if (result.ExitCode is not 0 and not 1)
         {
-            return new RipgrepSearchAttempt(
-                null,
-                "Ripgrep could not execute the requested pattern; used the managed text-search fallback.");
+            throw new InvalidOperationException(
+                $"Ripgrep exited with code {result.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}.");
         }
 
         var matches = new List<TextSearchMatch>();
         var sources = new List<ToolProvenanceSource>();
         var truncated = result.StandardOutputTruncated;
-        foreach (var record in result.StandardOutput.Split('\n'))
+        var records = result.StandardOutput.Split('\n');
+        for (var index = 0; index < records.Length; index++)
         {
-            var pathTerminator = record.IndexOf('\0');
-            if (pathTerminator <= 0)
+            var trimmed = records[index].TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(trimmed))
             {
                 continue;
             }
 
-            var relative = record[..pathTerminator];
-            if (relative.StartsWith("./", StringComparison.Ordinal)
-                || relative.StartsWith(".\\", StringComparison.Ordinal))
+            JsonDocument document;
+            try
             {
-                relative = relative[2..];
+                document = JsonDocument.Parse(trimmed);
             }
-
-            relative = relative.Replace('\\', '/');
-            ReadOnlySpan<char> locationAndText = record.AsSpan(pathTerminator + 1).TrimEnd('\r');
-            var lineSeparator = locationAndText.IndexOf(':');
-            var columnSeparator = lineSeparator < 0
-                ? -1
-                : locationAndText[(lineSeparator + 1)..].IndexOf(':');
-            if (lineSeparator <= 0 || columnSeparator < 0)
+            catch (JsonException) when (result.StandardOutputTruncated
+                && index == records.Length - 1
+                && !result.StandardOutput.EndsWith('\n'))
             {
-                continue;
-            }
-
-            columnSeparator += lineSeparator + 1;
-            if (!int.TryParse(locationAndText[..lineSeparator], out var line)
-                || !int.TryParse(locationAndText[(lineSeparator + 1)..columnSeparator], out var column))
-            {
-                continue;
-            }
-
-            if (matches.Count == maximumMatches)
-            {
-                truncated = true;
                 break;
             }
 
-            var text = locationAndText[(columnSeparator + 1)..].ToString();
-            matches.Add(new TextSearchMatch(relative, line, column, text));
-            sources.Add(new ToolProvenanceSource("file", relative, $"L{line}"));
+            using (document)
+            {
+                var root = document.RootElement;
+                if (!root.TryGetProperty("type", out var type)
+                    || !string.Equals(type.GetString(), "match", StringComparison.Ordinal)
+                    || !root.TryGetProperty("data", out var data)
+                    || !TryReadRipgrepText(data, "path", out var relative)
+                    || !TryReadRipgrepSanitizedPath(data, out var projectedRelative)
+                    || !TryReadRipgrepText(data, "lines", out var text)
+                    || !data.TryGetProperty("line_number", out var lineNumber)
+                    || !lineNumber.TryGetInt32(out var line)
+                    || !TryReadRipgrepColumn(data, out var column))
+                {
+                    continue;
+                }
+
+                if (relative.StartsWith("./", StringComparison.Ordinal)
+                    || relative.StartsWith(".\\", StringComparison.Ordinal))
+                {
+                    relative = relative[2..];
+                }
+
+                relative = relative.Replace('\\', '/');
+                string matchedPath;
+                try
+                {
+                    matchedPath = ToolPathRules.NormalizeAndValidate(relative, context.Invocation);
+                }
+                catch (Exception exception) when (
+                    exception is ToolArgumentValidationException
+                        or UnauthorizedAccessException
+                        or IOException)
+                {
+                    continue;
+                }
+
+                if (!IsWithinSearchPath(matchedPath, searchPath))
+                {
+                    continue;
+                }
+
+                relative = Path.GetRelativePath(repositoryPath, matchedPath).Replace('\\', '/');
+                projectedRelative = NormalizeProjectedRipgrepPath(projectedRelative);
+                if (matches.Count == maximumMatches)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                matches.Add(new TextSearchMatch(projectedRelative, line, column, text.TrimEnd('\r', '\n')));
+                sources.Add(new ToolProvenanceSource("file", projectedRelative, $"L{line}"));
+            }
         }
 
         return new RipgrepSearchAttempt(
@@ -635,16 +765,97 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             null);
     }
 
+    private static bool TryReadRipgrepText(JsonElement data, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!data.TryGetProperty(propertyName, out var container)
+            || !container.TryGetProperty("text", out var text)
+            || text.GetString() is not { } textValue)
+        {
+            return false;
+        }
+
+        value = textValue;
+        return true;
+    }
+
+    private static bool TryReadRipgrepSanitizedPath(JsonElement data, out string value)
+    {
+        value = string.Empty;
+        if (!data.TryGetProperty("path", out var container))
+        {
+            return false;
+        }
+
+        if (container.TryGetProperty("sanitizedText", out var sanitizedText)
+            && sanitizedText.GetString() is { } sanitizedValue)
+        {
+            value = sanitizedValue;
+            return true;
+        }
+
+        if (container.TryGetProperty("text", out var text)
+            && text.GetString() is { } textValue)
+        {
+            value = textValue;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeProjectedRipgrepPath(string relative)
+    {
+        if (relative.StartsWith("./", StringComparison.Ordinal)
+            || relative.StartsWith(".\\", StringComparison.Ordinal))
+        {
+            relative = relative[2..];
+        }
+
+        return relative.Replace('\\', '/');
+    }
+
+    private static bool TryReadRipgrepColumn(JsonElement data, out int column)
+    {
+        column = 1;
+        if (!data.TryGetProperty("submatches", out var submatches)
+            || submatches.ValueKind != JsonValueKind.Array
+            || submatches.GetArrayLength() == 0)
+        {
+            return true;
+        }
+
+        var first = submatches[0];
+        if (!first.TryGetProperty("start", out var start)
+            || !start.TryGetInt32(out var zeroBasedColumn))
+        {
+            return false;
+        }
+
+        column = zeroBasedColumn + 1;
+        return true;
+    }
+
     private async Task<SearchFileSet> GetManagedSearchFilesAsync(
         string repositoryPath,
+        string searchPath,
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
-        SearchFileSet? gitFileSet = await TryEnumerateGitSearchFilesAsync(
+        var gitFileSet = await TryEnumerateGitSearchFilesAsync(
             repositoryPath,
             context,
             cancellationToken);
-        return gitFileSet ?? new SearchFileSet(EnumerateSearchFiles(repositoryPath), false);
+        if (gitFileSet is not null)
+        {
+            return new SearchFileSet(
+                [.. gitFileSet.Paths.Where(path => IsWithinSearchPath(path, searchPath))],
+                gitFileSet.IsTruncated);
+        }
+
+        return new SearchFileSet(
+            File.Exists(searchPath) ? [searchPath] : EnumerateSearchFiles(searchPath),
+            false);
     }
 
     private async Task<SearchFileSet?> TryEnumerateGitSearchFilesAsync(
@@ -747,6 +958,67 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         return new SearchFileSet(paths, result.StandardOutputTruncated);
     }
 
+    private static bool IsWithinSearchPath(string path, string searchPath)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (File.Exists(searchPath))
+        {
+            return path.Equals(searchPath, comparison);
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(searchPath);
+        return path.Equals(root, comparison)
+            || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+    }
+
+    private static bool TryCreateRipgrepExclusionGlob(
+        string prohibitedPattern,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? exclusionGlob)
+    {
+        exclusionGlob = null;
+        var pattern = prohibitedPattern.Replace('\\', '/').Trim().TrimStart('/');
+        if (pattern.Length == 0 || ContainsRipgrepOnlyGlobSyntax(pattern))
+        {
+            return false;
+        }
+
+        if (pattern.EndsWith('/'))
+        {
+            pattern += "**";
+        }
+
+        exclusionGlob = pattern;
+        return true;
+    }
+
+    private static bool ContainsRipgrepOnlyGlobSyntax(string pattern)
+    {
+        return pattern.Contains('[')
+            || pattern.Contains(']')
+            || pattern.Contains('{')
+            || pattern.Contains('}')
+            || pattern.Contains('!');
+    }
+
+    private static bool MatchesSearchGlob(string glob, string relativePath)
+    {
+        var ignoreCase = OperatingSystem.IsWindows();
+        if (FileSystemName.MatchesSimpleExpression(glob, relativePath, ignoreCase))
+        {
+            return true;
+        }
+
+        if (glob.Contains('/') || glob.Contains('\\'))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(relativePath);
+        return FileSystemName.MatchesSimpleExpression(glob, fileName, ignoreCase);
+    }
+
     private static bool IsManagedSearchLinkOrReparsePoint(string path)
     {
         var file = new FileInfo(path);
@@ -773,7 +1045,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         var files = new FileSystemEnumerable<string>(
             repositoryPath,
-            static (ref FileSystemEntry entry) => entry.ToFullPath(),
+            static (ref entry) => entry.ToFullPath(),
             new EnumerationOptions
             {
                 RecurseSubdirectories = true,
@@ -781,8 +1053,8 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 AttributesToSkip = FileAttributes.ReparsePoint,
             })
         {
-            ShouldIncludePredicate = static (ref FileSystemEntry entry) => !entry.IsDirectory,
-            ShouldRecursePredicate = static (ref FileSystemEntry entry) =>
+            ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory,
+            ShouldRecursePredicate = static (ref entry) =>
             {
                 var name = entry.FileName.ToString();
                 return !IsManagedSearchExcludedDirectory(name)
@@ -808,28 +1080,28 @@ public sealed record GitStatusInput;
 public sealed record GitStatusOutput(
     string Branch,
     IReadOnlyList<string> Entries,
-    int ExitCode,
     bool IsTruncated);
 
 /// <summary>Gets machine-readable read-only Git status through the process manager.</summary>
 public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<GitStatusInput, GitStatusOutput>(
-        "git_status",
-        "Gets bounded read-only Git branch and working-tree status.",
-        ToolCategory.GitInspection,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(15),
-        128 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
 
     /// <summary>Initializes a new instance of the <see cref="GitStatusTool"/> class.</summary>
-    public GitStatusTool(IProcessManager processManager)
+    public GitStatusTool(IProcessManager processManager, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(processManager);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<GitStatusInput, GitStatusOutput>(
+            "git_status",
+            promptLoader.Get(PromptFileNames.ToolGitStatusDescription),
+            ToolCategory.GitInspection,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(15),
+            128 * 1024);
         _processManager = processManager;
     }
 
@@ -843,7 +1115,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
         CancellationToken cancellationToken = default)
     {
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        ProcessExecutionResult result = await _processManager.RunAsync(
+        var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {
                 ToolInvocationId = context.ToolInvocationId,
@@ -878,7 +1150,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
                 context.Invocation.ProhibitedPaths))];
         var truncated = result.StandardOutputTruncated || result.StandardErrorTruncated;
         return new ToolExecution<GitStatusOutput>(
-            new GitStatusOutput(branch, entries, result.ExitCode ?? -1, truncated),
+            new GitStatusOutput(branch, entries, truncated),
             [new ToolProvenanceSource("git", repositoryPath)],
             truncated);
     }
@@ -915,9 +1187,6 @@ public sealed record FindReferencesInput
 {
     /// <summary>Stable symbol identity returned by find_symbol.</summary>
     public required string SymbolId { get; init; }
-
-    /// <summary>Whether explicit text fallback is allowed below partial compilation.</summary>
-    public bool AllowTextFallback { get; init; }
 }
 
 /// <summary>Input for implementation lookup.</summary>
@@ -930,23 +1199,27 @@ public sealed record FindImplementationsInput
 /// <summary>Compiler-aware declaration search tool.</summary>
 public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
-        "find_symbol",
-        "Primary compiler-aware tool for C# declarations. MUST use before search for a symbol; returns stable symbol identifiers for find_references, find_implementations, call_hierarchy, and symbol_impact.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedBuild,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindSymbolTool"/> class.</summary>
-    public FindSymbolTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindSymbolTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
+            "find_symbol",
+            promptLoader.Get(PromptFileNames.ToolFindSymbolDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedBuild,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -961,13 +1234,17 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Semantic symbol search requires an opened workspace.");
-        IReadOnlyList<SymbolResult> results = await _semanticEngine.FindSymbolsAsync(
+        var results = await _semanticEngine.FindSymbolsAsync(
             workspaceId,
             input.Query,
             cancellationToken);
-        SymbolResult[] selected = [.. results.Take(_limits.FindSymbolMaxResults)];
+        SymbolResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        SymbolResult[] selected = [.. allowed.Take(_limits.FindSymbolMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<SymbolResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -975,7 +1252,8 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1003,26 +1281,30 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
     }
 }
 
-/// <summary>Compiler-aware reference search tool with explicit degraded fallback.</summary>
+/// <summary>Compiler-aware reference search tool with host-selected degraded fallback.</summary>
 public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList<ReferenceResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
-        "find_references",
-        "Primary compiler-aware tool for C# symbol references. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindReferencesTool"/> class.</summary>
-    public FindReferencesTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindReferencesTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
+            "find_references",
+            promptLoader.Get(PromptFileNames.ToolFindReferencesDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1037,14 +1319,18 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Semantic reference search requires an opened workspace.");
-        IReadOnlyList<ReferenceResult> results = await _semanticEngine.FindReferencesAsync(
+        var results = await _semanticEngine.FindReferencesAsync(
             workspaceId,
             input.SymbolId,
-            input.AllowTextFallback,
+            allowTextFallback: true,
             cancellationToken);
-        ReferenceResult[] selected = [.. results.Take(_limits.FindReferencesMaxResults)];
+        ReferenceResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        ReferenceResult[] selected = [.. allowed.Take(_limits.FindReferencesMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<ReferenceResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -1052,7 +1338,8 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1079,23 +1366,27 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
 /// <summary>Compiler-aware implementation search tool.</summary>
 public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IReadOnlyList<ImplementationResult>>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<FindImplementationsInput, IReadOnlyList<ImplementationResult>>(
-        "find_implementations",
-        "Primary compiler-aware tool for interface implementations and derived or overriding symbols. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.",
-        ToolCategory.SemanticSearch,
-        RepositoryTrustLevel.TrustedBuild,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        256 * 1024);
-
+    private readonly ToolDefinition _definition;
     private readonly ISemanticEngineResolver _semanticEngine;
     private readonly ToolLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="FindImplementationsTool"/> class.</summary>
-    public FindImplementationsTool(ISemanticEngineResolver semanticEngine, ToolLimits? limits = null)
+    public FindImplementationsTool(
+        ISemanticEngineResolver semanticEngine,
+        IPromptLoader promptLoader,
+        ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(semanticEngine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory.Create<FindImplementationsInput, IReadOnlyList<ImplementationResult>>(
+            "find_implementations",
+            promptLoader.Get(PromptFileNames.ToolFindImplementationsDescription),
+            ToolCategory.SemanticSearch,
+            RepositoryTrustLevel.TrustedBuild,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            256 * 1024);
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1110,14 +1401,18 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
         CancellationToken cancellationToken = default)
     {
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        WorkspaceId workspaceId = context.Invocation.WorkspaceId
+        var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException(
                 "Semantic implementation search requires an opened workspace.");
-        IReadOnlyList<ImplementationResult> results = await _semanticEngine.FindImplementationsAsync(
+        var results = await _semanticEngine.FindImplementationsAsync(
             workspaceId,
             input.SymbolId,
             cancellationToken);
-        ImplementationResult[] selected = [.. results.Take(_limits.FindImplementationsMaxResults)];
+        ImplementationResult[] allowed = [.. results.Where(result => LegacySemanticToolOutput.IsAllowed(
+            result.Location,
+            context.Invocation))];
+        ImplementationResult[] selected = [.. allowed.Take(_limits.FindImplementationsMaxResults)];
+        var truncated = results.Count > selected.Length;
         return new ToolExecution<IReadOnlyList<ImplementationResult>>(
             selected,
             selected.Select(result => new ToolProvenanceSource(
@@ -1125,7 +1420,8 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
                 result.Symbol.Id,
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
-            results.Count > selected.Length);
+            truncated,
+            LegacySemanticToolOutput.Render(selected, truncated));
     }
 
     /// <inheritdoc />
@@ -1149,6 +1445,87 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
     }
 }
 
+/// <summary>Confines legacy semantic results and creates bounded, flat model-facing projections.</summary>
+internal static class LegacySemanticToolOutput
+{
+    private const int MaximumResults = 100;
+
+    /// <summary>Returns whether a semantic location is within the invocation path policy.</summary>
+    internal static bool IsAllowed(
+        SemanticSourceLocation location,
+        ToolInvocationContext context)
+    {
+        try
+        {
+            _ = ToolPathRules.NormalizeAndValidate(location.FilePath, context);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Projects symbol declarations.</summary>
+    internal static string Render(IReadOnlyList<SymbolResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    /// <summary>Projects symbol references.</summary>
+    internal static string Render(IReadOnlyList<ReferenceResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    /// <summary>Projects symbol implementations.</summary>
+    internal static string Render(IReadOnlyList<ImplementationResult> results, bool truncated)
+    {
+        return Render(
+            results.Select(static result => CreateItem(result.Symbol, result.Location)),
+            results.Count,
+            truncated);
+    }
+
+    private static string Render(
+        IEnumerable<LegacySemanticProjectionItem> results,
+        int resultCount,
+        bool truncated)
+    {
+        var selected = results.Take(MaximumResults).ToArray();
+        return JsonSerializer.Serialize(new
+        {
+            results = selected,
+            truncated = truncated || resultCount > selected.Length,
+        });
+    }
+
+    private static LegacySemanticProjectionItem CreateItem(
+        SemanticSymbolIdentity symbol,
+        SemanticSourceLocation location)
+    {
+        return new(
+            symbol.Id,
+            symbol.DisplayName,
+            symbol.Kind,
+            location.FilePath,
+            location.Range.StartLine);
+    }
+
+    private sealed record LegacySemanticProjectionItem(
+        [property: JsonPropertyName("symbolId")] string SymbolId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("kind")] string Kind,
+        [property: JsonPropertyName("path")] string Path,
+        [property: JsonPropertyName("line")] int Line);
+}
+
 /// <summary>Input for bounded shell-command execution.</summary>
 public sealed record RunProcessInput
 {
@@ -1168,19 +1545,23 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
     private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
     private readonly ToolLimits _limits;
+    private readonly IPromptLoader _prompts;
     private readonly string _shellExecutable;
 
     /// <summary>Initializes a new instance of the <see cref="RunProcessTool"/> class.</summary>
     public RunProcessTool(
         IProcessManager processManager,
+        IPromptLoader promptLoader,
         ToolLimits? limits = null,
         IEnumerable<string>? allowedExecutables = null,
         bool requireApproval = true,
         string? shellExecutable = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
+        ArgumentNullException.ThrowIfNull(promptLoader);
         _processManager = processManager;
         _limits = limits ?? ToolLimits.Default;
+        _prompts = promptLoader;
         _shellExecutable = string.IsNullOrWhiteSpace(shellExecutable)
             ? OperatingSystem.IsWindows() ? "powershell" : "bash"
             : shellExecutable.Trim();
@@ -1197,7 +1578,12 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 StringComparer.OrdinalIgnoreCase) ?? false);
         _definition = ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
             "run_process",
-            $"Executes a {GetShellLanguage(_shellExecutable)} command in the repository root and returns bounded stdout and stderr.",
+            promptLoader.Render(
+                PromptFileNames.ToolRunProcessDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
+                }),
             ToolCategory.ProcessExecution,
             RepositoryTrustLevel.TrustedBuild,
             requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
@@ -1222,7 +1608,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             ".",
             context.Invocation);
         var timeoutSeconds = ResolveTimeoutSeconds(input);
-        ProcessExecutionResult result = await _processManager.RunAsync(
+        var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {
                 ToolInvocationId = context.ToolInvocationId,
@@ -1306,7 +1692,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         };
     }
 
-    private static IReadOnlyList<string> CreateShellArguments(string shellExecutable, string command)
+    private IReadOnlyList<string> CreateShellArguments(string shellExecutable, string command)
     {
         var shellName = Path.GetFileNameWithoutExtension(shellExecutable);
         return shellName.ToLowerInvariant() switch
@@ -1315,7 +1701,12 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             "bash" or "sh" or "zsh" => ["-c", command],
             "cmd" => ["/d", "/s", "/c", command],
             _ => throw new ToolArgumentValidationException(
-                $"Configured shell '{shellExecutable}' is not supported. Use pwsh, powershell, bash, sh, zsh, or cmd."),
+                _prompts.Render(
+                    PromptFileNames.CorrectionRunProcessUnsupportedShell,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ShellExecutable"] = shellExecutable,
+                    })),
         };
     }
 
@@ -1350,24 +1741,23 @@ internal static class ToolDefinitionFactory
         TimeSpan timeout,
         int maximumOutputBytes)
     {
-        JsonNode inputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
-            _schemaOptions,
+        var inputSchema = _schemaOptions.GetJsonSchemaAsNode(
             typeof(TInput),
             new JsonSchemaExporterOptions
             {
                 TreatNullObliviousAsNonNullable = true,
             });
-        JsonTypeInfo inputTypeInfo = _schemaOptions.GetTypeInfo(typeof(TInput));
+        var inputTypeInfo = _schemaOptions.GetTypeInfo(typeof(TInput));
         if (inputTypeInfo.Kind == JsonTypeInfoKind.Object
             && inputTypeInfo.Properties.Count == 0
             && inputSchema is JsonObject inputObject)
         {
             inputObject["properties"] = new JsonObject();
-            inputObject["additionalProperties"] = false;
         }
 
-        JsonNode outputSchema = JsonSchemaExporter.GetJsonSchemaAsNode(
-            _schemaOptions,
+        SealObjectSchemas(inputSchema);
+
+        var outputSchema = _schemaOptions.GetJsonSchemaAsNode(
             typeof(TOutput));
         return new()
         {
@@ -1395,6 +1785,50 @@ internal static class ToolDefinitionFactory
             MaximumOutputBytes = maximumOutputBytes,
             RequiresWorkspace = category == ToolCategory.SemanticSearch,
             Scheduling = CreateSchedulingDescriptor(category, sideEffect),
+        };
+    }
+
+    private static void SealObjectSchemas(JsonNode? schema)
+    {
+        switch (schema)
+        {
+            case JsonObject schemaObject:
+                if (IsObjectSchema(schemaObject))
+                {
+                    schemaObject["additionalProperties"] ??= false;
+                }
+
+                foreach (var property in schemaObject.ToArray())
+                {
+                    SealObjectSchemas(property.Value);
+                }
+
+                break;
+            case JsonArray schemaArray:
+                foreach (var item in schemaArray)
+                {
+                    SealObjectSchemas(item);
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsObjectSchema(JsonObject schemaObject)
+    {
+        if (schemaObject.ContainsKey("properties"))
+        {
+            return true;
+        }
+
+        return schemaObject["type"] switch
+        {
+            JsonValue typeValue when typeValue.TryGetValue<string>(out var type) =>
+                string.Equals(type, "object", StringComparison.Ordinal),
+            JsonArray typeArray => typeArray.OfType<JsonValue>()
+                .Any(value => value.TryGetValue<string>(out var type)
+                    && string.Equals(type, "object", StringComparison.Ordinal)),
+            _ => false,
         };
     }
 

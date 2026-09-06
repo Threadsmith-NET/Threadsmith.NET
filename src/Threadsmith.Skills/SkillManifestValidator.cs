@@ -167,8 +167,8 @@ internal static partial class SkillManifestValidator
         SkillWorkflowDefinition workflow,
         SkillBudget budget)
     {
-        int iterations = workflow.Steps.Sum(item => item.MaximumIterations);
-        int modelTurns = workflow.Steps
+        var iterations = workflow.Steps.Sum(item => item.MaximumIterations);
+        var modelTurns = workflow.Steps
             .Where(item => item.Kind is SkillWorkflowStepKind.InvokeProcedure
                 or SkillWorkflowStepKind.CollectEvidence
                 or SkillWorkflowStepKind.Summarize)
@@ -214,7 +214,7 @@ internal static partial class SkillManifestValidator
     {
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var visited = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string id in steps.Keys)
+        foreach (var id in steps.Keys)
         {
             Visit(id, steps, visiting, visited);
         }
@@ -236,7 +236,7 @@ internal static partial class SkillManifestValidator
             throw new InvalidDataException("Skill workflow graph contains a cycle.");
         }
 
-        foreach (string dependency in steps[id].DependsOn)
+        foreach (var dependency in steps[id].DependsOn)
         {
             Visit(dependency, steps, visiting, visited);
         }
@@ -316,8 +316,8 @@ internal static class SkillPathPolicy
             throw new InvalidDataException("Skill asset path must be bounded and package-relative.");
         }
 
-        string normalized = path.Replace('\\', '/');
-        string[] segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var normalized = path.Replace('\\', '/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0
             || segments.Any(segment => segment is "." or ".." || segment.EndsWith(' ') || segment.EndsWith('.')))
         {
@@ -329,19 +329,19 @@ internal static class SkillPathPolicy
     internal static string ResolveConfined(string root, string relativePath)
     {
         ValidateRelativePath(relativePath);
-        string fullRoot = Path.GetFullPath(root);
-        string candidate = Path.GetFullPath(Path.Combine(fullRoot, relativePath));
+        var fullRoot = Path.GetFullPath(root);
+        var candidate = Path.GetFullPath(Path.Combine(fullRoot, relativePath));
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string prefix = Path.TrimEndingDirectorySeparator(fullRoot) + Path.DirectorySeparatorChar;
+        var prefix = Path.TrimEndingDirectorySeparator(fullRoot) + Path.DirectorySeparatorChar;
         if (!candidate.StartsWith(prefix, comparison))
         {
             throw new UnauthorizedAccessException("Skill path escapes its package root.");
         }
 
-        string current = fullRoot;
-        foreach (string segment in relativePath.Replace('\\', '/').Split('/'))
+        var current = fullRoot;
+        foreach (var segment in relativePath.Replace('\\', '/').Split('/'))
         {
             current = Path.Combine(current, segment);
             if ((File.Exists(current) || Directory.Exists(current))

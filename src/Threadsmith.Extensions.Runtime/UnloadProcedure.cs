@@ -141,7 +141,7 @@ public sealed class UnloadProcedure
         generation.LoadContext = null;
 
         // 7. WeakReference verification (§17.19): bounded GC until the ALC is dead.
-        bool dead = await VerifyDeadAsync(weakRef);
+        var dead = await VerifyDeadAsync(weakRef);
         var total = _timeProvider.GetUtcNow() - startedAt;
 
         if (dead)
@@ -164,7 +164,7 @@ public sealed class UnloadProcedure
         // 8. Survived: diagnose blockers and report honestly (§17.19, §30.9). The leak keeps the ALC
         //    alive, so re-resolve it from the WeakReference to scan for retained handlers.
         generation.State = ExtensionLifecycleState.UnloadBlocked;
-        ExtensionLoadContext? survivedAlc = weakRef?.Target as ExtensionLoadContext;
+        var survivedAlc = weakRef?.Target as ExtensionLoadContext;
         var blockers = _blockerCatalog.Inspect(generation, survivedAlc);
         _logger.LogError(
             "Extension {ExtensionId} generation {GenerationId} did not unload: {BlockerCount} blocker(s) found. A restart may be necessary.",
@@ -195,7 +195,7 @@ public sealed class UnloadProcedure
             return true;
         }
 
-        for (int i = 0; i < GcRetries; i++)
+        for (var i = 0; i < GcRetries; i++)
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();

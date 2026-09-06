@@ -208,7 +208,7 @@ internal static class ApprovedPlanDelegationFactory
 
     private static string CreateBaselineIdentity(WorkspaceBaseline baseline)
     {
-        string content = string.Join('\n', baseline.Files.Select(file => $"{file.RelativePath}:{file.Sha256}"));
+        var content = string.Join('\n', baseline.Files.Select(file => $"{file.RelativePath}:{file.Sha256}"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
     }
 }

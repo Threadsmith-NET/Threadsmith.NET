@@ -1,0 +1,1 @@
+Checks dotnet formatting without applying changes.

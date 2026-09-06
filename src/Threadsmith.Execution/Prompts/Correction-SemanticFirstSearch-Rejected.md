@@ -1,0 +1,1 @@
+A semantic workspace is loaded and {{SuggestedTool}} is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. {{SuggestedCall}} The rejected search query was '{{RejectedQuery}}'. Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.

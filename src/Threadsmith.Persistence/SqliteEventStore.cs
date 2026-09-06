@@ -44,8 +44,8 @@ public sealed class SqliteEventStore
             throw new InvalidOperationException("Reasoning display notifications are transient and cannot be persisted.");
         }
 
-        string eventName = DomainEventJson.GetDiscriminator(domainEvent);
-        string payload = DomainEventJson.Serialize(domainEvent);
+        var eventName = DomainEventJson.GetDiscriminator(domainEvent);
+        var payload = DomainEventJson.Serialize(domainEvent);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -79,9 +79,9 @@ public sealed class SqliteEventStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            string eventName = reader.GetString(0);
-            int schemaVersion = reader.GetInt32(1);
-            string payload = reader.GetString(2);
+            var eventName = reader.GetString(0);
+            var schemaVersion = reader.GetInt32(1);
+            var payload = reader.GetString(2);
             var domainEvent = DomainEventJson.Deserialize(eventName, schemaVersion, payload);
             events.Add(domainEvent);
         }

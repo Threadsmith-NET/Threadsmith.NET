@@ -91,11 +91,20 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
+        var maximumOutputTokens = request.MaximumOutputTokens ?? _profile.MaximumOutputTokens;
+        if (maximumOutputTokens <= 0 || maximumOutputTokens > _profile.MaximumOutputTokens)
+        {
+            throw new ModelProviderException(
+                $"The requested output ceiling must be between 1 and the resolved profile maximum of "
+                + $"{_profile.MaximumOutputTokens} tokens.");
+        }
+
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         requestCancellation.CancelAfter(_profile.Timeout);
         HttpResponseMessage? response = null;
-        for (int attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
+        for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
         {
             using var message = new HttpRequestMessage(HttpMethod.Post, _profile.Endpoint);
             if (!string.IsNullOrWhiteSpace(_apiKey))
@@ -103,12 +112,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
             }
 
-            foreach ((string name, string value) in _headers)
+            foreach ((var name, var value) in _headers)
             {
                 message.Headers.TryAddWithoutValidation(name, value);
             }
 
-            bool hasStrictTools = false;
             var tools = new List<OpenAiTool>(canonicalTools.Count);
             foreach (var definition in canonicalTools)
             {
@@ -135,18 +143,20 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             $"Tool '{definition.Name}' argument schema must be a JSON object.");
                     }
 
-                    string? strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-                        definition.Name,
-                        definition.ArgumentsJsonSchema);
+                    var wireToolName = toolNameMap.ToWireName(definition.Name);
+                    var strictSchema = definition.PreferStrictArguments
+                        ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                            definition.Name,
+                            definition.ArgumentsJsonSchema)
+                        : null;
                     using var providerSchema = strictSchema is null
                         ? schema
                         : JsonDocument.Parse(strictSchema);
-                    hasStrictTools |= strictSchema is not null;
                     tools.Add(new OpenAiTool
                     {
                         Function = new OpenAiFunction
                         {
-                            Name = definition.Name,
+                            Name = wireToolName,
                             Description = definition.Description,
                             Parameters = providerSchema.RootElement.Clone(),
                             Strict = strictSchema is null ? null : true,
@@ -158,10 +168,10 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var body = new OpenAiChatRequest
             {
                 Model = _profile.ModelId,
-                Messages = CreateMessages(request),
+                Messages = CreateMessages(request, toolNameMap),
                 Stream = true,
                 StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
-                MaximumOutputTokens = _profile.MaximumOutputTokens,
+                MaximumOutputTokens = maximumOutputTokens,
                 Temperature = _profile.Temperature,
                 Seed = request.Seed,
                 ResponseFormat = request.RequiredCapabilities.StructuredOutput
@@ -172,7 +182,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     : null,
                 Tools = tools.Count == 0 ? null : tools,
                 ToolChoice = tools.Count == 0 ? null : "auto",
-                ParallelToolCalls = hasStrictTools ? false : null,
+                ParallelToolCalls = tools.Count == 0 ? null : request.AllowMultipleToolCalls,
             };
             var requestBody = JsonSerializer.SerializeToNode(body, _jsonOptions)?.AsObject()
                 ?? throw new InvalidOperationException("The model request could not be serialized.");
@@ -213,7 +223,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var statusCode = response.StatusCode;
             response.Dispose();
             response = null;
-            bool isTransient = statusCode is HttpStatusCode.TooManyRequests
+            var isTransient = statusCode is HttpStatusCode.TooManyRequests
                 or HttpStatusCode.ServiceUnavailable
                 || (int)statusCode == 529;
             if (!isTransient || attempt == _profile.RetryPolicy.MaxAttempts)
@@ -253,9 +263,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         using (var reader = new StreamReader(stream, Encoding.UTF8))
         {
             var toolCalls = new Dictionary<int, ToolCallAccumulator>();
-            int completionCharacters = 0;
-            int streamedOutputCharacters = 0;
-            bool usageReported = false;
+            var completionCharacters = 0;
+            var streamedOutputCharacters = 0;
+            var usageReported = false;
             while (true)
             {
                 string? line;
@@ -278,7 +288,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     continue;
                 }
 
-                string payload = line.AsSpan(5).Trim().ToString();
+                var payload = line.AsSpan(5).Trim().ToString();
                 if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
                 {
                     break;
@@ -306,10 +316,10 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     }
 
                     usageReported = true;
-                    long conservativeInputTokens = Math.Max(
+                    var conservativeInputTokens = Math.Max(
                         reportedUsage.PromptTokens,
                         request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length));
-                    long conservativeOutputTokens = Math.Max(
+                    var conservativeOutputTokens = Math.Max(
                         reportedUsage.CompletionTokens,
                         EstimateTokenCount(completionCharacters));
                     yield return new ModelChunk
@@ -326,7 +336,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                 foreach (var choice in envelope.Choices)
                 {
-                    string? reasoning = ResolveReasoningDelta(choice.Delta);
+                    var reasoning = ResolveReasoningDelta(choice.Delta);
                     if (reasoning is { Length: > 0 })
                     {
                         AddCompletionCharacters(
@@ -382,7 +392,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                     if (choice.FinishReason is { } finishReason)
                     {
-                        foreach (var toolChunk in DrainToolCalls(toolCalls, canonicalTools))
+                        foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
                         {
                             yield return toolChunk;
                         }
@@ -401,16 +411,16 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
             }
 
-            foreach (var toolChunk in DrainToolCalls(toolCalls, canonicalTools))
+            foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
             {
                 yield return toolChunk;
             }
 
             if (!usageReported)
             {
-                long inputTokens = request.WireEstimate?.WireInputTokens
+                var inputTokens = request.WireEstimate?.WireInputTokens
                     ?? EstimateTokenCount(request.Input.Length);
-                long outputTokens = EstimateTokenCount(completionCharacters);
+                var outputTokens = EstimateTokenCount(completionCharacters);
                 yield return new ModelChunk
                 {
                     Usage = new ModelUsage(
@@ -423,7 +433,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
     }
 
-    private static IReadOnlyList<OpenAiMessage> CreateMessages(ModelStreamRequest request)
+    private static IReadOnlyList<OpenAiMessage> CreateMessages(
+        ModelStreamRequest request,
+        ModelToolWireNameMap toolNameMap)
     {
         if (request.Messages.Count == 0)
         {
@@ -433,11 +445,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         var messages = new List<OpenAiMessage>(request.Messages.Count);
         foreach (var message in request.Messages)
         {
-            string content = string.Concat(message.Content.Select(part => part.Content));
+            var content = message.GetModelVisibleContent();
             switch (message.Role)
             {
                 case ModelMessageRole.System:
-                    messages.Add(new OpenAiMessage { Role = "system", Content = content });
+                    AddSystemMessage(messages, content);
                     break;
                 case ModelMessageRole.Developer:
                     AddUserMessage(
@@ -449,22 +461,17 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     break;
                 case ModelMessageRole.Assistant when message.ToolCallId is not null
                     && message.ToolName is not null:
-                    messages.Add(new OpenAiMessage
-                    {
-                        Role = "assistant",
-                        ToolCalls =
-                        [
-                            new OpenAiMessageToolCall
+                    AddAssistantToolCall(
+                        messages,
+                        new OpenAiMessageToolCall
+                        {
+                            Id = message.ToolCallId,
+                            Function = new OpenAiMessageFunctionCall
                             {
-                                Id = message.ToolCallId,
-                                Function = new OpenAiMessageFunctionCall
-                                {
-                                    Name = message.ToolName,
-                                    Arguments = content,
-                                },
+                                Name = toolNameMap.ToWireName(message.ToolName),
+                                Arguments = content,
                             },
-                        ],
-                    });
+                        });
                     break;
                 case ModelMessageRole.Assistant:
                     messages.Add(new OpenAiMessage { Role = "assistant", Content = content });
@@ -486,6 +493,39 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         return messages;
     }
 
+    private static void AddSystemMessage(List<OpenAiMessage> messages, string content)
+    {
+        if (messages.Count > 0 && messages[^1].Role == "system")
+        {
+            var previous = messages[^1];
+            messages[^1] = previous with
+            {
+                Content = string.Concat(previous.Content, "\n\n", content),
+            };
+            return;
+        }
+
+        messages.Add(new OpenAiMessage { Role = "system", Content = content });
+    }
+
+    private static void AddAssistantToolCall(
+        List<OpenAiMessage> messages,
+        OpenAiMessageToolCall toolCall)
+    {
+        if (messages.Count > 0
+            && messages[^1] is { Role: "assistant", Content: null, ToolCalls: not null } previous)
+        {
+            messages[^1] = previous with { ToolCalls = [.. previous.ToolCalls, toolCall] };
+            return;
+        }
+
+        messages.Add(new OpenAiMessage
+        {
+            Role = "assistant",
+            ToolCalls = [toolCall],
+        });
+    }
+
     private static void AddUserMessage(List<OpenAiMessage> messages, string content)
     {
         if (messages.Count > 0 && messages[^1].Role == "user")
@@ -503,15 +543,15 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private static ModelCacheUsage CreateCacheUsage(OpenAiUsage usage)
     {
-        long? cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
+        var cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
             ?? usage.CacheReadInputTokens;
-        long? cacheWriteTokens = usage.CacheCreationInputTokens;
+        var cacheWriteTokens = usage.CacheCreationInputTokens;
         if (cacheReadTokens is < 0 || cacheWriteTokens is < 0)
         {
             throw new MalformedModelOutputException("The provider returned negative cache token usage.");
         }
 
-        bool reported = cacheReadTokens is not null || cacheWriteTokens is not null;
+        var reported = cacheReadTokens is not null || cacheWriteTokens is not null;
         return new ModelCacheUsage
         {
             Availability = reported
@@ -567,7 +607,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         if (!_profile.SupportsReasoningLevel(request.ReasoningLevel))
         {
-            string supported = string.Join(", ", _profile.SupportedReasoningLevels);
+            var supported = string.Join(", ", _profile.SupportedReasoningLevels);
             throw new ModelProviderException(
                 $"Reasoning level '{request.ReasoningLevel}' is unsupported by model profile "
                 + $"'{_profile.Name}'. Supported levels: {supported}.");
@@ -586,7 +626,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 body["reasoning_effort"] = compatibility.LevelMap[request.ReasoningLevel];
                 break;
             case OpenAiReasoningControlMode.ChatTemplate:
-                bool enabled = request.ReasoningLevel != ReasoningLevel.None;
+                var enabled = request.ReasoningLevel != ReasoningLevel.None;
                 body["chat_template_kwargs"] = compatibility.ChatTemplateKind switch
                 {
                     OpenAiChatTemplateKind.EnableThinkingWithPreservation => new JsonObject
@@ -646,107 +686,48 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             OpenAiReasoningResponseMode.None => null,
             OpenAiReasoningResponseMode.ReasoningContent => delta.ReasoningContent,
             OpenAiReasoningResponseMode.Reasoning => delta.Reasoning,
-            null => delta.Reasoning ?? delta.ReasoningContent,
+            OpenAiReasoningResponseMode.ReasoningText => delta.ReasoningText,
+            OpenAiReasoningResponseMode.KnownFields => ResolveKnownReasoningDelta(delta),
+            null => ResolveKnownReasoningDelta(delta),
             _ => throw new MalformedModelOutputException("The configured reasoning response mode is invalid."),
         };
     }
 
+    private static string? ResolveKnownReasoningDelta(OpenAiDelta delta)
+    {
+        return delta.ReasoningContent ?? delta.Reasoning ?? delta.ReasoningText;
+    }
+
     private static IReadOnlyList<ModelChunk> DrainToolCalls(
         Dictionary<int, ToolCallAccumulator> toolCalls,
-        IReadOnlyList<ModelToolDefinition> availableTools)
+        ModelToolWireNameMap toolNameMap)
     {
-        var chunks = new List<ModelChunk>();
-        foreach (var call in toolCalls.OrderBy(item => item.Key).Select(item => item.Value))
+        var calls = toolCalls
+            .OrderBy(item => item.Key)
+            .Select(item => item.Value)
+            .ToArray();
+        for (var index = 0; index < calls.Length; index++)
         {
-            string arguments = NormalizeToolArguments(call.Name, call.Arguments, availableTools);
-            var output = new ToolRequestModelOutput(call.Name, arguments);
-            ModelOutputValidator.Validate(output);
-            chunks.Add(new ModelChunk { Output = output });
+            var output = new ToolRequestModelOutput(
+                toolNameMap.ToCanonicalName(calls[index].Name),
+                calls[index].Arguments);
+            ModelOutputValidator.ValidateInvocation(
+                output,
+                providerFamily: "openai-compatible",
+                toolOrdinal: index,
+                toolCallCount: calls.Length);
         }
 
+        var chunks = calls
+            .Select(call => new ModelChunk
+            {
+                Output = new ToolRequestModelOutput(
+                    toolNameMap.ToCanonicalName(call.Name),
+                    call.Arguments),
+            })
+            .ToArray();
         toolCalls.Clear();
         return chunks;
-    }
-
-    private static string NormalizeToolArguments(
-        string toolName,
-        string? arguments,
-        IReadOnlyList<ModelToolDefinition> availableTools)
-    {
-        if (string.IsNullOrWhiteSpace(arguments))
-        {
-            return AcceptsNoArguments(toolName, availableTools) ? "{}" : arguments ?? string.Empty;
-        }
-
-        try
-        {
-            using JsonDocument document = JsonDocument.Parse(arguments);
-            return arguments;
-        }
-        catch (JsonException)
-        {
-            return AcceptsNoArguments(toolName, availableTools) ? "{}" : arguments;
-        }
-    }
-
-    private static bool AcceptsNoArguments(
-        string toolName,
-        IReadOnlyList<ModelToolDefinition> availableTools)
-    {
-        var definition = availableTools.FirstOrDefault(tool =>
-            string.Equals(tool.Name, toolName, StringComparison.Ordinal));
-        if (definition is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            using JsonDocument schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
-            var root = schema.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("type", out var type)
-                || type.ValueKind != JsonValueKind.String
-                || !string.Equals(type.GetString(), "object", StringComparison.Ordinal)
-                || !root.TryGetProperty("properties", out var properties)
-                || properties.ValueKind != JsonValueKind.Object
-                || properties.EnumerateObject().Any()
-                || !root.TryGetProperty("additionalProperties", out var additionalProperties)
-                || additionalProperties.ValueKind != JsonValueKind.False)
-            {
-                return false;
-            }
-
-            if (root.TryGetProperty("required", out var required)
-                && (required.ValueKind != JsonValueKind.Array || required.GetArrayLength() > 0))
-            {
-                return false;
-            }
-
-            HashSet<string> acceptedKeywords = new(
-            [
-                "$anchor",
-                "$comment",
-                "$id",
-                "$schema",
-                "additionalProperties",
-                "deprecated",
-                "description",
-                "examples",
-                "properties",
-                "readOnly",
-                "required",
-                "title",
-                "type",
-                "writeOnly",
-            ],
-            StringComparer.Ordinal);
-            return root.EnumerateObject().All(property => acceptedKeywords.Contains(property.Name));
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
     }
 
     private async Task DelayBeforeRetryAsync(
@@ -983,6 +964,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         [JsonPropertyName("reasoning_content")]
         public string? ReasoningContent { get; init; }
+
+        [JsonPropertyName("reasoning_text")]
+        public string? ReasoningText { get; init; }
 
         [JsonPropertyName("tool_calls")]
         public IReadOnlyList<OpenAiToolCallDelta> ToolCalls { get; init; } = [];

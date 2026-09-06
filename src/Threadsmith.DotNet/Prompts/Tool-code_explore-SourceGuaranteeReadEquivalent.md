@@ -1,0 +1,1 @@
+{{FilePath}} {{SourceRange}} is current line-numbered source projected through host output sanitization; digests identify the original current source bytes before sanitization, so treat it as read-equivalent for code structure but not proof of redacted literal bytes.

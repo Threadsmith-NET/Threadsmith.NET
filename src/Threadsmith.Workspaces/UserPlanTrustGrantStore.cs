@@ -102,7 +102,7 @@ internal sealed class UserPlanTrustGrantStore : IUserPlanTrustGrantStore
             return;
         }
 
-        string directory = Path.GetDirectoryName(_trustStorePath)
+        var directory = Path.GetDirectoryName(_trustStorePath)
             ?? throw new InvalidOperationException("The user plan-policy trust path has no parent directory.");
         Directory.CreateDirectory(directory);
         await RepositorySettingsCoordinator.ExecuteWriteAsync(
@@ -116,7 +116,7 @@ internal sealed class UserPlanTrustGrantStore : IUserPlanTrustGrantStore
         bool isGranted,
         CancellationToken cancellationToken)
     {
-        string trustStorePath = _trustStorePath
+        var trustStorePath = _trustStorePath
             ?? throw new InvalidOperationException("A user plan-policy trust path is required.");
         var root = File.Exists(trustStorePath)
             ? await ReadRootAsync(trustStorePath, cancellationToken)
@@ -235,7 +235,7 @@ internal sealed class UserPlanTrustGrantStore : IUserPlanTrustGrantStore
         JsonObject root,
         CancellationToken cancellationToken)
     {
-        string temporaryPath = trustStorePath + $".{Guid.NewGuid():N}.tmp";
+        var temporaryPath = trustStorePath + $".{Guid.NewGuid():N}.tmp";
         Exception? primaryException = null;
         try
         {

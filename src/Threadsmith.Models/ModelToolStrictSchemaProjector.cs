@@ -104,7 +104,7 @@ public static class ModelToolStrictSchemaProjector
         }
 
         var result = new JsonObject();
-        foreach ((string key, var value) in source.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        foreach ((var key, var value) in source.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             if (key == "required" || key == "$schema" || ValidationOnlyKeywords.Contains(key))
             {
@@ -142,7 +142,7 @@ public static class ModelToolStrictSchemaProjector
                 }
 
                 JsonObject projectedDefinitions = [];
-                foreach ((string definitionName, var definitionSchema) in definitions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                foreach ((var definitionName, var definitionSchema) in definitions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                 {
                     if (definitionSchema is null)
                     {
@@ -171,14 +171,14 @@ public static class ModelToolStrictSchemaProjector
 
                 JsonObject projectedProperties = [];
                 var required = ReadRequired(source);
-                foreach ((string propertyName, var propertySchema) in properties.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                foreach ((var propertyName, var propertySchema) in properties.OrderBy(pair => pair.Key, StringComparer.Ordinal))
                 {
                     if (propertySchema is null)
                     {
                         return null;
                     }
 
-                    bool optional = !required.Contains(propertyName);
+                    var optional = !required.Contains(propertyName);
                     var projectedProperty = ProjectNode(propertySchema, optional);
                     if (projectedProperty is null)
                     {
@@ -196,7 +196,7 @@ public static class ModelToolStrictSchemaProjector
             if (key == "additionalProperties")
             {
                 if (value is not JsonValue jsonValue
-                    || !jsonValue.TryGetValue<bool>(out bool additionalProperties)
+                    || !jsonValue.TryGetValue<bool>(out var additionalProperties)
                     || additionalProperties)
                 {
                     return null;
@@ -265,7 +265,7 @@ public static class ModelToolStrictSchemaProjector
 
         foreach (var item in array)
         {
-            if (item is JsonValue value && value.TryGetValue<string>(out string? name) && name is not null)
+            if (item is JsonValue value && value.TryGetValue<string>(out var name) && name is not null)
             {
                 required.Add(name);
             }
@@ -289,7 +289,7 @@ public static class ModelToolStrictSchemaProjector
             };
         }
 
-        if (schema["type"] is JsonValue typeValue && typeValue.TryGetValue<string>(out string? typeName))
+        if (schema["type"] is JsonValue typeValue && typeValue.TryGetValue<string>(out var typeName))
         {
             schema["type"] = new JsonArray(JsonValue.Create(typeName), JsonValue.Create("null"));
         }
@@ -317,7 +317,7 @@ public static class ModelToolStrictSchemaProjector
     private static bool SchemaAllowsNull(JsonObject schema)
     {
         if (schema["type"] is JsonValue typeValue
-            && typeValue.TryGetValue<string>(out string? typeName)
+            && typeValue.TryGetValue<string>(out var typeName)
             && string.Equals(typeName, "null", StringComparison.Ordinal))
         {
             return true;
@@ -325,7 +325,7 @@ public static class ModelToolStrictSchemaProjector
 
         if (schema["type"] is JsonArray typeArray
             && typeArray.Any(item => item is JsonValue value
-                && value.TryGetValue<string>(out string? arrayType)
+                && value.TryGetValue<string>(out var arrayType)
                 && string.Equals(arrayType, "null", StringComparison.Ordinal)))
         {
             return true;
@@ -334,7 +334,7 @@ public static class ModelToolStrictSchemaProjector
         return schema["anyOf"] is JsonArray anyOf
             && anyOf.Any(item => item is JsonObject anyOfObject
                 && anyOfObject["type"] is JsonValue value
-                && value.TryGetValue<string>(out string? anyOfType)
+                && value.TryGetValue<string>(out var anyOfType)
                 && string.Equals(anyOfType, "null", StringComparison.Ordinal));
     }
 
@@ -342,7 +342,7 @@ public static class ModelToolStrictSchemaProjector
     {
         return IsObjectSchema(schema)
             && schema["additionalProperties"] is JsonValue additionalProperties
-            && additionalProperties.TryGetValue<bool>(out bool allowsAdditional)
+            && additionalProperties.TryGetValue<bool>(out var allowsAdditional)
             && !allowsAdditional
             && schema["properties"] is JsonObject
             && schema["required"] is JsonArray;
@@ -350,14 +350,14 @@ public static class ModelToolStrictSchemaProjector
 
     private static bool IsObjectSchema(JsonObject schema)
     {
-        if (schema["type"] is JsonValue typeValue && typeValue.TryGetValue<string>(out string? typeName))
+        if (schema["type"] is JsonValue typeValue && typeValue.TryGetValue<string>(out var typeName))
         {
             return string.Equals(typeName, "object", StringComparison.Ordinal);
         }
 
         return schema["type"] is JsonArray typeArray
             && typeArray.Any(item => item is JsonValue value
-                && value.TryGetValue<string>(out string? arrayType)
+                && value.TryGetValue<string>(out var arrayType)
                 && string.Equals(arrayType, "object", StringComparison.Ordinal));
     }
 }

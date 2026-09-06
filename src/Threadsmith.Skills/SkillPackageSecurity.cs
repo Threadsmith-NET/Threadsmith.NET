@@ -36,7 +36,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
     {
         ArgumentNullException.ThrowIfNull(candidate);
         var policy = _policyProvider.Snapshot;
-        string digest = candidate.Identity.Digest.Value;
+        var digest = candidate.Identity.Digest.Value;
         if (policy.DeniedSkillIds.Contains(candidate.Metadata.SkillId.Value)
             || policy.DeniedPublishers.Contains(candidate.Metadata.Publisher)
             || policy.RevokedDigests.Contains(digest)
@@ -55,9 +55,9 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         {
             await VerifyManifestUnchangedAsync(candidate, cancellationToken);
             await VerifyAssetsAsync(candidate, cancellationToken);
-            (var state, string reason) = VerifyTrust(candidate, policy);
-            string selector = FormatSelector(candidate);
-            bool enabled = state switch
+            (var state, var reason) = VerifyTrust(candidate, policy);
+            var selector = FormatSelector(candidate);
+            var enabled = state switch
             {
                 SkillVerificationState.Maintained => true,
                 SkillVerificationState.DigestAllowlisted => true,
@@ -91,7 +91,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         SkillCatalogCandidate candidate,
         CancellationToken cancellationToken)
     {
-        string parent = Path.GetDirectoryName(candidate.Provenance.PackageRoot)
+        var parent = Path.GetDirectoryName(candidate.Provenance.PackageRoot)
             ?? throw new InvalidDataException("Skill package root has no catalog parent.");
         var catalog = new SkillCatalog(
             [
@@ -132,7 +132,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         foreach (var asset in candidate.Metadata.Assets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
+            var path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
             if (!File.Exists(path))
             {
                 throw new InvalidDataException($"Declared skill asset '{asset.Path}' is missing.");
@@ -151,14 +151,14 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
                 FileShare.Read,
                 bufferSize: 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            byte[] hash = await SHA256.HashDataAsync(stream, cancellationToken);
+            var hash = await SHA256.HashDataAsync(stream, cancellationToken);
             if (!string.Equals(Convert.ToHexStringLower(hash), asset.Sha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException($"Skill asset '{asset.Path}' hash does not match its manifest.");
             }
         }
 
-        foreach (string file in Directory.EnumerateFiles(
+        foreach (var file in Directory.EnumerateFiles(
             candidate.Provenance.PackageRoot,
             "*",
             SearchOption.AllDirectories))
@@ -169,7 +169,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
                 throw new UnauthorizedAccessException("Skill package contains a link or reparse point.");
             }
 
-            string relative = Path.GetRelativePath(candidate.Provenance.PackageRoot, file).Replace('\\', '/');
+            var relative = Path.GetRelativePath(candidate.Provenance.PackageRoot, file).Replace('\\', '/');
             if (!declared.Contains(relative) && !MetadataFiles.Contains(relative))
             {
                 throw new InvalidDataException($"Skill package contains undeclared file '{relative}'.");
@@ -181,13 +181,13 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         SkillCatalogCandidate candidate,
         SkillTrustPolicySnapshot policy)
     {
-        string digest = candidate.Identity.Digest.Value;
+        var digest = candidate.Identity.Digest.Value;
         if (candidate.Provenance.Scope == SkillScope.Maintained)
         {
             return (SkillVerificationState.Maintained, "immutable host-shipped package integrity verified");
         }
 
-        string allowlistEntry = string.Join(
+        var allowlistEntry = string.Join(
             '|',
             digest,
             candidate.Metadata.Publisher,
@@ -203,16 +203,16 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
             return (SkillVerificationState.Unverified, "no trusted signature or exact external allowlist");
         }
 
-        if (!policy.TrustedSignerPublicKeys.TryGetValue(signature.SignerId, out string? publicKeyPem))
+        if (!policy.TrustedSignerPublicKeys.TryGetValue(signature.SignerId, out var publicKeyPem))
         {
             return (SkillVerificationState.Unverified, "signature signer is not trusted by external policy");
         }
 
-        using ECDsa key = ECDsa.Create();
+        using var key = ECDsa.Create();
         key.ImportFromPem(publicKeyPem);
-        byte[] digestBytes = Convert.FromHexString(digest);
-        byte[] signatureBytes = Convert.FromBase64String(signature.Signature);
-        bool valid = key.VerifyHash(
+        var digestBytes = Convert.FromHexString(digest);
+        var signatureBytes = Convert.FromBase64String(signature.Signature);
+        var valid = key.VerifyHash(
             digestBytes,
             signatureBytes,
             DSASignatureFormat.Rfc3279DerSequence);
@@ -276,13 +276,13 @@ public sealed class SkillContentLoader : ISkillContentLoader
                 .Select(item => item.Path),
         ];
         var segments = new List<SkillContextSegment>();
-        int usedTokens = 0;
-        foreach (string path in selectedPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        var usedTokens = 0;
+        foreach (var path in selectedPaths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var asset = candidate.Metadata.Assets.Single(item =>
                 string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
-            string fullPath = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-            byte[] bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+            var fullPath = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
+            var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
             if (bytes.LongLength != asset.Bytes
                 || !string.Equals(
                     Convert.ToHexStringLower(SHA256.HashData(bytes)),
@@ -292,8 +292,8 @@ public sealed class SkillContentLoader : ISkillContentLoader
                 throw new InvalidDataException("Skill content changed after verification.");
             }
 
-            string content = _sanitizer.Sanitize(StrictUtf8.GetString(bytes));
-            int tokens = Threadsmith.Context.TokenEstimator.Estimate(content);
+            var content = _sanitizer.Sanitize(StrictUtf8.GetString(bytes));
+            var tokens = Threadsmith.Context.TokenEstimator.Estimate(content);
             if (usedTokens + tokens > maximumTokens)
             {
                 if (asset.Required)
@@ -388,7 +388,7 @@ public sealed class SkillPackageInstaller
 
         Directory.CreateDirectory(_quarantineRoot);
         Directory.CreateDirectory(_contentStoreRoot);
-        string quarantine = Path.Combine(_quarantineRoot, Guid.NewGuid().ToString("N"));
+        var quarantine = Path.Combine(_quarantineRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(quarantine);
         try
         {
@@ -404,13 +404,13 @@ public sealed class SkillPackageInstaller
                 throw new UnauthorizedAccessException("Imported skill package is not trusted for installation.");
             }
 
-            string destination = Path.Combine(_contentStoreRoot, verified.Identity.Digest.Value);
+            var destination = Path.Combine(_contentStoreRoot, verified.Identity.Digest.Value);
             if (Directory.Exists(destination))
             {
                 return destination;
             }
 
-            string packageDirectory = verified.Provenance.PackageRoot;
+            var packageDirectory = verified.Provenance.PackageRoot;
             Directory.Move(packageDirectory, destination);
             return destination;
         }
@@ -435,8 +435,8 @@ public sealed class SkillPackageInstaller
             throw new UnauthorizedAccessException("Only user-scope packages may be uninstalled.");
         }
 
-        string packageRoot = Path.GetFullPath(candidate.Provenance.PackageRoot);
-        string expectedRoot = Path.Combine(_contentStoreRoot, candidate.Identity.Digest.Value);
+        var packageRoot = Path.GetFullPath(candidate.Provenance.PackageRoot);
+        var expectedRoot = Path.Combine(_contentStoreRoot, candidate.Identity.Digest.Value);
         if (!string.Equals(
             packageRoot,
             expectedRoot,
@@ -487,7 +487,7 @@ public sealed class SkillPackageInstaller
             }
 
             SkillPathPolicy.ValidateRelativePath(entry.FullName);
-            int unixFileType = (entry.ExternalAttributes >> 16) & 0xF000;
+            var unixFileType = (entry.ExternalAttributes >> 16) & 0xF000;
             if (unixFileType == 0xA000)
             {
                 throw new InvalidDataException("Skill archives cannot contain symbolic links.");
@@ -499,7 +499,7 @@ public sealed class SkillPackageInstaller
                 throw new InvalidDataException("Skill archive exceeds its extracted-size limit.");
             }
 
-            string output = SkillPathPolicy.ResolveConfined(destination, entry.FullName);
+            var output = SkillPathPolicy.ResolveConfined(destination, entry.FullName);
             Directory.CreateDirectory(Path.GetDirectoryName(output)
                 ?? throw new InvalidDataException("Skill archive output has no parent directory."));
             await using var input = await entry.OpenAsync(cancellationToken);

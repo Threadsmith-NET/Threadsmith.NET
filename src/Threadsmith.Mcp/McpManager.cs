@@ -217,7 +217,7 @@ public sealed class McpManager :
     {
         ArgumentNullException.ThrowIfNull(request);
         ThrowIfDisposed();
-        long started = _timeProvider.GetTimestamp();
+        var started = _timeProvider.GetTimestamp();
         try
         {
             ValidateRequest(request);
@@ -280,7 +280,7 @@ public sealed class McpManager :
         catch (Exception exception)
         {
             var failure = Classify(exception);
-            string message = NormalizeFailureMessage(exception.Message);
+            var message = NormalizeFailureMessage(exception.Message);
             _logger.LogError(
                 "MCP lifecycle {Action} for profile {ProfileId} failed with {FailureKind}: {Message}",
                 request.Action,
@@ -354,7 +354,7 @@ public sealed class McpManager :
     {
         if (state.Profile.Trust == McpTrustLevel.Untrusted || !IsEndpointEligible(state.Profile))
         {
-            string message = state.Profile.Trust == McpTrustLevel.Untrusted
+            var message = state.Profile.Trust == McpTrustLevel.Untrusted
                 ? "The profile is configured as untrusted and cannot connect."
                 : "The profile executable or endpoint does not satisfy MCP eligibility policy.";
             return RecordFailure(
@@ -598,8 +598,8 @@ public sealed class McpManager :
                 "Central tool policy denied the explicit MCP resource request.");
         }
 
-        long generation = state.Generation;
-        long started = _timeProvider.GetTimestamp();
+        var generation = state.Generation;
+        var started = _timeProvider.GetTimestamp();
         var result = await _adapter.ReadResourceAsync(
             state.Profile.Id,
             capability.Id,
@@ -638,8 +638,8 @@ public sealed class McpManager :
                 "Central tool policy denied the explicit MCP prompt request.");
         }
 
-        long generation = state.Generation;
-        long started = _timeProvider.GetTimestamp();
+        var generation = state.Generation;
+        var started = _timeProvider.GetTimestamp();
         var result = await _adapter.GetPromptAsync(
             state.Profile.Id,
             capability.Id,
@@ -823,11 +823,11 @@ public sealed class McpManager :
 
         if (GetLiveStatus(state.Profile.Id)?.State == McpConnectionState.Connected)
         {
-            long pingStarted = _timeProvider.GetTimestamp();
+            var pingStarted = _timeProvider.GetTimestamp();
             try
             {
                 await _adapter.PingAsync(state.Profile.Id, cancellationToken);
-                long? pingMilliseconds = ToElapsedMilliseconds(_timeProvider.GetElapsedTime(pingStarted));
+                var pingMilliseconds = ToElapsedMilliseconds(_timeProvider.GetElapsedTime(pingStarted));
                 state.AddLatency("ping", pingMilliseconds);
                 checks.Add(new McpDiagnosticCheck
                 {
@@ -1016,7 +1016,7 @@ public sealed class McpManager :
         lock (state.CapabilitySnapshotGate)
         {
             var current = state.Capabilities;
-            bool unchanged = current.Count == snapshot.Length
+            var unchanged = current.Count == snapshot.Length
                 && current.Zip(snapshot).All(pair => pair.First.Kind == pair.Second.Kind
                     && string.Equals(pair.First.Id, pair.Second.Id, StringComparison.Ordinal)
                     && string.Equals(pair.First.Digest, pair.Second.Digest, StringComparison.Ordinal));
@@ -1188,7 +1188,7 @@ public sealed class McpManager :
     private McpExternalContent MapContent(McpTransportContentItem content)
     {
         const int maximumTextCharacters = 256 * 1024;
-        string sanitizedText = _sanitizer.Sanitize(content.Text);
+        var sanitizedText = _sanitizer.Sanitize(content.Text);
         return new McpExternalContent
         {
             Label = Bound(_sanitizer.Sanitize(content.Label), 1024),
@@ -1278,30 +1278,30 @@ public sealed class McpManager :
         }
 
         var declared = new HashSet<string>(StringComparer.Ordinal);
-        int searchIndex = 0;
+        var searchIndex = 0;
         while (searchIndex < template.Length)
         {
-            int opening = template.IndexOf('{', searchIndex);
+            var opening = template.IndexOf('{', searchIndex);
             if (opening < 0)
             {
                 break;
             }
 
-            int closing = template.IndexOf('}', opening + 1);
+            var closing = template.IndexOf('}', opening + 1);
             if (closing < 0)
             {
                 return false;
             }
 
-            string expression = template[(opening + 1)..closing];
+            var expression = template[(opening + 1)..closing];
             if (expression.Length > 0 && expression[0] is '+' or '#' or '.' or '/' or ';' or '?' or '&')
             {
                 expression = expression[1..];
             }
 
-            foreach (string variable in expression.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            foreach (var variable in expression.Split(',', StringSplitOptions.RemoveEmptyEntries))
             {
-                string name = variable.Split(':', 2)[0].TrimEnd('*');
+                var name = variable.Split(':', 2)[0].TrimEnd('*');
                 if (name.Length > 0)
                 {
                     declared.Add(name);

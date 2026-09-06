@@ -1,0 +1,1 @@
+A plan proposal must be the only tool-producing output in a model response.

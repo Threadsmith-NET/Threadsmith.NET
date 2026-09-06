@@ -1,0 +1,1 @@
+{{FilePath}} {{SourceRange}} is unchanged source already visible in the current model request via holder {{HolderId}}, tool call {{ToolCallId}}; that visible text may already be host-sanitized, so use it for code structure instead of reading the same range again but do not infer redacted literal bytes.

@@ -43,10 +43,10 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         ValidateSessionId(sessionId);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = CreateSelectCommand(connection);
+        await using var command = CreateSelectCommand(connection);
         command.CommandText += " WHERE session_id = $session LIMIT 1;";
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadEntry(reader) : null;
     }
 
@@ -64,12 +64,12 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = CreateSelectCommand(connection);
+        await using var command = CreateSelectCommand(connection);
         command.CommandText += " WHERE repository_identity = $repository ORDER BY updated_at DESC, session_id LIMIT $limit;";
         command.Parameters.AddWithValue("$repository", repositoryIdentity);
         command.Parameters.AddWithValue("$limit", maximumCount);
         var entries = new List<SessionCatalogEntry>();
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             entries.Add(ReadEntry(reader));
@@ -89,7 +89,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        SessionCatalogEntry enriched = await EnrichFromConversationAsync(connection, transaction, entry, cancellationToken);
+        var enriched = await EnrichFromConversationAsync(connection, transaction, entry, cancellationToken);
         await UpsertAsync(connection, transaction, enriched, usage, insertOnly: false, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return enriched;
@@ -103,14 +103,14 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         ValidateSessionId(sessionId);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT input_tokens, output_tokens, usage_is_estimate, has_unknown_usage,
                    has_usage_observation, inherited_input_tokens, inherited_output_tokens
             FROM session_catalog WHERE session_id = $session;
             """;
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
             return new SessionDurableUsage(0, 0, false, false, false);
@@ -145,7 +145,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await CopyConversationAsync(connection, transaction, sourceSessionId, destination.SessionId, cancellationToken);
-        SessionCatalogEntry enriched = await EnrichFromConversationAsync(connection, transaction, destination, cancellationToken);
+        var enriched = await EnrichFromConversationAsync(connection, transaction, destination, cancellationToken);
         await UpsertAsync(connection, transaction, enriched, usage, insertOnly: true, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return enriched;
@@ -158,7 +158,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         SessionId destination,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             CREATE TEMP TABLE clone_message_map(old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL);
@@ -207,7 +207,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
         await RemapSummaryAsync(connection, transaction, source, destination, cancellationToken);
-        await using SqliteCommand cleanup = connection.CreateCommand();
+        await using var cleanup = connection.CreateCommand();
         cleanup.Transaction = transaction;
         cleanup.CommandText = "DROP TABLE clone_message_map; DROP TABLE clone_memory_map;";
         await cleanup.ExecuteNonQueryAsync(cancellationToken);
@@ -220,7 +220,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         SessionId destination,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand read = connection.CreateCommand();
+        await using var read = connection.CreateCommand();
         read.Transaction = transaction;
         read.CommandText = "SELECT memory_index_json FROM conversation_summaries WHERE session_id = $session;";
         read.Parameters.AddWithValue("$session", source.Value.ToString("D"));
@@ -229,16 +229,16 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
             return;
         }
 
-        Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>> sourceIndex =
+        var sourceIndex =
             JsonSerializer.Deserialize<Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>>>(json)
             ?? [];
         var mapped = new Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>>();
-        foreach ((ConversationMemoryKind kind, IReadOnlyList<ConversationMemoryId> ids) in sourceIndex)
+        foreach ((var kind, var ids) in sourceIndex)
         {
             var destinationIds = new List<ConversationMemoryId>();
-            foreach (ConversationMemoryId id in ids)
+            foreach (var id in ids)
             {
-                await using SqliteCommand map = connection.CreateCommand();
+                await using var map = connection.CreateCommand();
                 map.Transaction = transaction;
                 map.CommandText = "SELECT new_id FROM clone_memory_map WHERE old_id = $id;";
                 map.Parameters.AddWithValue("$id", id.Value.ToString("D"));
@@ -251,7 +251,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
             mapped[kind] = destinationIds;
         }
 
-        await using SqliteCommand update = connection.CreateCommand();
+        await using var update = connection.CreateCommand();
         update.Transaction = transaction;
         update.CommandText = "UPDATE conversation_summaries SET memory_index_json = $json WHERE session_id = $session;";
         update.Parameters.AddWithValue("$json", JsonSerializer.Serialize(mapped));
@@ -265,7 +265,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         SessionCatalogEntry entry,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             SELECT COUNT(*),
@@ -276,10 +276,10 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
             """;
         command.Parameters.AddWithValue("$session", entry.SessionId.Value.ToString("D"));
         command.Parameters.AddWithValue("$mode", (int)entry.ConversationMode);
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         _ = await reader.ReadAsync(cancellationToken);
-        string? preview = await reader.IsDBNullAsync(1) ? entry.Preview : Bound(reader.GetString(1), MaximumPreviewCharacters);
-        int mode = reader.GetInt32(2);
+        var preview = await reader.IsDBNullAsync(1) ? entry.Preview : Bound(reader.GetString(1), MaximumPreviewCharacters);
+        var mode = reader.GetInt32(2);
         return entry with
         {
             MessageCount = reader.GetInt64(0),
@@ -292,7 +292,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
 
     private static SqliteCommand CreateSelectCommand(SqliteConnection connection)
     {
-        SqliteCommand command = connection.CreateCommand();
+        var command = connection.CreateCommand();
         command.CommandText = """
             SELECT session_id, repository_identity, repository_display_name, created_at, updated_at,
                    state, preview, message_count, conversation_mode, clone_source_session_id,
@@ -304,7 +304,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
 
     private static SessionCatalogEntry ReadEntry(SqliteDataReader reader)
     {
-        SessionModelSelectionRecord? selection = reader.IsDBNull(10) ? null : new SessionModelSelectionRecord
+        var selection = reader.IsDBNull(10) ? null : new SessionModelSelectionRecord
         {
             ProviderId = reader.GetString(10),
             ProfileId = new ModelProfileId(Guid.Parse(reader.GetString(11))),
@@ -338,7 +338,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         bool insertOnly,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO session_catalog(
@@ -363,7 +363,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
                 inherited_input_tokens=excluded.inherited_input_tokens,
                 inherited_output_tokens=excluded.inherited_output_tokens, schema_version=excluded.schema_version
             """ + (insertOnly ? " WHERE false;" : ";");
-        SessionModelSelectionRecord? selection = entry.ModelSelection;
+        var selection = entry.ModelSelection;
         command.Parameters.AddWithValue("$session", entry.SessionId.Value.ToString("D"));
         command.Parameters.AddWithValue("$repository", entry.RepositoryIdentity);
         command.Parameters.AddWithValue("$display", Bound(entry.RepositoryDisplayName, MaximumRepositoryDisplayCharacters));
@@ -388,7 +388,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         command.Parameters.AddWithValue("$inheritedInput", usage.InheritedInputTokens);
         command.Parameters.AddWithValue("$inheritedOutput", usage.InheritedOutputTokens);
         command.Parameters.AddWithValue("$schema", entry.SchemaVersion);
-        int affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
         if (affected != 1)
         {
             throw new InvalidOperationException($"Session {entry.SessionId.Value:D} already exists.");
@@ -397,7 +397,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
 
     private static string Bound(string value, int maximumCharacters)
     {
-        string safe = string.Concat(value.Take(maximumCharacters).Select(character => char.IsControl(character) ? ' ' : character));
+        var safe = string.Concat(value.Take(maximumCharacters).Select(character => char.IsControl(character) ? ' ' : character));
         return safe.Trim();
     }
 

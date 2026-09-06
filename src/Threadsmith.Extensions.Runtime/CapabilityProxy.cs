@@ -99,13 +99,13 @@ public sealed class CapabilityProxy : ITool
         var argumentsJson = ((ExtensionToolArguments)input).Json;
 
         // Acquire a lease so plan-17 draining cannot unload the ALC while the extension is executing.
-        IInvocationLease lease = _leaseAuthority.Acquire(
+        var lease = _leaseAuthority.Acquire(
             _generation.GenerationId,
             _generation.Budget ?? new ExtensionInvocationBudget(_generation.GenerationId),
             GetLeaseTimeout());
         try
         {
-            ExtensionToolResult result = await _capability.ExecuteAsync(
+            var result = await _capability.ExecuteAsync(
                 argumentsJson,
                 MapContext(context.Invocation),
                 cancellationToken);

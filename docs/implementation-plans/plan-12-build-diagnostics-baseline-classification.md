@@ -1,4 +1,4 @@
-﻿# Implementation Plan 12: Build, Diagnostics, and Baseline Classification
+# Implementation Plan 12: Build, Diagnostics, and Baseline Classification
 
 **Status:** Complete (2026-08-02)
 **Milestone:** M6 — Build, Diagnostics, and Tests
@@ -26,7 +26,7 @@ Parent: Mutation engine → Validation pipeline (§28). This is `Threadsmith.Val
 - No test execution (plan-13). No analyzers beyond the compiler's own (analyzer integration is incremental post-M6). No semantic mutations (plan-11).
 
 ## 5. Current State
-Implemented. `Threadsmith.Validation` now provides baseline build capture, affected-project traversal, direct trusted build execution, normalized compiler diagnostics, confidence-aware baseline classification, mutation/symbol correlation, acceptance gating, bounded correction, metrics, and classified diagnostic event publication. The session projection and TUI render structured diagnostics. `Threadsmith.Milestone6.Tests` verifies the build half; plan-13 owns test discovery/execution.
+Implemented. `Threadsmith.Validation` now provides baseline build capture, affected-project traversal, direct trusted build execution, normalized compiler diagnostics, confidence-aware baseline classification, mutation/symbol correlation, acceptance gating, bounded correction, metrics, and classified diagnostic event publication. The session projection and TUI render structured diagnostics. `Threadsmith.Validation.Tests` verifies the build half; plan-13 owns test discovery/execution.
 
 ## 6. Proposed Design
 - `BaselineCapture`: run a build against the baseline snapshot; store diagnostics + the confidence level at capture time (§16.3, §13.x behavior 4).

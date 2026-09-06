@@ -1,0 +1,1 @@
+Configured shell '{{ShellExecutable}}' is not supported. Use pwsh, powershell, bash, sh, zsh, or cmd.

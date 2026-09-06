@@ -130,7 +130,7 @@ public sealed class SemanticMutationEngine :
                     continue;
                 }
 
-                string relativePath = NormalizeUnderRoot(snapshot.RepositoryPath, document.FilePath);
+                var relativePath = NormalizeUnderRoot(snapshot.RepositoryPath, document.FilePath);
                 if (!baselineByPath.TryGetValue(relativePath, out var baselineFile))
                 {
                     warnings.Add(
@@ -238,8 +238,8 @@ public sealed class SemanticMutationEngine :
             throw;
         }
 
-        string relativePath = NormalizeRelativePath(request.RelativePath);
-        string fullPath = Path.GetFullPath(relativePath.Replace('/', Path.DirectorySeparatorChar), snapshot.RepositoryPath);
+        var relativePath = NormalizeRelativePath(request.RelativePath);
+        var fullPath = Path.GetFullPath(relativePath.Replace('/', Path.DirectorySeparatorChar), snapshot.RepositoryPath);
         var document = snapshot.Solution.Projects
             .Where(project => snapshot.CompiledProjects.Contains(project.Id))
             .SelectMany(project => project.Documents)
@@ -299,7 +299,7 @@ public sealed class SemanticMutationEngine :
                 $"Document '{relativePath}' is not present in the mutation baseline.");
         }
 
-        string? relatedSymbolId = request.SymbolId;
+        var relatedSymbolId = request.SymbolId;
         if (relatedSymbolId is null)
         {
             var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
@@ -363,9 +363,9 @@ public sealed class SemanticMutationEngine :
 
     private static string NormalizeUnderRoot(string repositoryPath, string fullPath)
     {
-        string root = Path.GetFullPath(repositoryPath);
-        string normalized = Path.GetFullPath(fullPath);
-        string relative = Path.GetRelativePath(root, normalized);
+        var root = Path.GetFullPath(repositoryPath);
+        var normalized = Path.GetFullPath(fullPath);
+        var relative = Path.GetRelativePath(root, normalized);
         if (relative == ".."
             || relative.StartsWith($"..{Path.DirectorySeparatorChar}", PathComparison)
             || Path.IsPathRooted(relative))

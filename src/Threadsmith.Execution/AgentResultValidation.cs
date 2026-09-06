@@ -34,7 +34,7 @@ public static class ReviewFindingValidator
         }
 
         var ids = new HashSet<Guid>();
-        foreach (ReviewFinding finding in review.Findings)
+        foreach (var finding in review.Findings)
         {
             if (finding.FindingId == Guid.Empty
                 || !ids.Add(finding.FindingId)

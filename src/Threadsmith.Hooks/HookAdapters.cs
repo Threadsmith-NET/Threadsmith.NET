@@ -43,7 +43,7 @@ public sealed class ExecutableHookAdapter : IHookHandlerAdapter
             return new HookFailureResult("input-too-large", "The hook envelope exceeded the configured input bound.");
         }
 
-        ProcessExecutionResult process = await _processManager.RunAsync(
+        var process = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {
                 ToolInvocationId = new ToolInvocationId(envelope.InvocationId.Value),
@@ -114,9 +114,9 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(envelope);
-        if (!Uri.TryCreate(descriptor.Target, UriKind.Absolute, out Uri? target)
+        if (!Uri.TryCreate(descriptor.Target, UriKind.Absolute, out var target)
             || (target.Scheme != Uri.UriSchemeHttps
-                && !(target.Scheme == Uri.UriSchemeHttp && IPAddress.TryParse(target.Host, out IPAddress? address) && IPAddress.IsLoopback(address))))
+                && !(target.Scheme == Uri.UriSchemeHttp && IPAddress.TryParse(target.Host, out var address) && IPAddress.IsLoopback(address))))
         {
             return new HookFailureResult("endpoint-policy", "HTTP hook endpoints require HTTPS, except for literal loopback development endpoints.");
         }
@@ -139,7 +139,7 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
                 return new HookFailureResult("secret-scope-unavailable", "HTTP hook authentication requires one explicitly scoped secret reference.");
             }
 
-            if (!SecretReference.TryParse(envelope.SecretReferences[0], out SecretReference? reference) || reference is null)
+            if (!SecretReference.TryParse(envelope.SecretReferences[0], out var reference) || reference is null)
             {
                 return new HookFailureResult("secret-reference-invalid", "The scoped hook credential reference is invalid.");
             }
@@ -151,7 +151,7 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
                 Purpose = "authenticate a trusted managed HTTP hook",
                 MinimumTrust = SecretProviderTrust.UserOwned,
             };
-            SecretResolutionResult resolution = await _secretResolver.ResolveAsync(resolutionRequest, cancellationToken);
+            var resolution = await _secretResolver.ResolveAsync(resolutionRequest, cancellationToken);
             if (!resolution.Succeeded)
             {
                 return new HookFailureResult(
@@ -162,7 +162,7 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
             request.Headers.Authorization = new("Bearer", resolution.Value?.Reveal());
         }
 
-        using HttpResponseMessage response = await _httpClient.SendAsync(
+        using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
@@ -183,7 +183,7 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
             return new HookFailureResult("output-too-large", "The HTTP hook response exceeded its output bound.");
         }
 
-        await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var bounded = new MemoryStream();
         var buffer = new byte[4096];
         while (true)

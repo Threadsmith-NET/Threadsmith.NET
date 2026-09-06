@@ -83,7 +83,7 @@ All public contracts are host-owned and contain no Roslyn types.
 - `src/Threadsmith.Scripting.Worker/` — isolated Roslyn executable and local DOX contract.
 - `src/Threadsmith.Tools/` — config, tools, engine adapter, metadata, and process standard input.
 - `src/Threadsmith.App/` — worker deployment and composition.
-- `tests/Threadsmith.Milestone3.Tests/` — externally observable tool/config/worker tests.
+- `tests/Threadsmith.ModelTooling.Tests/` — externally observable tool/config/worker tests.
 - `tests/Threadsmith.Architecture.Tests/` — project graph and config schema assertions.
 - `.threadsmith/config.example`, `README.md`, milestone/manual plan, and owning AGENTS files.
 

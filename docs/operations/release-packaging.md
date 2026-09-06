@@ -11,7 +11,7 @@
 | macOS | Intel x64 | `Threadsmith-<version>-osx-x64.pkg` |
 | macOS | Apple silicon | `Threadsmith-<version>-osx-arm64.pkg` |
 
-All payloads are self-contained; .NET 10 does not need to be installed. Each payload also contains its matching official ripgrep executable under `tools/` for fast repository text search, plus upstream license/provenance notices under `third-party/ripgrep/`. The application-owned `ThreadsmithDocs/` bundle contains curated user, operator, authoring, architecture, testing, and guardrail documentation used by local help. Implementation plans, feature plans, repository runtime state, and generated artifacts are excluded. Trimming, Native AOT, and single-file publishing are intentionally disabled. Verify downloads with the release's `SHA256SUMS` before installation.
+All payloads are self-contained; .NET 10 does not need to be installed. Each payload also contains its matching official ripgrep executable under `tools/` for fast repository text search, plus upstream license/provenance notices under `third-party/ripgrep/`. The flat `prompts/` directory is required application content and must contain exactly the code-declared, case-insensitively collision-free [deployed prompt catalog](prompts.md); publishing, staging, archive extraction, and installer verification fail on a missing, stale, duplicate, or undeclared prompt asset. The application-owned `ThreadsmithDocs/` bundle contains curated user, operator, authoring, architecture, testing, and guardrail documentation used by local help; implementation plans, feature proposals, release-readiness assessments, repository runtime state, and generated artifacts are excluded. Trimming, Native AOT, and single-file publishing are intentionally disabled. Verify downloads with the release's `SHA256SUMS` before installation.
 
 ## Installation
 
@@ -38,10 +38,12 @@ Install the architecture-specific package with Finder or `sudo installer -pkg <f
 
 Install, upgrade, and uninstall do not remove user configuration, provider/MCP secrets, sessions, repositories, extensions, skills, hook state, or caches. Those remain in the existing platform-specific user locations and configuration precedence is unchanged.
 
+Deployed prompt files are installer-owned application assets, not user state. An upgrade replaces the complete shipped defaults and does not merge local prompt edits. Back up any prompt experiments outside the installation directory before upgrading, then review and reapply them against the new version's complete catalog.
+
 ## Operator runbook
 
 1. Ensure the repository is clean, the intended commit is on `main`, and all normal CI jobs pass. Review `eng/release/ripgrep-assets.json`: it must name only official `BurntSushi/ripgrep` release assets, retain the approved `MIT OR Unlicense` contract with MIT selected for distribution, and pin an independently reviewed SHA-256 digest for every supported RID.
-2. Run `eng/release/Test-ReleaseContracts.ps1` and locally build the host platform artifact with an explicit SemVer.
+2. Run `eng/release/Test-ReleaseContracts.ps1` and locally build the host platform artifact with an explicit SemVer. Confirm the published and staged `prompts/` sets match the code catalog exactly.
 3. Rehearse through `workflow_dispatch`; this builds all artifacts but cannot publish a release.
 4. Configure signing credentials only in repository/organization secret storage. Never place certificates, passwords, Apple profiles, tokens, or values in source or command output.
 5. Create and push an immutable annotated `v<SemVer>` tag for the exact reviewed commit.
@@ -66,4 +68,4 @@ Each publish validates the exact `project.assets.json` identity/version/SHA-512 
 
 Packaging runs only after `Test-ReleaseCompliance.ps1` passes. Every archive/installer gets a `.compliance.json` sidecar bound to its SHA-256 and staged-payload digest. `New-ReleaseManifest.ps1` rejects any missing, failed, wrong-RID, stale, or digest-mismatched sidecar, so the tag-gated workflow cannot reach `gh release create` on legal uncertainty. Inspect all six artifacts and sidecars during rehearsal; never manually bypass this gate.
 
-`Test-PackagedDocumentation.ps1` is part of staged-payload validation. It requires the bundle manifest and core help files, enforces file-count and byte bounds, rejects linked files, validates local Markdown link targets, and fails if an excluded prefix such as `docs/implementation-plans/` appears. Artifact inspection then proves the validated staged files are present byte-for-byte in each installer or archive.
+`Test-PackagedDocumentation.ps1` is part of staged-payload validation. It requires the bundle manifest and core help files, enforces file-count and byte bounds, rejects linked files, validates local Markdown link targets, and fails if unmanifested or excluded material appears. Artifact inspection then proves the validated staged files are present byte-for-byte in each installer or archive.

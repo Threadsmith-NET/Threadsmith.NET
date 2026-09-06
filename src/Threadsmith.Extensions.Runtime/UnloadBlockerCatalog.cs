@@ -115,7 +115,7 @@ public sealed class UnloadBlockerCatalog
             {
                 foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
                 {
-                    object? value = SafeGetValue(field);
+                    var value = SafeGetValue(field);
                     if (value is Task or System.Threading.Tasks.ValueTask)
                     {
                         blockers.Add(new UnloadBlocker

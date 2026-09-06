@@ -66,7 +66,7 @@ public sealed class HookEventObserver : IAsyncDisposable
             return;
         }
 
-        _repositories.TryGetValue(domainEvent.SessionId, out string? repositoryIdentity);
+        _repositories.TryGetValue(domainEvent.SessionId, out var repositoryIdentity);
         await _invocations.Writer.WriteAsync(
             new PendingHookInvocation(
                 mapped.Value.Point,

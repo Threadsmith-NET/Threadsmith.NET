@@ -115,7 +115,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        string canonicalRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
+        var canonicalRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
         var previous = _roots;
         ClaudeSkillRoot[] rebound = [.. previous.Select(root => root.IsRepositoryControlled
             ? root with { RootPath = Path.Combine(canonicalRepository, ".claude", "skills") }
@@ -136,12 +136,12 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
     public async Task<IReadOnlyList<ClaudeSkillCandidate>> RefreshAsync(
         CancellationToken cancellationToken = default)
     {
-        long generation = Interlocked.Increment(ref _generation);
+        var generation = Interlocked.Increment(ref _generation);
         var candidates = new List<ClaudeSkillCandidate>();
         foreach (var root in _roots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string canonicalRoot = Path.GetFullPath(root.RootPath);
+            var canonicalRoot = Path.GetFullPath(root.RootPath);
             if (!Directory.Exists(canonicalRoot))
             {
                 continue;
@@ -152,7 +152,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 throw new InvalidDataException("Configured Claude skill roots cannot be symbolic links or junctions.");
             }
 
-            foreach (string directory in Directory.EnumerateDirectories(canonicalRoot)
+            foreach (var directory in Directory.EnumerateDirectories(canonicalRoot)
                          .Order(StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -166,7 +166,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                     continue;
                 }
 
-                string skillPath = Path.Combine(directory, SkillFileName);
+                var skillPath = Path.Combine(directory, SkillFileName);
                 if (!File.Exists(skillPath) || IsLink(skillPath))
                 {
                     continue;
@@ -208,13 +208,13 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         var root = _roots.Single(item =>
             item.Scope == candidate.Identity.Scope
             && string.Equals(item.Source, candidate.Identity.Source, StringComparison.Ordinal));
-        string rootPath = Path.GetFullPath(root.RootPath);
+        var rootPath = Path.GetFullPath(root.RootPath);
         if (!Directory.Exists(rootPath) || IsLink(rootPath))
         {
             throw new InvalidDataException("The configured Claude skill root is missing or linked.");
         }
 
-        string skillRoot = Path.GetFullPath(Path.Combine(rootPath, candidate.Identity.Name));
+        var skillRoot = Path.GetFullPath(Path.Combine(rootPath, candidate.Identity.Name));
         EnsureContained(rootPath, skillRoot);
         if (!Directory.Exists(skillRoot) || IsLink(skillRoot))
         {
@@ -232,7 +232,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 ?? throw new InvalidDataException("The Claude skill candidate is stale; refresh the catalog before activation.");
         }
 
-        string skillPath = Path.Combine(skillRoot, SkillFileName);
+        var skillPath = Path.Combine(skillRoot, SkillFileName);
         if (!File.Exists(skillPath) || IsLink(skillPath))
         {
             throw new InvalidDataException("SKILL.md is missing or linked during activation.");
@@ -249,7 +249,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
             throw new InvalidDataException("Claude skill metadata changed; refresh the catalog before activation.");
         }
 
-        string[] files = EnumerateFilesWithoutLinks(skillRoot, _options.MaximumFiles);
+        var files = EnumerateFilesWithoutLinks(skillRoot, _options.MaximumFiles);
         if (files.Length == 0)
         {
             throw new InvalidDataException("Claude skill file count is outside configured bounds.");
@@ -259,16 +259,16 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         var resources = new Dictionary<string, string>(StringComparer.Ordinal);
         var snapshotFiles = new List<ClaudeSkillSnapshotFile>();
         string? instructions = null;
-        bool hasExecutableResource = false;
-        bool hasDynamicShell = false;
+        var hasExecutableResource = false;
+        var hasDynamicShell = false;
         long aggregateBytes = 0;
-        foreach (string file in files)
+        foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string fullPath = Path.GetFullPath(file);
+            var fullPath = Path.GetFullPath(file);
             EnsureContained(skillRoot, fullPath);
-            string relativePath = Path.GetRelativePath(skillRoot, fullPath).Replace('\\', '/');
-            byte[] bytes = await ReadFileWithoutFollowingLinksAsync(fullPath, cancellationToken);
+            var relativePath = Path.GetRelativePath(skillRoot, fullPath).Replace('\\', '/');
+            var bytes = await ReadFileWithoutFollowingLinksAsync(fullPath, cancellationToken);
             aggregateBytes += bytes.Length;
             if (aggregateBytes > _options.MaximumAggregateBytes)
             {
@@ -281,13 +281,13 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 Bytes = bytes.LongLength,
                 Sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes)),
             });
-            byte[] pathBytes = Encoding.UTF8.GetBytes(relativePath);
+            var pathBytes = Encoding.UTF8.GetBytes(relativePath);
             digest.AppendData(BitConverter.GetBytes(pathBytes.Length));
             digest.AppendData(pathBytes);
             digest.AppendData(BitConverter.GetBytes(bytes.Length));
             digest.AppendData(bytes);
 
-            string extension = Path.GetExtension(relativePath);
+            var extension = Path.GetExtension(relativePath);
             if (relativePath.StartsWith("scripts/", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".ps1", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".sh", StringComparison.OrdinalIgnoreCase)
@@ -298,7 +298,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 hasExecutableResource = true;
             }
 
-            bool isText = extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+            var isText = extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
@@ -308,7 +308,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 continue;
             }
 
-            string text = StrictUtf8.GetString(bytes);
+            var text = StrictUtf8.GetString(bytes);
             if (string.Equals(relativePath, SkillFileName, StringComparison.Ordinal))
             {
                 if (bytes.Length > _options.MaximumInstructionBytes)
@@ -330,7 +330,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
             throw new InvalidDataException("SKILL.md disappeared during activation.");
         }
 
-        string hash = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
+        var hash = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
         var activationReasons = revalidated.ReasonCodes.ToList();
         if (hasExecutableResource)
         {
@@ -371,9 +371,9 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         CancellationToken cancellationToken)
     {
         var metadata = await ReadFrontmatterAsync(skillPath, cancellationToken);
-        string directoryName = Path.GetFileName(directory);
-        string name = GetRequired(metadata, "name");
-        string description = GetRequired(metadata, "description");
+        var directoryName = Path.GetFileName(directory);
+        var name = GetRequired(metadata, "name");
+        var description = GetRequired(metadata, "description");
         if (!SkillNameRegex().IsMatch(name)
             || name.Length > 64
             || !string.Equals(name, directoryName, StringComparison.Ordinal))
@@ -386,7 +386,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
             throw new InvalidDataException("Claude skill description is outside configured bounds.");
         }
 
-        string[] declaredTools = metadata.TryGetValue("allowed-tools", out string? tools)
+        var declaredTools = metadata.TryGetValue("allowed-tools", out var tools)
             ? tools.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : [];
         string[] mapped = [.. declaredTools
@@ -396,8 +396,8 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         string[] unavailable = [.. declaredTools
             .Where(tool => !ToolMappings.ContainsKey(tool))
             .Distinct(StringComparer.Ordinal)];
-        bool hasUnsupportedExecution = metadata.ContainsKey("hooks")
-            || (metadata.TryGetValue("context", out string? context)
+        var hasUnsupportedExecution = metadata.ContainsKey("hooks")
+            || (metadata.TryGetValue("context", out var context)
                 && string.Equals(context, "fork", StringComparison.OrdinalIgnoreCase))
             || metadata.ContainsKey("agent");
         var status = hasUnsupportedExecution
@@ -482,7 +482,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         if (OperatingSystem.IsWindows())
         {
             var finalPath = new StringBuilder(WindowsFinalPathCapacity);
-            uint length = GetFinalPathNameByHandle(
+            var length = GetFinalPathNameByHandle(
                 stream.SafeFileHandle,
                 finalPath,
                 (uint)finalPath.Capacity,
@@ -498,7 +498,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         }
         else
         {
-            string descriptorPath = $"/proc/self/fd/{stream.SafeFileHandle.DangerousGetHandle()}";
+            var descriptorPath = $"/proc/self/fd/{stream.SafeFileHandle.DangerousGetHandle()}";
             var openedTarget = File.ResolveLinkTarget(descriptorPath, returnFinalTarget: true);
             openedPath = openedTarget?.FullName
                 ?? throw new InvalidDataException("The opened Claude skill resource could not be validated.");
@@ -546,7 +546,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         }
 
         using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-        string first = await reader.ReadLineAsync(cancellationToken)
+        var first = await reader.ReadLineAsync(cancellationToken)
             ?? throw new InvalidDataException("SKILL.md must begin with YAML frontmatter.");
         if (!string.Equals(first, "---", StringComparison.Ordinal))
         {
@@ -555,10 +555,10 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
 
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         string? parentKey = null;
-        int bytes = first.Length + 1;
+        var bytes = first.Length + 1;
         while (true)
         {
-            string line = await reader.ReadLineAsync(cancellationToken)
+            var line = await reader.ReadLineAsync(cancellationToken)
                 ?? throw new InvalidDataException("SKILL.md frontmatter is unterminated.");
 
             bytes += Encoding.UTF8.GetByteCount(line) + 1;
@@ -585,27 +585,27 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 throw new InvalidDataException("SKILL.md uses unsupported YAML features.");
             }
 
-            bool isNested = char.IsWhiteSpace(line[0]);
+            var isNested = char.IsWhiteSpace(line[0]);
             if (isNested && !string.Equals(parentKey, "metadata", StringComparison.Ordinal))
             {
                 throw new InvalidDataException("SKILL.md uses unsupported nested YAML metadata.");
             }
 
-            string scalarLine = isNested ? line.TrimStart() : line;
-            int separator = scalarLine.IndexOf(':');
+            var scalarLine = isNested ? line.TrimStart() : line;
+            var separator = scalarLine.IndexOf(':');
             if (separator <= 0)
             {
                 throw new InvalidDataException("SKILL.md frontmatter must contain scalar key/value pairs.");
             }
 
-            string key = scalarLine[..separator].Trim();
-            string value = Unquote(scalarLine[(separator + 1)..].Trim());
+            var key = scalarLine[..separator].Trim();
+            var value = Unquote(scalarLine[(separator + 1)..].Trim());
             if (!isNested)
             {
                 parentKey = string.IsNullOrEmpty(value) ? key : null;
             }
 
-            string storedKey = isNested ? $"metadata.{key}" : key;
+            var storedKey = isNested ? $"metadata.{key}" : key;
             if (key.Length > 64
                 || value.Length > 4096
                 || !values.TryAdd(storedKey, value))
@@ -619,20 +619,20 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
 
     private static string RemoveFrontmatter(string text)
     {
-        int firstEnd = text.IndexOf('\n');
-        int closing = firstEnd < 0 ? -1 : text.IndexOf("\n---", firstEnd, StringComparison.Ordinal);
+        var firstEnd = text.IndexOf('\n');
+        var closing = firstEnd < 0 ? -1 : text.IndexOf("\n---", firstEnd, StringComparison.Ordinal);
         if (closing < 0)
         {
             throw new InvalidDataException("SKILL.md frontmatter is unterminated.");
         }
 
-        int body = text.IndexOf('\n', closing + 1);
+        var body = text.IndexOf('\n', closing + 1);
         return body < 0 ? string.Empty : text[(body + 1)..];
     }
 
     private static string GetRequired(IReadOnlyDictionary<string, string> values, string key)
     {
-        return values.TryGetValue(key, out string? value) && !string.IsNullOrWhiteSpace(value)
+        return values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
             : throw new InvalidDataException($"SKILL.md requires '{key}'.");
     }
@@ -653,7 +653,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
 
     private static void EnsureContained(string root, string path)
     {
-        string relative = Path.GetRelativePath(root, path);
+        var relative = Path.GetRelativePath(root, path);
         if (Path.IsPathRooted(relative)
             || relative.Equals("..", StringComparison.Ordinal)
             || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
@@ -687,13 +687,13 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         pending.Push(skillRoot);
         while (pending.Count > 0)
         {
-            string directory = pending.Pop();
+            var directory = pending.Pop();
             if (IsLink(directory))
             {
                 throw new InvalidDataException("Linked Claude skill directories are not eligible for activation.");
             }
 
-            foreach (string file in Directory.EnumerateFiles(directory))
+            foreach (var file in Directory.EnumerateFiles(directory))
             {
                 if (IsLink(file))
                 {
@@ -707,7 +707,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 }
             }
 
-            foreach (string child in Directory.EnumerateDirectories(directory).OrderDescending())
+            foreach (var child in Directory.EnumerateDirectories(directory).OrderDescending())
             {
                 if (IsLink(child))
                 {

@@ -17,25 +17,26 @@ public sealed record DateTimeOutput(
 /// <summary>Returns the current UTC and host-local date/time.</summary>
 public sealed class DateTimeTool : Tool<DateTimeInput, DateTimeOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory
-        .Create<DateTimeInput, DateTimeOutput>(
-            "datetime",
-            "Returns the current UTC and local date/time with timezone information.",
-            ToolCategory.SystemInformation,
-            RepositoryTrustLevel.UntrustedInspection,
-            ApprovalLevel.None,
-            ToolSideEffect.ReadOnly,
-            TimeSpan.FromSeconds(2),
-            8 * 1024) with
-    {
-        DisplayName = "Date/Time",
-    };
-
+    private readonly ToolDefinition _definition;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="DateTimeTool"/> class.</summary>
-    public DateTimeTool(TimeProvider? timeProvider = null)
+    public DateTimeTool(IPromptLoader promptLoader, TimeProvider? timeProvider = null)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory
+            .Create<DateTimeInput, DateTimeOutput>(
+                "datetime",
+                promptLoader.Get(PromptFileNames.ToolDatetimeDescription),
+                ToolCategory.SystemInformation,
+                RepositoryTrustLevel.UntrustedInspection,
+                ApprovalLevel.None,
+                ToolSideEffect.ReadOnly,
+                TimeSpan.FromSeconds(2),
+                8 * 1024) with
+        {
+            DisplayName = "Date/Time",
+        };
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -139,9 +140,9 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentNullException.ThrowIfNull(context);
-        int timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", 5000);
-        int maximumOutputBytes = _toolConfig.Get("csharp_script", "max_output_bytes", 65536);
-        string allowedAssemblies = _toolConfig.Get(
+        var timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", 5000);
+        var maximumOutputBytes = _toolConfig.Get("csharp_script", "max_output_bytes", 65536);
+        var allowedAssemblies = _toolConfig.Get(
             "csharp_script",
             "allowed_assemblies",
             "System.Linq,System.Collections,System.Collections.Generic");
@@ -175,12 +176,12 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
             AllowedAssemblies = allowedAssemblies
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
         };
-        string requestJson = JsonSerializer.Serialize(workerRequest);
-        bool launchAppHost = !string.Equals(
+        var requestJson = JsonSerializer.Serialize(workerRequest);
+        var launchAppHost = !string.Equals(
             Path.GetExtension(_workerPath),
             ".dll",
             StringComparison.OrdinalIgnoreCase);
-        string entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
+        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
             ?? throw new InvalidOperationException("The host entry assembly path is unavailable.");
         IReadOnlyList<string> arguments = launchAppHost
             ? []
@@ -220,7 +221,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 
         if (result.ExitCode != 0 || result.StandardOutputTruncated)
         {
-            string error = string.IsNullOrWhiteSpace(result.StandardError)
+            var error = string.IsNullOrWhiteSpace(result.StandardError)
                 ? $"The C# scripting worker exited with code {result.ExitCode}."
                 : result.StandardError;
             return new CSharpScriptOutput(
@@ -259,28 +260,29 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 /// <summary>Runs a bounded C# expression or statement sequence in an isolated worker.</summary>
 public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutput>
 {
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory
-        .Create<CSharpScriptInput, CSharpScriptOutput>(
-            "csharp_script",
-            "Compiles and executes bounded C# in an isolated worker process.",
-            ToolCategory.CodeExecution,
-            RepositoryTrustLevel.FullyTrustedAutomation,
-            ApprovalLevel.None,
-            ToolSideEffect.ExecutesCode,
-            TimeSpan.FromSeconds(35),
-            7 * 1024 * 1024) with
-    {
-        DisplayName = "C# Script",
-        EnabledByDefault = false,
-        Idempotency = ToolIdempotency.NonIdempotent,
-    };
-
+    private readonly ToolDefinition _definition;
     private readonly ICSharpScriptEngine _engine;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptTool"/> class.</summary>
-    public CSharpScriptTool(ICSharpScriptEngine engine)
+    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        _definition = ToolDefinitionFactory
+            .Create<CSharpScriptInput, CSharpScriptOutput>(
+                "csharp_script",
+                promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
+                ToolCategory.CodeExecution,
+                RepositoryTrustLevel.FullyTrustedAutomation,
+                ApprovalLevel.None,
+                ToolSideEffect.ExecutesCode,
+                TimeSpan.FromSeconds(35),
+                7 * 1024 * 1024) with
+        {
+            DisplayName = "C# Script",
+            EnabledByDefault = false,
+            Idempotency = ToolIdempotency.NonIdempotent,
+        };
         _engine = engine;
     }
 

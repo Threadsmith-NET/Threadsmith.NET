@@ -1,0 +1,1 @@
+Wait until at least partial compilation is available, then retry code_explore.

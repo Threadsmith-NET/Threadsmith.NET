@@ -35,6 +35,29 @@ public sealed record ModelToolDefinition
 
     /// <summary>JSON object schema for the tool arguments.</summary>
     public required string ArgumentsJsonSchema { get; init; }
+
+    /// <summary>Whether providers should use strict argument generation when their wire protocol supports it.</summary>
+    /// <remarks>Canonical host validation remains authoritative regardless of this preference.</remarks>
+    public bool PreferStrictArguments { get; init; }
+}
+
+/// <summary>Provider-neutral exact instructions contributed to one provider request.</summary>
+public sealed record ModelProviderInstructions
+{
+    /// <summary>Stable section identity used for capacity and request inspection.</summary>
+    public required string SectionId { get; init; }
+
+    /// <summary>Exact provider-visible instruction content.</summary>
+    public required string Content { get; init; }
+}
+
+/// <summary>Resolves an optional compiled provider instruction contribution for a selected profile.</summary>
+public interface IModelProviderInstructionResolver
+{
+    /// <summary>Resolves the exact instruction contribution for one configured profile.</summary>
+    /// <param name="profileId">Selected configured profile.</param>
+    /// <returns>The exact contribution, or <see langword="null"/> when the provider declares none.</returns>
+    ModelProviderInstructions? Resolve(ModelProfileId profileId);
 }
 
 /// <summary>Request passed to a host-owned model provider.</summary>
@@ -52,6 +75,10 @@ public sealed record ModelStreamRequest
     /// <summary>Zero-based tool-continuation round for this run.</summary>
     public int ToolContinuationRound { get; init; }
 
+    /// <summary>Monotonic provider-neutral history generation after host rewrites.</summary>
+    /// <remarks>Opaque provider continuation identities from an older generation must not be reused.</remarks>
+    public long HistoryRewriteGeneration { get; init; }
+
     /// <summary>Workload used for per-request configured-model selection.</summary>
     public WorkloadClass WorkloadClass { get; init; } = WorkloadClass.General;
 
@@ -67,11 +94,20 @@ public sealed record ModelStreamRequest
     /// <summary>Profile resolved by host policy before provider invocation.</summary>
     public ModelProfileId? ResolvedProfileId { get; init; }
 
+    /// <summary>Optional per-request output ceiling; providers reject values above the resolved profile limit.</summary>
+    public int? MaximumOutputTokens { get; init; }
+
     /// <summary>Reasoning effort level for this request; defaults to <see cref="ReasoningLevel.None"/>.</summary>
     public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.None;
 
     /// <summary>Host-authorized tools available during this request.</summary>
     public IReadOnlyList<ModelToolDefinition> Tools { get; init; } = [];
+
+    /// <summary>
+    /// Whether the provider may return multiple tool calls in one response; <see langword="null"/> preserves its default.
+    /// </summary>
+    /// <remarks>This does not authorize tool execution or require the host to execute accepted calls concurrently.</remarks>
+    public bool? AllowMultipleToolCalls { get; init; }
 
     /// <summary>Structured chronological messages; empty retains legacy <see cref="Input"/> behavior.</summary>
     public IReadOnlyList<ModelMessage> Messages { get; init; } = [];
@@ -81,6 +117,9 @@ public sealed record ModelStreamRequest
 
     /// <summary>How canonical tool schemas are transported.</summary>
     public ToolTransportMode ToolTransportMode { get; init; } = ToolTransportMode.Native;
+
+    /// <summary>Optional exact request-owned provider instructions counted before dispatch.</summary>
+    public ModelProviderInstructions? ProviderInstructions { get; init; }
 
     /// <summary>Host-owned estimate of the exact serialized request capacity.</summary>
     public ModelWireEstimate? WireEstimate { get; init; }
@@ -219,8 +258,88 @@ public sealed class TransientModelException : Exception
     }
 }
 
+/// <summary>Safe failure categories for malformed model-authored invocations.</summary>
+public enum MalformedInvocationFailureKind
+{
+    /// <summary>Tool arguments were not valid JSON.</summary>
+    InvalidJsonArguments,
+
+    /// <summary>Tool arguments were valid JSON but not a JSON object.</summary>
+    NonObjectArguments,
+
+    /// <summary>The tool name was omitted or blank.</summary>
+    MissingToolName,
+
+    /// <summary>The requested tool is unknown to the host.</summary>
+    UnknownTool,
+
+    /// <summary>The requested tool is not currently available to the model.</summary>
+    UnavailableTool,
+
+    /// <summary>The arguments did not match the tool's schema or invariants.</summary>
+    ArgumentSchemaMismatch,
+
+    /// <summary>The requested tool is invalid in the current run phase.</summary>
+    PhaseInvalidTool,
+
+    /// <summary>The response mixed plan/mutation output with another tool-producing output.</summary>
+    MultipleToolProducingOutputs,
+
+    /// <summary>The structured plan payload did not match the required schema.</summary>
+    PlanSchemaMismatch,
+
+    /// <summary>The structured mutation payload did not match the required schema.</summary>
+    MutationSchemaMismatch,
+
+    /// <summary>Plan sanity checks found repairable issues.</summary>
+    PlanSanityRepair,
+
+    /// <summary>Pre-mutation analysis found repairable diagnostics.</summary>
+    PreMutationDiagnostics,
+
+    /// <summary>Post-apply validation failed and can be corrected by another mutation proposal.</summary>
+    PostApplyValidation,
+}
+
+/// <summary>Sanitized diagnostic metadata for a recoverable malformed model invocation.</summary>
+public sealed record MalformedInvocationDiagnostic
+{
+    /// <summary>Safe machine-readable failure kind.</summary>
+    public required MalformedInvocationFailureKind Kind { get; init; }
+
+    /// <summary>Short sanitized explanation that excludes raw arguments and provider bodies.</summary>
+    public required string SafeMessage { get; init; }
+
+    /// <summary>Tool name when it is safe and known.</summary>
+    public string? ToolName { get; init; }
+
+    /// <summary>Zero-based tool-call ordinal in the model response when known.</summary>
+    public int? ToolOrdinal { get; init; }
+
+    /// <summary>Total sibling tool-call count when known.</summary>
+    public int? ToolCallCount { get; init; }
+
+    /// <summary>Provider family that produced the malformed invocation when known.</summary>
+    public string? ProviderFamily { get; init; }
+
+    /// <summary>Raw argument character count, without retaining the argument content.</summary>
+    public int? ArgumentCharacterCount { get; init; }
+
+    /// <summary>SHA-256 digest of the raw argument content, without retaining the content itself.</summary>
+    public string? ArgumentSha256 { get; init; }
+
+    /// <summary>JSON parser path when available.</summary>
+    public string? JsonPath { get; init; }
+
+    /// <summary>JSON parser line number when available.</summary>
+    public long? JsonLineNumber { get; init; }
+
+    /// <summary>JSON parser byte position within the line when available.</summary>
+    public long? JsonBytePositionInLine { get; init; }
+}
+
 /// <summary>Exception representing invalid structured provider output.</summary>
-public sealed class MalformedModelOutputException : Exception
+public class MalformedModelOutputException : Exception
 {
     /// <summary>Initializes a new instance of the <see cref="MalformedModelOutputException"/> class.</summary>
     public MalformedModelOutputException()
@@ -237,6 +356,56 @@ public sealed class MalformedModelOutputException : Exception
     public MalformedModelOutputException(string message, Exception innerException)
         : base(message, innerException)
     {
+    }
+}
+
+/// <summary>Exception carrying safe metadata for a recoverable malformed model invocation.</summary>
+public sealed class MalformedInvocationException : MalformedModelOutputException
+{
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException()
+        : this(CreateCompatibilityDiagnostic("The model emitted a malformed invocation."))
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(string message)
+        : this(CreateCompatibilityDiagnostic(message))
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(string message, Exception innerException)
+        : this(CreateCompatibilityDiagnostic(message), innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(MalformedInvocationDiagnostic diagnostic)
+        : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage)
+    {
+        Diagnostic = diagnostic;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MalformedInvocationException"/> class.</summary>
+    public MalformedInvocationException(MalformedInvocationDiagnostic diagnostic, Exception innerException)
+        : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage, innerException)
+    {
+        Diagnostic = diagnostic;
+    }
+
+    /// <summary>Gets the sanitized diagnostic metadata.</summary>
+    public MalformedInvocationDiagnostic Diagnostic { get; }
+
+    private static MalformedInvocationDiagnostic CreateCompatibilityDiagnostic(string message)
+    {
+        return new MalformedInvocationDiagnostic
+        {
+            Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+            SafeMessage = string.IsNullOrWhiteSpace(message)
+                ? "The model emitted a malformed invocation."
+                : message,
+        };
     }
 }
 
@@ -357,7 +526,7 @@ public sealed class FakeModelProvider : IModelProvider
 
         var random = new Random(request.Seed);
         var skippedToolRounds = 0;
-        foreach (ScriptedTurn turn in _script.Turns)
+        foreach (var turn in _script.Turns)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (skippedToolRounds < request.ToolContinuationRound)

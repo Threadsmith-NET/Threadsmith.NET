@@ -63,7 +63,7 @@ public sealed class CommandDispatcher : ICommandDispatcher
     {
         try
         {
-            object? result = registration.Method.Invoke(
+            var result = registration.Method.Invoke(
                 registration.Handler,
                 [command, cancellationToken]);
             return result as Task<TResponse>

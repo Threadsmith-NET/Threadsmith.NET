@@ -61,19 +61,19 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             return null;
         }
 
-        string workspaceText = reader.GetString(0);
+        var workspaceText = reader.GetString(0);
         if (!Guid.TryParse(workspaceText, out var workspaceValue))
         {
             throw new InvalidDataException("Stored repository workspace identity is invalid.");
         }
 
-        int trustValue = reader.GetInt32(1);
+        var trustValue = reader.GetInt32(1);
         if (!Enum.IsDefined(typeof(RepositoryTrustLevel), trustValue))
         {
             throw new InvalidDataException("Stored repository trust level is invalid.");
         }
 
-        string grantedText = reader.GetString(2);
+        var grantedText = reader.GetString(2);
         if (!DateTimeOffset.TryParse(
             grantedText,
             CultureInfo.InvariantCulture,
@@ -83,10 +83,10 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             throw new InvalidDataException("Stored repository trust timestamp is invalid.");
         }
 
-        string? solutionPath = await reader.IsDBNullAsync(3, cancellationToken)
+        var solutionPath = await reader.IsDBNullAsync(3, cancellationToken)
             ? null
             : reader.GetString(3);
-        string[] frameworks = JsonSerializer.Deserialize<string[]>(reader.GetString(4))
+        var frameworks = JsonSerializer.Deserialize<string[]>(reader.GetString(4))
             ?? throw new InvalidDataException("Stored target-framework facts are invalid.");
         MsBuildEnvironmentSnapshot? environment = null;
         if (!await reader.IsDBNullAsync(5, cancellationToken))
@@ -158,7 +158,7 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
 
     private static string GetRepositoryKey(string repositoryPath)
     {
-        string normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+        var normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
         if (!OperatingSystem.IsWindows())
         {
             return normalizedPath;

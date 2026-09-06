@@ -113,6 +113,30 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 75 | `plan-75-plan-approval-policy-and-sanity-checks.md` | Plan approval policy, repository sanity checks, and plan-revision repair |
 | 76 | `plan-76-plan-approval-policy-storage-boundaries.md` | Plan-policy repository persistence and user trust-grant storage boundaries |
 | 77 | `plan-77-shared-codex-style-tui-lifecycle-blocks.md` | Shared Codex-style TUI lifecycle blocks for tools, plans, and semantic checks |
+| 78 | `plan-78-repository-scoped-cross-session-memory.md` | Repository-scoped cross-session memory in the existing ignored repo SQLite store |
+| 79 | `plan-79-packaged-local-documentation-help-skill.md` | Packaged local documentation bundle and maintained natural Q&A skill |
+| 80 | `plan-80-active-turn-tool-continuation-compaction.md` | Token-aware active-turn tool continuation compaction |
+| 81 | `plan-81-roslyn-code-explore-exact-anchors-and-source.md` | Exact symbol/path exploration with source-bearing Roslyn results |
+| 82 | `plan-82-roslyn-code-explore-multi-anchor-flow.md` | Multi-anchor semantic flow, dispatch branches, and blast radius |
+| 83 | `plan-83-roslyn-code-explore-natural-language-ranking.md` | Natural-language anchor discovery and structural source allocation |
+| 84 | `plan-84-context-aware-code-explore-source-deduplication.md` | Context-proven cross-call source-range deduplication |
+| 85 | `plan-85-code-explore-associated-non-csharp-artifacts.md` | Bounded associated prompt, configuration, and project artifacts |
+| 86 | `plan-86-pi-style-active-turn-summary.md` | Pi-style active-turn summary compaction |
+| 88 | `plan-88-unified-model-correction-loop-substrate.md` | Conversation-native corrective messages |
+| 88.1 | `plan-88.1-complete-conversation-native-correction-migration.md` | Conversation-native correction migration follow-up |
+| 89 | `plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md` | Code explore agent-sufficient presentation, ranking, adaptive output, and availability |
+| 90 | `plan-90-deployable-prompt-assets.md` | Deployable Markdown prompt assets and cached injectable prompt loading |
+| 91 | `plan-91-create-sub-agent-delegation-tool.md` | Model-callable sub-agent delegation tool, steering, and double-Esc cancellation |
+| 92 | `plan-92-advanced-semantic-tool-schema-maintenance.md` | Advanced semantic model-facing schema simplification and projection hardening |
+| 93 | `plan-93-codex-headless-auth-json-numeric-compatibility.md` | Codex headless OAuth JSON numeric compatibility |
+| 94 | `plan-94-code-explore-agent-execution-quality.md` | Code explore agent-execution ranking and presentation quality |
+| 95 | `plan-95-subagent-efficiency-code-explore-role-model-routing.md` | Subagent efficiency, residual code explore precision, and role-specific provider/model routing |
+| 96 | `plan-96-active-run-steering-and-double-escape.md` | Serialized active-run steering and double-Escape cancellation |
+| 97 | `plan-97-external-semantic-refresh.md` | Background external-change semantic refresh, stale-request admission, and manual recovery |
+| 98 | `plan-98-frontend-neutral-interaction-coordination.md` | Frontend-neutral interaction coordination and Markdown presentation extraction |
+| 99 | `plan-99-test-fixture-scope-determinism-cleanup.md` | Proportionate deterministic test fixtures and resource hygiene |
+| 100 | `plan-100-tuikit-alternate-interactive-frontend.md` | Selectable TUIKit full-screen frontend with fixed session status |
+| 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline
 

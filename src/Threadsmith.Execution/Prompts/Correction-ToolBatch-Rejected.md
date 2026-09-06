@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: This tool batch was rejected before execution. Nothing in the batch was executed. {{FailureSummary}} Re-emit the full intended batch with corrected arguments, or answer without tools.

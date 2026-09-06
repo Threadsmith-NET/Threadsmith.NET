@@ -1,0 +1,1 @@
+Retrieves one authorized public HTTPS textual document. Pass the host-issued search or current-user URL reference, or an explicitly granted or separately approved direct URL, in reference.

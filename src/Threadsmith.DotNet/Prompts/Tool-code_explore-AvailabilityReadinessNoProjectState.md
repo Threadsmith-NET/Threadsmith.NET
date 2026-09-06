@@ -1,0 +1,1 @@
+The semantic workspace does not currently expose compiler-aware project state.

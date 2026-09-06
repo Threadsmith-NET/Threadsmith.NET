@@ -108,7 +108,7 @@ public sealed class RepositoryLifecycle :
         cancellationToken.ThrowIfCancellationRequested();
         var repositoryPath = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(command.RepositoryPath));
-        RepositoryFacts? facts = await _factsStore.GetAsync(repositoryPath, cancellationToken);
+        var facts = await _factsStore.GetAsync(repositoryPath, cancellationToken);
         return facts?.Trust;
     }
 
@@ -144,17 +144,17 @@ public sealed class RepositoryLifecycle :
             throw new DirectoryNotFoundException($"Repository root '{repositoryPath}' does not exist.");
         }
 
-        FileAttributes attributes = File.GetAttributes(repositoryPath);
+        var attributes = File.GetAttributes(repositoryPath);
         if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
             throw new InvalidOperationException("Repository roots cannot be symbolic links or junctions.");
         }
 
-        RepositoryFacts? persisted = await _factsStore.GetAsync(repositoryPath, cancellationToken);
-        RepositoryTrustLevel effectiveTrust = persisted is not null && persisted.Trust.Level > command.RequestedTrust
+        var persisted = await _factsStore.GetAsync(repositoryPath, cancellationToken);
+        var effectiveTrust = persisted is not null && persisted.Trust.Level > command.RequestedTrust
             ? persisted.Trust.Level
             : command.RequestedTrust;
-        DateTimeOffset grantedAt = persisted is not null && persisted.Trust.Level == effectiveTrust
+        var grantedAt = persisted is not null && persisted.Trust.Level == effectiveTrust
             ? persisted.Trust.GrantedAt
             : DateTimeOffset.UtcNow;
         var trust = new RepositoryTrustState(repositoryPath, effectiveTrust, grantedAt);
@@ -167,7 +167,7 @@ public sealed class RepositoryLifecycle :
             throw new InvalidDataException("Repository configuration exceeds the 1 MiB safety limit.");
         }
 
-        IConfigurationRoot configuration = new ConfigurationBuilder()
+        var configuration = new ConfigurationBuilder()
             .AddJsonFile(configPath, optional: true)
             .Build();
         var configuredSolution = configuration["solution:path"];
@@ -201,8 +201,7 @@ public sealed class RepositoryLifecycle :
             approvedRoots,
             prohibitedPaths);
         string[] discovered = [.. EnumerateSafeFiles(repositoryPath, cancellationToken)
-            .Where(path => _solutionExtensions.Contains(Path.GetExtension(path)))
-            .Where(path => !IsProhibited(repositoryPath, path, prohibitedPaths))
+            .Where(path => _solutionExtensions.Contains(Path.GetExtension(path)) && !IsProhibited(repositoryPath, path, prohibitedPaths))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)];
         var solutionFiles = discovered
             .Where(path => _solutionContainerExtensions.Contains(Path.GetExtension(path)))
@@ -246,7 +245,7 @@ public sealed class RepositoryLifecycle :
             }
         }
 
-        MsBuildEnvironmentSnapshot? environment = effectiveTrust >= RepositoryTrustLevel.TrustedRead
+        var environment = effectiveTrust >= RepositoryTrustLevel.TrustedRead
             ? await DotNetEnvironmentResolver.ResolveAsync(
                 repositoryPath,
                 configuration["build:configuration"] ?? "Debug",
@@ -279,7 +278,7 @@ public sealed class RepositoryLifecycle :
             persisted?.TargetFrameworks.ToArray() ?? []);
         lock (_sessionGate)
         {
-            if (_workspacesBySession.Remove(command.SessionId, out WorkspaceId previousWorkspaceId))
+            if (_workspacesBySession.Remove(command.SessionId, out var previousWorkspaceId))
             {
                 _sessions.Remove(previousWorkspaceId);
             }
@@ -410,7 +409,7 @@ public sealed class RepositoryLifecycle :
             }
 
             var project = XDocument.Load(projectPath, LoadOptions.None);
-            foreach (XElement? property in project.Descendants()
+            foreach (var property in project.Descendants()
                 .Where(element => element.Name.LocalName is "TargetFramework" or "TargetFrameworks"))
             {
                 foreach (var framework in property.Value.Split(';', StringSplitOptions.RemoveEmptyEntries))
@@ -421,7 +420,7 @@ public sealed class RepositoryLifecycle :
         }
 
         string[] frameworks = [.. targetFrameworks.OrderBy(item => item, StringComparer.OrdinalIgnoreCase)];
-        MsBuildEnvironmentSnapshot? environment = session.Environment;
+        var environment = session.Environment;
         if (session.Trust.Level >= RepositoryTrustLevel.TrustedBuild && environment is not null)
         {
             environment = await DotNetEnvironmentResolver.RestoreAsync(
@@ -431,7 +430,7 @@ public sealed class RepositoryLifecycle :
                 cancellationToken);
         }
 
-        RepositorySession updated = session with
+        var updated = session with
         {
             SolutionPath = solutionPath,
             TargetFrameworks = frameworks,
@@ -690,11 +689,11 @@ public sealed class RepositoryLifecycle :
             }
 
             const int maximumOutputCharacters = 64 * 1024;
-            Task<string> outputTask = ReadBoundedOutputAsync(
+            var outputTask = ReadBoundedOutputAsync(
                 process.StandardOutput,
                 maximumOutputCharacters,
                 cancellationToken);
-            Task<string> errorTask = ReadBoundedOutputAsync(
+            var errorTask = ReadBoundedOutputAsync(
                 process.StandardError,
                 maximumOutputCharacters,
                 cancellationToken);
@@ -703,10 +702,14 @@ public sealed class RepositoryLifecycle :
             var error = await errorTask;
             if (process.ExitCode != 0)
             {
-                _logger.LogDebug(
-                    "Git baseline query failed in {RepositoryPath}: {Error}",
-                    repositoryPath,
-                    error[..Math.Min(error.Length, 1024)]);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug(
+                        "Git baseline query failed in {RepositoryPath}: {Error}",
+                        repositoryPath,
+                        error[..Math.Min(error.Length, 1024)]);
+                }
+
                 return null;
             }
 
@@ -716,10 +719,14 @@ public sealed class RepositoryLifecycle :
             or IOException
             or InvalidOperationException)
         {
-            _logger.LogDebug(
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug(
                 exception,
                 "Git is unavailable while capturing the baseline for {RepositoryPath}",
                 repositoryPath);
+            }
+
             return null;
         }
     }

@@ -1,6 +1,7 @@
 namespace Threadsmith.Tui;
 
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Interaction.Contracts;
 
 /// <summary>Immutable effective interactive display settings.</summary>
 public sealed record TuiDisplayOptions
@@ -30,6 +31,13 @@ public sealed record TuiDisplayOptions
             RenderMarkdown = renderMarkdown,
             Diagnostics = diagnostics.ToArray(),
         };
+    }
+
+    /// <summary>Projects configuration-free behavior into shared coordination.</summary>
+    /// <returns>Immutable frontend-neutral behavior.</returns>
+    internal InteractionDisplayOptions ToInteractionOptions()
+    {
+        return new InteractionDisplayOptions(RenderMarkdown, ShowOperationDurations);
     }
 
     private static bool ParseBoolean(string? configured, string key, List<string> diagnostics)

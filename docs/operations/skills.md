@@ -31,7 +31,7 @@ Threadsmith also discovers bounded frontmatter from `<repo>/.claude/skills/<name
 
 `/skills verify claude:<scope>:<name>` activates only that candidate, confines and hashes every eligible file, and reports the exact immutable digest without enabling it. `/skills enable` repeats that verification, then writes the exact digest/publisher/source decision to the same repository-excluding `%USERPROFILE%\.threadsmith\skill-policy.json` used by native packages. `/skills disable` records an exact deny. A source byte/path change creates a different identity and blocks old exact selectors and resume checkpoints.
 
-`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` Plan-39 workflow. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
+`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` workflow. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
 
 ## Trust, verification, and enablement
 

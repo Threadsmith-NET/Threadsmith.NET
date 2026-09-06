@@ -29,10 +29,10 @@ public sealed class InMemoryProjectionStore : IProjectionStore
             var toolActivity = existing?.ToolActivity.ToList() ?? [];
             var diagnostics = existing?.Diagnostics.ToList() ?? [];
             var approvals = existing?.PendingApprovals.ToList() ?? [];
-            string? resultPreview = domainEvent is ToolInvocationCompleted { ResultJson: { } resultJson }
+            var resultPreview = domainEvent is ToolInvocationCompleted { ResultJson: { } resultJson }
                 ? resultJson[..Math.Min(resultJson.Length, _maximumToolResultPreviewCharacters)]
                 : null;
-            bool resultPreviewTruncated = domainEvent is ToolInvocationCompleted completedEvent
+            var resultPreviewTruncated = domainEvent is ToolInvocationCompleted completedEvent
                 && completedEvent.ResultJson is { Length: > 0 } truncatedJson
                 && truncatedJson.Length > _maximumToolResultPreviewCharacters;
             var next = domainEvent switch
@@ -72,6 +72,14 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 ModelOutputObserved output when existing is not null => existing with
                 {
                     Activity = [.. activity, output.Text],
+                },
+                ModelCorrectionAttempted correction when existing is not null => existing with
+                {
+                    Activity =
+                    [
+                        .. activity,
+                        $"Model correction ({correction.Category}) {correction.AttemptNumber}/{correction.MaximumAttempts}: {correction.SafeReason}",
+                    ],
                 },
                 ContextAssembled assembled when existing is not null => existing with
                 {

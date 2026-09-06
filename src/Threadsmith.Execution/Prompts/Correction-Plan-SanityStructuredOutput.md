@@ -1,0 +1,1 @@
+Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: The structured plan was rejected before approval. Nothing from the rejected plan was accepted. {{Reason}} Return one corrected structured PlanModelOutput JSON response as assistant text; do not call propose_plan in this phase.

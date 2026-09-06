@@ -1,0 +1,1 @@
+The opened workspace has not loaded compiler-aware project state yet.

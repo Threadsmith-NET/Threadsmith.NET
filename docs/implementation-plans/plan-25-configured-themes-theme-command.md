@@ -90,7 +90,7 @@ Example configuration shape:
 - `src/Threadsmith.Tui/` — configuration DTOs/loader, catalog, built-in themes, session preference, command handler, and surface refresh.
 - `src/Threadsmith.App/Program.cs` — bind the effective theme catalog and initialize the interactive preference.
 - `.threadsmith/config.example` — document the complete theme array and supported semantic/UI settings.
-- `tests/Threadsmith.Milestone7_1.Tests/` (preferred) — configuration, catalog, command routing, selection, and built-in theme tests.
+- `tests/Threadsmith.SessionStatus.Tests/` (preferred) — configuration, catalog, command routing, selection, and built-in theme tests.
 - `docs/operations/tui-themes.md` — operator reference and examples.
 - `docs/operations/keyboard-shortcuts.md` — add `/theme` commands.
 - `docs/implementation-plans/manual-test-plan.md` — selection, immediate switching, invalid config, accessibility, and cancellation cases.

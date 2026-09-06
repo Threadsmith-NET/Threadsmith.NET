@@ -66,10 +66,10 @@ public sealed class MigrationRunner
         await connection.OpenAsync(cancellationToken);
         await EnsureSchemaVersionTableAsync(connection, cancellationToken);
         var current = await ReadCurrentVersionAsync(connection, cancellationToken);
-        foreach (IDatabaseMigration migration in _migrations.Where(m => m.Version > current))
+        foreach (var migration in _migrations.Where(m => m.Version > current))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await using SqliteTransaction transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
                 cancellationToken);
             try
             {
@@ -105,7 +105,7 @@ public sealed class MigrationRunner
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
@@ -119,7 +119,7 @@ public sealed class MigrationRunner
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT MAX(version) FROM schema_version;";
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return result is int version ? version : 0;
@@ -131,7 +131,7 @@ public sealed class MigrationRunner
         int version,
         CancellationToken cancellationToken)
     {
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
             INSERT OR IGNORE INTO schema_version(version, applied_at)

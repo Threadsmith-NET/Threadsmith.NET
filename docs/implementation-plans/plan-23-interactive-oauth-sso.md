@@ -42,7 +42,7 @@ Implemented. `McpOAuthFlow` projects host-owned browser/callback and token-store
 - `src/Threadsmith.Mcp/SdkHttpTransport.cs`: wire OAuth token acquisition.
 - `src/Threadsmith.Mcp/McpAdapter.cs`: remove the plan-22 `oauth.enabled` fail-fast; route to the flow.
 - `src/Threadsmith.App/Program.cs`: wire `IBrowserLauncher` (TUI) / headless callback UX.
-- `tests/Threadsmith.Milestone10.Tests/` (proposed): mock-IdP integration test (`HttpListener` discovery + authorize + token endpoints), token-refresh test, headless-UX test.
+- `tests/Threadsmith.McpOAuth.Tests/` (proposed): mock-IdP integration test (`HttpListener` discovery + authorize + token endpoints), token-refresh test, headless-UX test.
 - `.threadsmith/config.example` + `.threadsmith/AGENTS.md`: flip `oauth` from "planned" to "supported"; document the single-user limitation and the `mcp:oauth:{profileId}` secret namespace.
 - `docs/operations/mcp-connections.md`: Authentication section extended.
 

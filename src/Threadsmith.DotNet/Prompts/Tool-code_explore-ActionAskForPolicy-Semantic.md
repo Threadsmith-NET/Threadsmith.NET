@@ -1,0 +1,1 @@
+Ask the user whether the workspace scope or repository path policy should be adjusted before retrying.

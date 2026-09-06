@@ -2,7 +2,9 @@
 
 ## Status
 
-**Overall status: NOT READY for public binary distribution.**
+**Current addition (2026-09-04): TUIKit 0.10.1 is integrated with exact package evidence and supplemental notices.** The historical inventory below predates the implemented ADR-49 release automation; canonical current authority is `eng/release/release-license-evidence.json` plus exact per-RID generated artifact validation. Existing SDK/runtime review scope is unchanged by this addition.
+
+### Historical inventory baseline
 
 The application’s resolved NuGet libraries have only permissive or weak-copyleft
 open-source license expressions suitable for use by an Apache-2.0 product:
@@ -26,7 +28,7 @@ before the first public binary release.
 | Evidence | What was checked |
 |---|---|
 | `Directory.Packages.props` | Central Package Management and transitive pinning are enabled; declared versions are centrally pinned. |
-| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | Restored dependency graph for the 44-project solution. The machine-readable snapshot is retained beside this report as `dotnet-package-graph.json`. |
+| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | Restored dependency graph for the 45-project solution. The machine-readable snapshot is retained beside this report as `dotnet-package-graph.json`. |
 | `obj/project.assets.json` and cached `.nuspec` metadata | Resolved package scope and license expressions. |
 | `eng/release/ripgrep-assets.json` and `Stage-Ripgrep.ps1` | Ripgrep source, hash, license selection, and staged legal material. |
 | `.NET runtime` package legal files | `microsoft.netcore.app.runtime.win-x64/10.0.10/LICENSE.TXT` and `THIRD-PARTY-NOTICES.TXT`. |
@@ -82,6 +84,28 @@ release process starts redistributing them.
 | Microsoft.NETCore.App runtime (RID-specific self-contained payload) | 10.0.10 | **Incomplete release attribution.** The Windows runtime package contains `LICENSE.TXT` and `THIRD-PARTY-NOTICES.TXT`; neither is currently copied by the release scripts. The current .NET licensing guidance distinguishes MIT source/packages from Windows product/runtime distribution terms. Review and stage the required Windows license and notices for every Windows RID before publication. Apply the equivalent RID-specific runtime legal material for Linux/macOS too. |
 
 ## Non-shipped dependency inventory
+
+### TUIKit product frontend (2026-09-04)
+
+`Threadsmith.Tui.TuiKit` pins **TUIKit 0.10.1** in the root central catalog. It is included in the product solution, dependency graph, and all six local publish payloads. Canonical release evidence records its exact SHA-512, MIT declaration, and supplemental font notices. TUIKit is the default interactive frontend; the original PrettyPrompt frontend remains selectable and its MPL obligations still apply.
+
+The [candidate licensing bundle](../eng/release/legal/TUIKit-0.10.1-candidate/README.md)
+records exact archive/assembly/resource digests, the pinned upstream MIT license,
+the package's font attribution/removal notices, all 83 embedded font headers,
+and the full WTFPL v2 text. The .NET 10 TUIKit asset has no managed dependencies,
+but it includes font resources inside its DLL even when the font API is unused.
+
+| Observed embedded-font terms | Resources | Release disposition |
+|---|---:|---|
+| MIT stated in the header | 3 | Preserve copyright/author notices and full terms |
+| WTFPL v2 stated in the header | 6 | Permissive license; preserve its full text and record the expression in release evidence |
+| Modification permission requiring modifier credit | 18 | Preserve full author headers and terms |
+| No explicit license named in the declared header | 56 | Preserve package attribution and original headers; an absent header license does not establish a restriction |
+
+WTFPL is permissive; its absence from the existing expression inventory is a
+documentation update, not a licensing obstacle. No upstream issue or discussion
+is required or authorized. Product integration includes exact package evidence, supplemental notices, and SPDX license information. All six supported local RID publishes passed exact package closure and TUIKit notice checks. SPDX records the package's declared MIT license and the inventory's aggregate NOASSERTION without asserting that every embedded font is MIT. Existing runtime-version review scope remains unchanged.
+
 
 ### Build and analysis only
 

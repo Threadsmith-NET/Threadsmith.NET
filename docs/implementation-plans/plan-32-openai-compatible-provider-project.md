@@ -172,7 +172,7 @@ No concrete provider types enter domain events, persistent state, public project
 - `src/Threadsmith.Models/` — remove concrete OpenAI adapter/wire types and direct construction; retain shared contracts, selection, catalog, output validation, and dispatch.
 - `src/Threadsmith.App/` — reference/register the compiled provider and new catalog loader.
 - `src/Threadsmith.sln` — add provider project.
-- `tests/Threadsmith.Milestone3.Tests/` or new `tests/Threadsmith.Models.OpenAiCompatible.Tests/` — move/add observable provider tests.
+- `tests/Threadsmith.ModelTooling.Tests/` or new `tests/Threadsmith.Models.OpenAiCompatible.Tests/` — move/add observable provider tests.
 - `tests/Threadsmith.Architecture.Tests/` — enforce provider-project dependency and SDK leakage rules.
 - `Directory.Packages.props` only if a concrete external dependency is justified.
 - Configuration examples, user guide, manual plan, ADR, source/test/root DOX indexes during implementation.

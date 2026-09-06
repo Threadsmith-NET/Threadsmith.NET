@@ -1,0 +1,1 @@
+Pre-mutation Roslyn analysis found blocking diagnostics before staging or approval. Revise the proposed mutation set against the same baseline; no repository files were changed.{{DiagnosticItems}}{{OmissionItems}}

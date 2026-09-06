@@ -27,8 +27,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.RepositoryPath));
-        SemanticLoadRequest loaded = GetAuthoritativeLoadRequest(request.WorkspaceId, repositoryRoot);
-        IReadOnlyList<SemanticProjectInfo> projects = _registry.GetProjects(request.WorkspaceId);
+        var loaded = GetAuthoritativeLoadRequest(request.WorkspaceId, repositoryRoot);
+        var projects = _registry.GetProjects(request.WorkspaceId);
         return
         [
             loaded.SolutionPath,
@@ -44,27 +44,28 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.SelectedSolutionPath);
         cancellationToken.ThrowIfCancellationRequested();
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.RepositoryPath));
-        SemanticLoadRequest loaded = GetAuthoritativeLoadRequest(request.WorkspaceId, repositoryRoot);
+        var loaded = GetAuthoritativeLoadRequest(request.WorkspaceId, repositoryRoot);
         var selectedSolution = NormalizeUnderRoot(repositoryRoot, loaded.SolutionPath);
-        IReadOnlyList<SemanticProjectInfo> semanticProjects = _registry.GetProjects(request.WorkspaceId);
-        SemanticConfidenceLevel confidence = _registry.GetConfidence(request.WorkspaceId);
+        var semanticProjects = _registry.GetProjects(request.WorkspaceId);
+        var confidence = _registry.GetConfidence(request.WorkspaceId);
         var omissions = new List<string>();
         if (semanticProjects.Count > MaximumProjects)
         {
-            omissions.Add($"Project inventory was limited to {MaximumProjects} entries.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project inventory was limited to {MaximumProjects} entries."));
         }
 
-        IReadOnlyDictionary<string, string> centralVersions = ReadCentralVersions(repositoryRoot, omissions);
+        var centralVersions = ReadCentralVersions(repositoryRoot, omissions);
         ProjectInventory[] projects = [.. semanticProjects
             .Take(MaximumProjects)
             .Select(project => CreateProject(repositoryRoot, project, centralVersions, omissions, cancellationToken))
             .OrderBy(project => project.Path, StringComparer.OrdinalIgnoreCase)];
         if (projects.Length == 0)
         {
-            omissions.Add("No projects are loaded for the selected semantic workspace.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "No projects are loaded for the selected semantic workspace."));
         }
 
         var repositoryRevision = await _gitQueries.GetRevisionAsync(
@@ -94,8 +95,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         {
             try
             {
-                XDocument document = XDocument.Load(projectPath, LoadOptions.None);
-                foreach (XElement element in document.Descendants().Where(item => item.Name.LocalName == "PackageReference"))
+                var document = XDocument.Load(projectPath, LoadOptions.None);
+                foreach (var element in document.Descendants().Where(item => item.Name.LocalName == "PackageReference"))
                 {
                     var id = element.Attribute("Include")?.Value ?? element.Attribute("Update")?.Value;
                     if (string.IsNullOrWhiteSpace(id))
@@ -105,7 +106,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
 
                     var version = element.Attribute("Version")?.Value
                         ?? element.Elements().FirstOrDefault(item => item.Name.LocalName == "Version")?.Value;
-                    PackageVersionSource source = PackageVersionSource.Project;
+                    var source = PackageVersionSource.Project;
                     if (string.IsNullOrWhiteSpace(version) && centralVersions.TryGetValue(id, out var centralVersion))
                     {
                         version = centralVersion;
@@ -121,17 +122,19 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
             {
-                omissions.Add($"Could not inspect package metadata for {ToRelative(repositoryRoot, projectPath)}.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    $"Could not inspect package metadata for {ToRelative(repositoryRoot, projectPath)}."));
             }
         }
         else
         {
-            omissions.Add($"Project file is missing or exceeds 1 MiB: {ToRelative(repositoryRoot, projectPath)}.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"Project file is missing or exceeds 1 MiB: {ToRelative(repositoryRoot, projectPath)}."));
         }
 
         foreach (var package in semantic.PackageReferences.Where(package => !string.IsNullOrWhiteSpace(package)))
         {
-            PackageVersionSource source = centralVersions.ContainsKey(package)
+            var source = centralVersions.ContainsKey(package)
                 ? PackageVersionSource.Central
                 : PackageVersionSource.Unknown;
             packages.TryAdd(
@@ -172,11 +175,12 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         {
             if (new FileInfo(path).Length > 1024 * 1024)
             {
-                omissions.Add("Directory.Packages.props exceeds the 1 MiB inventory limit.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Directory.Packages.props exceeds the 1 MiB inventory limit."));
                 return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             }
 
-            XDocument document = XDocument.Load(path, LoadOptions.None);
+            var document = XDocument.Load(path, LoadOptions.None);
             return document.Descendants()
                 .Where(element => element.Name.LocalName == "PackageVersion")
                 .Select(element => new
@@ -190,7 +194,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
-            omissions.Add("Directory.Packages.props could not be inspected.");
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                "Directory.Packages.props could not be inspected."));
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
     }
@@ -207,9 +212,9 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         WorkspaceId workspaceId,
         string repositoryRoot)
     {
-        SemanticLoadRequest loaded = _registry.GetLoadRequest(workspaceId);
+        var loaded = _registry.GetLoadRequest(workspaceId);
         var loadedRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(loaded.RepositoryPath));
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         if (!loadedRepository.Equals(repositoryRoot, comparison))
@@ -224,7 +229,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
     private static string NormalizeUnderRoot(string repositoryRoot, string candidate)
     {
         var normalized = Path.GetFullPath(candidate, repositoryRoot);
-        StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (!normalized.Equals(repositoryRoot, comparison)
             && !normalized.StartsWith(repositoryRoot + Path.DirectorySeparatorChar, comparison))
         {

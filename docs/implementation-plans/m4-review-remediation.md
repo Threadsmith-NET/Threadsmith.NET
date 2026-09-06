@@ -104,8 +104,8 @@ Freeze or defensively wrap `TokensByCategory` when creating `ContextInspectionPr
 - `src/Threadsmith.Execution/SessionApplication.cs` — evidence dependency keys, affected-file preservation, revise event sequence.
 - `src/Threadsmith.Execution/InMemoryProjectionStore.cs` — revision closes the prior pending approval.
 - `src/Threadsmith.Models/OpenAiCompatibleModelProvider.cs` — resolved-profile mismatch guard before HTTP dispatch.
-- `tests/Threadsmith.Milestone4.Tests/Milestone4Tests.cs` — end-to-end invalidation, prompt, resolution, path, and revision tests.
-- `tests/Threadsmith.Milestone3.Tests/Milestone3Tests.cs` — direct OpenAI-compatible adapter mismatch test if that provider's existing tests live here.
+- `tests/Threadsmith.Planning.Tests/Milestone4Tests.cs` — end-to-end invalidation, prompt, resolution, path, and revision tests.
+- `tests/Threadsmith.ModelTooling.Tests/Milestone3Tests.cs` — direct OpenAI-compatible adapter mismatch test if that provider's existing tests live here.
 - `docs/implementation-plans/00-shared-context.md` and `plan-09-context-governor-structured-planning.md` — map strategy decision 19 to `docs/architecture/adr-12-phase-specific-governed-context.md`.
 - Applicable `AGENTS.md` files and Child DOX Indexes — update only where implemented behavior or contracts change.
 
@@ -144,9 +144,9 @@ Freeze or defensively wrap `TokensByCategory` when creating `ContextInspectionPr
 Run in this order:
 
 ```powershell
-dotnet test tests/Threadsmith.Milestone3.Tests
-dotnet test tests/Threadsmith.Milestone4.Tests
-dotnet test tests/Threadsmith.Milestone1.Tests
+dotnet test tests/Threadsmith.ModelTooling.Tests
+dotnet test tests/Threadsmith.Planning.Tests
+dotnet test tests/Threadsmith.CoreRuntime.Tests
 dotnet build src/Threadsmith.sln -c Debug
 ```
 

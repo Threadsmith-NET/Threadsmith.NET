@@ -47,15 +47,31 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
+        var profileOutputLimit = _profile.EffectiveRequestOutputTokenReserve;
+        if (request.MaximumOutputTokens is { } maximumOutputTokens
+            && (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit))
+        {
+            throw new ModelProviderException(
+                $"The requested output ceiling must be between 1 and the resolved profile request reserve of "
+                + $"{profileOutputLimit} tokens.");
+        }
+
+        var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        ValidateCapacity(request, canonicalTools, request.MaximumOutputTokens ?? profileOutputLimit);
+        var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_profile.Timeout);
-        string accessToken = AccessToken;
-        bool replayedAfterAuthenticationRejection = false;
-        int attempt = 0;
+        var accessToken = AccessToken;
+        var replayedAfterAuthenticationRejection = false;
+        var attempt = 0;
         while (true)
         {
             attempt++;
-            using HttpRequestMessage message = CreateRequest(request, accessToken);
+            using var message = CreateRequest(
+                request,
+                accessToken,
+                canonicalTools,
+                toolNameMap);
             HttpResponseMessage response;
             try
             {
@@ -73,9 +89,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             {
                 if (response.IsSuccessStatusCode)
                 {
-                    await using Stream stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                    await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
                     using StreamReader reader = new(stream);
-                    await foreach (ModelChunk chunk in ReadEventsAsync(reader, timeout.Token).ConfigureAwait(false))
+                    await foreach (var chunk in ReadEventsAsync(
+                        reader,
+                        toolNameMap,
+                        request.MaximumOutputTokens ?? profileOutputLimit,
+                        timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
                     }
@@ -120,23 +140,34 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     continue;
                 }
 
-                throw CreateFailure(response.StatusCode);
+                try
+                {
+                    throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new ModelProviderTimeoutException("The Codex error response timed out.", exception);
+                }
             }
         }
     }
 
-    private HttpRequestMessage CreateRequest(ModelStreamRequest request, string accessToken)
+    private HttpRequestMessage CreateRequest(
+        ModelStreamRequest request,
+        string accessToken,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        ModelToolWireNameMap toolNameMap)
     {
         JsonObject body = new()
         {
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
-            ["max_output_tokens"] = _profile.EffectiveRequestOutputTokenReserve,
-            ["instructions"] = "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.",
-            ["input"] = CreateInput(request),
+            ["instructions"] = request.ProviderInstructions?.Content
+                ?? throw new InvalidOperationException(
+                    "Native Codex requests require request-owned provider instructions."),
+            ["input"] = CreateInput(request, toolNameMap),
             ["include"] = new JsonArray("reasoning.encrypted_content"),
-            ["parallel_tool_calls"] = true,
             ["reasoning"] = new JsonObject
             {
                 ["effort"] = ToProviderReasoning(request.ReasoningLevel),
@@ -145,29 +176,29 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             ["text"] = new JsonObject { ["verbosity"] = "medium" },
         };
 
-        if (request.Tools.Count > 0)
+        if (request.AllowMultipleToolCalls is { } allowMultipleToolCalls)
         {
-            bool hasStrictTools = false;
+            body["parallel_tool_calls"] = allowMultipleToolCalls;
+        }
+
+        if (canonicalTools.Count > 0)
+        {
             JsonArray tools = [];
-            foreach (ModelToolDefinition tool in ModelToolCanonicalizer.Canonicalize(request.Tools))
+            foreach (var tool in canonicalTools)
             {
-                string? strictSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-                    tool.Name,
-                    tool.ArgumentsJsonSchema);
-                hasStrictTools |= strictSchema is not null;
+                var strictSchema = tool.PreferStrictArguments
+                    ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                        tool.Name,
+                        tool.ArgumentsJsonSchema)
+                    : null;
                 tools.Add(new JsonObject
                 {
                     ["type"] = "function",
-                    ["name"] = tool.Name,
+                    ["name"] = toolNameMap.ToWireName(tool.Name),
                     ["description"] = tool.Description,
                     ["parameters"] = JsonNode.Parse(strictSchema ?? tool.ArgumentsJsonSchema),
                     ["strict"] = strictSchema is not null,
                 });
-            }
-
-            if (hasStrictTools)
-            {
-                body["parallel_tool_calls"] = false;
             }
 
             body["tools"] = tools;
@@ -182,7 +213,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         message.Headers.TryAddWithoutValidation("originator", "threadsmith");
         message.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
-        string? accountId = OpenAiCodexTokenClaims.TryGetAccountId(accessToken);
+        var accountId = OpenAiCodexTokenClaims.TryGetAccountId(accessToken);
         if (accountId is not null)
         {
             message.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", accountId);
@@ -191,7 +222,70 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return message;
     }
 
-    private static JsonArray CreateInput(ModelStreamRequest request)
+    private void ValidateCapacity(
+        ModelStreamRequest request,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        int outputReserveTokens)
+    {
+        var providerInstructions = request.ProviderInstructions
+            ?? throw new ModelProviderException(
+                "Native Codex requests require request-owned provider instructions.");
+        var suppliedEstimate = request.WireEstimate
+            ?? throw new ModelProviderException(
+                "Native Codex requests require a complete provider-wire capacity estimate.");
+        var messages = request.Messages.Count == 0
+            ?
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.User,
+                    SectionId = "legacy-input",
+                    Content = [new ModelContentPart { Content = request.Input }],
+                },
+            ]
+            : request.Messages;
+        var stablePrefixMessageCount = request.Layout?.StablePrefixMessageCount ?? 0;
+        if (stablePrefixMessageCount > messages.Count)
+        {
+            throw new ModelProviderException(
+                "The Codex request layout exceeds the provider-visible message count.");
+        }
+
+        var expectedEstimate = ModelWireEstimator.Estimate(
+            messages,
+            canonicalTools,
+            request.ToolTransportMode,
+            stablePrefixMessageCount,
+            outputReserveTokens,
+            providerInstructions);
+        if (suppliedEstimate.LogicalTokens != expectedEstimate.LogicalTokens
+            || suppliedEstimate.WireInputTokens != expectedEstimate.WireInputTokens
+            || suppliedEstimate.StablePrefixTokens != expectedEstimate.StablePrefixTokens
+            || suppliedEstimate.NativeToolTokens != expectedEstimate.NativeToolTokens
+            || suppliedEstimate.TextToolTokens != expectedEstimate.TextToolTokens
+            || suppliedEstimate.FramingTokens != expectedEstimate.FramingTokens
+            || suppliedEstimate.ProviderInstructionTokens != expectedEstimate.ProviderInstructionTokens
+            || suppliedEstimate.OutputReserveTokens != expectedEstimate.OutputReserveTokens
+            || suppliedEstimate.SectionTokens.Count != expectedEstimate.SectionTokens.Count
+            || expectedEstimate.SectionTokens.Any(expected =>
+                !suppliedEstimate.SectionTokens.TryGetValue(expected.Key, out var supplied)
+                || supplied != expected.Value))
+        {
+            throw new ModelProviderException(
+                "The Codex request provider-wire capacity estimate does not match its provider-visible content.");
+        }
+
+        if (expectedEstimate.TotalCapacityTokens > _profile.ContextWindow)
+        {
+            throw new ModelProviderException(
+                $"The complete Codex request requires {expectedEstimate.TotalCapacityTokens} tokens but profile "
+                + $"'{_profile.Name}' permits {_profile.ContextWindow}.");
+        }
+    }
+
+    private static JsonArray CreateInput(
+        ModelStreamRequest request,
+        ModelToolWireNameMap toolNameMap)
     {
         if (request.Messages.Count == 0)
         {
@@ -209,9 +303,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         JsonArray input = [];
-        foreach (ModelMessage message in request.Messages)
+        foreach (var message in request.Messages)
         {
-            string content = string.Concat(message.Content.Select(part => part.Content));
+            var content = message.GetModelVisibleContent();
             if (message.Role == ModelMessageRole.Assistant
                 && message.ToolCallId is not null
                 && message.ToolName is not null)
@@ -220,7 +314,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     ["type"] = "function_call",
                     ["call_id"] = message.ToolCallId,
-                    ["name"] = message.ToolName,
+                    ["name"] = toolNameMap.ToWireName(message.ToolName),
                     ["arguments"] = content,
                 });
                 continue;
@@ -237,7 +331,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 continue;
             }
 
-            string role = message.Role switch
+            var role = message.Role switch
             {
                 ModelMessageRole.System => "system",
                 ModelMessageRole.Developer => "developer",
@@ -246,7 +340,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 _ => throw new InvalidOperationException(
                     $"Structured model message '{message.SectionId}' has invalid tool correlation."),
             };
-            string contentType = message.Role == ModelMessageRole.Assistant
+            var contentType = message.Role == ModelMessageRole.Assistant
                 ? "output_text"
                 : "input_text";
             input.Add(new JsonObject
@@ -264,9 +358,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
         StreamReader reader,
+        ModelToolWireNameMap toolNameMap,
+        int maximumOutputTokens,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        bool sawToolCall = false;
+        var pendingToolCalls = new List<PendingCodexToolCall>();
+        long streamedOutputBytes = 0;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -274,20 +371,21 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 continue;
             }
 
-            string payload = line.AsSpan(5).TrimStart().ToString();
+            var payload = line.AsSpan(5).TrimStart().ToString();
             if (payload.Length == 0 || string.Equals(payload, "[DONE]", StringComparison.Ordinal))
             {
                 continue;
             }
 
             using var document = JsonDocument.Parse(payload);
-            JsonElement root = document.RootElement;
-            string? type = GetString(root, "type");
+            var root = document.RootElement;
+            var type = GetString(root, "type");
             switch (type)
             {
                 case "response.output_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } text)
                     {
+                        AddStreamedOutput(text);
                         yield return new ModelChunk { Text = text };
                     }
 
@@ -296,54 +394,106 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.reasoning_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } reasoning)
                     {
+                        AddStreamedOutput(reasoning);
                         yield return new ModelChunk { Reasoning = reasoning };
                     }
 
                     break;
                 case "response.output_item.done":
-                    if (root.TryGetProperty("item", out JsonElement item)
-                        && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal)
-                        && GetString(item, "name") is { Length: > 0 } name)
+                    if (root.TryGetProperty("item", out var item)
+                        && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal))
                     {
-                        sawToolCall = true;
-                        yield return new ModelChunk
-                        {
-                            Output = new ToolRequestModelOutput(name, GetString(item, "arguments") ?? "{}"),
-                        };
+                        var name = GetString(item, "name");
+                        var arguments = GetString(item, "arguments");
+                        AddStreamedOutput(name);
+                        AddStreamedOutput(arguments);
+                        pendingToolCalls.Add(new PendingCodexToolCall(name, arguments));
                     }
 
                     break;
                 case "response.completed":
-                    ModelUsage? usage = TryReadUsage(root);
+                    var usage = TryReadUsage(root);
                     if (usage is not null)
                     {
                         yield return new ModelChunk { Usage = usage };
                     }
 
+                    var toolOutputs = CreateCodexToolOutputs(pendingToolCalls, toolNameMap);
+                    foreach (var output in toolOutputs)
+                    {
+                        yield return new ModelChunk { Output = output };
+                    }
+
                     yield return new ModelChunk
                     {
-                        FinishReason = sawToolCall ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop,
+                        FinishReason = toolOutputs.Count > 0 ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop,
                     };
+                    pendingToolCalls.Clear();
                     break;
                 case "response.failed":
                 case "error":
                     throw new ModelProviderException("The Codex Responses stream reported a provider error.");
             }
         }
+
+        void AddStreamedOutput(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            // Codex's byte-level tokenizer cannot produce more tokens than the UTF-8 bytes
+            // representing streamed model-visible output. Treating every byte as one token
+            // therefore enforces the ceiling conservatively without an endpoint parameter.
+            streamedOutputBytes = checked(streamedOutputBytes + Encoding.UTF8.GetByteCount(value));
+            if (streamedOutputBytes > maximumOutputTokens)
+            {
+                throw new ModelProviderException(
+                    $"The Codex response exceeded the host-owned output ceiling of {maximumOutputTokens} tokens.");
+            }
+        }
+    }
+
+    private static IReadOnlyList<ToolRequestModelOutput> CreateCodexToolOutputs(
+        IReadOnlyList<PendingCodexToolCall> pendingToolCalls,
+        ModelToolWireNameMap toolNameMap)
+    {
+        if (pendingToolCalls.Count == 0)
+        {
+            return [];
+        }
+
+        var outputs = new ToolRequestModelOutput[pendingToolCalls.Count];
+        for (var index = 0; index < pendingToolCalls.Count; index++)
+        {
+            var pending = pendingToolCalls[index];
+            var output = new ToolRequestModelOutput(
+                toolNameMap.ToCanonicalName(pending.Name ?? string.Empty),
+                pending.Arguments ?? string.Empty);
+            ModelOutputValidator.ValidateInvocation(
+                output,
+                providerFamily: "openai-codex",
+                toolOrdinal: index,
+                toolCallCount: pendingToolCalls.Count);
+            outputs[index] = output;
+        }
+
+        return outputs;
     }
 
     private static ModelUsage? TryReadUsage(JsonElement root)
     {
-        if (!root.TryGetProperty("response", out JsonElement response)
-            || !response.TryGetProperty("usage", out JsonElement usage))
+        if (!root.TryGetProperty("response", out var response)
+            || !response.TryGetProperty("usage", out var usage))
         {
             return null;
         }
 
-        long input = GetInt64(usage, "input_tokens");
-        long output = GetInt64(usage, "output_tokens");
+        var input = GetInt64(usage, "input_tokens");
+        var output = GetInt64(usage, "output_tokens");
         long? cachedInput = null;
-        if (usage.TryGetProperty("input_tokens_details", out JsonElement details))
+        if (usage.TryGetProperty("input_tokens_details", out var details))
         {
             cachedInput = GetNullableInt64(details, "cached_tokens");
         }
@@ -353,7 +503,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             throw new ModelProviderException("The Codex stream returned negative cache token usage.");
         }
 
-        ModelCacheUsage? cache = cachedInput is null
+        var cache = cachedInput is null
             ? null
             : new ModelCacheUsage
             {
@@ -365,17 +515,87 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return new ModelUsage(input, output, Cache: cache);
     }
 
-    private static Exception CreateFailure(HttpStatusCode statusCode)
+    private static async Task<Exception> CreateFailureAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(response);
+        var statusCode = response.StatusCode;
+        var details = await ReadErrorDetailsAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var suffix = details is null ? string.Empty : $" {details}";
         return statusCode switch
         {
             HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
                 or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout =>
-                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}."),
+                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.{suffix}"),
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-                new ModelProviderException("Codex authentication is missing, expired, or unauthorized."),
-            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}."),
+                new ModelProviderException($"Codex authentication is missing, expired, or unauthorized.{suffix}"),
+            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}.{suffix}"),
         };
+    }
+
+    private static async Task<string?> ReadErrorDetailsAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        const int maximumCharacters = 4096;
+        try
+        {
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using StreamReader reader = new(stream, Encoding.UTF8);
+            var body = new StringBuilder(maximumCharacters);
+            var buffer = new char[1024];
+            while (body.Length <= maximumCharacters)
+            {
+                var remaining = maximumCharacters + 1 - body.Length;
+                var count = await reader.ReadAsync(
+                    buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                    cancellationToken).ConfigureAwait(false);
+                if (count is 0)
+                {
+                    break;
+                }
+
+                body.Append(buffer, 0, count);
+            }
+
+            if (body.Length is 0 or > maximumCharacters)
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(body.ToString());
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var error = root.TryGetProperty("error", out var nestedError)
+                && nestedError.ValueKind == JsonValueKind.Object
+                ? nestedError
+                : root;
+            var code = GetString(error, "code");
+            var parameter = GetString(error, "param");
+            var parts = new[]
+            {
+                IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
+                IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
+            }.Where(part => !string.IsNullOrWhiteSpace(part));
+            var details = string.Join(' ', parts);
+            return details.Length == 0 ? null : details;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsSafeErrorIdentifier(string? value, int maximumLength)
+    {
+        return value is { Length: > 0 } && value.Length <= maximumLength
+            && value.All(character => char.IsAsciiLetterOrDigit(character)
+                || character is '_' or '-' or '.');
     }
 
     private static bool IsTransient(HttpStatusCode statusCode)
@@ -400,19 +620,21 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static string? GetString(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
     private static long GetInt64(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt64(out long result) ? result : 0;
+        return element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result) ? result : 0;
     }
 
     private static long? GetNullableInt64(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt64(out long result)
+        return element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result)
             ? result
             : null;
     }
+
+    private sealed record PendingCodexToolCall(string? Name, string? Arguments);
 }

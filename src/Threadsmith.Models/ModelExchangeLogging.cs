@@ -57,7 +57,9 @@ public sealed class JsonlModelExchangeLog
                 Kind = ModelExchangeLogEntryKind.Request,
                 RunId = request.RunId,
                 ToolContinuationRound = request.ToolContinuationRound,
-                Payload = JsonSerializer.SerializeToElement(request, SerializerOptions),
+                Payload = JsonSerializer.SerializeToElement(
+                    CreateProviderVisibleRequest(request),
+                    SerializerOptions),
             },
             cancellationToken);
     }
@@ -158,8 +160,22 @@ public sealed class JsonlModelExchangeLog
                 ToolContinuationRound = toolContinuationRound,
                 ErrorType = exception.GetType().Name,
                 ErrorMessage = exception.Message,
+                Payload = CreateFailurePayload(exception),
             },
             cancellationToken);
+    }
+
+    private static JsonElement? CreateFailurePayload(Exception exception)
+    {
+        return exception is MalformedInvocationException malformed
+            ? JsonSerializer.SerializeToElement(
+                new ModelExchangeFailurePayload
+                {
+                    MalformedInvocation = ModelExchangeMalformedInvocationSummary.FromDiagnostic(
+                        malformed.Diagnostic),
+                },
+                SerializerOptions)
+            : null;
     }
 
     private async Task AppendAsync(ModelExchangeLogEntry entry, CancellationToken cancellationToken)
@@ -188,6 +204,8 @@ public sealed class JsonlModelExchangeLog
             ReasoningLevel = request.ReasoningLevel.ToString(),
             ContainsSensitiveData = request.ContainsSensitiveData,
             ResolvedProfileId = request.ResolvedProfileId?.Value.ToString(),
+            ProviderInstructionCharacters = request.ProviderInstructions?.Content.Length ?? 0,
+            ProviderInstructionSectionId = request.ProviderInstructions?.SectionId,
             AdvertisedTools = request.Tools
                 .Select(tool => new ModelExchangeToolSummary
                 {
@@ -204,15 +222,27 @@ public sealed class JsonlModelExchangeLog
                     SectionId = message.SectionId,
                     ToolCallId = message.ToolCallId,
                     ToolName = message.ToolName,
-                    PartCount = message.Content.Count,
-                    ContentCharacters = message.Content.Sum(part => part.Content.Length),
+                    PartCount = message.Content.Count(static part => part.IsModelVisible),
+                    ContentCharacters = message.GetModelVisibleContentLength(),
                     ContentKinds = message.Content
+                        .Where(static part => part.IsModelVisible)
                         .Select(part => part.Kind.ToString())
                         .Distinct(StringComparer.Ordinal)
                         .ToArray(),
                 })
                 .ToArray(),
             WireEstimate = request.WireEstimate,
+        };
+    }
+
+    private static ModelStreamRequest CreateProviderVisibleRequest(ModelStreamRequest request)
+    {
+        return request with
+        {
+            Messages = [.. request.Messages.Select(message => message with
+            {
+                Content = [.. message.Content.Where(static part => part.IsModelVisible)],
+            })],
         };
     }
 
@@ -271,7 +301,7 @@ public sealed class LoggingModelProvider : IModelProvider
         string? finishReason = null;
         ModelUsage? usage = null;
         List<ModelExchangeToolCallSummary> toolCalls = [];
-        await using IAsyncEnumerator<ModelChunk> enumerator = _inner
+        await using var enumerator = _inner
             .StreamAsync(request, cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
         while (true)
@@ -296,7 +326,7 @@ public sealed class LoggingModelProvider : IModelProvider
                 break;
             }
 
-            ModelChunk chunk = enumerator.Current;
+            var chunk = enumerator.Current;
             textCharacters += chunk.Text?.Length ?? 0;
             reasoningCharacters += chunk.Reasoning?.Length ?? 0;
             if (chunk.Output is ToolRequestModelOutput toolRequest)
@@ -372,6 +402,73 @@ public sealed record ModelExchangeLogEntry
     public string? ErrorMessage { get; init; }
 }
 
+/// <summary>Compact failure summary for model exchange diagnostics.</summary>
+public sealed record ModelExchangeFailurePayload
+{
+    /// <summary>Gets safe malformed-invocation metadata, when the provider failure has it.</summary>
+    public ModelExchangeMalformedInvocationSummary? MalformedInvocation { get; init; }
+}
+
+/// <summary>Safe malformed-invocation metadata for raw model exchange diagnostics.</summary>
+public sealed record ModelExchangeMalformedInvocationSummary
+{
+    /// <summary>Gets the safe machine-readable failure kind.</summary>
+    public string Kind { get; init; } = string.Empty;
+
+    /// <summary>Gets the sanitized bounded diagnostic message.</summary>
+    public string SafeMessage { get; init; } = string.Empty;
+
+    /// <summary>Gets the safe tool name when known.</summary>
+    public string? ToolName { get; init; }
+
+    /// <summary>Gets the zero-based tool-call ordinal when known.</summary>
+    public int? ToolOrdinal { get; init; }
+
+    /// <summary>Gets the total sibling tool-call count when known.</summary>
+    public int? ToolCallCount { get; init; }
+
+    /// <summary>Gets the provider family when known.</summary>
+    public string? ProviderFamily { get; init; }
+
+    /// <summary>Gets the raw argument character count without retaining argument content.</summary>
+    public int? ArgumentCharacterCount { get; init; }
+
+    /// <summary>Gets the SHA-256 digest of raw arguments without retaining argument content.</summary>
+    public string? ArgumentSha256 { get; init; }
+
+    /// <summary>Gets the JSON parser path when available.</summary>
+    public string? JsonPath { get; init; }
+
+    /// <summary>Gets the JSON parser line number when available.</summary>
+    public long? JsonLineNumber { get; init; }
+
+    /// <summary>Gets the JSON parser byte position in line when available.</summary>
+    public long? JsonBytePositionInLine { get; init; }
+
+    /// <summary>Creates a safe summary from provider-neutral malformed-invocation diagnostics.</summary>
+    /// <param name="diagnostic">Malformed invocation diagnostic.</param>
+    /// <returns>Safe log summary.</returns>
+    public static ModelExchangeMalformedInvocationSummary FromDiagnostic(
+        MalformedInvocationDiagnostic diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+        return new ModelExchangeMalformedInvocationSummary
+        {
+            Kind = diagnostic.Kind.ToString(),
+            SafeMessage = diagnostic.SafeMessage,
+            ToolName = diagnostic.ToolName,
+            ToolOrdinal = diagnostic.ToolOrdinal,
+            ToolCallCount = diagnostic.ToolCallCount,
+            ProviderFamily = diagnostic.ProviderFamily,
+            ArgumentCharacterCount = diagnostic.ArgumentCharacterCount,
+            ArgumentSha256 = diagnostic.ArgumentSha256,
+            JsonPath = diagnostic.JsonPath,
+            JsonLineNumber = diagnostic.JsonLineNumber,
+            JsonBytePositionInLine = diagnostic.JsonBytePositionInLine,
+        };
+    }
+}
+
 /// <summary>Compact per-request summary for model exchange diagnostics.</summary>
 public sealed record ModelExchangeRequestSummary
 {
@@ -398,6 +495,12 @@ public sealed record ModelExchangeRequestSummary
 
     /// <summary>Gets the selected profile id, when resolved.</summary>
     public string? ResolvedProfileId { get; init; }
+
+    /// <summary>Gets the exact provider-instruction content length without exposing its body.</summary>
+    public int ProviderInstructionCharacters { get; init; }
+
+    /// <summary>Gets the stable provider-instruction section identity, when present.</summary>
+    public string? ProviderInstructionSectionId { get; init; }
 
     /// <summary>Gets compact summaries of advertised tools.</summary>
     public IReadOnlyList<ModelExchangeToolSummary> AdvertisedTools { get; init; } = [];

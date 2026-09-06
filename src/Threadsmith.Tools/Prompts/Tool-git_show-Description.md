@@ -1,0 +1,1 @@
+Gets bounded commit, tree, tag, or blob content from local Git objects.

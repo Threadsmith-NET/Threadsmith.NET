@@ -16,3 +16,5 @@ Content is sanitized, wrapped in a project_context XML segment, and composed aft
 Each segment receives a stable path-derived id and a SHA-256 content version. The context execution record and inspector show its source, order, size, id, and version. Unchanged hashes reuse sanitized cached content. File changes become visible at the next turn boundary.
 
 With no configured files, assembly has no project append segment and requires no additional setup.
+
+The application-level [deployed prompt catalog](prompts.md) does not add a repository precedence layer and does not change this contract. Stable deployed host policy still precedes repository instructions; applicable `AGENTS.md` and configured prompt appends retain their existing parent-to-child/order behavior and remain untrusted. Deployed assets are loaded once at process startup, while prompt append files are re-fingerprinted at turn boundaries as described above.

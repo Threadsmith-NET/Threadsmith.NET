@@ -17,6 +17,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(PlanApprovalPolicyChanged), "planApprovalPolicyChanged")]
 [JsonDerivedType(typeof(PlanRevisionRequested), "planRevisionRequested")]
 [JsonDerivedType(typeof(ContextAssembled), "contextAssembled")]
+[JsonDerivedType(typeof(ModelFallbackSelected), "modelFallbackSelected")]
+[JsonDerivedType(typeof(ActiveTurnCompactionStarted), "activeTurnCompactionStarted")]
+[JsonDerivedType(typeof(ActiveTurnCompactionCompleted), "activeTurnCompactionCompleted")]
 [JsonDerivedType(typeof(ApprovalRequested), "approvalRequested")]
 [JsonDerivedType(typeof(ApprovalGranted), "approvalGranted")]
 [JsonDerivedType(typeof(ApprovalDenied), "approvalDenied")]
@@ -26,6 +29,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(SemanticCheckCompleted), "semanticCheckCompleted")]
 [JsonDerivedType(typeof(MutationProposalStarted), "mutationProposalStarted")]
 [JsonDerivedType(typeof(MutationProposalRepairAttempted), "mutationProposalRepairAttempted")]
+[JsonDerivedType(typeof(ModelCorrectionAttempted), "modelCorrectionAttempted")]
 [JsonDerivedType(typeof(PreMutationAnalysisCompleted), "preMutationAnalysisCompleted")]
 [JsonDerivedType(typeof(SemanticMutationWarningObserved), "semanticMutationWarningObserved")]
 [JsonDerivedType(typeof(MutationSetProposed), "mutationSetProposed")]
@@ -42,6 +46,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ExtensionUnloadFailed), "extensionUnloadFailed")]
 [JsonDerivedType(typeof(SemanticConfidenceChanged), "semanticConfidenceChanged")]
 [JsonDerivedType(typeof(SemanticLoadCompleted), "semanticLoadCompleted")]
+[JsonDerivedType(typeof(SemanticRefreshStarted), "semanticRefreshStarted")]
+[JsonDerivedType(typeof(SemanticRefreshCompleted), "semanticRefreshCompleted")]
+[JsonDerivedType(typeof(SemanticRefreshFailed), "semanticRefreshFailed")]
 [JsonDerivedType(typeof(RunTransitioned), "runTransitioned")]
 [JsonDerivedType(typeof(RunTransitionFailed), "runTransitionFailed")]
 [JsonDerivedType(typeof(ModelOutputObserved), "modelOutputObserved")]
@@ -51,6 +58,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ConversationMemoryPromoted), "conversationMemoryPromoted")]
 [JsonDerivedType(typeof(ConversationMemorySuperseded), "conversationMemorySuperseded")]
 [JsonDerivedType(typeof(ConversationMemoryInvalidated), "conversationMemoryInvalidated")]
+[JsonDerivedType(typeof(RepositoryMemoryRemembered), "repositoryMemoryRemembered")]
+[JsonDerivedType(typeof(RepositoryMemorySuperseded), "repositoryMemorySuperseded")]
+[JsonDerivedType(typeof(RepositoryMemoryValidityChanged), "repositoryMemoryValidityChanged")]
 [JsonDerivedType(typeof(ConversationSummarySnapshotReplaced), "conversationSummarySnapshotReplaced")]
 [JsonDerivedType(typeof(ExecutionCheckpointWritten), "executionCheckpointWritten")]
 [JsonDerivedType(typeof(ExecutionSideEffectRecorded), "executionSideEffectRecorded")]
@@ -65,6 +75,9 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(HookInvocationStartedEvent), "hookInvocationStarted")]
 [JsonDerivedType(typeof(HookInvocationCompletedEvent), "hookInvocationCompleted")]
 [JsonDerivedType(typeof(HookRepositoryApprovalChanged), "hookRepositoryApprovalChanged")]
+[JsonDerivedType(typeof(RunSteeringPauseRequested), "runSteeringPauseRequested")]
+[JsonDerivedType(typeof(RunSteeringPaused), "runSteeringPaused")]
+[JsonDerivedType(typeof(RunSteeringSubmitted), "runSteeringSubmitted")]
 [JsonDerivedType(typeof(RunCompleted), "runCompleted")]
 public interface IDomainEvent
 {
@@ -179,6 +192,38 @@ public sealed record ContextAssembled(
     DateTimeOffset OccurredAt,
     ContextInspectionProjection Inspection) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>A per-request fallback became the active model selection before provider dispatch.</summary>
+public sealed record ModelFallbackSelected(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId RequestedProfileId,
+    ModelProfileId SelectedProfileId,
+    string SelectedProviderId,
+    string SelectedModelName,
+    bool Persisted,
+    string? PersistenceDiagnostic = null) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active-turn candidate operation began under host-owned pressure policy.</summary>
+public sealed record ActiveTurnCompactionStarted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId CandidateProfileId,
+    int BeforeInputTokens,
+    int PressureTargetTokens) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active-turn candidate operation ended without exposing summary or tool content.</summary>
+public sealed record ActiveTurnCompactionCompleted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelProfileId CandidateProfileId,
+    ActiveTurnCompactionInspectionStatus Status,
+    int BeforeInputTokens,
+    int AfterInputTokens,
+    long? DurationMilliseconds) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>Identifies the host-owned boundary requesting approval.</summary>
 public enum ApprovalRequestKind
 {
@@ -238,7 +283,8 @@ public sealed record ToolInvocationCompleted(
     bool IsTruncated = false,
     ToolActivitySource? Source = null,
     long? ElapsedMilliseconds = null,
-    OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown) : DomainEvent(SessionId, OccurredAt);
+    OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown,
+    string? ModelResultContent = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A semantic check started.</summary>
 public sealed record SemanticCheckStarted(
@@ -261,7 +307,7 @@ public sealed record SemanticCheckCompleted(
     long? ElapsedMilliseconds = null,
     string? Detail = null) : DomainEvent(SessionId, OccurredAt);
 
-/// <summary>Approved-plan execution started or retried a governed mutation proposal turn.</summary>
+/// <summary>Approved-plan execution started or retried one governed mutation proposal attempt.</summary>
 public sealed record MutationProposalStarted(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
@@ -269,7 +315,7 @@ public sealed record MutationProposalStarted(
     int AttemptNumber,
     int MaximumAttempts) : DomainEvent(SessionId, OccurredAt);
 
-/// <summary>A mutation proposal failed repairable host validation and is being retried with correction evidence.</summary>
+/// <summary>Historical mutation-proposal repair event retained for durable replay.</summary>
 public sealed record MutationProposalRepairAttempted(
     SessionId SessionId,
     DateTimeOffset OccurredAt,
@@ -277,6 +323,44 @@ public sealed record MutationProposalRepairAttempted(
     int AttemptNumber,
     int MaximumAttempts,
     string Reason) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>Model-visible corrective retry categories.</summary>
+public enum ModelCorrectionCategory
+{
+    /// <summary>Provider-boundary malformed invocation correction.</summary>
+    ProviderInvocation,
+
+    /// <summary>Conversation tool-batch correction.</summary>
+    ToolBatch,
+
+    /// <summary>Plan schema correction.</summary>
+    PlanSchema,
+
+    /// <summary>Plan sanity correction.</summary>
+    PlanSanity,
+
+    /// <summary>Mutation proposal correction.</summary>
+    MutationProposal,
+
+    /// <summary>Pre-mutation analysis correction.</summary>
+    PreMutationAnalysis,
+
+    /// <summary>Post-apply validation correction.</summary>
+    PostApplyValidation,
+
+    /// <summary>Empty assistant response correction.</summary>
+    EmptyResponse,
+}
+
+/// <summary>A recoverable model request was rejected and retried through a bounded corrective message.</summary>
+public sealed record ModelCorrectionAttempted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    ModelCorrectionCategory Category,
+    int AttemptNumber,
+    int MaximumAttempts,
+    string SafeReason) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>Pre-mutation Roslyn screening completed before staging or approval.</summary>
 public sealed record PreMutationAnalysisCompleted(
@@ -451,6 +535,46 @@ public sealed record SemanticLoadCompleted : DomainEvent
     public string Confidence { get; init; }
 }
 
+/// <summary>A coalesced semantic refresh began for one workspace.</summary>
+public sealed record SemanticRefreshStarted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A coalesced semantic refresh published current state.</summary>
+public sealed record SemanticRefreshCompleted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion,
+    long AppliedVersion,
+    SemanticConfidenceLevel Confidence,
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A semantic refresh failed without advancing its applied version.</summary>
+public sealed record SemanticRefreshFailed(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount,
+    long DirtyVersion,
+    long AppliedVersion,
+    SemanticRefreshFailureKind FailureKind,
+    string SafeReason,
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>A run transitioned.</summary>
 public sealed record RunTransitioned(
     SessionId SessionId,
@@ -514,6 +638,32 @@ public sealed record ConversationMemoryInvalidated(
     ConversationMemoryId MemoryId,
     string Reason) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>A repository-scoped memory item was remembered through a host-owned boundary.</summary>
+public sealed record RepositoryMemoryRemembered(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId MemoryId,
+    RepositoryMemoryKind Kind,
+    RepositoryMemoryAuthority Authority) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A repository-scoped memory correction superseded an older item.</summary>
+public sealed record RepositoryMemorySuperseded(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId SupersededId,
+    RepositoryMemoryId ReplacementId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A repository-scoped memory item changed selection validity without deleting audit metadata.</summary>
+public sealed record RepositoryMemoryValidityChanged(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    string RepositoryIdentity,
+    RepositoryMemoryId MemoryId,
+    RepositoryMemoryValidity Validity,
+    string Reason) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>The active structured conversation summary was atomically replaced.</summary>
 public sealed record ConversationSummarySnapshotReplaced(
     SessionId SessionId,
@@ -562,7 +712,8 @@ public sealed record DelegationCheckpointWritten(
     RunId ParentRunId,
     DelegationCheckpointPhase Phase,
     int Generation,
-    string NextAction) : DomainEvent(SessionId, OccurredAt);
+    string NextAction,
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>One child reached an observable lifecycle state.</summary>
 public sealed record AgentRunLifecycleObserved(
@@ -574,7 +725,8 @@ public sealed record AgentRunLifecycleObserved(
     AgentRole Role,
     AgentRunStatus Status,
     int Generation,
-    string Reason) : DomainEvent(SessionId, OccurredAt);
+    string Reason,
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A metadata-only skill catalog refresh completed.</summary>
 public sealed record SkillCatalogRefreshed(
@@ -648,6 +800,29 @@ public sealed record HookRepositoryApprovalChanged(
     HookConfigurationDigest ConfigurationDigest,
     bool Approved) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>A user requested one idempotent steering pause for an active run.</summary>
+public sealed record RunSteeringPauseRequested(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>An active run reached the requested safe steering boundary.</summary>
+public sealed record RunSteeringPaused(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>A ready steering prompt was submitted or dismissed.</summary>
+public sealed record RunSteeringSubmitted(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    RunId RunId,
+    SteeringPauseId PauseId,
+    long? Sequence,
+    bool HasText) : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>A run completed.</summary>
 public sealed record RunCompleted(
     SessionId SessionId,
@@ -674,6 +849,9 @@ public static class DomainEventJson
             ["planApprovalPolicyChanged"] = typeof(PlanApprovalPolicyChanged),
             ["planRevisionRequested"] = typeof(PlanRevisionRequested),
             ["contextAssembled"] = typeof(ContextAssembled),
+            ["modelFallbackSelected"] = typeof(ModelFallbackSelected),
+            ["activeTurnCompactionStarted"] = typeof(ActiveTurnCompactionStarted),
+            ["activeTurnCompactionCompleted"] = typeof(ActiveTurnCompactionCompleted),
             ["approvalRequested"] = typeof(ApprovalRequested),
             ["approvalGranted"] = typeof(ApprovalGranted),
             ["approvalDenied"] = typeof(ApprovalDenied),
@@ -683,6 +861,7 @@ public static class DomainEventJson
             ["semanticCheckCompleted"] = typeof(SemanticCheckCompleted),
             ["mutationProposalStarted"] = typeof(MutationProposalStarted),
             ["mutationProposalRepairAttempted"] = typeof(MutationProposalRepairAttempted),
+            ["modelCorrectionAttempted"] = typeof(ModelCorrectionAttempted),
             ["preMutationAnalysisCompleted"] = typeof(PreMutationAnalysisCompleted),
             ["semanticMutationWarningObserved"] = typeof(SemanticMutationWarningObserved),
             ["mutationSetProposed"] = typeof(MutationSetProposed),
@@ -699,6 +878,9 @@ public static class DomainEventJson
             ["extensionUnloadFailed"] = typeof(ExtensionUnloadFailed),
             ["semanticConfidenceChanged"] = typeof(SemanticConfidenceChanged),
             ["semanticLoadCompleted"] = typeof(SemanticLoadCompleted),
+            ["semanticRefreshStarted"] = typeof(SemanticRefreshStarted),
+            ["semanticRefreshCompleted"] = typeof(SemanticRefreshCompleted),
+            ["semanticRefreshFailed"] = typeof(SemanticRefreshFailed),
             ["runTransitioned"] = typeof(RunTransitioned),
             ["runTransitionFailed"] = typeof(RunTransitionFailed),
             ["modelOutputObserved"] = typeof(ModelOutputObserved),
@@ -708,6 +890,9 @@ public static class DomainEventJson
             ["conversationMemoryPromoted"] = typeof(ConversationMemoryPromoted),
             ["conversationMemorySuperseded"] = typeof(ConversationMemorySuperseded),
             ["conversationMemoryInvalidated"] = typeof(ConversationMemoryInvalidated),
+            ["repositoryMemoryRemembered"] = typeof(RepositoryMemoryRemembered),
+            ["repositoryMemorySuperseded"] = typeof(RepositoryMemorySuperseded),
+            ["repositoryMemoryValidityChanged"] = typeof(RepositoryMemoryValidityChanged),
             ["conversationSummarySnapshotReplaced"] = typeof(ConversationSummarySnapshotReplaced),
             ["executionCheckpointWritten"] = typeof(ExecutionCheckpointWritten),
             ["executionSideEffectRecorded"] = typeof(ExecutionSideEffectRecorded),
@@ -722,6 +907,9 @@ public static class DomainEventJson
             ["hookInvocationStarted"] = typeof(HookInvocationStartedEvent),
             ["hookInvocationCompleted"] = typeof(HookInvocationCompletedEvent),
             ["hookRepositoryApprovalChanged"] = typeof(HookRepositoryApprovalChanged),
+            ["runSteeringPauseRequested"] = typeof(RunSteeringPauseRequested),
+            ["runSteeringPaused"] = typeof(RunSteeringPaused),
+            ["runSteeringSubmitted"] = typeof(RunSteeringSubmitted),
             ["runCompleted"] = typeof(RunCompleted),
         };
 
@@ -732,7 +920,7 @@ public static class DomainEventJson
     public static string GetDiscriminator(IDomainEvent domainEvent)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
-        return EventNames.TryGetValue(domainEvent.GetType(), out string? name)
+        return EventNames.TryGetValue(domainEvent.GetType(), out var name)
             ? name
             : throw new NotSupportedException($"Unregistered domain event type {domainEvent.GetType().FullName}.");
     }
@@ -787,4 +975,51 @@ public interface IDomainEventStream : IAsyncDisposable
 
     /// <summary>Publishes an event and waits until every current subscriber handles it.</summary>
     Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Prepares one ordered event batch, invokes the synchronous producer commit, then exposes the batch.
+    /// </summary>
+    /// <remarks>
+    /// Caller cancellation may abort only before <paramref name="tryCommit"/> begins. Once committed, subscriber
+    /// delivery is observed without rolling producer state back.
+    /// </remarks>
+    Task PublishCommittedBatchAsync(
+        IReadOnlyList<IDomainEvent> domainEvents,
+        Func<bool> tryCommit,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Reports subscriber delivery failure after a committed domain-event batch became authoritative.</summary>
+public sealed class CommittedDomainEventDeliveryException : InvalidOperationException
+{
+    private const string DefaultMessage =
+        "A committed domain-event batch could not be delivered to every subscriber.";
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    public CommittedDomainEventDeliveryException()
+        : base(DefaultMessage)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="message">Delivery failure explanation.</param>
+    public CommittedDomainEventDeliveryException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="innerException">Exception raised by a committed-batch subscriber.</param>
+    public CommittedDomainEventDeliveryException(Exception innerException)
+        : base(DefaultMessage, innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="CommittedDomainEventDeliveryException"/> class.</summary>
+    /// <param name="message">Delivery failure explanation.</param>
+    /// <param name="innerException">Exception raised by a committed-batch subscriber.</param>
+    public CommittedDomainEventDeliveryException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }

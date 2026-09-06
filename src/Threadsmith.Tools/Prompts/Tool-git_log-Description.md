@@ -1,0 +1,1 @@
+Gets bounded local Git commit history. Use revision HEAD for current history; omitted or null revision defaults to HEAD, and maximumCommits is a host-clamped result hint.

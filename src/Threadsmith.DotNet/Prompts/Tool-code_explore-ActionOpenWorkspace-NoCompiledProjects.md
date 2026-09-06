@@ -1,0 +1,1 @@
+Open or load a C# solution/project workspace before retrying code_explore.

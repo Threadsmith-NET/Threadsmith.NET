@@ -4,6 +4,7 @@ param([Parameter(Mandatory)][string] $StageDirectory, [Parameter(Mandatory)][str
 Assert-ReleaseRid $RuntimeIdentifier
 & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1') | Out-Null
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
+Assert-ReleasePromptPayload -PayloadDirectory $stage -RuntimeIdentifier $RuntimeIdentifier
 foreach ($relative in @('LICENSE', 'third-party/THIRD-PARTY-NOTICES.txt', 'third-party/sbom.spdx.json', 'third-party/dotnet-runtime/LICENSE.txt', 'third-party/dotnet-runtime/THIRD-PARTY-NOTICES.txt', 'third-party/dotnet-runtime/PROVENANCE.json', 'third-party/ripgrep/LICENSE-MIT', 'third-party/ripgrep/SOURCE.json')) {
     $file = Join-Path $stage $relative
     if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or ((Get-Item $file).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Release compliance required file is missing or linked: $relative" }

@@ -36,7 +36,7 @@ internal static class IntegrationComposition
             leaseAuthority: leaseAuthority,
             extensionLoggerFactory: loggerFactory);
         var selectionPath = Path.Combine(repositoryRoot, ".threadsmith", "extensions.json");
-        ExtensionSelectionConfig selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
+        var selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
         extensionHost.SetDiscoveryDirectory(
             Path.GetFullPath(selection.DiscoveryDirectory, repositoryRoot));
         if (!useInteractiveTerminal || selection.AutoLoad.Count == 0)
@@ -45,7 +45,7 @@ internal static class IntegrationComposition
         }
 
         // Extension failures are isolated so one optional integration cannot prevent the shell from starting.
-        ILogger startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
+        var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
         await extensionHost.DiscoverAsync(cancellationToken);
         foreach (var extensionId in selection.AutoLoad)
         {
@@ -83,6 +83,7 @@ internal static class IntegrationComposition
         IToolInvocationPipeline toolPipeline,
         string repositoryRoot,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,6 +95,7 @@ internal static class IntegrationComposition
         ArgumentNullException.ThrowIfNull(toolPipeline);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(prompts);
 
         IBrowserLauncher browserLauncher = useInteractiveTerminal
             ? new SystemBrowserLauncher()
@@ -125,9 +127,10 @@ internal static class IntegrationComposition
             secretResolver,
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
+            prompts,
             toolRegistry);
         var identityManager = new McpIdentityManager(tokenStore, secretResolver);
-        IReadOnlyList<McpConnectionProfile> profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
+        var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null;
         if (hookCoordinator is not null)
         {
@@ -147,11 +150,15 @@ internal static class IntegrationComposition
             connectedCallback: connectedCallback,
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
-                var policyTool = new McpExplicitReadPolicyTool(profile, capability);
-                ToolInvocationResult decision = await toolPipeline.InvokeAsync(
+                var policyTool = new McpExplicitReadPolicyTool(profile, capability, prompts);
+                var decision = await toolPipeline.InvokeAsync(
                     new ToolInvocationRequest
                     {
-                        ExpectedRegistration = policyTool,
+                        ExpectedRegistration = new ToolRegistration(
+                            policyTool,
+                            new ToolActivitySource(
+                                ToolActivitySourceKind.Mcp,
+                                profile.Id)),
                         SessionId = SessionId.New(),
                         RunId = RunId.New(),
                         Phase = RunPhase.Intake,
@@ -196,6 +203,7 @@ internal static class IntegrationComposition
         SecretOutputSanitizer sanitizer,
         ToolRegistry toolRegistry,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -206,6 +214,7 @@ internal static class IntegrationComposition
                 sanitizer,
                 toolRegistry,
                 loggerFactory,
+                prompts,
                 hookCoordinator,
                 cancellationToken);
     }
@@ -218,6 +227,7 @@ internal static class IntegrationComposition
         SecretOutputSanitizer sanitizer,
         ToolRegistry toolRegistry,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
@@ -250,9 +260,10 @@ internal static class IntegrationComposition
             secretResolver,
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
+            prompts,
             toolRegistry);
-        IReadOnlyList<McpConnectionProfile> profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
-        ILogger startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");
+        var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
+        var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");
         if (profiles.Count > 0)
         {
             startupLogger.LogInformation("Loaded {Count} MCP connection profile(s).", profiles.Count);
@@ -260,11 +271,11 @@ internal static class IntegrationComposition
 
         try
         {
-            foreach (McpConnectionProfile profile in profiles.Where(profile => profile.AutoConnect))
+            foreach (var profile in profiles.Where(profile => profile.AutoConnect))
             {
                 try
                 {
-                    McpConnectionResult result = await adapter.ConnectAsync(profile, cancellationToken);
+                    var result = await adapter.ConnectAsync(profile, cancellationToken);
                     if (!result.Succeeded)
                     {
                         startupLogger.LogWarning(

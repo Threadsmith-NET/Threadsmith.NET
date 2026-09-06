@@ -102,7 +102,7 @@ public sealed class DiagnosticBundleGenerator
 
         var directory = options.Directory;
         Directory.CreateDirectory(directory);
-        DateTimeOffset now = _timeProvider.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
         var stamp = now.ToString("yyyyMMddHHmmss");
         var bundlePath = Path.Combine(directory, $"threadsmith-diagnostics-{stamp}.zip");
         var entries = new List<DiagnosticBundleEntry>();
@@ -115,9 +115,9 @@ public sealed class DiagnosticBundleGenerator
             {
                 var sanitized = _sanitizer.Sanitize(content);
                 redactions += CountRedactions(sanitized);
-                ZipArchiveEntry entry = archive.CreateEntry(relativePath);
+                var entry = archive.CreateEntry(relativePath);
 #pragma warning disable VSTHRD103 // ZipArchiveEntry offers no async Open; the underlying stream is already opened asynchronously above.
-                using Stream entryStream = entry.Open();
+                using var entryStream = entry.Open();
 #pragma warning restore VSTHRD103
                 var bytes = System.Text.Encoding.UTF8.GetBytes(sanitized);
                 totalBytes += bytes.Length;
@@ -158,7 +158,7 @@ public sealed class DiagnosticBundleGenerator
 
             if (options.IncludeArtifacts && inputs.Artifacts is { Count: > 0 } artifacts)
             {
-                foreach (KeyValuePair<string, string> artifact in artifacts)
+                foreach (var artifact in artifacts)
                 {
                     AddText($"artifacts/{artifact.Key}", "artifact", artifact.Value);
                 }
@@ -196,10 +196,10 @@ public sealed class DiagnosticBundleGenerator
         ArgumentException.ThrowIfNullOrWhiteSpace(canarySecret);
         using var archiveStream = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
         using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
-        foreach (ZipArchiveEntry entry in archive.Entries)
+        foreach (var entry in archive.Entries)
         {
 #pragma warning disable VSTHRD103 // ZipArchiveEntry offers no async Open; reading uses ReadToEndAsync below.
-            using Stream entryStream = entry.Open();
+            using var entryStream = entry.Open();
 #pragma warning restore VSTHRD103
             using var reader = new StreamReader(entryStream);
             var content = await reader.ReadToEndAsync(cancellationToken);

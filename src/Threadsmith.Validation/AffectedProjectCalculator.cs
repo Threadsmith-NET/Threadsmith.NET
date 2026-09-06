@@ -19,7 +19,7 @@ public sealed class AffectedProjectCalculator
         ArgumentNullException.ThrowIfNull(changedFiles);
         ArgumentNullException.ThrowIfNull(projects);
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        StringComparer comparer = OperatingSystem.IsWindows()
+        var comparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
         var projectByPath = projects
@@ -38,7 +38,7 @@ public sealed class AffectedProjectCalculator
                 throw new InvalidOperationException($"Changed path '{configuredPath}' is outside the repository root.");
             }
 
-            SemanticProjectInfo? owner = projects
+            var owner = projects
                 .Where(project =>
                 {
                     var projectPath = Path.GetFullPath(project.FilePath);
@@ -58,7 +58,7 @@ public sealed class AffectedProjectCalculator
         }
 
         var dependents = projectByPath.Keys.ToDictionary(path => path, _ => new HashSet<string>(comparer), comparer);
-        foreach (SemanticProjectInfo project in projects)
+        foreach (var project in projects)
         {
             var projectPath = Path.GetFullPath(project.FilePath);
             var projectDirectory = Path.GetDirectoryName(projectPath) ?? root;
@@ -87,7 +87,7 @@ public sealed class AffectedProjectCalculator
                     }
                 }
 
-                if (referencedPath is not null && dependents.TryGetValue(referencedPath, out HashSet<string>? referencingProjects))
+                if (referencedPath is not null && dependents.TryGetValue(referencedPath, out var referencingProjects))
                 {
                     referencingProjects.Add(projectPath);
                 }
@@ -98,7 +98,7 @@ public sealed class AffectedProjectCalculator
         var queue = new Queue<string>(direct.OrderBy(path => path, comparer));
         while (queue.TryDequeue(out var path))
         {
-            if (!dependents.TryGetValue(path, out HashSet<string>? projectDependents))
+            if (!dependents.TryGetValue(path, out var projectDependents))
             {
                 continue;
             }
@@ -129,7 +129,7 @@ public sealed class AffectedProjectCalculator
 
     private static bool IsWithinRoot(string path, string root)
     {
-        StringComparison comparison = OperatingSystem.IsWindows()
+        var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         var relative = Path.GetRelativePath(root, path);

@@ -175,7 +175,7 @@ No provider SDK, Roslyn workspace, MSBuild, terminal-library, persistence-row, e
 - `Threadsmith.Persistence` — ordered migration and atomic checkpoint/outcome persistence/restoration.
 - `Threadsmith.App` — composition and startup restoration/resume coordinator.
 - `Threadsmith.Tui` / `Threadsmith.Cli` — implementation activity, exact-diff review, policy decision, cancellation, resume, and final evidence projection.
-- Existing M4–M8 suites plus a dedicated `Threadsmith.Milestone11.Tests` project and architecture tests.
+- Existing M4–M8 suites plus a dedicated `Threadsmith.ExecutionOrchestration.Tests` project and architecture tests.
 - Architecture, user, operations, configuration (if limits are configurable), manual, milestone, acceptance-scenario, README, and DOX documentation.
 
 ## 9 Ordered Tasks

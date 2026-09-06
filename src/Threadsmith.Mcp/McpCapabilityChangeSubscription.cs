@@ -16,8 +16,9 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
     private readonly IReadOnlyList<IAsyncDisposable> _registrations;
     private readonly CancellationTokenSource _lifetime = new();
     private Func<IReadOnlyList<McpImportedCapability>, CancellationToken, Task>? _handler;
-    private Task _refresh = Task.CompletedTask;
-    private long _refreshGeneration;
+    private Task _refreshWorker = Task.CompletedTask;
+    private bool _refreshRequested;
+    private bool _workerRunning;
     private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="McpCapabilityChangeSubscription"/> class.</summary>
@@ -64,8 +65,7 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
         lock (_gate)
         {
             _handler = null;
-            _refreshGeneration++;
-            refresh = _refresh;
+            refresh = _refreshWorker;
         }
 
         await _lifetime.CancelAsync();
@@ -93,9 +93,10 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             _handler = handler;
-            if (handler is null)
+            if (handler is not null && _refreshRequested && !_workerRunning)
             {
-                _refreshGeneration++;
+                _workerRunning = true;
+                _refreshWorker = RefreshLoopAsync(_lifetime.Token);
             }
         }
     }
@@ -115,60 +116,65 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (Volatile.Read(ref _disposed) != 0 || _handler is null)
+            if (Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
 
-            long generation = ++_refreshGeneration;
-            _refresh = RefreshAsync(generation, _lifetime.Token);
+            _refreshRequested = true;
+            if (_handler is not null && !_workerRunning)
+            {
+                _workerRunning = true;
+                _refreshWorker = RefreshLoopAsync(_lifetime.Token);
+            }
         }
     }
 
-    private async Task RefreshAsync(long generation, CancellationToken cancellationToken)
+    private async Task RefreshLoopAsync(CancellationToken cancellationToken)
     {
-        try
+        // SetHandler and notification callbacks start the worker while holding _gate. Yield before
+        // entering the serialized loop so the task never attempts to reacquire that lock inline.
+        await Task.Yield();
+        while (true)
         {
-            await Task.Delay(DebounceDelay, cancellationToken);
             Func<IReadOnlyList<McpImportedCapability>, CancellationToken, Task>? handler;
             lock (_gate)
             {
-                if (generation != _refreshGeneration)
+                if (!_refreshRequested || _handler is null)
                 {
+                    _workerRunning = false;
                     return;
                 }
 
+                _refreshRequested = false;
                 handler = _handler;
             }
 
-            if (handler is null)
+            try
             {
+                await Task.Delay(DebounceDelay, cancellationToken);
+                var capabilities = await SdkHttpTransport.DiscoverCapabilitiesAsync(
+                    _client,
+                    _profile,
+                    cancellationToken);
+                await handler(capabilities, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                lock (_gate)
+                {
+                    _workerRunning = false;
+                }
+
                 return;
             }
-
-            var capabilities = await SdkHttpTransport.DiscoverCapabilitiesAsync(
-                _client,
-                _profile,
-                cancellationToken);
-            lock (_gate)
+            catch (Exception exception)
             {
-                if (generation != _refreshGeneration)
-                {
-                    return;
-                }
+                _logger.LogWarning(
+                    "MCP capability rediscovery for profile '{ProfileId}' failed with {FailureType}; reconnect is required.",
+                    _profile.Id,
+                    exception.GetType().Name);
             }
-
-            await handler(capabilities, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                "MCP capability rediscovery for profile '{ProfileId}' failed with {FailureType}; reconnect is required.",
-                _profile.Id,
-                exception.GetType().Name);
         }
     }
 }

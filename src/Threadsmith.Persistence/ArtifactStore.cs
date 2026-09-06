@@ -84,7 +84,7 @@ public sealed class ArtifactStore : IArtifactStore
             await File.WriteAllBytesAsync(absolutePath, bytes, cancellationToken);
         }
 
-        DateTimeOffset recordedAt = _timeProvider.GetUtcNow();
+        var recordedAt = _timeProvider.GetUtcNow();
         var metadata = new ArtifactMetadata
         {
             ContentHash = hashText,
@@ -96,7 +96,7 @@ public sealed class ArtifactStore : IArtifactStore
         };
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS artifacts (
                 content_hash TEXT PRIMARY KEY,
@@ -112,7 +112,7 @@ public sealed class ArtifactStore : IArtifactStore
                 ON artifacts(kind);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
-        await using SqliteCommand insert = connection.CreateCommand();
+        await using var insert = connection.CreateCommand();
         insert.CommandText = """
             INSERT OR IGNORE INTO artifacts(content_hash, kind, length, session_id, relative_path, recorded_at)
             VALUES($hash, $kind, $length, $session, $path, $recordedAt);
@@ -133,7 +133,7 @@ public sealed class ArtifactStore : IArtifactStore
         ArgumentException.ThrowIfNullOrWhiteSpace(contentHash);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT relative_path FROM artifacts WHERE content_hash = $hash;
             """;
@@ -158,9 +158,9 @@ public sealed class ArtifactStore : IArtifactStore
         ArgumentException.ThrowIfNullOrWhiteSpace(contentHash);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction =
+        await using var transaction =
             (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using SqliteCommand select = connection.CreateCommand();
+        await using var select = connection.CreateCommand();
         select.Transaction = transaction;
         select.CommandText = "SELECT relative_path FROM artifacts WHERE content_hash = $hash;";
         select.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
@@ -171,7 +171,7 @@ public sealed class ArtifactStore : IArtifactStore
             return false;
         }
 
-        await using SqliteCommand delete = connection.CreateCommand();
+        await using var delete = connection.CreateCommand();
         delete.Transaction = transaction;
         delete.CommandText = "DELETE FROM artifacts WHERE content_hash = $hash;";
         delete.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
@@ -188,7 +188,7 @@ public sealed class ArtifactStore : IArtifactStore
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         if (sessionId is null)
         {
             command.CommandText = """
@@ -206,7 +206,7 @@ public sealed class ArtifactStore : IArtifactStore
         }
 
         var results = new List<ArtifactMetadata>();
-        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var hash = reader.GetString(0);
@@ -214,7 +214,7 @@ public sealed class ArtifactStore : IArtifactStore
             var length = reader.GetInt64(2);
             var sessionText = await reader.IsDBNullAsync(3) ? null : reader.GetString(3);
             var relativePath = reader.GetString(4);
-            DateTimeOffset recordedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture);
+            var recordedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture);
             results.Add(new ArtifactMetadata
             {
                 ContentHash = hash,
@@ -236,7 +236,7 @@ public sealed class ArtifactStore : IArtifactStore
         Directory.CreateDirectory(_artifactDirectory);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteCommand command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS artifacts (
                 content_hash TEXT PRIMARY KEY,

@@ -95,7 +95,7 @@ public static class HookDescriptorValidator
             throw new ArgumentException("Hook identity, target, or secret-reference bounds are invalid.", nameof(descriptor));
         }
 
-        HookHandlerLimits limits = descriptor.Limits;
+        var limits = descriptor.Limits;
         if (limits.Timeout < TimeSpan.FromMilliseconds(100)
             || limits.Timeout > TimeSpan.FromMinutes(2)
             || limits.MaximumInputBytes is < 1024 or > 1024 * 1024
@@ -108,7 +108,7 @@ public static class HookDescriptorValidator
 
         HookPoint[] points = [.. descriptor.HookPoints.Distinct().OrderBy(point => point)];
         string[] secrets = [.. descriptor.SecretReferences.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
-        HookHandlerDescriptor normalized = descriptor with
+        var normalized = descriptor with
         {
             HookPoints = points,
             SecretReferences = secrets,
@@ -159,7 +159,7 @@ public sealed class HookPolicyEvaluator
                 return HookEligibilityDecision.Ineligible("repository-identity-required");
             }
 
-            HookRepositoryApproval? approval = await _store.GetApprovalAsync(
+            var approval = await _store.GetApprovalAsync(
                 repositoryIdentity,
                 descriptor.Identity,
                 cancellationToken);
@@ -176,7 +176,7 @@ public sealed class HookPolicyEvaluator
                 descriptor.SecretReferences);
         }
 
-        HookManagedPolicyGrant? grant = _grants.FirstOrDefault(candidate =>
+        var grant = _grants.FirstOrDefault(candidate =>
             candidate.HandlerIdentity == descriptor.Identity
             && candidate.HookPoints.Contains(point));
         if (grant is null || !HookDescriptorValidator.AllowsBlocking(point))

@@ -1,25 +1,30 @@
 namespace Threadsmith.Tools;
 
+using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Gets a bounded Git diff through the workspace-owned query service.</summary>
 public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
 {
-    private static readonly ToolDefinition _definition = RepositoryInventoryToolDefinitions.Create<GitDiffRequest, GitDiffResult>(
-        "git_diff",
-        "Gets a bounded Git diff. Use mode WorkingTree for unstaged changes, Staged for index changes, Commit with baseRevision set to the commit/ref, and Range or MergeBase with both baseRevision and targetRevision. Defaultable bounds may be omitted or null.");
-
+    private readonly IPromptLoader _prompts;
     private readonly IGitQueryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="GitDiffTool"/> class.</summary>
-    public GitDiffTool(IGitQueryService service)
+    public GitDiffTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        Definition = RepositoryInventoryToolDefinitions.Create<GitDiffRequest, GitDiffResult>(
+            "git_diff",
+            promptLoader,
+            PromptFileNames.ToolGitDiffDescription);
+        _prompts = promptLoader;
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitDiffResult>> ExecuteAsync(
@@ -37,7 +42,8 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
         return new(
             result,
             [new ToolProvenanceSource("git", context.Invocation.RepositoryPath, $"diff:{mode}")],
-            result.IsTruncated);
+            result.IsTruncated,
+            ModelResultContent: GitModelProjection.Create(result));
     }
 
     /// <inheritdoc />
@@ -60,21 +66,9 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
         return "git";
     }
 
-    private static void ValidateDiffRequest(GitDiffRequest input)
+    private void ValidateDiffRequest(GitDiffRequest input)
     {
         var mode = input.Mode ?? GitComparisonMode.WorkingTree;
-        int maximumEntries = input.MaximumEntries ?? 200;
-        int maximumPatchCharacters = input.MaximumPatchCharacters ?? 131072;
-        if (maximumEntries is < 1 or > 2000)
-        {
-            throw new ToolArgumentValidationException("maximumEntries must be between 1 and 2000; omit it or pass null to use the default 200.");
-        }
-
-        if (maximumPatchCharacters is < 1 or > 1_048_576)
-        {
-            throw new ToolArgumentValidationException("maximumPatchCharacters must be between 1 and 1048576; omit it or pass null to use the default 131072.");
-        }
-
         if (mode == GitComparisonMode.Commit)
         {
             ValidateRequiredRevision(input.BaseRevision, nameof(input.BaseRevision), "commit mode");
@@ -86,14 +80,16 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
         }
     }
 
-    private static void ValidateRequiredRevision(string? revision, string fieldName, string modeDescription)
+    private void ValidateRequiredRevision(string? revision, string fieldName, string modeDescription)
     {
         if (string.IsNullOrWhiteSpace(revision))
         {
-            throw new ToolArgumentValidationException($"{fieldName} is required for git_diff {modeDescription}; use mode WorkingTree or Staged when no revision comparison is intended.");
+            throw new ToolArgumentValidationException(_prompts.Render(
+                PromptFileNames.CorrectionGitDiffMissingRevision,
+                Tokens(("FieldName", fieldName), ("ModeDescription", modeDescription))));
         }
 
-        if (revision.StartsWith("-", StringComparison.Ordinal)
+        if (revision.StartsWith('-')
             || revision.Length > 256
             || revision.Any(char.IsWhiteSpace)
             || revision.Contains('\0')
@@ -103,26 +99,34 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
                 $"{fieldName} must be a bounded non-option Git revision token without whitespace.");
         }
     }
+
+    private static IReadOnlyDictionary<string, string> Tokens(params (string Name, string Value)[] values)
+    {
+        return values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
+    }
 }
 
 /// <summary>Gets bounded local Git history.</summary>
 public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 {
-    private static readonly ToolDefinition _definition = RepositoryInventoryToolDefinitions.Create<GitLogRequest, GitLogResult>(
-        "git_log",
-        "Gets bounded local Git commit history. Use revision HEAD for current history; omitted or null revision defaults to HEAD, and omitted or null maximumCommits defaults to 50.");
-
+    private readonly IPromptLoader _prompts;
     private readonly IGitQueryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="GitLogTool"/> class.</summary>
-    public GitLogTool(IGitQueryService service)
+    public GitLogTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        Definition = RepositoryInventoryToolDefinitions.Create<GitLogRequest, GitLogResult>(
+            "git_log",
+            promptLoader,
+            PromptFileNames.ToolGitLogDescription);
+        _prompts = promptLoader;
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitLogResult>> ExecuteAsync(
@@ -131,7 +135,7 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
-        string revision = NormalizeRevisionOrDefault(input.Revision);
+        var revision = NormalizeRevisionOrDefault(input.Revision);
         var result = await _service.LogAsync(
             context.Invocation.RepositoryPath,
             input,
@@ -139,19 +143,15 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
         return new(
             result,
             [new ToolProvenanceSource("git", revision, "log")],
-            result.IsTruncated);
+            result.IsTruncated,
+            ModelResultContent: GitModelProjection.Create(result));
     }
 
     /// <inheritdoc />
     protected override void ValidateInput(GitLogRequest input)
     {
-        string revision = NormalizeRevisionOrDefault(input.Revision);
-        int maximumCommits = input.MaximumCommits ?? 50;
+        var revision = NormalizeRevisionOrDefault(input.Revision);
         ValidateRevision(revision, nameof(input.Revision));
-        if (maximumCommits is < 1 or > 500)
-        {
-            throw new ToolArgumentValidationException("maximumCommits must be between 1 and 500; omit it or pass null to use the default 50.");
-        }
     }
 
     /// <inheritdoc />
@@ -170,20 +170,25 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 
     private static string NormalizeRevisionOrDefault(string? revision)
     {
-        return revision is null ? "HEAD" : revision;
+        return revision ?? "HEAD";
     }
 
-    private static void ValidateRevision(string revision, string fieldName)
+    private void ValidateRevision(string revision, string fieldName)
     {
         if (string.IsNullOrWhiteSpace(revision)
-            || revision.StartsWith("-", StringComparison.Ordinal)
+            || revision.StartsWith('-')
             || revision.Length > 256
             || revision.Any(char.IsWhiteSpace)
             || revision.Contains('\0')
             || revision.Contains(':'))
         {
             throw new ToolArgumentValidationException(
-                $"{fieldName} must be a bounded non-option Git revision token without whitespace; omit it or pass HEAD for current history.");
+                _prompts.Render(
+                    PromptFileNames.CorrectionGitLogInvalidRevision,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["FieldName"] = fieldName,
+                    }));
         }
     }
 }
@@ -191,21 +196,21 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 /// <summary>Gets a bounded local Git object.</summary>
 public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
 {
-    private static readonly ToolDefinition _definition = RepositoryInventoryToolDefinitions.Create<GitShowRequest, GitShowResult>(
-        "git_show",
-        "Gets bounded commit, tree, tag, or blob content from local Git objects.");
-
     private readonly IGitQueryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="GitShowTool"/> class.</summary>
-    public GitShowTool(IGitQueryService service)
+    public GitShowTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        Definition = RepositoryInventoryToolDefinitions.Create<GitShowRequest, GitShowResult>(
+            "git_show",
+            promptLoader,
+            PromptFileNames.ToolGitShowDescription);
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitShowResult>> ExecuteAsync(
@@ -249,21 +254,24 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
 /// <summary>Gets bounded local Git line attribution.</summary>
 public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
 {
-    private static readonly ToolDefinition _definition = RepositoryInventoryToolDefinitions.Create<GitBlameRequest, GitBlameResult>(
-        "git_blame",
-        "Gets bounded line attribution for a repository file.");
-
+    private readonly IPromptLoader _prompts;
     private readonly IGitQueryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="GitBlameTool"/> class.</summary>
-    public GitBlameTool(IGitQueryService service)
+    public GitBlameTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        Definition = RepositoryInventoryToolDefinitions.Create<GitBlameRequest, GitBlameResult>(
+            "git_blame",
+            promptLoader,
+            PromptFileNames.ToolGitBlameDescription);
+        _prompts = promptLoader;
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitBlameResult>> ExecuteAsync(
@@ -272,7 +280,7 @@ public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
-        string revision = NormalizeRevisionOrDefault(input.Revision);
+        var revision = NormalizeRevisionOrDefault(input.Revision);
         var result = await _service.BlameAsync(
             context.Invocation.RepositoryPath,
             input,
@@ -280,7 +288,8 @@ public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
         return new(
             result,
             [new ToolProvenanceSource("git-blame", input.Path, revision)],
-            result.IsTruncated);
+            result.IsTruncated,
+            ModelResultContent: GitModelProjection.Create(result));
     }
 
     /// <inheritdoc />
@@ -309,20 +318,25 @@ public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
 
     private static string NormalizeRevisionOrDefault(string? revision)
     {
-        return revision is null ? "HEAD" : revision;
+        return revision ?? "HEAD";
     }
 
-    private static void ValidateRevision(string revision, string fieldName)
+    private void ValidateRevision(string revision, string fieldName)
     {
         if (string.IsNullOrWhiteSpace(revision)
-            || revision.StartsWith("-", StringComparison.Ordinal)
+            || revision.StartsWith('-')
             || revision.Length > 256
             || revision.Any(char.IsWhiteSpace)
             || revision.Contains('\0')
             || revision.Contains(':'))
         {
             throw new ToolArgumentValidationException(
-                $"{fieldName} must be a bounded non-option Git revision token without whitespace; omit it or pass HEAD for current blame.");
+                _prompts.Render(
+                    PromptFileNames.CorrectionGitBlameInvalidRevision,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["FieldName"] = fieldName,
+                    }));
         }
     }
 }
@@ -330,21 +344,21 @@ public sealed class GitBlameTool : Tool<GitBlameRequest, GitBlameResult>
 /// <summary>Compares two local Git revision endpoints.</summary>
 public sealed class GitBranchComparisonTool : Tool<GitBranchComparisonRequest, GitBranchComparisonResult>
 {
-    private static readonly ToolDefinition _definition = RepositoryInventoryToolDefinitions.Create<GitBranchComparisonRequest, GitBranchComparisonResult>(
-        "git_compare_branches",
-        "Compares local revisions using merge base, ahead/behind counts, and changed paths.");
-
     private readonly IGitQueryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="GitBranchComparisonTool"/> class.</summary>
-    public GitBranchComparisonTool(IGitQueryService service)
+    public GitBranchComparisonTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        Definition = RepositoryInventoryToolDefinitions.Create<GitBranchComparisonRequest, GitBranchComparisonResult>(
+            "git_compare_branches",
+            promptLoader,
+            PromptFileNames.ToolGitCompareBranchesDescription);
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitBranchComparisonResult>> ExecuteAsync(
@@ -386,51 +400,51 @@ public sealed class GitBranchComparisonTool : Tool<GitBranchComparisonRequest, G
     }
 }
 
-/// <summary>Gets normalized solution, project, target-framework, reference, package, and test inventory.</summary>
-public sealed class DotNetInventoryTool : Tool<DotNetInventoryRequest, DotNetInventoryResult>
-{
-    private static readonly ToolDefinition _definition = ToolDefinitionFactory.Create<DotNetInventoryRequest, DotNetInventoryResult>(
-        "dotnet_inventory",
-        "Gets normalized inventory from the selected loaded .NET workspace.",
-        ToolCategory.RepositoryInspection,
-        RepositoryTrustLevel.TrustedRead,
-        ApprovalLevel.None,
-        ToolSideEffect.ReadOnly,
-        TimeSpan.FromSeconds(30),
-        512 * 1024) with
-    {
-        RequiresWorkspace = true,
-    };
+/// <summary>Empty model input for host-context-bound .NET inventory.</summary>
+public sealed record DotNetInventoryInput;
 
+/// <summary>Gets normalized solution, project, target-framework, reference, package, and test inventory.</summary>
+public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInventoryResult>
+{
+    private const int MaximumModelItemsPerProject = 12;
+    private const int MaximumModelOmissions = 20;
+    private const int MaximumModelProjects = 25;
+    private const int MaximumModelResultCharacters = 128 * 1024;
+    private const int MaximumModelTargetFrameworks = 12;
+    private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IDotNetInventoryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetInventoryTool"/> class.</summary>
-    public DotNetInventoryTool(IDotNetInventoryService service)
+    public DotNetInventoryTool(IDotNetInventoryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(promptLoader);
+        Definition = ToolDefinitionFactory.Create<DotNetInventoryInput, DotNetInventoryResult>(
+            "dotnet_inventory",
+            promptLoader.Get(PromptFileNames.ToolDotnetInventoryDescription),
+            ToolCategory.RepositoryInspection,
+            RepositoryTrustLevel.TrustedRead,
+            ApprovalLevel.None,
+            ToolSideEffect.ReadOnly,
+            TimeSpan.FromSeconds(30),
+            512 * 1024) with
+        {
+            RequiresWorkspace = true,
+        };
         _service = service;
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<DotNetInventoryResult>> ExecuteAsync(
-        DotNetInventoryRequest input,
+        DotNetInventoryInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (context.Invocation.WorkspaceId != input.WorkspaceId)
-        {
-            throw new InvalidOperationException(
-                "Inventory workspace does not match the opened invocation workspace.");
-        }
-
-        var effective = input with
-        {
-            RepositoryPath = context.Invocation.RepositoryPath,
-        };
-        foreach (string resourcePath in _service.GetResourcePaths(effective))
+        var effective = CreateRequest(context.Invocation);
+        foreach (var resourcePath in _service.GetResourcePaths(effective))
         {
             _ = ToolPathRules.NormalizeAndValidate(resourcePath, context.Invocation);
         }
@@ -439,31 +453,207 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryRequest, DotNetInv
         return new(
             result,
             [new ToolProvenanceSource("solution", result.Solution.Path, result.Confidence.ToString())],
-            false);
+            false,
+            CreateModelResultContent(result));
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(DotNetInventoryRequest input)
+    protected override void ValidateInput(DotNetInventoryInput input)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(input.SelectedSolutionPath);
     }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
-        DotNetInventoryRequest input,
+        DotNetInventoryInput input,
         ToolInvocationContext context)
     {
-        var effective = input with
-        {
-            RepositoryPath = context.RepositoryPath,
-        };
-        return _service.GetResourcePaths(effective);
+        return _service.GetResourcePaths(CreateRequest(context));
     }
 
     /// <inheritdoc />
-    protected override string? GetExecutable(DotNetInventoryRequest input)
+    protected override string? GetExecutable(DotNetInventoryInput input)
     {
         return "git";
+    }
+
+    private static DotNetInventoryRequest CreateRequest(ToolInvocationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var workspaceId = context.WorkspaceId
+            ?? throw new InvalidOperationException(".NET inventory requires an opened workspace.");
+        return new DotNetInventoryRequest
+        {
+            WorkspaceId = workspaceId,
+            RepositoryPath = context.RepositoryPath,
+        };
+    }
+
+    private static string CreateModelResultContent(DotNetInventoryResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var projects = result.Solution.Projects
+            .Take(MaximumModelProjects)
+            .Select(project => new DotNetInventoryModelProject(
+                Bound(project.Name, 128),
+                Bound(project.Path, 512),
+                project.IsTestProject,
+                project.TargetFrameworks.Take(MaximumModelTargetFrameworks)
+                    .Select(framework => Bound(framework.Name, 64)).ToArray(),
+                project.ProjectReferences.Take(MaximumModelItemsPerProject)
+                    .Select(reference => Bound(reference.Path, 512)).ToArray(),
+                project.PackageReferences.Take(MaximumModelItemsPerProject)
+                    .Select(package => new DotNetInventoryModelPackage(
+                        Bound(package.Id, 128),
+                        BoundNullable(package.Version, 128),
+                        package.VersionSource.ToString()))
+                    .ToArray(),
+                Math.Max(0, project.TargetFrameworks.Count - MaximumModelTargetFrameworks),
+                Math.Max(0, project.ProjectReferences.Count - MaximumModelItemsPerProject),
+                Math.Max(0, project.PackageReferences.Count - MaximumModelItemsPerProject)))
+            .ToArray();
+        var projection = new DotNetInventoryModelProjection(
+            Bound(result.Solution.Path, 512),
+            result.Confidence.ToString(),
+            result.Solution.Projects.Count,
+            projects,
+            Math.Max(0, result.Solution.Projects.Count - MaximumModelProjects),
+            result.Omissions.Take(MaximumModelOmissions)
+                .Select(omission => Bound(omission, 512)).ToArray(),
+            Math.Max(0, result.Omissions.Count - MaximumModelOmissions));
+        var content = JsonSerializer.Serialize(projection, ModelJsonOptions);
+        if (content.Length <= MaximumModelResultCharacters)
+        {
+            return content;
+        }
+
+        var summarizedProjects = projects.Select(project => project with
+        {
+            ProjectReferences = [],
+            Packages = [],
+            OmittedProjectReferences = project.OmittedProjectReferences + project.ProjectReferences.Count,
+            OmittedPackages = project.OmittedPackages + project.Packages.Count,
+        }).ToArray();
+        return JsonSerializer.Serialize(
+            projection with { Projects = summarizedProjects },
+            ModelJsonOptions);
+    }
+
+    private static string Bound(string value, int maximumCharacters)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (builder.Length + rune.Utf16SequenceLength > maximumCharacters)
+            {
+                break;
+            }
+
+            builder.Append(rune.ToString());
+        }
+
+        return builder.ToString();
+    }
+
+    private static string? BoundNullable(string? value, int maximumCharacters)
+    {
+        return value is null ? null : Bound(value, maximumCharacters);
+    }
+
+    private sealed record DotNetInventoryModelPackage(
+        string Id,
+        string? Version,
+        string VersionSource);
+
+    private sealed record DotNetInventoryModelProject(
+        string Name,
+        string Path,
+        bool IsTestProject,
+        IReadOnlyList<string> TargetFrameworks,
+        IReadOnlyList<string> ProjectReferences,
+        IReadOnlyList<DotNetInventoryModelPackage> Packages,
+        int OmittedTargetFrameworks,
+        int OmittedProjectReferences,
+        int OmittedPackages);
+
+    private sealed record DotNetInventoryModelProjection(
+        string Solution,
+        string Confidence,
+        int ProjectCount,
+        IReadOnlyList<DotNetInventoryModelProject> Projects,
+        int OmittedProjects,
+        IReadOnlyList<string> Omissions,
+        int OmittedOmissions);
+}
+
+/// <summary>Creates compact model-facing Git projections while retaining complete host results.</summary>
+internal static class GitModelProjection
+{
+    private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Projects diff summary and patch without duplicating the changed-path inventory.</summary>
+    internal static string Create(GitDiffResult result)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                mode = result.Mode.ToString(),
+                result.BaseRevision,
+                result.TargetRevision,
+                summary = result.Summary,
+                changedPaths = result.Entries
+                    .Take(result.Patch.Length == 0 || result.IsTruncated ? result.Entries.Count : 0)
+                    .Select(entry => new
+                    {
+                        entry.Status,
+                        entry.Path,
+                        entry.PreviousPath,
+                        entry.IsBinary,
+                    }),
+                patch = result.Patch,
+                truncated = result.IsTruncated,
+            },
+            ModelJsonOptions);
+    }
+
+    /// <summary>Projects commit history without author email addresses.</summary>
+    internal static string Create(GitLogResult result)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                commits = result.Commits.Select(commit => new
+                {
+                    commit.Commit,
+                    commit.Parents,
+                    author = commit.AuthorName,
+                    commit.AuthoredAt,
+                    commit.Subject,
+                }),
+                truncated = result.IsTruncated,
+            },
+            ModelJsonOptions);
+    }
+
+    /// <summary>Projects blame lines without author email addresses.</summary>
+    internal static string Create(GitBlameResult result)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                result.Path,
+                lines = result.Lines.Select(line => new
+                {
+                    line.Commit,
+                    line.Author,
+                    line.AuthoredAt,
+                    line.FinalLine,
+                    line.Text,
+                }),
+                truncated = result.IsTruncated,
+            },
+            ModelJsonOptions);
     }
 }
 
@@ -471,11 +661,15 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryRequest, DotNetInv
 internal static class RepositoryInventoryToolDefinitions
 {
     /// <summary>Creates one read-only trusted Git definition.</summary>
-    internal static ToolDefinition Create<TInput, TOutput>(string id, string description)
+    internal static ToolDefinition Create<TInput, TOutput>(
+        string id,
+        IPromptLoader promptLoader,
+        string promptFileName)
     {
+        ArgumentNullException.ThrowIfNull(promptLoader);
         return ToolDefinitionFactory.Create<TInput, TOutput>(
             id,
-            description,
+            promptLoader.Get(promptFileName),
             ToolCategory.GitInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -495,7 +689,7 @@ internal static class RepositoryInventoryToolPolicy
         ToolInvocationContext context)
         where TInput : class
     {
-        foreach (string resourcePath in ((ITool)tool).GetResourcePaths(input, context))
+        foreach (var resourcePath in ((ITool)tool).GetResourcePaths(input, context))
         {
             _ = ToolPathRules.NormalizeAndValidate(resourcePath, context);
         }
@@ -513,8 +707,8 @@ internal static class RepositoryInventoryToolPolicy
         }
 
         GitDiffEntry[] entries = [.. result.Entries.Where(entry => IsAllowed(entry, context))];
-        bool withheldPatch = IsRecursiveScopeRestricted(context) && result.Patch.Length > 0;
-        bool omittedEntries = entries.Length != result.Entries.Count;
+        var withheldPatch = IsRecursiveScopeRestricted(context) && result.Patch.Length > 0;
+        var omittedEntries = entries.Length != result.Entries.Count;
         return result with
         {
             Entries = entries,
@@ -549,7 +743,7 @@ internal static class RepositoryInventoryToolPolicy
             return result;
         }
 
-        int patchStart = result.Content.IndexOf("diff --git ", StringComparison.Ordinal);
+        var patchStart = result.Content.IndexOf("diff --git ", StringComparison.Ordinal);
         if (patchStart < 0)
         {
             return result;
@@ -603,7 +797,7 @@ internal static class RepositoryInventoryToolPolicy
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
         return !context.ApprovedRoots.Any(root =>
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot))
                 .Equals(repositoryRoot, comparison));

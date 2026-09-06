@@ -75,7 +75,7 @@ public sealed class ShadowCopier
         // an unstable package and keep waiting until the deadline rather than letting
         // DirectoryNotFoundException escape and defeat the bounded wait (F4).
         (var size, var count) = MeasurePackage(sourceDirectory);
-        TimeSpan elapsed = TimeSpan.Zero;
+        var elapsed = TimeSpan.Zero;
         var deadline = TimeSpan.FromSeconds(30);
         while (elapsed < deadline)
         {
@@ -112,7 +112,7 @@ public sealed class ShadowCopier
     {
         long size = 0;
         var count = 0;
-        foreach (FileInfo file in new DirectoryInfo(directory).EnumerateFiles("*", SearchOption.AllDirectories))
+        foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*", SearchOption.AllDirectories))
         {
             size += file.Length;
             count++;

@@ -1,0 +1,1 @@
+{{FilePath}} {{SourceRange}} is current line-numbered partial source projected through host output sanitization; use continuation anchors for omitted lines before claiming complete-file or exact-byte coverage.

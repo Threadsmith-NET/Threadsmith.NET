@@ -1,0 +1,1 @@
+Use the returned source only for the loaded project's advertised ranges.

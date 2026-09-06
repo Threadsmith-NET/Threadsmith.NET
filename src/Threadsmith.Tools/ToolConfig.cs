@@ -42,7 +42,7 @@ public sealed class ToolConfig : IToolConfig
             return (T)(object)value;
         }
 
-        TypeConverter converter = TypeDescriptor.GetConverter(typeof(T));
+        var converter = TypeDescriptor.GetConverter(typeof(T));
         if (!converter.CanConvertFrom(typeof(string)))
         {
             throw new InvalidOperationException(

@@ -1,0 +1,1 @@
+- {{Caller}} → {{Callee}} ({{DispatchKind}}) at {{CallSiteFile}}:{{CallSiteRange}} — {{Proof}}

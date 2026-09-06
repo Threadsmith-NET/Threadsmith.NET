@@ -28,9 +28,11 @@
     <ProjectReference Include="..\Threadsmith.Workspaces\Threadsmith.Workspaces.csproj" />
     <ProjectReference Include="..\Threadsmith.Validation\Threadsmith.Validation.csproj" />
     <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />
+    <ProjectReference Include="..\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\Threadsmith.Hooks\Threadsmith.Hooks.csproj" />
     <ProjectReference Include="..\Threadsmith.Extensions.Runtime\Threadsmith.Extensions.Runtime.csproj" />
     <ProjectReference Include="..\Threadsmith.Tui\Threadsmith.Tui.csproj" />
+    <ProjectReference Include="..\Threadsmith.Tui.TuiKit\Threadsmith.Tui.TuiKit.csproj" />
     <ProjectReference Include="..\Threadsmith.Cli\Threadsmith.Cli.csproj" />
     <ProjectReference Include="..\Threadsmith.Mcp\Threadsmith.Mcp.csproj" />
     <ProjectReference Include="..\Threadsmith.Scripting.Worker\Threadsmith.Scripting.Worker.csproj" />
@@ -43,19 +45,52 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Curated application-owned help evidence; implementation and feature plans are intentionally not globbed. -->
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Context\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Execution\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Tools\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.DotNet\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Skills\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Models\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Models.OpenAiCodex\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.Mcp\Prompts\*.md" />
+    <None Include="@(ThreadsmithPromptAsset)"
+          Link="prompts/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Curated application-owned help evidence; planning and release-readiness documents are intentionally excluded. -->
     <None Include="ThreadsmithDocs.manifest.json" Link="ThreadsmithDocs/manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\README.md" Link="ThreadsmithDocs/README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\CONTRIBUTING.md" Link="ThreadsmithDocs/CONTRIBUTING.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\CODE_OF_CONDUCT.md" Link="ThreadsmithDocs/CODE_OF_CONDUCT.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\LICENSE" Link="ThreadsmithDocs/LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\docs\*.md" Exclude="..\..\docs\AGENTS.md" Link="ThreadsmithDocs/docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\index.md;..\..\docs\user-guide.md;..\..\docs\prompt-file-reference.md;..\..\docs\skill-authoring.md;..\..\docs\skill-compatibility-spec-v1.md;..\..\docs\hook-authoring.md"
+          Link="ThreadsmithDocs/docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\operations\**\*.md" Link="ThreadsmithDocs/docs/operations/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\extension-authoring\**\*.md" Link="ThreadsmithDocs/docs/extension-authoring/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\testing\**\*.md" Link="ThreadsmithDocs/docs/testing/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\architecture\**\*.md" Link="ThreadsmithDocs/docs/architecture/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\guardrails\**\*.md" Link="ThreadsmithDocs/docs/guardrails/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="ValidateThreadsmithPromptAssetNames" BeforeTargets="PrepareForBuild;ComputeFilesToPublish">
+    <ItemGroup>
+      <_ThreadsmithPromptAssetName Include="@(ThreadsmithPromptAsset)">
+        <NormalizedName>$([System.String]::Copy('%(Filename)%(Extension)').ToUpperInvariant())</NormalizedName>
+      </_ThreadsmithPromptAssetName>
+    </ItemGroup>
+    <RemoveDuplicates Inputs="@(_ThreadsmithPromptAssetName->'%(NormalizedName)')">
+      <Output TaskParameter="Filtered" ItemName="_ThreadsmithUniquePromptAssetName" />
+    </RemoveDuplicates>
+    <PropertyGroup>
+      <_ThreadsmithPromptAssetCount>@(_ThreadsmithPromptAssetName->Count())</_ThreadsmithPromptAssetCount>
+      <_ThreadsmithUniquePromptAssetCount>@(_ThreadsmithUniquePromptAssetName->Count())</_ThreadsmithUniquePromptAssetCount>
+    </PropertyGroup>
+    <Error Condition="'$(_ThreadsmithPromptAssetCount)' != '$(_ThreadsmithUniquePromptAssetCount)'"
+           Text="Prompt asset filenames must be globally unique case-insensitively in the flat prompts deployment directory." />
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />

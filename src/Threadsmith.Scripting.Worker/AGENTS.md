@@ -7,7 +7,7 @@ Own the disposable Roslyn process used by the optional `csharp_script` built-in 
 ## Ownership
 
 - `Program.cs` — bounded standard-input protocol, reference/import restrictions, normalized syntax and semantic prohibited-capability checks, fresh script evaluation, UTF-8 output bounding, and JSON response.
-- `Threadsmith.Scripting.Worker.csproj` — isolated Roslyn scripting dependency and executable deployment boundary; `eng/release/` publishes and requires its apphost explicitly for the application's RID.
+- `Threadsmith.Scripting.Worker.csproj` — isolated Roslyn scripting dependency and executable deployment boundary; it declares the complete supported release RID matrix so split restore/publish workflows resolve the worker target, while `eng/release/` publishes and requires its apphost explicitly for the application's RID.
 
 ## Local Contracts
 
@@ -26,7 +26,7 @@ Own the disposable Roslyn process used by the optional `csharp_script` built-in 
 ## Verification
 
 - `dotnet build src/Threadsmith.sln --no-restore`
-- `tests\Threadsmith.Milestone3.Tests\bin\Debug\net10.0\Threadsmith.Milestone3.Tests.exe --filter-method "*CSharpScript*"`
+- `tests\Threadsmith.ModelTooling.Tests\bin\Debug\net10.0\Threadsmith.ModelTooling.Tests.exe --filter-method "*CSharpScript*"`
 
 ## Child DOX Index
 

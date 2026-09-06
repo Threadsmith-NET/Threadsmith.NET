@@ -84,7 +84,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
             throw new InvalidOperationException("The Codex OAuth callback redirect target is invalid.");
         }
 
-        Dictionary<string, string> query = ParseQuery(callbackUri.Query);
+        var query = ParseQuery(callbackUri.Query);
         if (!query.TryGetValue("state", out var state)
             || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(state), Encoding.UTF8.GetBytes(challenge.State)))
         {
@@ -110,19 +110,19 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
             ["redirect_uri"] = challenge.RedirectUri.AbsoluteUri,
             ["code_verifier"] = challenge.CodeVerifier,
         };
-        TokenEnvelope tokens = await PostTokenAsync(fields, cancellationToken).ConfigureAwait(false);
+        var tokens = await PostTokenAsync(fields, cancellationToken).ConfigureAwait(false);
         await SaveAsync(tokens, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Starts the headless device authorization flow.</summary>
     public async Task<OpenAiCodexDeviceChallenge> StartDeviceAsync(CancellationToken cancellationToken = default)
     {
-        using HttpRequestMessage request = CreateJsonRequest(DeviceCodeEndpoint, new { client_id = ClientId });
-        using JsonDocument document = await SendJsonAsync(request, cancellationToken).ConfigureAwait(false);
-        JsonElement root = document.RootElement;
+        using var request = CreateJsonRequest(DeviceCodeEndpoint, new { client_id = ClientId });
+        using var document = await SendJsonAsync(request, cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
         var deviceAuthId = RequiredString(root, "device_auth_id");
         var userCode = RequiredString(root, "user_code");
-        var interval = root.TryGetProperty("interval", out JsonElement value) && value.TryGetInt32(out var seconds)
+        var interval = root.TryGetProperty("interval", out var value) && value.TryGetInt32(out var seconds)
             ? Math.Clamp(seconds, 1, 30)
             : 5;
         return new OpenAiCodexDeviceChallenge(
@@ -139,18 +139,18 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(challenge);
-        using CancellationTokenSource bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bounded.CancelAfter(timeout);
         while (true)
         {
-            using HttpRequestMessage deviceRequest = CreateJsonRequest(DeviceTokenEndpoint, new
+            using var deviceRequest = CreateJsonRequest(DeviceTokenEndpoint, new
             {
                 device_auth_id = challenge.DeviceAuthId,
                 user_code = challenge.UserCode,
             });
             try
             {
-                using JsonDocument device = await SendJsonAsync(deviceRequest, bounded.Token).ConfigureAwait(false);
+                using var device = await SendJsonAsync(deviceRequest, bounded.Token).ConfigureAwait(false);
                 var authorizationCode = RequiredString(device.RootElement, "authorization_code");
                 var verifier = RequiredString(device.RootElement, "code_verifier");
                 Dictionary<string, string> fields = new()
@@ -161,7 +161,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
                     ["code_verifier"] = verifier,
                     ["redirect_uri"] = "https://auth.openai.com/deviceauth/callback",
                 };
-                TokenEnvelope tokens = await PostTokenAsync(fields, bounded.Token).ConfigureAwait(false);
+                var tokens = await PostTokenAsync(fields, bounded.Token).ConfigureAwait(false);
                 await SaveAsync(tokens, bounded.Token).ConfigureAwait(false);
                 return;
             }
@@ -175,7 +175,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
     /// <summary>Returns a valid access token, refreshing it when required.</summary>
     public async Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
-        TokenEnvelope? envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        var envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
         if (envelope is null)
         {
             return null;
@@ -217,7 +217,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
         await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            TokenEnvelope? envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
+            var envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
             if (envelope is null)
             {
                 return null;
@@ -240,7 +240,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
     /// <summary>Returns secret-free current authentication status.</summary>
     public async Task<OpenAiCodexAuthenticationStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        TokenEnvelope? envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        var envelope = await LoadAsync(cancellationToken).ConfigureAwait(false);
         return envelope is null
             ? new OpenAiCodexAuthenticationStatus(false, null, null)
             : new OpenAiCodexAuthenticationStatus(
@@ -274,11 +274,11 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
         {
             Content = new FormUrlEncodedContent(fields),
         };
-        using JsonDocument document = await SendJsonAsync(request, cancellationToken).ConfigureAwait(false);
-        JsonElement root = document.RootElement;
+        using var document = await SendJsonAsync(request, cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
         var accessToken = RequiredString(root, "access_token");
-        var refreshToken = root.TryGetProperty("refresh_token", out JsonElement refresh) ? refresh.GetString() : null;
-        var expiresIn = root.TryGetProperty("expires_in", out JsonElement expires) && expires.TryGetInt32(out var seconds)
+        var refreshToken = root.TryGetProperty("refresh_token", out var refresh) ? refresh.GetString() : null;
+        var expiresIn = root.TryGetProperty("expires_in", out var expires) && expires.TryGetInt32(out var seconds)
             ? Math.Clamp(seconds, 60, 86_400 * 30)
             : 3600;
         return new TokenEnvelope(accessToken, refreshToken, DateTimeOffset.UtcNow.AddSeconds(expiresIn));
@@ -287,7 +287,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
     private async Task<JsonDocument> SendJsonAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
@@ -297,7 +297,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
         }
 
         await response.Content.LoadIntoBufferAsync(64 * 1024, cancellationToken).ConfigureAwait(false);
-        await using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         return await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
@@ -351,8 +351,8 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
 
         try
         {
-            await using FileStream stream = File.OpenRead(_cachePath);
-            TokenEnvelope? envelope = await JsonSerializer.DeserializeAsync<TokenEnvelope>(
+            await using var stream = File.OpenRead(_cachePath);
+            var envelope = await JsonSerializer.DeserializeAsync<TokenEnvelope>(
                 stream,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             return IsValid(envelope) ? envelope : null;
@@ -376,7 +376,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
             ["client_id"] = ClientId,
             ["refresh_token"] = envelope.RefreshToken,
         };
-        TokenEnvelope refreshed = await PostTokenAsync(fields, cancellationToken).ConfigureAwait(false);
+        var refreshed = await PostTokenAsync(fields, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(refreshed.RefreshToken))
         {
             refreshed = refreshed with { RefreshToken = envelope.RefreshToken };
@@ -404,7 +404,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
 
     private static string RequiredString(JsonElement root, string propertyName)
     {
-        return root.TryGetProperty(propertyName, out JsonElement value) && value.GetString() is { Length: > 0 } result
+        return root.TryGetProperty(propertyName, out var value) && value.GetString() is { Length: > 0 } result
             ? result
             : throw new InvalidDataException($"The Codex authentication response is missing {propertyName}.");
     }
@@ -450,15 +450,15 @@ internal static class OpenAiCodexTokenClaims
         {
             var payload = parts[1].Replace('-', '+').Replace('_', '/');
             payload = payload.PadRight(payload.Length + ((4 - (payload.Length % 4)) % 4), '=');
-            using JsonDocument document = JsonDocument.Parse(Convert.FromBase64String(payload));
-            JsonElement root = document.RootElement;
-            if (root.TryGetProperty("https://api.openai.com/auth", out JsonElement auth)
-                && auth.TryGetProperty("chatgpt_account_id", out JsonElement account))
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var root = document.RootElement;
+            if (root.TryGetProperty("https://api.openai.com/auth", out var auth)
+                && auth.TryGetProperty("chatgpt_account_id", out var account))
             {
                 return account.GetString();
             }
 
-            return root.TryGetProperty("chatgpt_account_id", out JsonElement direct) ? direct.GetString() : null;
+            return root.TryGetProperty("chatgpt_account_id", out var direct) ? direct.GetString() : null;
         }
         catch (Exception exception) when (exception is FormatException or JsonException)
         {

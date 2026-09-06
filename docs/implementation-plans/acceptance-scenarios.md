@@ -51,6 +51,18 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario C2 — Conversation-Native Corrective Turns
+
+1. A model emits malformed tool arguments, an unavailable tool, or an invalid sibling in a multi-tool response.
+2. The host rejects the invalid request before execution and does not repair arguments.
+3. The next model request contains bounded corrective feedback controlled by `execution:maxCorrectiveTurns`.
+4. A corrected request can proceed; exhausted attempts fail closed with sanitized diagnostics.
+5. For MCP imported tools with provider-unsafe canonical ids, the provider wire name is safely aliased and mapped back before invocation.
+
+**Verifies:** active-turn corrective history, atomic pre-execution batch rejection, purge after successful correction, safe diagnostics without raw malformed arguments/secrets/provider bodies, provider-neutral canonical tool identity, and OpenAI-family tool-name aliasing.
+
+---
+
 ## Scenario D — Drop-In Extension
 
 1. User copies an extension package into the configured directory.
@@ -179,18 +191,22 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario L — Bounded Parallel Research, Isolated Workers, and Review
 
-1. User requests a multi-project change whose approved plan contains two provably non-overlapping implementation steps plus one shared configuration step.
-2. The host proposes bounded read-only exploration assignments with explicit roles, questions, models, tools, trust ceilings, contexts, budgets, and stopping conditions.
-3. Two explorers run concurrently as in-process .NET child tasks against the same immutable baseline and return schema-validated cited findings; the parent receives no raw child transcript.
-4. The host synthesizes findings, approves/records the parent plan, partitions the two independent steps, and serializes the shared configuration step.
-5. User approves the delegation projection. Two implementation children run concurrently in separate managed detached Git worktrees, each confined to its assignment and full governed mutation/validation path.
-6. Freeze both structured worker change sets. Run security, test, performance, and architecture reviewers concurrently against immutable diff/evidence artifacts.
-7. Resolve required review findings and ask the parent to integrate selected workers.
-8. The parent detects worker-to-worker and current-primary conflicts, restages selected changes transactionally, presents one fresh exact aggregate diff, applies only after policy authorization, and reruns aggregate affected builds/tests.
-9. Repeat with overlapping/shared paths, stale primary bytes, an out-of-scope worker edit, cancelled parent/child, slow provider, exhausted child/parent budget, reviewer disagreement, interrupted checkpoints, and worktree cleanup failure.
-10. Monitor operating-system processes while agents run.
+1. In ordinary trusted chat with a selected semantic workspace, request two independent repository investigations and have the parent model call `delegate_agents` with exact `task`, `context`, and `readOnly` or `inherit` values.
+2. Confirm the host freezes the parent's exact visible tool snapshot, rejects unknown knobs or excess children, removes mutation, process/code-execution, approval-required, workflow, and delegation tools, and narrows child trust, roots, prohibited paths, phase, sensitivity, network, and budget.
+3. Two Explorer children run concurrently as in-process .NET tasks against one immutable baseline and return schema-validated cited findings; the joined result contains delegation/assignment IDs, honest statuses, uncertainty, omissions, conservative disagreements, and usage without raw child transcripts or hidden reasoning.
+4. Inspect the latest durable state with `/agents <delegation-id>`, then cancel a child and a complete delegation in separate runs and confirm observed hierarchical cancellation. Through the shared persistence/checkpoint boundary, confirm accepted/queued/running and role-specific terminal revisions increase monotonically, joined state is durable before findings enter parent evidence, and a late lower-revision progress write neither replaces terminal state nor emits a stale lifecycle event.
+5. User requests a multi-project change whose approved plan contains two provably non-overlapping implementation steps plus one shared configuration step.
+6. The host proposes bounded read-only exploration assignments with explicit roles, questions, models, tools, trust ceilings, contexts, budgets, and stopping conditions.
+7. The host synthesizes findings, approves/records the parent plan, partitions the two independent steps, and serializes the shared configuration step.
+8. User approves the delegation projection. Two implementation children run concurrently in separate managed detached Git worktrees, each confined to its assignment and full governed mutation/validation path.
+9. Freeze both structured worker change sets. Run security, test, performance, and architecture reviewers concurrently against immutable diff/evidence artifacts.
+10. Resolve required review findings and ask the parent to integrate selected workers.
+11. The parent detects worker-to-worker and current-primary conflicts, restages selected changes transactionally, presents one fresh exact aggregate diff, applies only after policy authorization, and reruns aggregate affected builds/tests.
+12. Repeat with malformed child output, policy-denied child tools, overlapping/shared paths, stale primary bytes, an out-of-scope worker edit, cancelled parent/child, slow provider, exhausted child/parent budget, reviewer disagreement, interrupted checkpoints, and worktree cleanup failure.
+13. Monitor operating-system processes while agents run.
+14. During an ordinary model response and again during a two-child delegation tool batch, press Enter repeatedly. Confirm one immediate acknowledgement and one pause request; finish the in-flight operation, confirm the parent and every still-running child stop before their next provider/tool operation, and confirm no output occurs while `steer >` is visible. Submit ordered steering, verify eligible-child delivery and honest undelivered counts for completed children, then repeat with empty dismissal, buffered multiline input, `Esc Esc`, and `Ctrl+C` cancellation.
 
-**Verifies:** deterministic state and immutable turns, repository/baseline/worktree confinement, central tool/context/capability/model/budget policy, validation and correction, persistence/restoration, bounded in-process structured concurrency, hierarchical cancellation, non-overlap partitioning, isolated workers, typed reviewers, conflict-safe parent integration, and parent/child provenance. No process hosts a child agent; only existing tracked Git/build/test/tool infrastructure processes may appear. Unsafe partitioning falls back to serial execution, and no worker result is automatically merged.
+**Verifies:** deterministic state and immutable turns, direct model-callable bounded fork/join, repository/baseline/worktree confinement, exact parent-tool inheritance and central tool/context/capability/model/budget policy, validation and correction, persistence/restoration, serialized idempotent active-run input, safe-boundary parent/child steering, hierarchical cancellation, bounded in-process structured concurrency, non-overlap partitioning, isolated workers, typed reviewers, conflict-safe parent integration, and parent/child provenance. No process hosts a child agent; only existing tracked Git/build/test/tool infrastructure processes may appear. Children never delegate or transition parent workflow, unsafe partitioning falls back to serial execution, and no worker result is automatically merged.
 
 
 ---
@@ -308,7 +324,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 2. Configure one deterministic built-in tool. Have the model request it after a controlled delay, execute it under fake monotonic time, and continue to a final answer. Confirm `THINKING` yields to live `TOOLS` elapsed time, one completion marker reports the authoritative tool-execution duration, and `THINKING` resumes at the original total-turn elapsed value rather than restarting.
 3. Repeat with an extension tool and confirm stable host-owned source classification, identical policy/cancellation behavior, and no extension type in public/durable/TUI contracts.
 4. Repeat through stdio, SSE, and streamable-HTTP MCP profiles with deterministic transport delay and one retry. Confirm live `MCP` activity, one MCP-specific completion/failure row with the remote logical-invocation duration, no duplicate generic tool row, and no endpoint/header/token/argument/result disclosure.
-5. Stream whitespace-only content, reasoning chunks, tool-call framing, usage, fragmented visible output, and `[DONE]`. Confirm only first non-whitespace final answer ends resumed `THINKING`; the completed transcript contains no host-generated `THINKING` marker, while `/thinking` and `Ctrl+T` can still reveal latest sanitized transient reasoning.
+5. Stream whitespace-only content, reasoning chunks, tool-call framing, usage, fragmented visible output, and `[DONE]`. Confirm only first non-whitespace final answer ends resumed `THINKING`; the completed transcript contains no host-generated `THINKING` marker; `/thinking on`, `/thinking off`, `/thinking`, and `Ctrl+T` control live streaming of future sanitized reasoning without making prior scrollback removable or durable.
 6. Exercise model failure, malformed output, tool/MCP failure, timeout, cancellation at each boundary, event-stream completion, status-renderer failure, and shell shutdown. Confirm live timers stop, tasks are observed, final host/tool outcomes render in order, the composer remains usable, and no console-gate deadlock or cursor artifact remains.
 7. Set `tui:showOperationDurations` false in user configuration, then override true in repository configuration; reverse both values and restart each time. Confirm standard precedence, one option controls request/tool/MCP timing together, disabled mode retains activity/outcome words without duration or periodic redraw, and unrelated configuration is preserved.
 8. Restore legacy tool events without duration/source and inject negative, overflowed, or impossible duration metadata. Confirm legacy output omits duration, invalid data fails or degrades with bounded diagnostics, and Threadsmith never fabricates `0ms` or guesses MCP identity.
@@ -430,7 +446,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 5. Run `/mcp capabilities`, capability detail, and headless projections against a fixture advertising tools, resources/templates, prompts, duplicate/invalid/oversized metadata, and list-change notifications. Confirm complete sanitized descriptors within the strict connection bound, debounced list-change replacement, policy filtering, stale-generation rejection, and no insertion of the catalog into ordinary model context/tool schemas.
 6. Disable one imported tool with `/mcp disable`, then inspect the ordinary model request and invoke by ID. Confirm repository tool state is the sole availability authority, the schema is absent and invocation denied, while capability inspection remains available. Re-enable it, then change the server schema identity and reconnect; confirm stale enablement fails closed pending review.
 7. Read an exact discovered text resource and render a prompt with bounded arguments. Confirm MIME/schema/output/time limits, provenance, cancellation, and untrusted-evidence rendering. Attempt binary/oversized/unknown/template-escape content and prompt injection; confirm rejection or bounded metadata only, no instruction authority, and no automatic model-tool/context admission.
-8. Authenticate an OAuth profile explicitly. Confirm list/inspect/diagnose never launch the browser, while `/mcp auth` preserves protected-resource discovery, configured scope caps, PKCE/state/issuer checks, callback-before-browser ordering, headless pasted-callback parity, and exact profile token namespace.
+8. Authenticate explicit-client and URL-only OAuth profiles explicitly. Confirm list/inspect/diagnose never launch the browser, while `/mcp auth` preserves protected-resource discovery, dynamic client registration when no `clientId` is configured, configured scope caps, PKCE/state/issuer checks, callback-before-browser ordering, headless pasted-callback parity, and exact profile token/registration namespace.
 9. Run local logout. Confirm the profile disconnects/drains first, only its local token namespace is atomically cleared, generations invalidate, no remote-revocation claim is made, and another profile's identity is unchanged.
 10. Exercise an advertised revocation endpoint with success, unsupported, invalid-token, timeout, and ambiguous failure. Confirm truthful remote/local outcomes, explicit choice before local-only cleanup after an unconfirmed remote failure, and no token/callback/account leakage.
 11. Run switch-account and cancel/fail at each boundary. Confirm it replaces the one profile identity through logout/re-auth, retains no second account, never mixes old/new credentials, and reconnects only after the fresh identity is complete. Static-token profiles reject logout/revoke/switch without deleting external secrets.
@@ -439,7 +455,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 14. Apply managed hook denials and attempt self-authorization from repository configuration, MCP descriptions/prompts/resources, model text, extensions, and untrusted hooks. Confirm none can grant profile trust, connect/authenticate, enable tools, expand secret scope, revoke identity, or bypass lifecycle policy.
 15. Resume and clone a session, then restart Threadsmith. Confirm live transports/process IDs/capability handles/auth flows are never restored as authority; current trusted auto-connect or explicit connect revalidates everything, while the user token cache remains separately profile-bound.
 16. Compare TUI and headless list/inspect/connect/disconnect/reconnect/capability/auth/logout/revoke/switch/diagnose outcomes, confirmation requirements, cancellation, headless-JSON/interactive-text identity, and exit codes. Confirm both call the same manager and no TUI/CLI SDK or token-store access exists.
-17. Inspect events, logs, activity, diagnostics, and support bundles. Confirm bounded profile/source/outcome/duration/capability data and honest latency labels without secrets, headers, environment, arguments, callback URLs/codes, claims/account identifiers, raw resource/prompt content, stderr, or unsafe schemas.
+17. Inspect events, logs, activity, diagnostics, and support bundles. Confirm bounded profile/source/outcome/duration/capability data and honest latency labels without tokens, dynamically registered client secrets, configured secrets, headers, environment, arguments, callback URLs/codes, claims/account identifiers, raw resource/prompt content, stderr, or unsafe schemas.
 18. Run maintained real stdio lifecycle coverage and explicitly opted-in live HTTP/OAuth coverage. Confirm connect, inspect, latency, logout/re-auth, reconnect, and clean shutdown while retaining all transport, OAuth, tool-availability, activity, context, session, and scheduling regressions.
 
 **Verifies:** centralized tool policy and MCP adapter/persistence/hardening, real SDK stdio/HTTP/SSE transports and OAuth, repository tool availability and context inspection, managed hooks and activity timing, canonical tool identity, session safe boundaries and scheduling, provider-neutral static-secret discovery, and one-authority profile/capability/authentication/diagnostic lifecycle with interactive/headless parity.
@@ -689,3 +705,92 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 - Staging is not visible to read tools mid-turn (Scenario B step 6/8 ordering).
 - Introduced-vs-baseline classification is authoritative at `FullSemantic` and reports `ConfidenceDegraded` otherwise (Scenario C step 2).
 - The correction loop stops at the configured budget (Scenario C step 8).
+
+---
+
+## Scenario AM - Repository-Scoped Cross-Session Memory
+
+1. Open a repository and explicitly remember a repo-scoped fact. Confirm the host writes bounded structured memory with user-authored authority, repository identity, source message provenance, sensitivity metadata, and active validity into the existing ignored repository SQLite store.
+2. Start a new independent session in the same repository and run memory list/inspect plus the headless equivalents. Confirm the remembered item is visible with stable JSON, provenance, validity, and no dependency on the prior session transcript.
+3. Ask a relevant follow-up question or task. Confirm context assembly retrieves the active memory only when relevant and within budget, and `/context inspect` reports inclusion or omission rationale, token accounting, authority, and source identity.
+4. Supersede the item with a user correction. Confirm retrieval prefers the replacement, the older item becomes superseded/rejected rather than silently deleted, and audit provenance remains inspectable.
+5. Create repository-dependent memory backed by a file, symbol, project, or repository revision, then change the supporting repository state. Confirm turn-boundary invalidation marks the item stale and excludes it until validation reactivates it or keeps it stale with a bounded reason.
+6. Attempt to create, authorize, or elevate memory from tracked repository files, prompt appends, skills, hooks, ordinary repository configuration, model text, and assistant claims. Confirm none can create authoritative memory without an explicit host command, host-observed event, or validated governed evidence.
+7. Exercise optional model-proposed memory candidates with malformed schema, unsupported source IDs, oversized content, secret-like text, invented completed work, and stale repository claims. Confirm every unsafe candidate is rejected and the previous active memory snapshot remains valid.
+8. Inspect Git status, diagnostics, logs, events, support bundles, persistence restore, `/new`, `/resume`, and process restart. Confirm `.threadsmith/threadsmith.db` remains ignored/local, raw secrets/hidden reasoning/provider payloads are absent, and repository memory survives local lifecycle operations without becoming shared/team memory.
+
+**Verifies:** repository identity and persistence, conversation/context governance, session lifecycle, repository instruction safety, skill/hook/config trust boundaries, redaction, invalidation, and local repository-scoped memory that is structured, attributable, bounded, inspectable, and not shared through Git.
+
+---
+
+## Scenario AN - Packaged Local Documentation Help Skill
+
+1. Build each published release payload and installer fixture. Confirm the curated local documentation bundle contains user, operation, authoring, architecture, testing, guardrail, license, and reference docs selected by the manifest, and confirm no `docs/implementation-plans/**` file or generated/local runtime state is present.
+2. Launch Threadsmith from the packaged payload with no repository open and ask a natural product-help question, such as how to compact context. Confirm the ordinary model request does not advertise any new docs-specific tool, but may invoke the maintained docs-help skill through the existing `invoke_skill` path when phase, trust, and tool policy allow it.
+3. Ask questions about commands, configuration, skills, model providers, context, hooks, extension authoring, release packaging, and troubleshooting. Confirm the skill searches/reads only the packaged local docs root, returns bounded answers citing doc paths/headings/snippets, and states uncertainty when shipped docs do not answer.
+4. Open a repository containing conflicting prompt appends, `.threadsmith` configuration, repo skills, hooks, MCP content, and documentation-like files. Confirm none can replace the packaged docs root, alter the maintained docs skill, widen tool policy, or override host/user/repository-work authority.
+5. Disable `invoke_skill`, lower trust below the required level, enter an ineligible phase, remove/corrupt the packaged docs bundle, and exceed docs search/read/answer budgets. Confirm the model cannot use the skill, failures are bounded and actionable, and ordinary Threadsmith operation continues without fabricated documentation answers.
+6. Inspect `/skills`, `/context inspect`, tool inventory, logs, events, telemetry, diagnostics, and support bundles. Confirm maintained skill identity, docs bundle version/path, search/read counts, citation counts, omissions, and failure reasons are bounded and secret-free, with no hidden reasoning, raw provider payloads, unbounded docs excerpts, or private runtime paths.
+7. Run package validation, skill workflow, context/tool-advertisement, redaction, architecture, and release-gate tests. Confirm the docs-help feature does not change mutation, approval, process, network, MCP, hook, extension, or repository trust behavior.
+
+**Verifies:** release packaging, maintained skill integrity/invocation, canonical tool/context governance, local documentation authority, repository trust boundaries, diagnostics/redaction, and natural Threadsmith documentation Q&A without always-advertised docs-specific tools.
+
+---
+
+## Scenario AO - Roslyn-Backed Task-Sufficient Code Exploration
+
+1. Open a trusted multi-project C# repository containing overloaded symbols, interface and virtual dispatch, delegates, generated/linked documents, tests, prompt templates, JSON configuration, and project resource items. Load the semantic workspace at full confidence, then repeat relevant checks with partial compilation and an unloaded project.
+2. Ask about one exact type, method, and repository-relative C# path. Confirm `code_explore` resolves every material ambiguity, returns grouped line-numbered source with stable semantic identities, file/range digests, workspace generation, confidence, completeness, selection reasons, and exact continuation targets without requiring a preliminary symbol lookup or rereading the returned source.
+3. Ask how several named symbols connect. Confirm the result leads with a bounded compiler-proven call path, includes the relevant declaration bodies and call-site context, branches at interface/virtual implementations, marks delegate/dynamic/runtime boundaries honestly, preserves named anchor source when later expansion is incomplete, and summarizes callers plus direct/transitive dependent projects and tests without claiming whole-program certainty.
+4. Ask an ordinary natural-language architecture or behavior question without supplying symbol IDs. Confirm deterministic identifier/path discovery resolves likely anchors, structurally connected production code outranks incidental word matches, pinned paths and explicitly named symbols remain first, and every included or omitted file has an inspectable reason.
+5. Repeat with ambiguous common names, overloads, large files, generated code, test-focused questions, a large repository, tight model context, traversal/time/source limits, cancellation, semantic invalidation, and repository switching. Confirm bounded deterministic results, usable source allocation, explicit omissions, and no stale generation crossing.
+6. Make an overlapping follow-up query. Confirm unchanged ranges already present in current model-visible context become precise back-references while freed budget covers new source. Edit one referenced file, compact or remove the prior result, and repeat; confirm current source is emitted again rather than hidden behind a stale pointer.
+7. Ask about a C# flow whose response depends on a referenced prompt template, configuration file, additional document, or project resource. Confirm associated textual artifacts are repository-confined, bounded, relationship-labeled, optionally projected with current ranges/digests, and never executed or treated as semantic C# authority.
+8. Disable or make semantic exploration unavailable, lower trust, deny a path, exceed a bound, cancel during each stage, and trigger malformed or unsupported input. Confirm controlled success-shaped empty/incomplete results where recovery is expected, classified failures where authority or integrity fails, flow/branch/blast evidence outside path policy is omitted, and safe fallback to granular semantic/text tools only when the result explicitly warrants it.
+9. Inspect interactive/headless output, tool inventory, context inspection, events, telemetry, persistence, cache/stateful-continuation behavior, support bundles, and restored sessions. Confirm bounded provenance and metrics without source leakage, hidden reasoning, provider payloads, Roslyn objects, secrets, or unsafe cross-session deduplication.
+10. Compare repeated fixed-task runs against the granular-tool baseline. Confirm equal or better answer correctness with fewer dependent rounds, fewer repeated/contained searches and overlapping reads, lower repeated model-visible source, and no regression in policy, approval, audit, cancellation, semantic confidence, or mutation/build/test authority.
+
+**Verifies:** compiler-aware repository discovery, native tool policy, semantic generation and confidence, context/cache/session governance, source provenance, bounded flow and impact, natural-language structural retrieval, safe model-visible deduplication, associated textual artifacts, interactive/headless parity, and task-sufficient exploration without replacing granular tools or host authority.
+
+---
+
+## Scenario AP - Deployable Prompt Assets and Cached Loading
+
+1. Build and publish Threadsmith for every supported runtime. Confirm each application output, staged payload, archive, and installer contains one flat, case-insensitively collision-free `prompts/` directory whose filenames agree exactly with the code-declared catalog and documented token contracts.
+2. Start a deterministic provider capture with the shipped assets. Confirm system/phase/output context, provider instructions, built-in tool descriptions, corrections, skill procedure prompts, parent delegation descriptions/results, delegated-child policy/progress/steering, and `code_explore` guidance preserve their expected roles, order, wording, whitespace, schemas, and host decisions.
+3. Stop the process; edit the main system prompt, one ordinary tool description, the `delegate_agents` description, one delegated-child policy or guidance asset, and the native Codex instruction; then restart. Confirm only the corresponding provider-visible content and honest capacity/identity totals change.
+4. Edit those files again while Threadsmith remains running. Confirm active and later requests in that process continue using the immutable startup snapshot; restart and confirm the new content is then loaded.
+5. Independently remove a required file; introduce invalid UTF-8, NUL, an unresolved/unknown/missing token, a case-only filename collision, an oversized file/catalog, traversal, and a link/reparse target. Confirm startup fails before provider, tool, delegation, skill, or repository activity and ordinary diagnostics expose no body or token value.
+6. Expand the Codex instruction near and beyond a selected model's capacity. Confirm it is counted exactly before context admission, reduces lower-priority context while the request can still fit, and fails before network dispatch when fixed content plus tools and output reserve cannot fit.
+7. Attempt to use edited assets to advertise or invoke a disabled tool, change a tool or result schema, approve/apply a mutation, widen repository/child trust or paths, let a child delegate, grant process/network/secret authority, change model/role/budgets, alter finding admission, or bypass validation. Confirm every compiled host boundary remains authoritative.
+8. Compare ordinary startup/request logs with explicitly enabled raw-model logging. Confirm ordinary logs contain only bounded safe metadata, while the privileged raw log contains the complete provider-visible externalized content but no credentials, authorization headers, or host-only secrets.
+9. Upgrade an installation containing local prompt experiments. Confirm the installer replaces the complete shipped defaults without merging local edits, documented backup/restore guidance is accurate, and an incomplete mixed-version catalog fails closed.
+
+**Verifies:** complete cross-platform prompt deployment, exact default compatibility, eager immutable startup loading, deterministic bounded named-token rendering, provider-wire capacity, raw-log boundaries, authority isolation, safe failure, and replace-on-upgrade behavior.
+
+---
+
+## Scenario AQ - External Semantic Freshness and Request Admission
+
+1. Open a disposable trusted multi-project C# repository, select its solution, and wait for compiler-backed semantic loading. With the composer empty, edit one loaded C# document outside Threadsmith and generate duplicate editor save notifications. Without pressing a key, focusing Threadsmith, or otherwise interacting with its console, confirm one settled background cycle prints `External changes detected; updating semantic model...` and one completion. Repeat with an unsent multiline draft; confirm output waits while the draft is nonempty, the draft remains exact, and deleting it back to empty releases the queued output without submission.
+2. Query the edited symbol through symbol, reference, implementation, advanced semantic, and `code_explore` operations. Confirm all observe one new published generation and current source identity while unchanged project/document state remains reusable and the ordinary source save does not reopen the complete solution.
+3. Hold an external edit in settling and refresh phases, then submit a model request. Confirm submission joins the same single-flight work and no run identity, cancellation state, budget, steering registration, conversation append, model request, or tool call exists before applied version reaches the latest settled dirty version.
+4. Change a project/solution, props/targets, package/SDK/reference, analyzer configuration, or document membership input. Confirm one complete reload occurs. Repeat with create/delete/rename ambiguity and watcher error/lost notification; confirm bounded authoritative recovery never claims stale state is current.
+5. Deliver another relevant change while refresh preparation is in flight. Confirm the dirty version advances, late/obsolete publication is discarded or followed by one coalesced cycle, and waiters are released only after applied and dirty versions converge.
+6. Apply an approved Threadsmith mutation while also producing an unrelated external edit. Confirm exact host-owned watcher echoes reuse the coordinator without an `External changes` message or duplicate refresh, while the overlapping unattributed edit remains external and cannot be hidden by broad suppression.
+7. With the workspace clean, run `/semantic_refresh`. Confirm one full refresh is forced and awaited, completion reports duration and resulting confidence, and no model run, conversation message, budget, tool call, or model call is created. Invoke again during an incremental cycle and confirm repeated manual callers share one full follow-up.
+8. Inject an infrastructure/currentness failure. Confirm bounded sanitized failure output leaves the workspace dirty and rejects a new model request before run allocation. Repair the condition and use a later change or `/semantic_refresh`; confirm successful recovery releases admission. Repeat with compiler diagnostics and confirm reduced semantic confidence completes rather than becoming infrastructure failure.
+9. Rebind repositories and sessions, cancel one waiter, and shut down while work is active. Confirm obsolete monitor/results cannot publish into the new binding, waiter cancellation does not cancel shared work, shutdown remains bounded, and no source text, raw changed paths, secret, watcher/Roslyn/MSBuild object, exception dump, or terminal type enters the public lifecycle.
+10. Repeat submission and forced refresh through the headless surface. Confirm it uses the same command/coordinator and freshness invariant and returns the same structured refresh outcome without interactive prompting.
+
+**Verifies:** repository/solution lifecycle and path policy, immutable Roslyn generations and semantic confidence, workspace-scoped monitoring/coalescing/stable identity, incremental versus full refresh classification, dirty/applied convergence, single-flight admission/manual/background coordination, exact host-mutation attribution, serialized draft-safe TUI lifecycle projection, headless parity, bounded cancellation/rebinding/recovery, and pre-`RunId` stale-state exclusion.
+
+## Scenario AR — Default TUIKit with shared interaction authority
+
+**Source:** Plan 100; ADR-52; MTP-257.
+
+With the same scripted model and repository, exercise both frontends through ordinary chat; every slash command; repository open/trust; session new/resume/clone; model/reasoning and theme changes; MCP/extensions/tools/skills/hooks management; policy choices; planning approval/rejection; exact-diff apply/discard; validation retry/correction; context/source/Markdown output; usage; steering and cancellation. Assert identical host commands, identities, authority decisions, persistence outcomes, and semantic output.
+
+TUIKit additionally keeps a fixed bottom footer through runs, selectors, output, and resize; moves each committed ordinary entry into retained output exactly once while preserving its exact `current-user` context content; preserves exact drafts across prompt purposes; exposes complete option labels and safe links; bounds retained text/queues; and restores terminal state on all exits. Bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` retains PrettyPrompt/Spectre with native scrollback. MCP/authentication bypass either backend. Package notices and SPDX include the exact TUIKit payload and supplemental font terms for every supported RID.
+
+Record automated and physical-terminal evidence separately; unexecuted operator cases remain pending.

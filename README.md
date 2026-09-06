@@ -2,11 +2,11 @@
 
 A .NET-native, terminal-first coding harness where the host owns control flow and the model is a pluggable reasoning engine—not an autonomous actor.
 
-Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed read-only tools, requires host-validated plans before repository changes, stages mutations transactionally, and runs confidence-aware build and test validation. The interactive interface preserves native terminal scrollback, selection, copying, and responsive bulk paste; equivalent headless operation supports scripts and CI.
+Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed read-only tools, requires host-validated plans before repository changes, stages mutations transactionally, and runs confidence-aware build and test validation. Interactive use defaults to a retained full-screen TUIKit interface, with the original native-scrollback frontend available explicitly; equivalent headless operation supports scripts and CI.
 
 ## Current state
 
-Threadsmith.NET is currently under active testing and is best described as pre-alpha. I am testing its tools and other functionality, but not everything has been thoroughly validated. Until version 1.0, the project is presented as-is.
+Threadsmith.NET is currently under active testing and is best described as pre-alpha. I am testing its tools and other functionality, but not everything has been thoroughly validated. Until version 1.0, the project is presented as-is. There are still going to be a lot of bugs, but I am working through them.
 
 If you are interested in helping, contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details or contact me at [mwright556@gmail.com](mailto:mwright556@gmail.com). Areas that need substantial testing include the Codex provider and its authentication flow, as well as MCP support—particularly SSO authentication flows. This work will take time, and I maintain the project alongside a demanding full-time job.
 
@@ -36,7 +36,7 @@ The expected benefit is greatest for unfamiliar or large C# solutions, multi-pro
 
 ### Who is Threadsmith for?
 
-Short answer - me. There is no shortage of coding harnesses out there (in fact, I almost named this YACH - Yet Another Coding Harness). I'm a huge .NET fan and have been using it consistently since version 1.0 in the early 2000s. IMO it's the best general-purpose language available. Not perfect by any means, but over the last 8+ years it has truly become a viable cross platform, high-performance option suitable for large scale, enterprise development projects. You may disagree. We all have our favorites. Additionally, no one will _ever_ convince me that weak (dynamically) typed languages are appropriate for large scale development. In fact, I believe that - especially for agentic engineering - that type safety and more structure allow for agents to produce _better_ code that is cleaner and less prone to runtime errors.
+Short answer - me. There is no shortage of coding harnesses out there (in fact, I almost named this YACH - Yet Another Coding Harness). I'm a huge .NET fan and have been using it consistently since version 1.0 in the early 2000s. IMO it's the best general-purpose language available. Not perfect by any means, but over the last 8+ years it has truly become a viable cross platform, high-performance option suitable for large scale, enterprise development projects. You may disagree. We all have our favorites. Anyone who knows me also knows my preference for strongly-typed languages. In fact, I believe that - especially for agentic engineering - that type safety and more structure allow for agents to produce _better_ code that is cleaner and less prone to runtime errors.
 
 Maybe I am completely wrong - but "It's my repo and I'll preach if I want to." :D
 
@@ -90,6 +90,8 @@ Launch the interactive terminal from the repository you want to inspect:
 dotnet run --project C:\source\repos\Threadsmith\src\Threadsmith.App -- --tui
 ```
 
+Bare `--tui` launches the retained TUIKit interface; `--tui=tuikit` is the equivalent explicit form. Use `--tui=original` for the previous PrettyPrompt/Spectre interface. Both use the same commands and approval workflows. TUIKit moves each committed ordinary entry into retained output before the composer clears. If Enter is pressed while the initial semantic model is loading, TUIKit visibly queues one message and submits it when repository semantics are ready. See the [user guide](docs/user-guide.md#retained-tuikit-frontend-default) for keys, fixed status, and selection.
+
 When running Threadsmith against its own source tree:
 
 ```powershell
@@ -108,7 +110,13 @@ Open a specific repository and solution:
 dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedRead --solution src\MyRepo.sln
 ```
 
-The current directory is the default repository. Interactive startup guides trust and ambiguous solution selection, remembers successful solution choices, and can initialize minimal `.threadsmith/config.json` configuration for an empty repository. Override the startup flags only when the defaults do not match the current task.
+Run a headless request against a specific trusted solution:
+
+```powershell
+dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedBuild --solution src\MyRepo.sln "explain the request pipeline"
+```
+
+The current directory is the default repository. Interactive startup guides trust and ambiguous solution selection, remembers successful solution choices, and can initialize minimal `.threadsmith/config.json` configuration for an empty repository. Adjust any of the other flags to personal preference of immediate need.
 
 ### SQLite
 Threadsmith keeps its SQLite session store and content-addressed artifacts under `.threadsmith/` by default. Startup applies transactional migrations, audits persisted content for secrets, and runs configured age-based retention. Static credentials belong in the separate owner-protected `~/.threadsmith/secrets/config.json` user store, an eligible confined/untracked/ignored repository store, or exact `THREADSMITH_` environment variables—not ordinary configuration or command arguments. Consumer trust determines which sources are eligible; lifecycle-owned Codex and MCP OAuth token caches remain separate. See the [user guide](docs/user-guide.md#secrets) and [secret-discovery operations](docs/operations/secret-discovery.md).
@@ -141,17 +149,17 @@ Threadsmith registers a built-in runtime tool catalog. Repository configuration,
 | `test_discover` | Discover bounded stable test identities in a selected test project. |
 | `test_run_targeted` | Run one host-issued test identity with a generated exact filter. |
 | `find_symbol` | Find compiler symbols with stable identity and semantic confidence. |
+| `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, current line-numbered source or safe current-context back-references, flow/impact evidence, associated prompt/config/project artifacts, digests, confidence, omissions, and continuations. |
 | `find_references` | Find references to a compiler symbol. |
 | `find_implementations` | Find implementations of a compiler symbol. |
-| `call_hierarchy` | Traverse bounded incoming/outgoing compiler-known calls with dispatch, cycles, confidence, and omissions. |
-| `symbol_impact` | Explain bounded reference, caller, implementation, dependent-project/test, and classified-source impact. |
-| `csharp_pattern_search` | Search declarations and expression shapes with a closed, inert, versioned C# pattern schema. |
+| `call_hierarchy` | Traverse incoming/outgoing compiler-known calls from a symbol with one optional depth hint and compact call-list output. |
+| `symbol_impact` | Explain ranked reference, caller, implementation, dependent-project/test, and classified-source impact for a symbol. |
+| `csharp_pattern_search` | Search declarations and expression shapes with a flat, closed, inert C# pattern schema. |
 | `generated_code_query` | Inventory and optionally inspect bounded generated content already loaded by the semantic workspace. |
 | `run_process` | Run an allow-listed, approved, non-interactive process with bounded output and process-tree cancellation. |
 | `datetime` | Return current UTC and local date/time with timezone information. |
 | `csharp_script` | Run bounded C# in a fresh isolated worker; disabled by default and reserved for fully trusted automation. |
 | `web_search` | Search the web through Brave after explicit repository-scoped outbound consent; disabled by default, with bounded results treated as untrusted evidence. |
-| `web_fetch` | Fetch one explicitly authorized HTTPS URL chain with bounded, sanitized content treated as untrusted evidence. |
 
 Loaded extensions and configured MCP servers may contribute additional tools to the same governed pipeline. At `TrustedRead` or higher, the conditional `invoke_skill` tool lets a model invoke an explicit enabled, compatible declarative skill during evidence collection; it cannot invoke another skill recursively or grant itself additional tools, trust, models, agents, approval, or mutation authority.
 
@@ -163,7 +171,7 @@ See the [user guide](docs/user-guide.md#tools-and-tool-availability) for tool av
 
 ## Governed skills quick example
 
-Threadsmith supports metadata-first, immutable declarative skills and resumable workflows. Maintained packages ship with the host and use the same trust, model, tool, planning, delegation, mutation, and validation boundaries as third-party packages.
+Threadsmith supports metadata-first, immutable declarative skills and resumable workflows. Maintained packages ship with the host and use the same trust, model, tool, planning, delegation, mutation, and validation boundaries as third-party packages. The maintained `threadsmith-docs-help` package answers product and authoring questions from the installed local documentation bundle with exact citations and no access to the opened repository.
 
 Host-owned typed lifecycle hooks support advisory-by-default executable, HTTP, MCP, and extension adapters. Repository declarations require exact external approval and remain advisory/fail-open; only repository-excluding managed policy can grant bounded blocking authority at eligible pre-action points. Approvals and redacted audit data are stored outside repository control.
 
@@ -241,23 +249,30 @@ Threadsmith/
 │   ├── Threadsmith.Validation/            # build, diagnostic, and test validation
 │   ├── Threadsmith.Persistence/           # durable events, facts, artifacts, and migrations
 │   ├── Threadsmith.Telemetry/             # metrics, tracing, logging, and diagnostics
-│   ├── Threadsmith.Tui/                   # conversation-first terminal adapter
+│   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination and presentation
+│   ├── Threadsmith.Tui/                   # original PrettyPrompt/Spectre terminal adapter
+│   ├── Threadsmith.Tui.TuiKit/            # default retained TUIKit terminal adapter
 │   ├── Threadsmith.Cli/                   # headless command adapter
 │   ├── Threadsmith.Mcp/                   # host-owned MCP boundary
 │   ├── Threadsmith.Skills/                # governed declarative catalog and workflows
 │   └── Threadsmith.Extensions.*/          # extension contracts and runtime
-├── tests/                                 # architecture and milestone verification
+├── tests/                                 # architecture and scope-focused verification
 ├── docs/                                  # user, architecture, operations, and planning docs
 └── .threadsmith/config.example             # annotated repository configuration schema
 ```
 
+### DOX Framework
+
+Not so much a "framework" but an addition to AGENTS.MD - this project uses the process described in https://github.com/agent0ai/dox to help provide localized (in the project) details to AI agents. I think it's been helpful, and using it is nothing more than a block on AGENTS.md - the additional, localized documentation in the sub-AGENTS.md files is useful for humans, too!
+
 ## Documentation
 
-The documentation folder contains user and developer references plus implementation milestones, requirements, checklists, and plans. The installed documentation bundle intentionally omits implementation and feature plans because those can describe future behavior. If you find a gap or inconsistency, please report it or submit a pull request with the correction.
+The documentation folder contains user and developer references plus implementation milestones, requirements, checklists, and plans. The installed documentation bundle intentionally omits implementation plans, feature proposals, and release-readiness assessments because those can describe future or provisional behavior. If you find a gap or inconsistency, please report it or submit a pull request with the correction.
 
 - **[User guide](docs/user-guide.md)** — installation, repository onboarding, trust, commands, governed changes, tools, models, configuration, extensions, automation, safety, and troubleshooting.
 - [Contributing guide](CONTRIBUTING.md) — local setup, coding standards, tests, commits, and pull-request expectations.
 - [Repository configuration example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/config.example) — complete annotated configuration schema in the source repository.
+- [Documentation index](docs/index.md) — entry point for the user, operations, authoring, architecture, testing, and guardrail references.
 - [Operations references](docs/operations/README.md) — focused command, conversation-context, provider, tool, theme, and repository workflows.
 - [Conversation context operations](docs/operations/conversation-context.md) — modes, `/context`, inspection, compaction, configuration, retention, and restoration.
 - [Parallel-agent operations](docs/operations/parallel-agents.md) — delegation limits, `/agents`, worktree isolation, cancellation, conflicts, and recovery.

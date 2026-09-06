@@ -12,6 +12,12 @@ public sealed class OpenAiCodexCatalogClient
 {
     private const int DefaultContextWindow = 128_000;
     private const int DefaultOutputReserve = 32_768;
+
+    // The Codex backend filters `/models` rows by Codex client compatibility, not by
+    // Threadsmith's product version. Upstream Codex model metadata reviewed for this
+    // implementation currently requires up to 0.144.0.
+    private const string CodexModelsClientCompatibilityVersion = "0.144.0";
+
     private readonly HttpClient _httpClient;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCodexCatalogClient"/> class.</summary>
@@ -38,7 +44,7 @@ public sealed class OpenAiCodexCatalogClient
             request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", effectiveAccountId);
         }
 
-        using HttpResponseMessage response = await _httpClient.SendAsync(
+        using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
@@ -51,14 +57,15 @@ public sealed class OpenAiCodexCatalogClient
         }
 
         await response.Content.LoadIntoBufferAsync(1024 * 1024, cancellationToken).ConfigureAwait(false);
-        await using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using JsonDocument document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (!document.RootElement.TryGetProperty("models", out JsonElement models)
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!document.RootElement.TryGetProperty("models", out var models)
             || models.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("The Codex model response does not contain a models array.");
         }
 
+        var returnedCount = models.GetArrayLength();
         OpenAiCodexModelConfiguration[] discovered =
         [
             .. models.EnumerateArray()
@@ -67,9 +74,14 @@ public sealed class OpenAiCodexCatalogClient
                 .Select(model => model!)
                 .DistinctBy(model => model.ModelId, StringComparer.Ordinal),
         ];
-        if (discovered.Length is 0 or > 256)
+        if (returnedCount is 0 or > 256)
         {
             throw new InvalidDataException("The authenticated Codex account returned an invalid model count.");
+        }
+
+        if (discovered.Length == 0)
+        {
+            throw new InvalidDataException("The Codex model response did not contain any usable model identifiers.");
         }
 
         return new OpenAiCodexProviderConfiguration
@@ -84,25 +96,30 @@ public sealed class OpenAiCodexCatalogClient
 
     private static Uri BuildModelsUri()
     {
-        var version = typeof(OpenAiCodexCatalogClient).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-        return new Uri($"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(version)}");
+        return new Uri(
+            $"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(CodexModelsClientCompatibilityVersion)}");
     }
 
     private static OpenAiCodexModelConfiguration? ProjectModel(JsonElement element)
     {
         var slug = GetString(element, "slug");
-        if (string.IsNullOrWhiteSpace(slug))
+        if (string.IsNullOrWhiteSpace(slug) || slug.Length > 256)
         {
             return null;
         }
 
-        var name = GetString(element, "display_name") ?? slug;
+        var name = GetString(element, "display_name");
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 256)
+        {
+            name = slug;
+        }
+
         var contextWindow = GetPositiveInt(element, "context_window")
             ?? GetPositiveInt(element, "max_context_window")
             ?? DefaultContextWindow;
         var reserve = Math.Min(DefaultOutputReserve, Math.Max(1, contextWindow / 4));
-        ReasoningLevel[] supported = ResolveReasoningLevels(element);
-        ReasoningLevel defaultLevel = ResolveReasoningLevel(GetString(element, "default_reasoning_level"));
+        var supported = ResolveReasoningLevels(element);
+        var defaultLevel = ResolveReasoningLevel(GetString(element, "default_reasoning_level"));
         if (!supported.Contains(defaultLevel))
         {
             defaultLevel = supported.Contains(ReasoningLevel.Medium) ? ReasoningLevel.Medium : supported[0];
@@ -124,7 +141,7 @@ public sealed class OpenAiCodexCatalogClient
                 StructuredOutput = true,
             },
             Cost = new ModelCostMetadata(),
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
+            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             IntendedWorkloadClasses = Enum.GetValues<WorkloadClass>(),
             DefaultReasoningLevel = defaultLevel,
             SupportedReasoningLevels = supported,
@@ -137,10 +154,10 @@ public sealed class OpenAiCodexCatalogClient
     private static ReasoningLevel[] ResolveReasoningLevels(JsonElement model)
     {
         HashSet<ReasoningLevel> levels = [ReasoningLevel.None];
-        if (model.TryGetProperty("supported_reasoning_levels", out JsonElement values)
+        if (model.TryGetProperty("supported_reasoning_levels", out var values)
             && values.ValueKind == JsonValueKind.Array)
         {
-            foreach (JsonElement value in values.EnumerateArray())
+            foreach (var value in values.EnumerateArray())
             {
                 var effort = value.ValueKind == JsonValueKind.String
                     ? value.GetString()
@@ -173,7 +190,7 @@ public sealed class OpenAiCodexCatalogClient
     private static ModelProfileId StableProfileId(string slug)
     {
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"openai-codex:{slug}"));
-        Span<byte> guidBytes = digest.AsSpan(0, 16);
+        var guidBytes = digest.AsSpan(0, 16);
         guidBytes[6] = (byte)((guidBytes[6] & 0x0f) | 0x50);
         guidBytes[8] = (byte)((guidBytes[8] & 0x3f) | 0x80);
         return new ModelProfileId(new Guid(guidBytes));
@@ -181,7 +198,7 @@ public sealed class OpenAiCodexCatalogClient
 
     private static int? GetPositiveInt(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.TryGetInt32(out var result)
         && result > 0
             ? result
@@ -190,7 +207,7 @@ public sealed class OpenAiCodexCatalogClient
 
     private static string? GetString(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out JsonElement value)
+        return element.TryGetProperty(propertyName, out var value)
         && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;

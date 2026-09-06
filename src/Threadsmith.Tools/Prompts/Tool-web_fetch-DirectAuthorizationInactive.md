@@ -1,0 +1,1 @@
+DirectAuthorizationRequired: web_fetch is not progressively active for this run; use explicit exact-URL pre-authorization.

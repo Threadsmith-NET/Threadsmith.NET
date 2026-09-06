@@ -98,15 +98,15 @@ public sealed class RetentionService
         var now = _timeProvider.GetUtcNow();
         var cutoff = now - _options.SessionAge;
         var messageBodyCutoff = now - _options.ConversationMessageBodyAge;
-        int removedSessions = await _eventStore.DeleteSessionsOlderThanAsync(cutoff, cancellationToken);
-        int removedMessageBodies = _conversationStore is not null
+        var removedSessions = await _eventStore.DeleteSessionsOlderThanAsync(cutoff, cancellationToken);
+        var removedMessageBodies = _conversationStore is not null
             && (!_options.RetainConversationBodies || _options.MetadataOnly)
             ? await _conversationStore.RemoveMessageBodiesOlderThanAsync(messageBodyCutoff, cancellationToken)
             : 0;
-        int removedSkillWorkflows = _skillStateStore is null
+        var removedSkillWorkflows = _skillStateStore is null
             ? 0
             : await _skillStateStore.DeleteCheckpointsOlderThanAsync(cutoff, cancellationToken);
-        int removedArtifacts = 0;
+        var removedArtifacts = 0;
 
         // Artifact cleanup is delegated to the artifact store's session-scoped listing; in
         // metadata-only mode artifacts are already sanitized so they remain unless aged.

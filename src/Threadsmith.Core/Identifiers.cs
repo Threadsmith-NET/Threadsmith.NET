@@ -97,6 +97,15 @@ public readonly record struct ConversationMemoryId(Guid Value) : IStableIdentifi
     }
 }
 
+/// <summary>Identifies one repository-scoped memory item.</summary>
+public readonly record struct RepositoryMemoryId(Guid Value) : IStableIdentifier
+{ /// <summary>Creates an identifier.</summary>
+    public static RepositoryMemoryId New()
+    {
+        return new(Guid.NewGuid());
+    }
+}
+
 /// <summary>Identifies an approval.</summary>
 public readonly record struct ApprovalId(Guid Value) : IStableIdentifier
 { /// <summary>Creates an identifier.</summary>
@@ -146,6 +155,15 @@ public readonly record struct ModelProfileId(Guid Value) : IStableIdentifier
 public readonly record struct WorkspaceId(Guid Value) : IStableIdentifier
 { /// <summary>Creates an identifier.</summary>
     public static WorkspaceId New()
+    {
+        return new(Guid.NewGuid());
+    }
+}
+
+/// <summary>Identifies one coalesced semantic refresh lifecycle.</summary>
+public readonly record struct SemanticRefreshId(Guid Value) : IStableIdentifier
+{ /// <summary>Creates an identifier.</summary>
+    public static SemanticRefreshId New()
     {
         return new(Guid.NewGuid());
     }

@@ -15,6 +15,18 @@ public interface IToolInvocationPipeline
         ToolInvocationRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Validates a complete sibling set without publishing events, requesting approval, or executing tools.</summary>
+    ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests);
+
+    /// <summary>Executes a preflight-prepared sibling set against the validated registration snapshot.</summary>
+    Task<IReadOnlyList<ToolBatchResult>> InvokePreparedBatchAsync(
+        ToolBatchPreparation preparation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        return InvokeBatchAsync(preparation.Requests, cancellationToken);
+    }
+
     /// <summary>Executes a complete sibling set in deterministic conflict-free waves.</summary>
     async Task<IReadOnlyList<ToolBatchResult>> InvokeBatchAsync(
         IReadOnlyList<ToolBatchRequest> requests,
@@ -36,6 +48,7 @@ public interface IToolInvocationPipeline
 public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 {
     private const int MaximumActivityDetailCharacters = 240;
+    private const int MaximumPreflightReasonCharacters = 512;
     private static readonly ActivitySource _activitySource = new("Threadsmith.Tools");
     private static readonly Meter _meter = new("Threadsmith.Tools");
     private static readonly Histogram<double> _latency = _meter.CreateHistogram<double>(
@@ -92,6 +105,73 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     }
 
     /// <inheritdoc />
+    public ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        if (requests.Count == 0)
+        {
+            return ToolBatchPreflightResult.Success;
+        }
+
+        var duplicate = requests
+            .GroupBy(request => request.CorrelationId, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1)
+            ?.OrderBy(request => request.Ordinal)
+            .Skip(1)
+            .FirstOrDefault();
+        if (duplicate is not null)
+        {
+            return new ToolBatchPreflightResult
+            {
+                FailedOrdinal = duplicate.Ordinal,
+                FailedToolId = duplicate.Invocation.ToolId,
+                ErrorClassification = ToolErrorClassification.InvalidArguments,
+                SafeReason = "Sibling tool-call correlation identifiers must be unique.",
+            };
+        }
+
+        var planner = new ToolConflictPlanner(_registry, _parallelOptions);
+        var waves = planner.Plan(requests);
+        foreach (var planned in waves.SelectMany(static wave => wave).OrderBy(item => item.Request.Ordinal))
+        {
+            if (planned.PreparationError is not null)
+            {
+                return new ToolBatchPreflightResult
+                {
+                    FailedOrdinal = planned.Request.Ordinal,
+                    FailedToolId = planned.Request.Invocation.ToolId,
+                    ErrorClassification = ToolErrorClassification.InvalidArguments,
+                    SafeReason = CreatePreflightSafeReason(planned.PreparationError),
+                };
+            }
+        }
+
+        return new ToolBatchPreflightResult
+        {
+            Succeeded = true,
+            Preparation = new ToolBatchPreparation(waves),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ToolBatchResult>> InvokePreparedBatchAsync(
+        ToolBatchPreparation preparation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        if (preparation.Requests.Count == 0)
+        {
+            return [];
+        }
+
+        return await InvokePlannedWavesAsync(
+            preparation.Requests,
+            preparation.Waves,
+            usePreparedSnapshot: true,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<ToolBatchResult>> InvokeBatchAsync(
         IReadOnlyList<ToolBatchRequest> requests,
         CancellationToken cancellationToken = default)
@@ -109,6 +189,36 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
         var planner = new ToolConflictPlanner(_registry, _parallelOptions);
         var waves = planner.Plan(requests);
+        return await InvokePlannedWavesAsync(
+            requests,
+            waves,
+            usePreparedSnapshot: false,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ToolInvocationResult> InvokeAsync(
+        ToolInvocationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ToolId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ArgumentsJson);
+        ArgumentNullException.ThrowIfNull(request.Context);
+        return await InvokeCoreAsync(
+            request,
+            preparationError: null,
+            preparedRegistration: null,
+            returnCancellationResult: false,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ToolBatchResult>> InvokePlannedWavesAsync(
+        IReadOnlyList<ToolBatchRequest> requests,
+        IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> waves,
+        bool usePreparedSnapshot,
+        CancellationToken cancellationToken)
+    {
         var results = new List<ToolBatchResult>(requests.Count);
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var wave in waves)
@@ -116,12 +226,16 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             cancellationToken.ThrowIfCancellationRequested();
             Task<ToolBatchResult>[] tasks = [.. wave.Select(async planned =>
             {
-                var result = await InvokeCoreAsync(
-                    planned.Request.Invocation with
+                var invocation = usePreparedSnapshot
+                    ? planned.Request.Invocation
+                    : planned.Request.Invocation with
                     {
-                        ExpectedRegistration = planned.Registration?.Tool,
-                    },
+                        ExpectedRegistration = planned.Registration,
+                    };
+                var result = await InvokeCoreAsync(
+                    invocation,
                     planned.PreparationError,
+                    usePreparedSnapshot ? planned.Registration : null,
                     returnCancellationResult: true,
                     batchCancellation.Token);
                 if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
@@ -163,25 +277,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         return [.. results.OrderBy(result => result.Ordinal)];
     }
 
-    /// <inheritdoc />
-    public async Task<ToolInvocationResult> InvokeAsync(
-        ToolInvocationRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.ToolId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.ArgumentsJson);
-        ArgumentNullException.ThrowIfNull(request.Context);
-        return await InvokeCoreAsync(
-            request,
-            preparationError: null,
-            returnCancellationResult: false,
-            cancellationToken);
-    }
-
     private async Task<ToolInvocationResult> InvokeCoreAsync(
         ToolInvocationRequest request,
         string? preparationError,
+        ToolRegistration? preparedRegistration,
         bool returnCancellationResult,
         CancellationToken cancellationToken)
     {
@@ -189,19 +288,23 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(request.Context);
 
         var invocationId = ToolInvocationId.New();
-        bool suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
+        var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
-        ToolRegistration? registration;
-        try
+        var registration = preparedRegistration;
+        if (registration is null)
         {
-            registration = _registry.GetRegistration(request.ToolId);
-        }
-        catch (KeyNotFoundException)
-        {
-            registration = null;
+            try
+            {
+                registration = _registry.GetRegistration(request.ToolId);
+            }
+            catch (KeyNotFoundException)
+            {
+                registration = null;
+            }
         }
 
         var source = registration?.Source
+            ?? request.ExpectedRegistration?.Source
             ?? new ToolActivitySource(ToolActivitySourceKind.Unknown);
 
         using var activity = _activitySource.StartActivity("tool.invoke");
@@ -224,15 +327,17 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         object input;
         try
         {
-            tool = registration?.Tool ?? request.ExpectedRegistration ?? _registry.Get(request.ToolId);
             if (registration is not null
                 && request.ExpectedRegistration is not null
-                && !ReferenceEquals(tool, request.ExpectedRegistration))
+                && !ToolRegistrationIdentity.Matches(registration, request.ExpectedRegistration))
             {
                 throw new ToolArgumentValidationException(
                     $"Tool '{request.ToolId}' no longer matches the approved capability identity.");
             }
 
+            tool = registration?.Tool
+                ?? request.ExpectedRegistration?.Tool
+                ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
@@ -248,7 +353,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
-        string? activityDetail = CreateActivityDetail(tool, input);
+        var activityDetail = CreateActivityDetail(tool, input);
         await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail);
 
         ToolPolicyDecision policyDecision;
@@ -343,7 +448,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         if (policyDecision.RequiredApproval != ApprovalLevel.None)
         {
             var approvalId = ApprovalId.New();
-            string action = $"Invoke tool '{tool.Definition.Id}'";
+            var action = $"Invoke tool '{tool.Definition.Id}'";
             await _events.PublishAsync(
                 new ApprovalRequested(
                     request.SessionId,
@@ -426,7 +531,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         timeoutCancellation.CancelAfter(tool.Definition.Timeout);
-        long executionStarted = _timeProvider.GetTimestamp();
+        var executionStarted = _timeProvider.GetTimestamp();
         try
         {
             using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
@@ -445,7 +550,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 },
                 timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
-            long? authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
+            var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
             await using var resultStream = new MemoryStream();
             await JsonSerializer.SerializeAsync(
@@ -466,8 +571,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     authoritativeElapsedMilliseconds);
             }
 
-            string resultJson = _sanitizer.Sanitize(
-                Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length));
+            var resultJson = JsonOutputSanitizer.Sanitize(
+                Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length),
+                _sanitizer);
             if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(
@@ -479,6 +585,50 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     isTruncated: true,
                     source,
                     authoritativeElapsedMilliseconds);
+            }
+
+            string? modelResultContent = null;
+            if (!string.IsNullOrEmpty(execution.ModelResultContent))
+            {
+                modelResultContent = _sanitizer.Sanitize(execution.ModelResultContent);
+                if (Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
+                {
+                    return await CompleteFailureAsync(
+                        request,
+                        invocationId,
+                        ToolErrorClassification.OutputLimitExceeded,
+                        "The sanitized model-visible tool result exceeded its declared output bound.",
+                        startedAt,
+                        isTruncated: true,
+                        source,
+                        authoritativeElapsedMilliseconds);
+                }
+            }
+
+            var isTruncated = execution.IsTruncated;
+            if (tool is IPostSanitizationToolOutputBoundary outputBoundary)
+            {
+                var boundedOutput = outputBoundary.BoundSanitizedOutput(
+                    resultJson,
+                    modelResultContent,
+                    request.Context);
+                resultJson = boundedOutput.ResultJson;
+                modelResultContent = boundedOutput.ModelResultContent;
+                isTruncated |= boundedOutput.WasTruncated;
+                if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes
+                    || (modelResultContent is not null
+                        && Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes))
+                {
+                    return await CompleteFailureAsync(
+                        request,
+                        invocationId,
+                        ToolErrorClassification.OutputLimitExceeded,
+                        "The bounded sanitized tool output exceeded its declared output bound.",
+                        startedAt,
+                        isTruncated: true,
+                        source,
+                        authoritativeElapsedMilliseconds);
+                }
             }
 
             var duration = authoritativeElapsedMilliseconds is { } measured
@@ -496,10 +646,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     invocationId,
                     true,
                     resultJson,
-                    IsTruncated: execution.IsTruncated,
+                    IsTruncated: isTruncated,
                     Source: source,
                     ElapsedMilliseconds: authoritativeElapsedMilliseconds,
-                    Outcome: OperationActivityOutcome.Completed),
+                    Outcome: OperationActivityOutcome.Completed,
+                    ModelResultContent: modelResultContent),
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -508,8 +659,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ToolId = tool.Definition.Id,
                 Succeeded = true,
                 ResultJson = resultJson,
+                ModelResultContent = modelResultContent,
                 Sources = execution.Sources,
-                IsTruncated = execution.IsTruncated,
+                IsTruncated = isTruncated,
                 ErrorClassification = ToolErrorClassification.None,
                 Duration = duration,
             };
@@ -544,7 +696,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
         catch (ToolExecutionException exception)
         {
-            long? elapsedMilliseconds = exception.AuthoritativeElapsedMilliseconds
+            var elapsedMilliseconds = exception.AuthoritativeElapsedMilliseconds
                 ?? GetElapsedMilliseconds(executionStarted);
             return await CompleteFailureAsync(
                 request,
@@ -569,12 +721,23 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
         catch (Exception exception)
         {
-            string sanitizedError = _sanitizer.Sanitize(exception.Message);
+            var sanitizedError = _sanitizer.Sanitize(exception.Message);
+#if DEBUG
+            var sanitizedDiagnostic = _sanitizer.Sanitize(exception.ToString());
+            _logger.LogError(
+                "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}{NewLine}{Diagnostic}",
+                tool.Definition.Id,
+                invocationId.Value,
+                sanitizedError,
+                Environment.NewLine,
+                sanitizedDiagnostic);
+#else
             _logger.LogError(
                 "Tool {ToolId} failed for invocation {ToolInvocationId}: {Error}",
                 tool.Definition.Id,
                 invocationId.Value,
                 sanitizedError);
+#endif
             return await CompleteFailureAsync(
                 request,
                 invocationId,
@@ -584,6 +747,37 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
         }
+    }
+
+    private string CreatePreflightSafeReason(string? preparationError)
+    {
+        if (string.IsNullOrWhiteSpace(preparationError))
+        {
+            return "Tool arguments do not match the declared input schema or host invariants.";
+        }
+
+        var sanitized = _sanitizer.Sanitize(preparationError);
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "Tool arguments do not match the declared input schema or host invariants."
+            : BoundSingleLine(sanitized, MaximumPreflightReasonCharacters);
+    }
+
+    private static string BoundSingleLine(string value, int maximumCharacters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+        foreach (var character in value)
+        {
+            if (builder.Length == maximumCharacters)
+            {
+                break;
+            }
+
+            builder.Append(char.IsWhiteSpace(character) || char.IsControl(character) ? ' ' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private string? CreateActivityDetail(ITool tool, object input)
@@ -607,12 +801,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             return null;
         }
 
-        string sanitized = _sanitizer.Sanitize(detail);
+        var sanitized = _sanitizer.Sanitize(detail);
         var normalized = new StringBuilder(Math.Min(sanitized.Length, MaximumActivityDetailCharacters + 2));
-        bool previousWasWhitespace = false;
+        var previousWasWhitespace = false;
         foreach (var rune in sanitized.EnumerateRunes())
         {
-            bool isWhitespace = Rune.IsWhiteSpace(rune) || Rune.IsControl(rune);
+            var isWhitespace = Rune.IsWhiteSpace(rune) || Rune.IsControl(rune);
             if (isWhitespace)
             {
                 if (!previousWasWhitespace && normalized.Length > 0)
@@ -634,7 +828,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
         }
 
-        string result = normalized.ToString().Trim();
+        var result = normalized.ToString().Trim();
         if (result.Length > MaximumActivityDetailCharacters)
         {
             const int maximumContentCharacters = MaximumActivityDetailCharacters - 3;
@@ -686,8 +880,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         long? elapsedMilliseconds = null,
         string? transientError = null)
     {
-        string sanitizedError = _sanitizer.Sanitize(error);
-        string returnedError = transientError is null
+        var sanitizedError = _sanitizer.Sanitize(error);
+        var returnedError = transientError is null
             ? sanitizedError
             : _sanitizer.Sanitize(transientError);
         source ??= ResolveSourceOrUnknown(request.ToolId);

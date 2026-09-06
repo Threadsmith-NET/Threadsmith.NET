@@ -108,6 +108,9 @@ public sealed record McpOAuthOptions
     /// <summary>Configured OAuth client identifier.</summary>
     public string? ClientId { get; init; }
 
+    /// <summary>Public OAuth Client ID Metadata Document URI used as the client identifier when supported.</summary>
+    public Uri? ClientMetadataDocumentUri { get; init; }
+
     /// <summary>Logical secret reference for the optional client secret.</summary>
     public string? ClientSecret { get; init; }
 
@@ -116,6 +119,41 @@ public sealed record McpOAuthOptions
 
     /// <summary>Unsupported authorization-server discovery override retained for fail-closed validation.</summary>
     public string? DiscoveryUrl { get; init; }
+
+    /// <summary>Gets the validated client-establishment mode represented by this configuration.</summary>
+    internal McpOAuthClientMode ClientMode
+    {
+        get
+        {
+            if (ClientId is not null && string.IsNullOrWhiteSpace(ClientId))
+            {
+                throw new InvalidOperationException("An OAuth clientId cannot be empty or whitespace.");
+            }
+
+            if (ClientSecret is not null && string.IsNullOrWhiteSpace(ClientSecret))
+            {
+                throw new InvalidOperationException("An OAuth clientSecret reference cannot be empty or whitespace.");
+            }
+
+            if (ClientMetadataDocumentUri is not null && ClientId is not null)
+            {
+                throw new InvalidOperationException(
+                    "OAuth clientId and clientMetadataDocumentUri modes are mutually exclusive.");
+            }
+
+            if (ClientSecret is not null && ClientId is null)
+            {
+                throw new InvalidOperationException(
+                    "An OAuth clientSecret reference requires the pre-registered clientId mode.");
+            }
+
+            return ClientMetadataDocumentUri is not null
+                ? McpOAuthClientMode.ClientMetadataDocument
+                : ClientId is not null
+                    ? McpOAuthClientMode.PreRegistered
+                    : McpOAuthClientMode.DynamicRegistration;
+        }
+    }
 }
 
 /// <summary>Capability kinds an MCP server can contribute (strategy §20.1).</summary>

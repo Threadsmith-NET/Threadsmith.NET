@@ -1,0 +1,1 @@
+Call find_symbol with query '{{SuggestedQuery}}' before text search.

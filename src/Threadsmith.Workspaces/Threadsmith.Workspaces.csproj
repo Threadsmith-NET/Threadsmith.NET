@@ -8,8 +8,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.App" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone5.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone14.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Mutations.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.NativeTools.Tests" />
   </ItemGroup>
 
   <ItemGroup>

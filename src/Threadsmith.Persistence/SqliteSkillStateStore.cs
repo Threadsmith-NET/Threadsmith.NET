@@ -93,7 +93,7 @@ public sealed class SqliteSkillStateStore : ISkillStateStore
             return null;
         }
 
-        string? signerId = await reader.IsDBNullAsync(6, cancellationToken)
+        var signerId = await reader.IsDBNullAsync(6, cancellationToken)
             ? null
             : reader.GetString(6);
         return new SkillVerificationRecord
@@ -122,10 +122,10 @@ public sealed class SqliteSkillStateStore : ISkillStateStore
         CancellationToken cancellationToken = default)
     {
         Validate(checkpoint);
-        string json = JsonSerializer.Serialize(checkpoint, JsonOptions);
+        var json = JsonSerializer.Serialize(checkpoint, JsonOptions);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using SqliteTransaction transaction =
+        await using var transaction =
             (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -174,7 +174,7 @@ public sealed class SqliteSkillStateStore : ISkillStateStore
             command.Parameters.AddWithValue("$expectedStatus", (int)expectedVersion.Status);
         }
 
-        int affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
         if (affected != 1)
         {
             throw new SkillCheckpointConflictException();
@@ -203,7 +203,7 @@ public sealed class SqliteSkillStateStore : ISkillStateStore
             return null;
         }
 
-        int schema = reader.GetInt32(0);
+        var schema = reader.GetInt32(0);
         if (schema != SupportedCheckpointSchema)
         {
             throw new NotSupportedException(
@@ -298,7 +298,7 @@ public sealed class SqliteSkillStateStore : ISkillStateStore
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT package_identity_json FROM skill_pins WHERE skill_id = $skill;";
         command.Parameters.AddWithValue("$skill", skillId.Value);
-        object? value = await command.ExecuteScalarAsync(cancellationToken);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
         if (value is not string json)
         {
             return null;

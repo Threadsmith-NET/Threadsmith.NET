@@ -1,0 +1,1 @@
+Returns the current UTC and local date/time with timezone information.

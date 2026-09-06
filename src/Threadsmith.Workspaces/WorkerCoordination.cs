@@ -37,8 +37,8 @@ public sealed class WorkerWorktreeCoordinator : IWorkerWorktreeCoordinator
             repositoryPath,
             revision: revision,
             cancellationToken: cancellationToken);
-        string managedRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Threadsmith", "worktrees"));
-        string isolatedRoot = Path.GetFullPath(isolation.RepositoryPath);
+        var managedRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Threadsmith", "worktrees"));
+        var isolatedRoot = Path.GetFullPath(isolation.RepositoryPath);
         if (!IsUnder(isolatedRoot, managedRoot) || IsReparsePoint(isolatedRoot))
         {
             await _worktrees.RemoveAsync(repositoryPath, isolation, CancellationToken.None);
@@ -105,7 +105,7 @@ public sealed class WorkerWorktreeCoordinator : IWorkerWorktreeCoordinator
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        string prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
+        var prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
         return candidate.StartsWith(prefix, comparison);
     }
 
@@ -162,7 +162,7 @@ public sealed class WorkerIntegrationCoordinator : IWorkerIntegrationCoordinator
                 continue;
             }
 
-            string[]? normalizedPaths = NormalizePaths(changeSet.TouchedPaths);
+            var normalizedPaths = NormalizePaths(changeSet.TouchedPaths);
             if (normalizedPaths is null)
             {
                 conflicts.Add(new AgentConflict(
@@ -201,12 +201,12 @@ public sealed class WorkerIntegrationCoordinator : IWorkerIntegrationCoordinator
             }
         }
 
-        for (int left = 0; left < changeSets.Count; left++)
+        for (var left = 0; left < changeSets.Count; left++)
         {
-            for (int right = left + 1; right < changeSets.Count; right++)
+            for (var right = left + 1; right < changeSets.Count; right++)
             {
-                string[]? leftPaths = NormalizePaths(changeSets[left].TouchedPaths);
-                string[]? rightPaths = NormalizePaths(changeSets[right].TouchedPaths);
+                var leftPaths = NormalizePaths(changeSets[left].TouchedPaths);
+                var rightPaths = NormalizePaths(changeSets[right].TouchedPaths);
                 if (leftPaths is null || rightPaths is null)
                 {
                     continue;
@@ -234,7 +234,7 @@ public sealed class WorkerIntegrationCoordinator : IWorkerIntegrationCoordinator
 
     private static bool Owns(AgentAssignmentScope scope, string path)
     {
-        string normalized = Normalize(path);
+        var normalized = Normalize(path);
         if (scope.Files.Select(Normalize).Contains(normalized, StringComparer.OrdinalIgnoreCase))
         {
             return true;
@@ -252,15 +252,15 @@ public sealed class WorkerIntegrationCoordinator : IWorkerIntegrationCoordinator
     private static string[]? NormalizePaths(IReadOnlyList<string> paths)
     {
         var normalized = new string[paths.Count];
-        for (int index = 0; index < paths.Count; index++)
+        for (var index = 0; index < paths.Count; index++)
         {
-            string path = paths[index];
+            var path = paths[index];
             if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
             {
                 return null;
             }
 
-            string[] segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
             {
                 return null;

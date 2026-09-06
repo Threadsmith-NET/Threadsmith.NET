@@ -13,24 +13,12 @@ public static class PackagedDocumentationPolicy
     /// <summary>Application-relative directory containing the curated documentation bundle.</summary>
     public const string BundleDirectoryName = "ThreadsmithDocs";
 
-    /// <summary>Returns whether a selector identifies the maintained documentation skill.</summary>
-    public static bool IsDocumentationSkillSelector(string selector)
+    /// <summary>Returns whether a resolved package is the maintained documentation skill.</summary>
+    public static bool IsDocumentationSkill(SkillScope scope, string skillId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(selector);
-        var identity = selector;
-        var scopeSeparator = identity.IndexOf(':');
-        if (scopeSeparator >= 0)
-        {
-            identity = identity[(scopeSeparator + 1)..];
-        }
-
-        var qualifier = identity.IndexOfAny(['@', '+']);
-        if (qualifier >= 0)
-        {
-            identity = identity[..qualifier];
-        }
-
-        return string.Equals(identity, SkillId, StringComparison.Ordinal);
+        ArgumentException.ThrowIfNullOrWhiteSpace(skillId);
+        return scope == SkillScope.Maintained
+            && string.Equals(skillId, SkillId, StringComparison.Ordinal);
     }
 
     /// <summary>Rebinds a tool invocation to the application-owned documentation bundle with read-only authority.</summary>
@@ -176,10 +164,7 @@ public static class PackagedDocumentationPolicy
         string? governingHeading = null;
         for (int index = lineStart - 1; index >= 0; index--)
         {
-            var candidate = lines[index].Trim();
-            if (candidate.Length > 1
-                && candidate[0] == '#'
-                && candidate.SkipWhile(character => character == '#').FirstOrDefault() == ' ')
+            if (TryGetMarkdownHeading(lines[index], out var candidate))
             {
                 governingHeading = candidate;
                 break;
@@ -191,10 +176,39 @@ public static class PackagedDocumentationPolicy
             throw new InvalidDataException("Documentation citation heading does not govern the cited line range.");
         }
 
+        for (int index = lineStart; index < lineEnd; index++)
+        {
+            if (TryGetMarkdownHeading(lines[index], out _))
+            {
+                throw new InvalidDataException("Documentation citation line range crosses a section boundary.");
+            }
+        }
+
         var citedText = string.Join('\n', lines[(lineStart - 1)..lineEnd]);
         if (!citedText.Contains(snippet, StringComparison.Ordinal))
         {
             throw new InvalidDataException("Documentation citation snippet is not present in the cited range.");
         }
+    }
+
+    private static bool TryGetMarkdownHeading(string line, out string heading)
+    {
+        var candidate = line.Trim();
+        var markerLength = 0;
+        while (markerLength < candidate.Length && candidate[markerLength] == '#')
+        {
+            markerLength++;
+        }
+
+        if (markerLength is >= 1 and <= 6
+            && markerLength < candidate.Length
+            && candidate[markerLength] == ' ')
+        {
+            heading = candidate;
+            return true;
+        }
+
+        heading = string.Empty;
+        return false;
     }
 }

@@ -2,6 +2,7 @@ namespace Threadsmith.DotNet;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.Build.Locator;
@@ -90,9 +91,25 @@ public sealed class SemanticEngine : ISemanticEngine
     }
 
     /// <inheritdoc />
-    public async Task<SemanticLoadResult> LoadAsync(
+    public Task<SemanticLoadResult> LoadAsync(
         SemanticLoadRequest request,
         CancellationToken cancellationToken = default)
+    {
+        return LoadCoreAsync(
+            request,
+            publishLoadCompleted: true,
+            publishConfidenceChanged: true,
+            allowTextFallback: true,
+            cancellationToken);
+    }
+
+    /// <summary>Loads semantic state with explicit initial-load lifecycle publication control.</summary>
+    public async Task<SemanticLoadResult> LoadCoreAsync(
+        SemanticLoadRequest request,
+        bool publishLoadCompleted,
+        bool publishConfidenceChanged,
+        bool allowTextFallback,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
@@ -138,7 +155,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
-        StringComparer pathComparer = OperatingSystem.IsWindows()
+        var pathComparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
         SemanticProjectInfo[] metadata = [.. projectPaths
@@ -152,20 +169,15 @@ public sealed class SemanticEngine : ISemanticEngine
                     SemanticConfidenceLevel.ProjectGraphOnly,
                     [],
                     []))];
-        SemanticLoadRequest normalizedRequest = request with
+        var normalizedRequest = request with
         {
             RepositoryPath = repositoryPath,
             SolutionPath = solutionPath,
         };
-        lock (_gate)
-        {
-            _lastRequest = normalizedRequest;
-        }
-
         if (request.TrustLevel < RepositoryTrustLevel.TrustedBuild)
         {
             SemanticProjectInfo[] textOnly = [.. metadata.Select(project => project with { Confidence = SemanticConfidenceLevel.TextOnly })];
-            SemanticConfidenceLevel textConfidence = textOnly.Length == 0
+            var textConfidence = textOnly.Length == 0
                 ? SemanticConfidenceLevel.None
                 : SemanticConfidenceLevel.TextOnly;
             await ReplaceStateAsync(
@@ -174,8 +186,9 @@ public sealed class SemanticEngine : ISemanticEngine
                 compiledProjects: [],
                 projects: textOnly,
                 confidence: textConfidence,
-                request.SessionId,
-                request.WorkspaceId,
+                normalizedRequest,
+                publishLoadCompleted,
+                publishConfidenceChanged,
                 cancellationToken);
             return new SemanticLoadResult(
                 request.WorkspaceId,
@@ -216,7 +229,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         Solution solution;
                         if (isDirectProject)
                         {
-                            Project project = await workspace.OpenProjectAsync(
+                            var project = await workspace.OpenProjectAsync(
                                 solutionPath,
                                 progress: null,
                                 operationToken);
@@ -246,9 +259,16 @@ public sealed class SemanticEngine : ISemanticEngine
                 exception,
                 "Semantic MSBuild loading failed for solution {SolutionPath}; using text metadata",
                 solutionPath);
+            if (!allowTextFallback)
+            {
+                throw new InvalidOperationException(
+                    "Semantic MSBuild refresh failed.",
+                    exception);
+            }
+
             diagnostics.Enqueue($"MSBuild load failed: {exception.Message}");
             SemanticProjectInfo[] degradedProjects = [.. metadata.Select(project => project with { Confidence = SemanticConfidenceLevel.TextOnly })];
-            SemanticConfidenceLevel degradedConfidence = degradedProjects.Length == 0
+            var degradedConfidence = degradedProjects.Length == 0
                 ? SemanticConfidenceLevel.None
                 : SemanticConfidenceLevel.TextOnly;
             await ReplaceStateAsync(
@@ -257,8 +277,9 @@ public sealed class SemanticEngine : ISemanticEngine
                 compiledProjects: [],
                 projects: degradedProjects,
                 confidence: degradedConfidence,
-                request.SessionId,
-                request.WorkspaceId,
+                normalizedRequest,
+                publishLoadCompleted,
+                publishConfidenceChanged,
                 cancellationToken);
             return new SemanticLoadResult(
                 request.WorkspaceId,
@@ -267,8 +288,8 @@ public sealed class SemanticEngine : ISemanticEngine
                 diagnostics.ToArray());
         }
 
-        Solution confinedSolution = load.Solution;
-        foreach (Project? project in confinedSolution.Projects.ToArray())
+        var confinedSolution = load.Solution;
+        foreach (var project in confinedSolution.Projects.ToArray())
         {
             if (project.FilePath is null || !IsPathWithinRoot(project.FilePath, repositoryPath))
             {
@@ -279,15 +300,38 @@ public sealed class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            foreach (Document? document in project.Documents
-                .Where(document => document.FilePath is null
-                    || !IsPathWithinRoot(document.FilePath, repositoryPath))
+            foreach (var document in project.Documents
+                .Where(document => !IsSemanticInputPathAllowed(document.FilePath, normalizedRequest))
                 .ToArray())
             {
                 diagnostics.Enqueue(
-                    $"Document '{document.Name}' was excluded because it is outside the repository root.");
+                    $"Document '{document.Name}' was excluded by repository path policy.");
                 Interlocked.Increment(ref workspaceFailureCount);
                 confinedSolution = confinedSolution.RemoveDocument(document.Id);
+            }
+
+            foreach (var document in project.AdditionalDocuments
+                .Where(document => IsRepositoryLocalSemanticInputRejected(
+                    document.FilePath,
+                    normalizedRequest))
+                .ToArray())
+            {
+                diagnostics.Enqueue(
+                    $"Additional document '{document.Name}' was excluded by repository path policy.");
+                Interlocked.Increment(ref workspaceFailureCount);
+                confinedSolution = confinedSolution.RemoveAdditionalDocument(document.Id);
+            }
+
+            foreach (var document in project.AnalyzerConfigDocuments
+                .Where(document => IsRepositoryLocalSemanticInputRejected(
+                    document.FilePath,
+                    normalizedRequest))
+                .ToArray())
+            {
+                diagnostics.Enqueue(
+                    $"Analyzer config '{document.Name}' was excluded by repository path policy.");
+                Interlocked.Increment(ref workspaceFailureCount);
+                confinedSolution = confinedSolution.RemoveAnalyzerConfigDocument(document.Id);
             }
         }
 
@@ -295,7 +339,7 @@ public sealed class SemanticEngine : ISemanticEngine
 
         var compiledProjects = new HashSet<ProjectId>();
         var loadedProjects = new List<SemanticProjectInfo>();
-        foreach (Project project in load.Solution.Projects)
+        foreach (var project in load.Solution.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Compilation? compilation = null;
@@ -314,7 +358,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 diagnostics.Enqueue($"{project.Name}: {exception.Message}");
             }
 
-            SemanticConfidenceLevel projectConfidence = compilation is null
+            var projectConfidence = compilation is null
                 ? SemanticConfidenceLevel.ProjectGraphOnly
                 : SemanticConfidenceLevel.FullSemantic;
             if (compilation is not null)
@@ -323,7 +367,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
 
             var filePath = project.FilePath ?? string.Empty;
-            SemanticProjectInfo? projectMetadata = metadata.FirstOrDefault(item => string.Equals(
+            var projectMetadata = metadata.FirstOrDefault(item => string.Equals(
                 item.FilePath,
                 filePath,
                 PathComparison));
@@ -366,7 +410,7 @@ public sealed class SemanticEngine : ISemanticEngine
             && metadata.All(project => compiledProjectPaths.Contains(project.FilePath));
         var everyLoadedProjectCompiled = loadedProjects.Count > 0
             && loadedProjects.All(project => project.Confidence == SemanticConfidenceLevel.FullSemantic);
-        SemanticConfidenceLevel aggregate = loadedProjects.Count == 0
+        var aggregate = loadedProjects.Count == 0
             ? metadata.Length == 0
                 ? SemanticConfidenceLevel.None
                 : SemanticConfidenceLevel.ProjectGraphOnly
@@ -383,8 +427,9 @@ public sealed class SemanticEngine : ISemanticEngine
             compiledProjects,
             loadedProjects,
             aggregate,
-            request.SessionId,
-            request.WorkspaceId,
+            normalizedRequest,
+            publishLoadCompleted,
+            publishConfidenceChanged,
             cancellationToken);
         return new SemanticLoadResult(
             request.WorkspaceId,
@@ -399,14 +444,14 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
-        (Solution? solution, HashSet<ProjectId>? compiledProjects, SemanticConfidenceLevel confidence, var _) = CaptureSemanticState();
-        List<ISymbol> symbols = await RunNonCooperativeAsync(
+        (var solution, var compiledProjects, var confidence, var _) = CaptureSemanticState();
+        var symbols = await RunNonCooperativeAsync(
             async operationToken =>
             {
                 var found = new List<ISymbol>();
-                foreach (Project? project in solution.Projects.Where(project => compiledProjects.Contains(project.Id)))
+                foreach (var project in solution.Projects.Where(project => compiledProjects.Contains(project.Id)))
                 {
-                    IEnumerable<ISymbol> declarations = await SymbolFinder.FindDeclarationsAsync(
+                    var declarations = await SymbolFinder.FindDeclarationsAsync(
                         project,
                         query,
                         ignoreCase: true,
@@ -419,13 +464,13 @@ public sealed class SemanticEngine : ISemanticEngine
             },
             cancellationToken);
         var results = new List<SymbolResult>();
-        SemanticLocationContext locationContext = CreateLocationContext(solution);
-        foreach (ISymbol? symbol in symbols.Distinct(SymbolEqualityComparer.Default))
+        var locationContext = CreateLocationContext(solution);
+        foreach (var symbol in symbols.Distinct(SymbolEqualityComparer.Default))
         {
-            SemanticSymbolIdentity identity = CreateIdentity(symbol);
-            foreach (Location? location in symbol.Locations.Where(location => location.IsInSource))
+            var identity = CreateIdentity(symbol);
+            foreach (var location in symbol.Locations.Where(location => location.IsInSource))
             {
-                SemanticSourceLocation? source = CreateLocation(solution, location, locationContext);
+                var source = CreateLocation(solution, location, locationContext);
                 if (source is not null)
                 {
                     results.Add(new SymbolResult(identity, source, confidence));
@@ -467,7 +512,7 @@ public sealed class SemanticEngine : ISemanticEngine
             pending.Push(request.RepositoryPath);
             var inspectedEntries = 0;
             var inspectedFiles = 0;
-            IReadOnlyList<string> prohibitedPaths = request.ProhibitedPaths ?? [];
+            var prohibitedPaths = request.ProhibitedPaths ?? [];
             while (pending.Count > 0
                 && inspectedEntries < _maximumFallbackEntries
                 && inspectedFiles < _maximumFallbackFiles
@@ -574,17 +619,17 @@ public sealed class SemanticEngine : ISemanticEngine
             return fallback;
         }
 
-        (Solution? solution, HashSet<ProjectId> _, SemanticConfidenceLevel currentConfidence, var _) = CaptureSemanticState();
-        ISymbol symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
-        IEnumerable<ReferencedSymbol> referencedSymbols = await RunNonCooperativeAsync(
+        (var solution, var _, var currentConfidence, var _) = CaptureSemanticState();
+        var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
+        var referencedSymbols = await RunNonCooperativeAsync(
             token => SymbolFinder.FindReferencesAsync(symbol, solution, token),
             cancellationToken);
         var results = new List<ReferenceResult>();
-        SemanticSymbolIdentity identity = CreateIdentity(symbol);
-        SemanticLocationContext locationContext = CreateLocationContext(solution);
-        foreach (ReferenceLocation reference in referencedSymbols.SelectMany(item => item.Locations))
+        var identity = CreateIdentity(symbol);
+        var locationContext = CreateLocationContext(solution);
+        foreach (var reference in referencedSymbols.SelectMany(item => item.Locations))
         {
-            SemanticSourceLocation? source = CreateLocation(solution, reference.Location, locationContext);
+            var source = CreateLocation(solution, reference.Location, locationContext);
             if (source is not null)
             {
                 results.Add(new ReferenceResult(identity, source, currentConfidence));
@@ -600,19 +645,19 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
-        (Solution? solution, HashSet<ProjectId> _, SemanticConfidenceLevel confidence, var _) = CaptureSemanticState();
-        ISymbol symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
-        IEnumerable<ISymbol> implementations = await RunNonCooperativeAsync(
+        (var solution, var _, var confidence, var _) = CaptureSemanticState();
+        var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
+        var implementations = await RunNonCooperativeAsync(
             token => SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: token),
             cancellationToken);
         var results = new List<ImplementationResult>();
-        SemanticLocationContext locationContext = CreateLocationContext(solution);
-        foreach (ISymbol? implementation in implementations)
+        var locationContext = CreateLocationContext(solution);
+        foreach (var implementation in implementations)
         {
-            SemanticSymbolIdentity identity = CreateIdentity(implementation);
-            foreach (Location? location in implementation.Locations.Where(location => location.IsInSource))
+            var identity = CreateIdentity(implementation);
+            foreach (var location in implementation.Locations.Where(location => location.IsInSource))
             {
-                SemanticSourceLocation? source = CreateLocation(solution, location, locationContext);
+                var source = CreateLocation(solution, location, locationContext);
                 if (source is not null)
                 {
                     results.Add(new ImplementationResult(identity, source, confidence));
@@ -683,6 +728,190 @@ public sealed class SemanticEngine : ISemanticEngine
         return LoadAsync(request, cancellationToken);
     }
 
+    /// <summary>Reloads the last semantic selection without publishing an initial-load completion.</summary>
+    public Task<SemanticLoadResult> RefreshFullAsync(CancellationToken cancellationToken = default)
+    {
+        SemanticLoadRequest request;
+        lock (_gate)
+        {
+            request = _lastRequest
+                ?? throw new InvalidOperationException("No semantic solution has been loaded.");
+        }
+
+        return LoadCoreAsync(
+            request,
+            publishLoadCompleted: false,
+            publishConfidenceChanged: true,
+            allowTextFallback: false,
+            cancellationToken);
+    }
+
+    /// <summary>Atomically publishes replacement text for proven existing loaded documents.</summary>
+    public async Task<SemanticLoadResult> RefreshDocumentsAsync(
+        IReadOnlyList<SemanticDocumentRefresh> documents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        cancellationToken.ThrowIfCancellationRequested();
+        Solution solution;
+        HashSet<ProjectId> compiledProjects;
+        IReadOnlyList<SemanticProjectInfo> projects;
+        SemanticLoadRequest request;
+        SemanticConfidenceLevel confidence;
+        long generation;
+        lock (_gate)
+        {
+            solution = _solution
+                ?? throw new InvalidOperationException("No compiler-aware semantic solution has been loaded.");
+            compiledProjects = [.. _compiledProjects];
+            projects = _projects.ToArray();
+            request = _lastRequest
+                ?? throw new InvalidOperationException("No semantic solution has been loaded.");
+            confidence = _confidence;
+            generation = _generation;
+        }
+
+        var documentsByPath = CreateDocumentsByPath(solution);
+        var replacement = solution;
+        var affectedProjects = new HashSet<ProjectId>();
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(document.Path);
+            if (!IsPathWithinRoot(fullPath, request.RepositoryPath)
+                || !IsCSharpSourcePath(fullPath)
+                || !documentsByPath.TryGetValue(fullPath, out var documentIds))
+            {
+                throw new InvalidOperationException(
+                    "Incremental semantic refresh requires an existing loaded C# document.");
+            }
+
+            foreach (var documentId in documentIds)
+            {
+                replacement = replacement.WithDocumentText(
+                    documentId,
+                    SourceText.From(document.Text, Encoding.UTF8),
+                    PreservationMode.PreserveIdentity);
+                affectedProjects.Add(documentId.ProjectId);
+            }
+        }
+
+        foreach (var projectId in affectedProjects.Where(compiledProjects.Contains))
+        {
+            var project = replacement.GetProject(projectId);
+            if (project is null
+                || await RunNonCooperativeAsync<Compilation?>(
+                    project.GetCompilationAsync,
+                    cancellationToken) is null)
+            {
+                throw new InvalidOperationException(
+                    "Incremental semantic refresh could not prepare an affected compilation.");
+            }
+        }
+
+        lock (_gate)
+        {
+            if (_generation != generation
+                || _lastRequest?.WorkspaceId != request.WorkspaceId)
+            {
+                throw new InvalidOperationException(
+                    "The semantic workspace changed while refresh was being prepared.");
+            }
+
+            _solution = replacement;
+            _generation++;
+        }
+
+        return new SemanticLoadResult(request.WorkspaceId, confidence, projects, []);
+    }
+
+    /// <summary>Gets normalized paths for the currently loaded source documents.</summary>
+    public IReadOnlySet<string> GetLoadedDocumentPaths()
+    {
+        lock (_gate)
+        {
+            if (_solution is null || _lastRequest is null)
+            {
+                return new HashSet<string>(StringComparerForCurrentPlatform());
+            }
+
+            return GetTextDocumentPaths(
+                _solution.Projects.SelectMany(project => project.Documents),
+                _lastRequest);
+        }
+    }
+
+    /// <summary>Gets the exact Roslyn document inventory used for refresh classification.</summary>
+    public SemanticRefreshInventory GetRefreshInventory()
+    {
+        lock (_gate)
+        {
+            if (_solution is null || _lastRequest is null)
+            {
+                var comparer = StringComparerForCurrentPlatform();
+                return new SemanticRefreshInventory(
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer),
+                    new HashSet<string>(comparer));
+            }
+
+            return new SemanticRefreshInventory(
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.Documents),
+                    _lastRequest),
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.AdditionalDocuments),
+                    _lastRequest),
+                GetTextDocumentPaths(
+                    _solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments),
+                    _lastRequest),
+                GetReferencePaths(_solution, _lastRequest));
+        }
+    }
+
+    /// <summary>Captures current loaded source text identities for refresh no-op suppression.</summary>
+    public async Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        Solution? solution;
+        SemanticLoadRequest? request;
+        lock (_gate)
+        {
+            solution = _solution;
+            request = _lastRequest;
+        }
+
+        if (solution is null || request is null)
+        {
+            return [];
+        }
+
+        var documents = new List<SemanticDocumentRefresh>();
+        foreach (var document in solution.Projects
+            .SelectMany(project => project.Documents
+                .Cast<TextDocument>()
+                .Concat(project.AdditionalDocuments)
+            .Concat(project.AnalyzerConfigDocuments))
+            .Where(document => IsSemanticInputPathAllowed(document.FilePath, request))
+            .GroupBy(
+                document => Path.GetFullPath(document.FilePath ?? string.Empty),
+                StringComparerForCurrentPlatform())
+            .Select(group => group.First()))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var text = await document.GetTextAsync(cancellationToken);
+            var content = text.ToString();
+            var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+            documents.Add(new SemanticDocumentRefresh(
+                Path.GetFullPath(document.FilePath ?? string.Empty),
+                content,
+                identity));
+        }
+
+        return documents;
+    }
+
     /// <summary>Gets fast compiler diagnostics from the loaded Roslyn solution.</summary>
     public async Task<IReadOnlyList<Threadsmith.Core.Diagnostic>> GetDiagnosticsAsync(
         IReadOnlyList<string> projectPaths,
@@ -691,9 +920,9 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         ArgumentNullException.ThrowIfNull(projectPaths);
         ArgumentNullException.ThrowIfNull(changedFiles);
-        (Solution solution, HashSet<ProjectId> compiledProjects, SemanticConfidenceLevel confidence, var repositoryPath) =
+        (var solution, var compiledProjects, var confidence, var repositoryPath) =
             CaptureSemanticState();
-        StringComparer pathComparer = StringComparerForCurrentPlatform();
+        var pathComparer = StringComparerForCurrentPlatform();
         var requestedPaths = new HashSet<string>(
             projectPaths
                 .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -706,7 +935,7 @@ public sealed class SemanticEngine : ISemanticEngine
         ];
         solution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, cancellationToken);
         var diagnostics = new List<Threadsmith.Core.Diagnostic>();
-        foreach (Project project in solution.Projects)
+        foreach (var project in solution.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!compiledProjects.Contains(project.Id))
@@ -721,7 +950,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            Compilation? compilation = await RunNonCooperativeAsync<Compilation?>(
+            var compilation = await RunNonCooperativeAsync<Compilation?>(
                 project.GetCompilationAsync,
                 cancellationToken);
             if (compilation is null)
@@ -732,16 +961,16 @@ public sealed class SemanticEngine : ISemanticEngine
             var targetFramework = projectPath is null || !File.Exists(projectPath)
                 ? string.Empty
                 : ReadProjectInfo(projectPath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
-            SemanticLocationContext context = CreateLocationContext(solution);
-            foreach (Microsoft.CodeAnalysis.Diagnostic diagnostic in compilation.GetDiagnostics(cancellationToken))
+            var context = CreateLocationContext(solution);
+            foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
             {
-                SemanticSourceLocation? location = diagnostic.Location == Location.None
+                var location = diagnostic.Location == Location.None
                     ? null
                     : CreateLocation(solution, diagnostic.Location, context);
                 var relativeFile = location?.FilePath is null
                     ? null
                     : Path.GetRelativePath(repositoryPath, location.FilePath).Replace('\\', '/');
-                SourceRange? range = location?.Range;
+                var range = location?.Range;
                 var message = diagnostic.GetMessage();
                 diagnostics.Add(new Threadsmith.Core.Diagnostic
                 {
@@ -805,18 +1034,18 @@ public sealed class SemanticEngine : ISemanticEngine
         {
             "Pre-approval analyzer execution is limited to host-owned allowlisted or isolated analyzers; ordinary repository analyzer/source-generator assemblies were not loaded.",
         };
-        (Solution? solution, HashSet<ProjectId> compiledProjects, SemanticConfidenceLevel confidence, var loadedRepository) =
+        (var solution, var compiledProjects, var confidence, var loadedRepository) =
             TryCaptureSemanticState();
         var semanticRepository = string.IsNullOrWhiteSpace(loadedRepository)
             ? repositoryPath
             : loadedRepository;
-        Dictionary<string, PreMutationOverlayFile> sourceByFullPath = CreateOverlayMap(
+        var sourceByFullPath = CreateOverlayMap(
             sourceFiles,
             repositoryPath);
-        Dictionary<string, DocumentId[]> documentsByPath = solution is null
+        var documentsByPath = solution is null
             ? new Dictionary<string, DocumentId[]>(StringComparerForCurrentPlatform())
             : CreateDocumentsByPath(solution);
-        Dictionary<string, CSharpParseOptions?> parseOptionsByPath = solution is null
+        var parseOptionsByPath = solution is null
             ? new Dictionary<string, CSharpParseOptions?>(StringComparerForCurrentPlatform())
             : CreateParseOptionsByPath(solution);
 
@@ -828,7 +1057,7 @@ public sealed class SemanticEngine : ISemanticEngine
             "pre-mutation overlay syntax");
         try
         {
-            foreach ((var fullPath, PreMutationOverlayFile overlay) in sourceByFullPath)
+            foreach ((var fullPath, var overlay) in sourceByFullPath)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (overlay.Text is null)
@@ -836,13 +1065,13 @@ public sealed class SemanticEngine : ISemanticEngine
                     continue;
                 }
 
-                CSharpParseOptions parseOptions = GetParseOptions(fullPath, parseOptionsByPath);
-                SyntaxTree tree = CSharpSyntaxTree.ParseText(
+                var parseOptions = GetParseOptions(fullPath, parseOptionsByPath);
+                var tree = CSharpSyntaxTree.ParseText(
                     SourceText.From(overlay.Text, Encoding.UTF8),
                     parseOptions,
                     fullPath,
                     cancellationToken);
-                foreach (Microsoft.CodeAnalysis.Diagnostic diagnostic in tree.GetDiagnostics(cancellationToken))
+                foreach (var diagnostic in tree.GetDiagnostics(cancellationToken))
                 {
                     diagnostics.Add(CreatePreMutationDiagnostic(
                         PreMutationDiagnosticSource.Syntax,
@@ -903,18 +1132,18 @@ public sealed class SemanticEngine : ISemanticEngine
         {
             if (!syntaxBlocks && solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
             {
-                Solution overlaySolution = ApplyOverlayToSolution(
+                var overlaySolution = ApplyOverlayToSolution(
                     solution,
                     sourceByFullPath,
                     documentsByPath,
                     semanticRepository);
-                SemanticLocationContext context = CreateLocationContext(overlaySolution);
+                var context = CreateLocationContext(overlaySolution);
                 var affectedProjects = new HashSet<ProjectId>();
                 foreach (var fullPath in sourceByFullPath.Keys)
                 {
-                    if (documentsByPath.TryGetValue(fullPath, out DocumentId[]? documentIds))
+                    if (documentsByPath.TryGetValue(fullPath, out var documentIds))
                     {
-                        foreach (DocumentId documentId in documentIds)
+                        foreach (var documentId in documentIds)
                         {
                             affectedProjects.Add(documentId.ProjectId);
                         }
@@ -922,35 +1151,36 @@ public sealed class SemanticEngine : ISemanticEngine
                         continue;
                     }
 
-                    foreach (Project project in FindContainingProjects(overlaySolution, fullPath))
+                    foreach (var project in FindContainingProjects(overlaySolution, fullPath))
                     {
                         affectedProjects.Add(project.Id);
                     }
                 }
 
-                foreach (Project project in overlaySolution.Projects
+                foreach (var project in overlaySolution.Projects
                     .Where(project => affectedProjects.Contains(project.Id) && compiledProjects.Contains(project.Id))
                     .OrderBy(project => project.Name, StringComparer.Ordinal))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    Compilation? compilation = await RunNonCooperativeAsync<Compilation?>(
+                    var compilation = await RunNonCooperativeAsync<Compilation?>(
                         project.GetCompilationAsync,
                         cancellationToken);
                     if (compilation is null)
                     {
-                        omissions.Add($"Compilation diagnostics were unavailable for project '{project.Name}'.");
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            $"Compilation diagnostics were unavailable for project '{project.Name}'."));
                         continue;
                     }
 
                     var targetFramework = project.FilePath is null || !File.Exists(project.FilePath)
                         ? string.Empty
                         : ReadProjectInfo(project.FilePath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
-                    Dictionary<string, int> baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
+                    var baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
                         solution,
                         project.Id,
                         repositoryPath,
                         cancellationToken);
-                    foreach (Microsoft.CodeAnalysis.Diagnostic diagnostic in compilation.GetDiagnostics(cancellationToken)
+                    foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken)
                         .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
                     {
                         var diagnosticFingerprint = CreateCompilationDiagnosticFingerprint(
@@ -964,7 +1194,7 @@ public sealed class SemanticEngine : ISemanticEngine
                             continue;
                         }
 
-                        SemanticSourceLocation? location = diagnostic.Location == Location.None
+                        var location = diagnostic.Location == Location.None
                             ? null
                             : CreateLocation(overlaySolution, diagnostic.Location, context);
                         if (location?.FilePath is not { } filePath)
@@ -973,7 +1203,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         }
 
                         var diagnosticFullPath = Path.GetFullPath(filePath);
-                        PreMutationOverlayFile overlay = sourceByFullPath.TryGetValue(diagnosticFullPath, out PreMutationOverlayFile? changedOverlay)
+                        var overlay = sourceByFullPath.TryGetValue(diagnosticFullPath, out var changedOverlay)
                             ? changedOverlay
                             : new PreMutationOverlayFile
                             {
@@ -993,12 +1223,13 @@ public sealed class SemanticEngine : ISemanticEngine
             }
             else if (syntaxBlocks)
             {
-                omissions.Add("Compilation diagnostics were skipped because syntax diagnostics blocked compilation.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    "Compilation diagnostics were skipped because syntax diagnostics blocked compilation."));
             }
             else
             {
-                omissions.Add(
-                    $"Semantic and compilation pre-mutation checks require PartialCompilation confidence; current confidence is {confidence}.");
+                omissions.Add(ModelVisibleStructuredFact.Exact(
+                    $"Semantic and compilation pre-mutation checks require PartialCompilation confidence; current confidence is {confidence}."));
             }
         }
         catch (OperationCanceledException)
@@ -1029,7 +1260,7 @@ public sealed class SemanticEngine : ISemanticEngine
             .Skip(diagnosticCountBeforeCompilation)
             .Count(diagnostic => diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error);
         var compilationOmissions = omissions.Count - omissionCountBeforeCompilation;
-        SemanticCheckOutcome compilationOutcome = syntaxBlocks
+        var compilationOutcome = syntaxBlocks
             ? SemanticCheckOutcome.Skipped
             : compilationBlocking > 0
                 ? SemanticCheckOutcome.Failed
@@ -1090,6 +1321,21 @@ public sealed class SemanticEngine : ISemanticEngine
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>Captures semantic readiness before deciding whether code_explore can return source.</summary>
+    internal CodeExploreReadinessSnapshot CaptureCodeExploreReadinessSnapshot()
+    {
+        lock (_gate)
+        {
+            return new CodeExploreReadinessSnapshot(
+                _solution,
+                _compiledProjects.ToHashSet(),
+                _confidence,
+                _lastRequest?.RepositoryPath,
+                _lastRequest?.SolutionPath,
+                _generation);
+        }
+    }
+
     /// <summary>Captures immutable Roslyn references for one fenced advanced semantic query.</summary>
     internal AdvancedSemanticSnapshot CaptureAdvancedSnapshot()
     {
@@ -1108,6 +1354,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 _compiledProjects.ToHashSet(),
                 _confidence,
                 _lastRequest.RepositoryPath,
+                _lastRequest.SolutionPath,
                 _generation);
         }
     }
@@ -1190,6 +1437,32 @@ public sealed class SemanticEngine : ISemanticEngine
         return $"{fileCount} files, {diagnosticCount} diagnostics, {blockingDiagnosticCount} blocking, {omissionCount} omissions";
     }
 
+    private static IReadOnlySet<string> GetTextDocumentPaths(
+        IEnumerable<TextDocument> documents,
+        SemanticLoadRequest request)
+    {
+        return documents
+            .Select(document => document.FilePath)
+            .Where(path => IsSemanticInputPathAllowed(path, request))
+            .Select(path => Path.GetFullPath(path ?? string.Empty))
+            .ToHashSet(StringComparerForCurrentPlatform());
+    }
+
+    private static IReadOnlySet<string> GetReferencePaths(
+        Solution solution,
+        SemanticLoadRequest request)
+    {
+        return solution.Projects
+            .SelectMany(project => project.AnalyzerReferences
+                .Select(reference => reference.FullPath)
+                .Concat(project.MetadataReferences
+                    .OfType<PortableExecutableReference>()
+                    .Select(reference => reference.FilePath)))
+            .Where(path => IsSemanticInputPathAllowed(path, request))
+            .Select(path => Path.GetFullPath(path ?? string.Empty))
+            .ToHashSet(StringComparerForCurrentPlatform());
+    }
+
     private static long? ToElapsedMilliseconds(TimeSpan elapsed)
     {
         if (elapsed < TimeSpan.Zero || elapsed.TotalMilliseconds > long.MaxValue)
@@ -1217,13 +1490,13 @@ public sealed class SemanticEngine : ISemanticEngine
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        Project? baselineProject = solution.GetProject(projectId);
+        var baselineProject = solution.GetProject(projectId);
         if (baselineProject is null)
         {
             return [];
         }
 
-        Compilation? baselineCompilation = await RunNonCooperativeAsync<Compilation?>(
+        var baselineCompilation = await RunNonCooperativeAsync<Compilation?>(
             baselineProject.GetCompilationAsync,
             cancellationToken);
         if (baselineCompilation is null)
@@ -1252,7 +1525,7 @@ public sealed class SemanticEngine : ISemanticEngine
         var file = string.Empty;
         if (diagnostic.Location != Location.None)
         {
-            SemanticSourceLocation? location = CreateLocation(
+            var location = CreateLocation(
                 solution,
                 diagnostic.Location,
                 CreateLocationContext(solution));
@@ -1274,7 +1547,7 @@ public sealed class SemanticEngine : ISemanticEngine
         string repositoryPath)
     {
         var sourceByFullPath = new Dictionary<string, PreMutationOverlayFile>(StringComparerForCurrentPlatform());
-        foreach (PreMutationOverlayFile file in files)
+        foreach (var file in files)
         {
             var fullPath = Path.GetFullPath(
                 file.RelativePath.Replace('/', Path.DirectorySeparatorChar),
@@ -1292,7 +1565,7 @@ public sealed class SemanticEngine : ISemanticEngine
 
     private static Dictionary<string, DocumentId[]> CreateDocumentsByPath(Solution solution)
     {
-        StringComparer comparer = StringComparerForCurrentPlatform();
+        var comparer = StringComparerForCurrentPlatform();
         return solution.Projects
             .SelectMany(project => project.Documents)
             .Where(document => !string.IsNullOrWhiteSpace(document.FilePath))
@@ -1305,7 +1578,7 @@ public sealed class SemanticEngine : ISemanticEngine
 
     private static Dictionary<string, CSharpParseOptions?> CreateParseOptionsByPath(Solution solution)
     {
-        StringComparer comparer = StringComparerForCurrentPlatform();
+        var comparer = StringComparerForCurrentPlatform();
         return solution.Projects
             .SelectMany(project => project.Documents.Select(document => new
             {
@@ -1324,7 +1597,7 @@ public sealed class SemanticEngine : ISemanticEngine
         string fullPath,
         IReadOnlyDictionary<string, CSharpParseOptions?> parseOptionsByPath)
     {
-        return parseOptionsByPath.TryGetValue(fullPath, out CSharpParseOptions? options) && options is not null
+        return parseOptionsByPath.TryGetValue(fullPath, out var options) && options is not null
             ? options
             : CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);
     }
@@ -1335,12 +1608,12 @@ public sealed class SemanticEngine : ISemanticEngine
         IReadOnlyDictionary<string, DocumentId[]> documentsByPath,
         string repositoryPath)
     {
-        Solution overlaySolution = solution;
-        foreach ((var fullPath, PreMutationOverlayFile overlay) in sourceByFullPath)
+        var overlaySolution = solution;
+        foreach ((var fullPath, var overlay) in sourceByFullPath)
         {
-            if (documentsByPath.TryGetValue(fullPath, out DocumentId[]? documentIds))
+            if (documentsByPath.TryGetValue(fullPath, out var documentIds))
             {
-                foreach (DocumentId documentId in documentIds)
+                foreach (var documentId in documentIds)
                 {
                     overlaySolution = overlay.Text is null
                         ? overlaySolution.RemoveDocument(documentId)
@@ -1358,7 +1631,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            foreach (Project project in FindContainingProjects(overlaySolution, fullPath))
+            foreach (var project in FindContainingProjects(overlaySolution, fullPath))
             {
                 overlaySolution = overlaySolution.AddDocument(
                     DocumentId.CreateNewId(project.Id),
@@ -1392,10 +1665,10 @@ public sealed class SemanticEngine : ISemanticEngine
         SyntaxTree? syntaxTree,
         string? text)
     {
-        FileLinePositionSpan lineSpan = diagnostic.Location == Location.None
+        var lineSpan = diagnostic.Location == Location.None
             ? default
             : diagnostic.Location.GetLineSpan();
-        SourceRange? range = diagnostic.Location == Location.None
+        var range = diagnostic.Location == Location.None
             ? null
             : new SourceRange(
                 lineSpan.StartLinePosition.Line + 1,
@@ -1466,9 +1739,9 @@ public sealed class SemanticEngine : ISemanticEngine
             return null;
         }
 
-        SyntaxNode root = syntaxTree.GetRoot();
-        SyntaxNode node = root.FindNode(location.SourceSpan, getInnermostNodeForTie: true);
-        SyntaxNode? containing = node.AncestorsAndSelf()
+        var root = syntaxTree.GetRoot();
+        var node = root.FindNode(location.SourceSpan, getInnermostNodeForTie: true);
+        var containing = node.AncestorsAndSelf()
             .FirstOrDefault(candidate => candidate is Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax
                 or Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax
                 or Microsoft.CodeAnalysis.CSharp.Syntax.NamespaceDeclarationSyntax
@@ -1493,6 +1766,67 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         return path.Equals(root, PathComparison)
                 || path.StartsWith(root + Path.DirectorySeparatorChar, PathComparison);
+    }
+
+    private static bool IsRepositoryLocalSemanticInputRejected(
+        string? path,
+        SemanticLoadRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            return IsPathWithinRoot(fullPath, request.RepositoryPath)
+                && !IsSemanticInputPathAllowed(fullPath, request);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsSemanticInputPathAllowed(
+        string? path,
+        SemanticLoadRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return false;
+        }
+
+        if (!IsPathWithinRoot(fullPath, request.RepositoryPath))
+        {
+            return false;
+        }
+
+        if (SemanticPathSafety.HasReparseComponent(request.RepositoryPath, fullPath))
+        {
+            return false;
+        }
+
+        var relativePath = Path.GetRelativePath(request.RepositoryPath, fullPath)
+            .Replace(Path.DirectorySeparatorChar, '/');
+        return !RepositoryPathPolicy.IsProhibited(
+            relativePath,
+            request.ProhibitedPaths ?? []);
     }
 
     private static SemanticProjectInfo ReadProjectInfo(string projectPath)
@@ -1535,7 +1869,7 @@ public sealed class SemanticEngine : ISemanticEngine
 
     private static SemanticLocationContext CreateLocationContext(Solution solution)
     {
-        StringComparer pathComparer = OperatingSystem.IsWindows()
+        var pathComparer = OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
         var documentCounts = solution.Projects
@@ -1564,13 +1898,13 @@ public sealed class SemanticEngine : ISemanticEngine
             return null;
         }
 
-        Document? document = solution.GetDocument(location.SourceTree);
+        var document = solution.GetDocument(location.SourceTree);
         if (document is null)
         {
             return null;
         }
 
-        FileLinePositionSpan lineSpan = location.GetLineSpan();
+        var lineSpan = location.GetLineSpan();
         var filePath = document.FilePath ?? lineSpan.Path;
         var targetFramework = document.Project.FilePath is { } projectPath
             && context.TargetFrameworks.TryGetValue(projectPath, out var framework)
@@ -1607,15 +1941,15 @@ public sealed class SemanticEngine : ISemanticEngine
         return await RunNonCooperativeAsync(
             async operationToken =>
             {
-                foreach (Project project in solution.Projects)
+                foreach (var project in solution.Projects)
                 {
-                    Compilation? compilation = await project.GetCompilationAsync(operationToken);
+                    var compilation = await project.GetCompilationAsync(operationToken);
                     if (compilation is null)
                     {
                         continue;
                     }
 
-                    ISymbol? symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
+                    var symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
                         symbolId,
                         compilation);
                     if (symbol is not null)
@@ -1674,7 +2008,7 @@ public sealed class SemanticEngine : ISemanticEngine
             return solution;
         }
 
-        StringComparer comparer = StringComparerForCurrentPlatform();
+        var comparer = StringComparerForCurrentPlatform();
         string[] normalizedPaths = [.. changedFiles
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(path => Path.IsPathRooted(path)
@@ -1709,15 +2043,15 @@ public sealed class SemanticEngine : ISemanticEngine
                 group => group.Select(document => document.Id).ToArray(),
                 comparer);
 
-        Solution refreshed = solution;
+        var refreshed = solution;
         foreach (var changedPath in normalizedPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (documentsByPath.TryGetValue(changedPath, out DocumentId[]? documentIds))
+            if (documentsByPath.TryGetValue(changedPath, out var documentIds))
             {
-                if (sourceByPath.TryGetValue(changedPath, out SourceText? sourceText))
+                if (sourceByPath.TryGetValue(changedPath, out var sourceText))
                 {
-                    foreach (DocumentId documentId in documentIds)
+                    foreach (var documentId in documentIds)
                     {
                         refreshed = refreshed.WithDocumentText(
                             documentId,
@@ -1727,7 +2061,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 }
                 else
                 {
-                    foreach (DocumentId documentId in documentIds)
+                    foreach (var documentId in documentIds)
                     {
                         refreshed = refreshed.RemoveDocument(documentId);
                     }
@@ -1736,12 +2070,12 @@ public sealed class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            if (!sourceByPath.TryGetValue(changedPath, out SourceText? newSourceText))
+            if (!sourceByPath.TryGetValue(changedPath, out var newSourceText))
             {
                 continue;
             }
 
-            foreach (Project project in FindContainingProjects(refreshed, changedPath))
+            foreach (var project in FindContainingProjects(refreshed, changedPath))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 refreshed = refreshed.AddDocument(
@@ -1823,10 +2157,12 @@ public sealed class SemanticEngine : ISemanticEngine
         HashSet<ProjectId> compiledProjects,
         IReadOnlyList<SemanticProjectInfo> projects,
         SemanticConfidenceLevel confidence,
-        SessionId sessionId,
-        WorkspaceId workspaceId,
+        SemanticLoadRequest request,
+        bool publishLoadCompleted,
+        bool publishConfidenceChanged,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         MSBuildWorkspace? previousWorkspace;
         SemanticConfidenceLevel previousConfidence;
         lock (_gate)
@@ -1838,6 +2174,7 @@ public sealed class SemanticEngine : ISemanticEngine
             _compiledProjects = compiledProjects;
             _projects = projects;
             _confidence = confidence;
+            _lastRequest = request;
             _generation++;
         }
 
@@ -1846,23 +2183,26 @@ public sealed class SemanticEngine : ISemanticEngine
             previousWorkspace?.Dispose();
         }
 
-        if (previousConfidence != confidence)
+        if (publishConfidenceChanged && previousConfidence != confidence)
         {
             await _events.PublishAsync(
                 new SemanticConfidenceChanged(
-                    sessionId,
+                    request.SessionId,
                     DateTimeOffset.UtcNow,
                     confidence.ToString()),
                 cancellationToken);
         }
 
-        await _events.PublishAsync(
-            new SemanticLoadCompleted(
-                sessionId,
-                DateTimeOffset.UtcNow,
-                workspaceId,
-                confidence.ToString()),
-            cancellationToken);
+        if (publishLoadCompleted)
+        {
+            await _events.PublishAsync(
+                new SemanticLoadCompleted(
+                    request.SessionId,
+                    DateTimeOffset.UtcNow,
+                    request.WorkspaceId,
+                    confidence.ToString()),
+                cancellationToken);
+        }
     }
 
     private async Task<T> RunNonCooperativeAsync<T>(
@@ -1871,7 +2211,7 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
-        Task<T> task = Task.Run(() => operation(operationCancellation.Token), CancellationToken.None);
+        var task = Task.Run(() => operation(operationCancellation.Token), CancellationToken.None);
         try
         {
             return await task.WaitAsync(cancellationToken);
@@ -1879,7 +2219,7 @@ public sealed class SemanticEngine : ISemanticEngine
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await operationCancellation.CancelAsync();
-            Task completed = await Task.WhenAny(
+            var completed = await Task.WhenAny(
                 task,
                 Task.Delay(_cancellationBackstop, CancellationToken.None));
             if (completed == task)
@@ -1916,3 +2256,6 @@ public sealed class SemanticEngine : ISemanticEngine
         IReadOnlyDictionary<string, int> DocumentCounts,
         IReadOnlyDictionary<string, string> TargetFrameworks);
 }
+
+/// <summary>Prepared current text for one existing loaded semantic document.</summary>
+public sealed record SemanticDocumentRefresh(string Path, string Text, string ContentIdentity);

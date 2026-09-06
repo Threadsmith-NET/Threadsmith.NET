@@ -66,7 +66,7 @@ public sealed class ExecutionBudget : IBudget
             _used.Calls + delta.Calls,
             _used.WallClock + delta.WallClock,
             _used.Cost + delta.Cost);
-        bool exhausted = prospective.Tokens > _limit.Tokens
+        var exhausted = prospective.Tokens > _limit.Tokens
             || prospective.Calls > _limit.Calls
             || prospective.WallClock > _limit.WallClock
             || (_limit.Cost > 0 && prospective.Cost > _limit.Cost);

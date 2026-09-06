@@ -1,5 +1,5 @@
 # Gitleaks ignore — intentional synthetic redaction-test values
 # These are deliberately planted fake secrets in Plan20 hardening tests
 # that verify RedactionAudit catches and repairs unredacted artifacts.
-ca3e5cc3a5e32300116f7469805bd386f143905f:tests/Threadsmith.Milestone8.Tests/Plan20HardeningTests.cs:generic-api-key:122
-ca3e5cc3a5e32300116f7469805bd386f143905f:tests/Threadsmith.Milestone8.Tests/Plan20HardeningTests.cs:generic-api-key:154
+ca3e5cc3a5e32300116f7469805bd386f143905f:tests/Threadsmith.PersistenceMcpHardening.Tests/Plan20HardeningTests.cs:generic-api-key:122
+ca3e5cc3a5e32300116f7469805bd386f143905f:tests/Threadsmith.PersistenceMcpHardening.Tests/Plan20HardeningTests.cs:generic-api-key:154

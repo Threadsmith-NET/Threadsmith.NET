@@ -60,8 +60,8 @@ Automated coverage proves append-only streaming, clean quit, local unknown-comma
 
 ## 8. Testing
 
-- `dotnet test tests/Threadsmith.Milestone1.Tests/` covers lifecycle, streaming, exact large multiline input, unknown commands, event flooding, cancellation, and CLI parity.
-- `dotnet test tests/Threadsmith.Milestone2.Tests/` covers repository trust and solution-choice behavior.
+- `dotnet test tests/Threadsmith.CoreRuntime.Tests/` covers lifecycle, streaming, exact large multiline input, unknown commands, event flooding, cancellation, and CLI parity.
+- `dotnet test tests/Threadsmith.RepositoryLifecycle.Tests/` covers repository trust and solution-choice behavior.
 - Architecture tests prohibit terminal-library packages in Core and extension abstractions.
 - `manual-test-plan.md` verifies Windows Terminal mouse selection, keyboard mark-mode selection, `Ctrl+C`, `Ctrl+V`, 10 KB/100 KB paste latency, resizing, Unicode, and review choices.
 

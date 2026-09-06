@@ -11,4 +11,8 @@
     <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.ContextCaching.Tests" />
+  </ItemGroup>
+
 </Project>

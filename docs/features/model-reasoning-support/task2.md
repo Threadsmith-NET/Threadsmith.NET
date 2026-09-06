@@ -42,6 +42,6 @@ Owner: implementer. Depends on task1. Files: Threadsmith.Execution + Threadsmith
 
 ## Verify
 - `dotnet build src\Threadsmith.sln`
-- `dotnet test tests\Threadsmith.Milestone1.Tests tests\Threadsmith.Milestone3.Tests` (no regressions;
+- `dotnet test tests\Threadsmith.CoreRuntime.Tests tests\Threadsmith.ModelTooling.Tests` (no regressions;
   scripted providers ignore the new field since default is None)
 - Constructor-injection only (G-21); `IEnumerable<T>` not needed (single instance).

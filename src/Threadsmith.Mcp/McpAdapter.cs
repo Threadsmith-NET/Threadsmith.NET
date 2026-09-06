@@ -21,6 +21,7 @@ public sealed class McpAdapter : IMcpAdapter
     private readonly ISecretResolver _secretResolver;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ILogger<McpAdapter> _logger;
+    private readonly IPromptLoader _prompts;
     private readonly ToolRegistry? _toolRegistry;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, Connection> _connections = new(StringComparer.Ordinal);
@@ -32,6 +33,7 @@ public sealed class McpAdapter : IMcpAdapter
         ISecretResolver secretResolver,
         IOutputSanitizer sanitizer,
         ILogger<McpAdapter> logger,
+        IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
         TimeProvider? timeProvider = null)
     {
@@ -39,10 +41,12 @@ public sealed class McpAdapter : IMcpAdapter
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(prompts);
         _transportFactory = transportFactory;
         _secretResolver = secretResolver;
         _sanitizer = sanitizer;
         _logger = logger;
+        _prompts = prompts;
         _toolRegistry = toolRegistry;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -53,6 +57,7 @@ public sealed class McpAdapter : IMcpAdapter
         ISecretStore secretStore,
         IOutputSanitizer sanitizer,
         ILogger<McpAdapter> logger,
+        IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -60,6 +65,7 @@ public sealed class McpAdapter : IMcpAdapter
             new LegacySecretStoreResolver(secretStore),
             sanitizer,
             logger,
+            prompts,
             toolRegistry,
             timeProvider)
     {
@@ -117,7 +123,7 @@ public sealed class McpAdapter : IMcpAdapter
 
         var transport = _transportFactory(profile);
         IReadOnlyList<McpImportedCapability> capabilities;
-        long startupStarted = _timeProvider.GetTimestamp();
+        var startupStarted = _timeProvider.GetTimestamp();
         try
         {
             capabilities = await transport.StartAsync(profile, environment, startupCancellation.Token);
@@ -139,7 +145,7 @@ public sealed class McpAdapter : IMcpAdapter
         }
 
         var connection = new Connection(transport, profile, capabilities);
-        long capabilityGeneration = connection.CapabilityGeneration;
+        var capabilityGeneration = connection.CapabilityGeneration;
         var importedTools = new List<McpImportedTool>();
         foreach (var capability in capabilities.Where(c => c.Kind == McpCapabilityKind.Tool))
         {
@@ -154,6 +160,7 @@ public sealed class McpAdapter : IMcpAdapter
                 profile,
                 capability,
                 _sanitizer,
+                _prompts,
                 _timeProvider,
                 () => connection.AcquireInvocation(capabilityGeneration)));
         }
@@ -270,8 +277,8 @@ public sealed class McpAdapter : IMcpAdapter
             connection.CapabilityGate.Release();
         }
 
-        long drainStarted = _timeProvider.GetTimestamp();
-        TimeSpan drainWindow = TimeSpan.FromTicks(connection.Profile.DrainKillTimeout.Ticks / 2);
+        var drainStarted = _timeProvider.GetTimestamp();
+        var drainWindow = TimeSpan.FromTicks(connection.Profile.DrainKillTimeout.Ticks / 2);
         bool requestsDrained;
         using (var drainCancellation = new CancellationTokenSource(drainWindow))
         {
@@ -293,8 +300,8 @@ public sealed class McpAdapter : IMcpAdapter
             remaining = TimeSpan.FromMilliseconds(1);
         }
 
-        bool transportDrained = await SafeStopAsync(connection.Transport, connection.Profile, remaining);
-        bool drained = requestsDrained && transportDrained;
+        var transportDrained = await SafeStopAsync(connection.Transport, connection.Profile, remaining);
+        var drained = requestsDrained && transportDrained;
         if (!drained)
         {
             _logger.LogWarning(
@@ -391,7 +398,7 @@ public sealed class McpAdapter : IMcpAdapter
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        foreach (string profileId in _connections.Keys.ToArray())
+        foreach (var profileId in _connections.Keys.ToArray())
         {
             await DisconnectAsync(profileId, CancellationToken.None);
         }
@@ -479,8 +486,8 @@ public sealed class McpAdapter : IMcpAdapter
                     connection.Profile.Id,
                     StringComparison.Ordinal)),
             ];
-            long replacementGeneration = connection.BeginCapabilityReplacement();
-            bool replacementCompleted = false;
+            var replacementGeneration = connection.BeginCapabilityReplacement();
+            var replacementCompleted = false;
             try
             {
                 McpImportedTool[] replacementTools =
@@ -492,6 +499,7 @@ public sealed class McpAdapter : IMcpAdapter
                             connection.Profile,
                             capability,
                             _sanitizer,
+                            _prompts,
                             _timeProvider,
                             () => connection.AcquireInvocation(replacementGeneration))),
                 ];
@@ -550,7 +558,7 @@ public sealed class McpAdapter : IMcpAdapter
         CancellationToken cancellationToken)
     {
         var environment = new Dictionary<string, string>(profile.Environment, StringComparer.Ordinal);
-        foreach (string secretReference in profile.SecretScope)
+        foreach (var secretReference in profile.SecretScope)
         {
             if (!SecretReference.TryParse(secretReference, out var reference) || reference is null)
             {
@@ -566,11 +574,11 @@ public sealed class McpAdapter : IMcpAdapter
                 MinimumTrust = SecretProviderTrust.UserOwned,
             };
             var resolution = await _secretResolver.ResolveAsync(request, cancellationToken);
-            string value = resolution.RequireValue(request);
+            var value = resolution.RequireValue(request);
 
             // Inject only the secrets named in the profile scope (§21.3, gap #6). The key is the
             // environment variable name; secrets: references resolve to the configured value.
-            string key = secretReference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase)
+            var key = secretReference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase)
                 ? secretReference["secrets:".Length..]
                 : secretReference;
             environment[key] = value;

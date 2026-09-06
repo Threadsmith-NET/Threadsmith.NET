@@ -1,0 +1,1 @@
+Retry code_explore with more exact symbol or path anchors, or use a narrower granular fallback for the immediate gap.

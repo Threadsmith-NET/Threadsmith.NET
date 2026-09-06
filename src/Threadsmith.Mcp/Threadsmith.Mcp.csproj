@@ -12,9 +12,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.App" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone9.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone10.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.Milestone23.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.McpTransports.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.McpOAuth.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.McpLifecycle.Tests" />
   </ItemGroup>
 
   <ItemGroup>

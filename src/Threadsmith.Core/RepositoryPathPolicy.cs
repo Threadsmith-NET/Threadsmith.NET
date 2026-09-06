@@ -31,7 +31,7 @@ public static class RepositoryPathPolicy
                 pattern += "**";
             }
 
-            Regex matcher = _matchers.GetOrAdd(
+            var matcher = _matchers.GetOrAdd(
                 (pattern, ignoreCase),
                 static key =>
                 {
@@ -74,7 +74,7 @@ public static class RepositoryPathPolicy
                     }
 
                     expression.Append('$');
-                    RegexOptions options = RegexOptions.CultureInvariant;
+                    var options = RegexOptions.CultureInvariant;
                     if (key.IgnoreCase)
                     {
                         options |= RegexOptions.IgnoreCase;

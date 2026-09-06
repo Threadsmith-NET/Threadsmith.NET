@@ -1,6 +1,8 @@
 namespace Threadsmith.Mcp;
 
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Tools;
@@ -62,13 +64,8 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         ArgumentNullException.ThrowIfNull(secretResolver);
         _tokenStore = tokenStore;
         _secretResolver = secretResolver;
-        _httpClient = httpClient ?? new HttpClient(new SocketsHttpHandler
-        {
-            // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
-            // matches the model-transport host default. See Plan 67 (AR-04).
-            AllowAutoRedirect = false,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-        })
+        _httpClient = httpClient ?? new HttpClient(new McpBoundedHttpResponseHandler(
+            SdkHttpTransport.CreateMetadataCompatibilityHandler()))
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
@@ -86,9 +83,8 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             return McpAuthenticationState.NotApplicable;
         }
 
-        var accessToken = await _tokenStore.GetAsync(Prefix(profile) + "accessToken", cancellationToken);
-        var refreshToken = await _tokenStore.GetAsync(Prefix(profile) + "refreshToken", cancellationToken);
-        return string.IsNullOrWhiteSpace(accessToken) && string.IsNullOrWhiteSpace(refreshToken)
+        var cachedGrant = await LoadCachedGrantAsync(Prefix(profile), cancellationToken);
+        return string.IsNullOrWhiteSpace(cachedGrant.AccessToken) && string.IsNullOrWhiteSpace(cachedGrant.RefreshToken)
             ? McpAuthenticationState.SignedOut
             : McpAuthenticationState.Cached;
     }
@@ -127,9 +123,10 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         }
 
         var prefix = Prefix(profile);
-        var accessToken = await _tokenStore.GetAsync(prefix + "accessToken", cancellationToken);
-        var refreshToken = await _tokenStore.GetAsync(prefix + "refreshToken", cancellationToken);
-        var authorizationServer = await _tokenStore.GetAsync(prefix + "authorizationServer", cancellationToken);
+        var cachedGrant = await LoadCachedGrantAsync(prefix, cancellationToken);
+        var accessToken = cachedGrant.AccessToken;
+        var refreshToken = cachedGrant.RefreshToken;
+        var authorizationServer = cachedGrant.AuthorizationServer;
         if (string.IsNullOrWhiteSpace(accessToken) && string.IsNullOrWhiteSpace(refreshToken))
         {
             await _tokenStore.RemovePrefixAsync(prefix, cancellationToken);
@@ -142,7 +139,7 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             };
         }
 
-        if (!TryCreateSecureUri(authorizationServer, out Uri? issuer))
+        if (!TryCreateSecureUri(authorizationServer, out var issuer))
         {
             return new McpIdentityMutationResult
             {
@@ -152,20 +149,19 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             };
         }
 
-        Uri validatedIssuer = issuer
+        var validatedIssuer = issuer
             ?? throw new InvalidOperationException("The authorization-server URI was not available after validation.");
-        Uri metadataUri = BuildMetadataUri(validatedIssuer);
+        var metadataUri = BuildMetadataUri(validatedIssuer);
         Uri? revocationEndpoint;
         using var metadataCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         metadataCancellation.CancelAfter(profile.RequestTimeout);
         try
         {
-            using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
-            using HttpResponseMessage metadataResponse = await _httpClient.SendAsync(
-                metadataRequest,
-                HttpCompletionOption.ResponseHeadersRead,
+            using var metadata = await ReadRevocationMetadataAsync(
+                profile,
+                metadataUri,
                 metadataCancellation.Token);
-            if (!metadataResponse.IsSuccessStatusCode)
+            if (metadata is null)
             {
                 return await HandleUnconfirmedAsync(
                     profile,
@@ -174,10 +170,7 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
                     cancellationToken);
             }
 
-            using JsonDocument metadata = await ReadBoundedMetadataAsync(
-                metadataResponse.Content,
-                metadataCancellation.Token);
-            var endpoint = metadata.RootElement.TryGetProperty("revocation_endpoint", out JsonElement value)
+            var endpoint = metadata.RootElement.TryGetProperty("revocation_endpoint", out var value)
                 && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;
@@ -216,12 +209,11 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             ["token"] = token,
             ["token_type_hint"] = refreshToken is null ? "access_token" : "refresh_token",
         };
-        McpOAuthOptions oauth = profile.OAuth
+        var oauth = profile.OAuth
             ?? throw new InvalidOperationException("The OAuth profile configuration became unavailable.");
-        if (!string.IsNullOrWhiteSpace(oauth.ClientId))
-        {
-            fields["client_id"] = oauth.ClientId;
-        }
+        var dynamicallyRegistered = oauth.ClientMode == McpOAuthClientMode.DynamicRegistration;
+        var clientId = dynamicallyRegistered ? cachedGrant.ClientId : oauth.ClientId;
+        var clientSecret = dynamicallyRegistered ? cachedGrant.ClientSecret : null;
 
         if (oauth.ClientSecret is { } secretReference)
         {
@@ -232,8 +224,43 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
                 Purpose = "authenticate an MCP OAuth token-revocation request",
                 MinimumTrust = SecretProviderTrust.UserOwned,
             };
-            SecretResolutionResult resolution = await _secretResolver.ResolveAsync(request, cancellationToken);
-            fields["client_secret"] = resolution.RequireValue(request);
+            var resolution = await _secretResolver.ResolveAsync(request, cancellationToken);
+            clientSecret = resolution.RequireValue(request);
+        }
+
+        var authenticationMethod = cachedGrant.TokenEndpointAuthMethod
+            ?? (string.IsNullOrWhiteSpace(clientSecret) ? "none" : "client_secret_post");
+        AuthenticationHeaderValue? authorization = null;
+        switch (authenticationMethod)
+        {
+            case "none":
+                if (!string.IsNullOrWhiteSpace(clientId))
+                {
+                    fields["client_id"] = clientId;
+                }
+
+                break;
+            case "client_secret_post" when !string.IsNullOrWhiteSpace(clientId)
+                && !string.IsNullOrWhiteSpace(clientSecret):
+                fields["client_id"] = clientId;
+                fields["client_secret"] = clientSecret;
+                break;
+            case "client_secret_basic" when !string.IsNullOrWhiteSpace(clientId)
+                && !string.IsNullOrWhiteSpace(clientSecret):
+                var userName = WebUtility.UrlEncode(clientId);
+                var password = WebUtility.UrlEncode(clientSecret);
+                var parameter = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{userName}:{password}"));
+                authorization = new AuthenticationHeaderValue("Basic", parameter);
+                break;
+            default:
+                {
+                    return new McpIdentityMutationResult
+                    {
+                        Succeeded = false,
+                        FailureKind = McpManagementFailureKind.RevocationUnsupported,
+                        Message = "The cached OAuth client authentication method is unsupported for RFC 7009 revocation.",
+                    };
+                }
         }
 
         using var revokeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -244,7 +271,8 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             {
                 Content = new FormUrlEncodedContent(fields),
             };
-            using HttpResponseMessage revokeResponse = await _httpClient.SendAsync(
+            revokeRequest.Headers.Authorization = authorization;
+            using var revokeResponse = await _httpClient.SendAsync(
                 revokeRequest,
                 HttpCompletionOption.ResponseHeadersRead,
                 revokeCancellation.Token);
@@ -325,6 +353,59 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         };
     }
 
+    private async Task<JsonDocument?> ReadRevocationMetadataAsync(
+        McpConnectionProfile profile,
+        Uri metadataUri,
+        CancellationToken cancellationToken)
+    {
+        var metadata = await TryReadMetadataAsync(metadataUri, cancellationToken);
+        if (metadata is not null
+            && metadata.RootElement.TryGetProperty("revocation_endpoint", out var endpoint)
+            && endpoint.ValueKind == JsonValueKind.String)
+        {
+            return metadata;
+        }
+
+        // A prior authentication may have followed validated protected-resource metadata to a
+        // proxy-owned authorization document. Re-run that same compatibility path after restart,
+        // then retry the canonical location served from the handler's validated metadata cache.
+        if (Uri.TryCreate(profile.Command, UriKind.Absolute, out var resourceUri)
+            && resourceUri.Scheme == Uri.UriSchemeHttps)
+        {
+            var protectedResourceMetadataUri = BuildProtectedResourceMetadataUri(resourceUri);
+            using var compatibilityRequest = new HttpRequestMessage(HttpMethod.Get, protectedResourceMetadataUri);
+            using var compatibilityResponse = await _httpClient.SendAsync(
+                compatibilityRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (compatibilityResponse.IsSuccessStatusCode)
+            {
+                var compatibleMetadata = await TryReadMetadataAsync(metadataUri, cancellationToken);
+                if (compatibleMetadata is not null)
+                {
+                    metadata?.Dispose();
+                    return compatibleMetadata;
+                }
+            }
+        }
+
+        return metadata;
+    }
+
+    private async Task<JsonDocument?> TryReadMetadataAsync(
+        Uri metadataUri,
+        CancellationToken cancellationToken)
+    {
+        using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
+        using var metadataResponse = await _httpClient.SendAsync(
+            metadataRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        return metadataResponse.IsSuccessStatusCode
+            ? await ReadBoundedMetadataAsync(metadataResponse.Content, cancellationToken)
+            : null;
+    }
+
     private static async Task<JsonDocument> ReadBoundedMetadataAsync(
         HttpContent content,
         CancellationToken cancellationToken)
@@ -335,7 +416,7 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
         }
 
-        await using Stream stream = await content.ReadAsStreamAsync(cancellationToken);
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
         var buffer = new byte[maximumBytes + 1];
         var offset = 0;
         while (offset < buffer.Length)
@@ -371,6 +452,19 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         return builder.Uri;
     }
 
+    private static Uri BuildProtectedResourceMetadataUri(Uri resourceUri)
+    {
+        var resourcePath = resourceUri.AbsolutePath.TrimStart('/');
+        var builder = new UriBuilder(resourceUri.Scheme, resourceUri.Host, resourceUri.Port)
+        {
+            Path = "/.well-known/oauth-protected-resource"
+                + (resourcePath.Length == 0 ? string.Empty : "/" + resourcePath),
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+        return builder.Uri;
+    }
+
     private static bool HasSameOrigin(Uri first, Uri second)
     {
         return string.Equals(first.Scheme, second.Scheme, StringComparison.OrdinalIgnoreCase)
@@ -392,10 +486,55 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         return valid;
     }
 
+    private async Task<CachedGrant> LoadCachedGrantAsync(string prefix, CancellationToken cancellationToken)
+    {
+        var snapshot = await _tokenStore.GetSnapshotAsync(prefix, cancellationToken);
+        var currentGrantPrefix = $"{prefix}grant:";
+        var currentAccessToken = GetValue(snapshot, currentGrantPrefix + "accessToken");
+        if (!string.IsNullOrWhiteSpace(currentAccessToken))
+        {
+            return LoadCachedGrantFields(snapshot, currentGrantPrefix);
+        }
+
+        var generation = GetValue(snapshot, prefix + "activeGrantGeneration");
+        var grantPrefix = string.IsNullOrWhiteSpace(generation)
+            ? prefix
+            : $"{prefix}grant:{generation}:";
+        return LoadCachedGrantFields(snapshot, grantPrefix);
+    }
+
+    private static CachedGrant LoadCachedGrantFields(
+        IReadOnlyDictionary<string, string> snapshot,
+        string grantPrefix)
+    {
+        return new CachedGrant(
+            GetValue(snapshot, grantPrefix + "accessToken"),
+            GetValue(snapshot, grantPrefix + "refreshToken"),
+            GetValue(snapshot, grantPrefix + "authorizationServer"),
+            GetValue(snapshot, grantPrefix + "clientId"),
+            GetValue(snapshot, grantPrefix + "clientSecret"),
+            GetValue(snapshot, grantPrefix + "tokenEndpointAuthMethod"));
+    }
+
+    private static string? GetValue(IReadOnlyDictionary<string, string> snapshot, string key)
+    {
+        return snapshot.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
+    }
+
     private static string Prefix(McpConnectionProfile profile)
     {
         return $"mcp:oauth:{profile.Id}:";
     }
+
+    private sealed record CachedGrant(
+        string? AccessToken,
+        string? RefreshToken,
+        string? AuthorizationServer,
+        string? ClientId,
+        string? ClientSecret,
+        string? TokenEndpointAuthMethod);
 
     private static McpIdentityMutationResult Unsupported()
     {

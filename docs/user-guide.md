@@ -8,9 +8,12 @@ This guide documents the currently implemented user-facing behavior. Features de
 
 1. [Requirements and installation](#requirements-and-installation)
 2. [Starting Threadsmith](#starting-threadsmith)
+   - [Customizing deployed prompts](#customizing-deployed-prompts)
 3. [Opening and initializing a repository](#opening-and-initializing-a-repository)
+   - [Keeping the semantic workspace current](#keeping-the-semantic-workspace-current)
 4. [Trust levels](#trust-levels)
 5. [Using the interactive terminal](#using-the-interactive-terminal)
+   - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
@@ -18,13 +21,12 @@ This guide documents the currently implemented user-facing behavior. Features de
 10. [Themes and session status](#themes-and-session-status)
 11. [Extensions](#extensions)
 12. [Governed skills and reusable workflows](#governed-skills-and-reusable-workflows)
-13. [Lifecycle hooks and policy automation](#lifecycle-hooks-and-policy-automation)
-14. [Headless and automated use](#headless-and-automated-use)
-15. [Persistence, retention, and diagnostics](#persistence-retention-and-diagnostics)
-16. [MCP connection profiles](#mcp-connection-profiles)
-17. [Safety model](#safety-model)
-18. [Troubleshooting](#troubleshooting)
-19. [Further reference](#further-reference)
+13. [Headless and automated use](#headless-and-automated-use)
+14. [Persistence, retention, and diagnostics](#persistence-retention-and-diagnostics)
+15. [MCP connection profiles](#mcp-connection-profiles)
+16. [Safety model](#safety-model)
+17. [Troubleshooting](#troubleshooting)
+18. [Further reference](#further-reference)
 
 ## Requirements and installation
 
@@ -86,7 +88,13 @@ Headless mode is the default:
 dotnet run --project src\Threadsmith.App -- "inspect this repository"
 ```
 
-With no request, Threadsmith performs repository discovery without granting file-read trust:
+A headless request can also open a specific repository and solution before submitting the model turn:
+
+```powershell
+dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedBuild --solution src\MyRepo.sln "explain the request pipeline"
+```
+
+When repository options and a request are supplied together, Threadsmith opens the repository, selects the solution, records the baseline, waits briefly for `PartialCompilation` semantic readiness, and fails closed without submitting the request if semantic tools would be unusable. With no request, Threadsmith performs repository discovery without granting file-read trust:
 
 ```powershell
 dotnet run --project src\Threadsmith.App
@@ -102,13 +110,21 @@ dotnet src\Threadsmith.App\bin\Debug\net10.0\Threadsmith.App.dll --tui
 dotnet src\Threadsmith.App\bin\Debug\net10.0\Threadsmith.App.dll "inspect this repository"
 ```
 
+### Customizing deployed prompts
+
+Every built or installed application includes a flat `prompts/` directory beside the executable. It contains the Threadsmith-authored system, phase, correction, tool, delegation, skill, provider, and model-visible result prose used by that build. Threadsmith loads the complete declared catalog once at startup; edits affect only a newly started process, and a missing, corrupt, oversized, linked, colliding, or incomplete catalog fails startup before model or tool activity.
+
+Prompt files control wording only. They cannot add or enable tools, change schemas, approve mutations, widen repository or delegated-child authority, alter trust, select models, grant network or secret access, or bypass validation. Prompt content can be sent to the selected provider and is present in explicitly enabled privileged raw-model logs, so never add secrets. Installed upgrades replace the shipped defaults instead of merging local edits; back up experiments before upgrading. See the [prompt file reference](prompt-file-reference.md) for the categorized file-by-file catalog and complete placeholder glossary, and [deployed prompt assets](operations/prompts.md) for source ownership, deployment paths, capacity, logging, and upgrade behavior.
+
 ### Startup arguments
 
 Common arguments include:
 
 | Argument | Purpose |
 |---|---|
-| `--tui` | Start the interactive terminal. |
+| `--tui` | Start the default retained TUIKit terminal. |
+| `--tui=tuikit` | Explicitly start the retained TUIKit terminal. |
+| `--tui=original` | Start the original PrettyPrompt/Spectre terminal. |
 | `--repository <path>` | Open a repository other than the current directory. |
 | `--solution <path>` | Select a solution or supported project explicitly. |
 | `--trust <level>` | Request a trust level without an interactive selector. |
@@ -166,6 +182,20 @@ Initialization creates a minimal UTF-8 `.threadsmith/config.json` containing neu
 
 Declining leaves the repository unchanged.
 
+### Keeping the semantic workspace current
+
+After a solution or supported project is loaded, Threadsmith monitors relevant files beneath the active repository. A short bounded settling interval coalesces editor save bursts before one workspace-scoped refresh begins. An edit to an existing loaded C# document is applied incrementally when its settled path still exists and its identity and project membership remain stable, including editors that save by atomically replacing the same file. Actual document membership changes, project/solution files, build props and targets, analyzer configuration, uncertain changes, and watcher recovery use a complete semantic reload.
+
+An externally attributed cycle prints `External changes detected; updating semantic model...` once, followed by one completion or actionable failure. Watcher recovery instead starts with `External changes require semantic recovery; updating semantic model...` and uses the same single terminal projection. The refresh uses the same serialized console boundary as the composer, so background output does not submit, clear, or discard a draft. Compiler diagnostics may reduce the resulting semantic confidence without making refresh infrastructure fail.
+
+The semantic update itself runs without waiting for Threadsmith to regain focus or for composer input. When the composer is empty, refresh lifecycle output automatically closes and reopens that empty prompt, so the update appears without a keypress or other console interaction. Once any draft text exists, including whitespace, lifecycle output waits until the draft is submitted, cancelled, or cleared back to empty; the refresh never submits, clears, or discards the draft. Focusing the window alone does not trigger or release semantic work. A submitted model request still waits for the already-running refresh before a run is created.
+
+A model request submitted while relevant changes are settling or refreshing waits for the same single-flight refresh before a run identity, budget, conversation entry, model call, or tool call is created. A refresh failure leaves the workspace dirty and rejects new model requests until a later change, retry, or manual refresh establishes current state. Non-model commands such as `/help`, `/quit`, and `/semantic_refresh` remain local.
+
+Run `/semantic_refresh` to force and await one complete refresh even when the workspace appears clean. It reports the changed-file count, duration, and resulting confidence, creates no model run, and returns a clear error if no repository and solution are bound. Cancelling the waiter does not corrupt or cancel refresh work already shared with another trigger.
+
+See [Semantic refresh](operations/semantic-refresh.md) for the full command behavior and the exact external-edit trigger and ignore rules.
+
 ## Trust levels
 
 Trust controls what the host may inspect or execute. It is separate from model capability, tool availability, and per-invocation approval.
@@ -186,7 +216,7 @@ Grant `TrustedBuild` or above only to repositories whose build scripts, analyzer
 
 ## Using the interactive terminal
 
-Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The composer is labeled with the current repository directory name.
+Startup displays the Threadsmith identity, repository and solution state, effective model, trust, session-status mode, target frameworks, semantic confidence, and terminal mode. The composer is labeled with the current repository directory name.
 
 Ordinary prompts are conversational. A greeting or question can complete as a normal assistant response. A repository-change request remains in the same model turn, but the model must call the host-owned `propose_plan` tool before governed planning begins.
 
@@ -194,34 +224,36 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 | Command | Purpose |
 |---|---|
+| `/clone` | Create and activate an independent governed copy of the current session. |
+| `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
+| `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
+| `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
+| `/context mode` | Report the effective cross-turn conversation mode. |
+| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
+| `/extensions` | Browse, load, and unload discovered extensions. |
+| `/help` | Display available commands. |
+| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
+| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
+| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
+| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
+| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
+| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
+| `/models` | Select and persist the active repository provider/model. |
+| `/new` | Checkpoint the current session and activate a fresh empty session. |
 | `/open [path]` | Open or switch repositories. |
-| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
-| `/tools` | Browse and toggle non-essential repository tools. |
 | `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
 | `/policy [name|current]` | Select or report the mutation approval policy for exact staged diffs. |
-| `/extensions` | Browse, load, and unload discovered extensions. |
-| `/new` | Checkpoint the current session and activate a fresh empty session. |
-| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
-| `/clone` | Create and activate an independent governed copy of the current session. |
-| `/models` | Select and persist the active repository provider/model. |
-| `/auth openai-codex [login\|status\|logout]` | Manage OpenAI Codex authentication. |
+| `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
-| `/thinking` | Show or hide the latest sanitized reasoning. |
-| `/fetch-authorize <url> [redirect ...]` | Authorize one exact URL chain for `web_fetch`. |
-| `/mcp [...]` | Inspect and manage MCP profiles and capabilities. |
-| `/hooks [...]` | Inspect, test, approve, enable, disable, or audit lifecycle hooks. |
+| `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
+| `/semantic_refresh` | Force and await a complete semantic refresh without creating a model run. |
 | `/theme` | Select a theme. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
-| `/context mode` | Report the effective cross-turn conversation mode. |
-| `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
-| `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
-| `/context compact` | Request bounded compaction at a safe turn boundary. |
-| `/validation retry` | Resume interrupted post-apply validation. |
-| `/agents <id> [cancel\|cancel-child <id>]` | Inspect or cancel a delegation tree. |
-| `/skills [...]` | Inspect, verify, enable, invoke, resume, or cancel skills. |
-| `/help` | Display available commands. |
-| `/quit` | Exit cleanly. |
+| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/tools` | Browse and toggle non-essential repository tools. |
+| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
 
 
 ### Durable session lifecycle
@@ -230,7 +262,23 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 A resumed session reconstructs tolerant event projections and the sanitized conversation archive, governed memory, mode, persisted usage, and compatible model/reasoning selection. Stale context inspections and provider continuation/cache handles are invalidated. A clone receives new session-local identities and independent future history; it does not duplicate live execution authority, approvals, transactions, leases, credentials, hidden reasoning, or provider transcripts. Clone output includes a copyable `/resume <source-session-id>` return command. See [Session lifecycle operations](operations/session-lifecycle.md).
 
-### Keyboard and clipboard
+### Retained TUIKit frontend (default)
+
+Run `threadsmith --tui` for the default full-screen interface; `threadsmith --tui=tuikit` is equivalent. Run `threadsmith --tui=original` for the previous PrettyPrompt/Spectre interface with native scrollback. Both use the same commands, repository/session workflows, approvals, policies, models, themes, source/Markdown settings, and run coordination. No frontend is selected by configuration. Invalid or repeated frontend selectors fail before startup, and the former `--tui=pretty` spelling is rejected.
+
+TUIKit keeps a one-row status footer and activity row below a scrolling transcript, with one contiguous four-row composer. The first input cell appears directly after the repository prompt. The status footer is the terminal's final row, with no spacer row below it. It requires an interactive terminal of at least 40 columns by 12 rows; shrinking preserves your draft until the terminal grows again. The footer uses shared status snapshots refreshed during runs and selectors; `tui:footer:enabled=false` still hides it.
+
+Enter submits. TUIKit moves each committed ordinary entry into the retained transcript before clearing the composer. During initial semantic loading, it accepts one submitted message, retains it in the transcript, marks it queued, and sends it automatically when the coordinator opens conversation input. Model execution still waits for the current semantic generation so repository tools cannot start against incomplete state; text entered after the queued message remains as the next draft. Ctrl+Enter inserts a newline; Shift+Enter and Alt+Enter do so where the terminal distinguishes them. Ctrl+Alt+Enter submits. Editing supports grapheme/word movement, selection, multiline paste, bounded undo/redo, indentation, and submission history. Ordinary, secondary, and steering prompts keep separate drafts. During a run, Enter requests steering at a safe boundary; double Escape cancels the run. Ctrl+C copies selected text and otherwise exits through process cancellation.
+
+F1 opens a static, non-selectable explanation of every key shown in the activity row. F7 switches keyboard focus between the composer and transcript. In the transcript, arrows/PageUp/PageDown/Home/End scroll; shifted movement selects. Incoming output preserves detached scroll position and shows an unseen-output count. Ctrl+L clears the visible viewport while bounded earlier content remains reachable with Home. Ctrl+C and F6 copy visible selected text; Ctrl+C cancels the process only when nothing is selected. Ctrl+Shift+C copies the focused selection or complete draft. F8 lists validated links from retained output so Enter can copy one. F12 releases or recaptures the mouse, allowing terminal-native selection while released. Explicit application copy is limited to 64 KiB and depends on OSC 52 terminal support. Ctrl+V/Shift+Insert request an OS clipboard read bounded to one MiB and two seconds; terminal bracketed paste is also supported.
+
+Selectors filter labels while preserving stable option identities. Arrows/PageUp/PageDown/Home/End navigate, Enter selects, and Escape cancels. F2 opens complete scrollable option details, including long paths and model descriptions. F8 lists validated links from retained output; Enter copies the selected target and F2 shows the complete target. Links never execute automatically.
+
+The retained transcript keeps up to 1024 chunks/512 KiB and visibly announces eviction. It is a view, not durable session history or native terminal scrollback. Themes and `NO_COLOR` remain supported; selector markers remain visible without color.
+
+### Original frontend keyboard and clipboard
+
+The following keys apply to `--tui=original`. The default retained TUIKit frontend has its own keyboard and clipboard details [above](#retained-tuikit-frontend-default).
 
 | Input | Action |
 |---|---|
@@ -239,14 +287,14 @@ A resumed session reconstructs tolerant event projections and the sanitized conv
 | `Ctrl+V` or `Shift+Insert` | Paste clipboard content as one operation. |
 | `Ctrl+C` | Cancel current input or an active run; with a native terminal selection, copy that selection. |
 | `Ctrl+Shift+C` | Copy a PrettyPrompt editor selection where supported. |
-| `Ctrl+T` | On an empty composer, show or hide the latest reasoning. |
+| `Ctrl+T` | On an empty composer, toggle future reasoning streaming. |
 | Mouse drag / terminal mark mode | Select across the native transcript and composer output. |
 
 Threadsmith deliberately retains native terminal scrollback and does not enable mouse capture. Terminal-specific selection shortcuts remain controlled by the terminal emulator.
 
 ### Reasoning display
 
-Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. `/thinking` or `Ctrl+T` reveals the latest sanitized reasoning in `<thinking>` tags. This does not expose credentials or raw unsanitized provider content.
+Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed by default. `/thinking on` enables live streaming of future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` disables future streaming, and `/thinking` or `Ctrl+T` toggles the same in-session setting. Turning streaming off cannot remove reasoning already written to native scrollback. This does not expose credentials or raw unsanitized provider content.
 
 ### Cross-turn conversation context
 
@@ -257,6 +305,16 @@ Conversation continuity is bounded and host-owned. Threadsmith archives only san
 - **Stateless**: current input and current-run governed state only. Mode changes preserve the archive for later use.
 
 Structured memory distinguishes user requirements, decisions, constraints, unresolved questions, repository findings, completed work, and rejected/superseded information. Explicit corrections supersede rather than erase prior items. Repository findings require current governed evidence and revision provenance; repository changes make dependent items stale before later retrieval.
+
+### Repository-scoped memory
+
+Repository-scoped memory is separate from session conversation memory. It is local to the current repository identity, stored in the ignored `.threadsmith/threadsmith.db` database, and is not shared or tracked by Git. A repository file, prompt append, skill, hook, or ordinary configuration cannot silently create, authorize, or elevate memory.
+
+Use `/memory remember repo <text>` only for facts you explicitly want retained for future sessions in this repository. Threadsmith sanitizes and bounds the text, records user-command provenance, and stores it as untrusted prompt data. `/memory list repo` includes active and inactive audit rows; `/memory inspect <memory-id>` shows the bounded content, validity, authority, hash, and provenance. Corrections use `/memory supersede <memory-id> <replacement-text>` so the old item becomes superseded while the replacement is preferred. `/memory forget <memory-id>` marks an item forgotten without deleting audit metadata.
+
+Repository-dependent memory with path, symbol, project, or revision support is conservatively marked stale when host-observed repository mutations affect that support. Stale, superseded, forgotten, and rejected memory is omitted from model context until explicit validation or correction changes the state. `/memory validate repo` can reactivate explicit user-authored memory that has no repository-dependent support; unverifiable path/symbol/project/revision-scoped items remain stale. `/context inspect` reports repository-memory inclusion, omission, staleness, and budget rationale alongside ordinary conversation context.
+
+Headless callers use the same host-owned repository-memory commands and JSON DTOs as the TUI. Model-proposed repository-memory candidates remain disabled in this implementation; assistant prose alone is never enough to create durable repository memory.
 
 #### How context optimization works
 
@@ -278,9 +336,93 @@ During an unchanged tool round, Threadsmith freezes the assembled prefix and app
 
 Capacity checks use the estimated provider-wire request rather than only visible prompt text. The estimate includes structured content, native or textual tool schemas, provider framing, and the selected model's output reserve. Context reduction occurs before dispatch; a request that still cannot fit fails before contacting the provider.
 
-Provider cache support and reporting vary. Threadsmith reports cache-read or cache-write tokens only when the provider supplies them; a missing counter is **unavailable**, not zero. Compiled providers retain a canonical stateless request as the audit and recovery authority. They do not depend on remote cached state, and Threadsmith does not infer a cache hit from latency.
+##### Active-turn tool continuation compaction
 
-`/context inspect` reports logical content tokens, estimated provider-wire input and budget, stable-prefix tokens, native/textual tool transport, the effective mode and source, token pressure, summary version/range, included or omitted messages and memory, retrieval rationale/provenance, stale or superseded exclusions, and exact pressure reductions. `/context compact` is bounded and atomic: malformed output, cancellation, provider failure, or persistence failure leaves the prior snapshot active. Headless callers use the same host-owned mode, inspection, and compaction commands, with stable JSON inspection output.
+Active-turn compaction keeps one long user request from repeatedly sending every earlier tool result until the active main model's context window is exhausted. It applies automatically to ordinary multi-round evidence collection and planning. It does not end the turn, ask the user to resubmit the request, change the active main model, or expose a compaction tool to the model. Candidate generation can optionally use a separately configured auxiliary model profile.
+
+This is different from `/context compact`. The command compacts completed cross-turn conversation history at a safe turn boundary. Active-turn compaction is an automatic pre-sampling operation over tool continuation generated **inside the request currently running**. There is currently no user or repository setting that disables, postpones, or manually triggers the active-turn reliability boundary.
+
+Threadsmith uses these terms:
+
+| Term | Meaning |
+|---|---|
+| **Frozen context** | The initially assembled host policy, repository instructions, current user input, output contract, canonical tool inventory, and other authority-bearing context. Active-turn compaction never rewrites it. |
+| **Complete group** | All sibling assistant tool-call messages produced by one model round followed by exactly one matching result for each call, in call order. An incomplete, mismatched, duplicate, or orphaned call/result set is not compactable. |
+| **Delivered group** | A complete group that has already been sent verbatim to the model in a later completed request. |
+| **Eligible prefix** | The oldest contiguous delivered groups that can be considered for replacement while newer groups remain exact. |
+| **Cumulative summary** | One bounded, explicitly untrusted historical assistant message that replaces an eligible prefix. A later compaction receives the complete previous summary plus newly old raw activity and returns one updated checkpoint. |
+
+The exact sequence is:
+
+1. **Form and deliver a complete group.** Threadsmith buffers sibling calls and results independently, then emits every call before the matching call-ordered results. The next model request receives that group exactly. A newly completed group cannot be summarized on this first delivery.
+2. **Estimate before every later model request.** The host estimates the complete provider-wire request, including frozen messages, any active summary, raw continuation groups, native or textual tool schemas, provider framing, and the selected profile's effective request output reserve.
+3. **Compare with the pressure target.** The operational target is 75% of the usable selected-model input budget. The usable budget is bounded by both the host request budget and the model context window after its effective output reserve. Below that target, Threadsmith sends the unchanged request.
+4. **Select only an old delivered prefix.** At pressure, Threadsmith keeps at least the newest complete group exact and aims to retain the newest 12,000 raw continuation tokens. That target scales downward when the selected profile, frozen request, and 16,384-token summary allowance leave less room. It never splits a sibling group or selects a group that has not already been delivered verbatim.
+5. **Prepare a bounded candidate request.** Preflight validates aggregate group, message, source, and file-list bounds and projects all candidate input from one candidate-profile-derived capacity budget. The candidate receives the required task objective and required-first acceptance intent, the complete previous active-turn summary when present, and bounded projections of the selected raw tool activity. Preflight performs no provider I/O and creates no hook, usage, call, or cost record. If the configured candidate profile prohibits sensitive input, preflight rejects it before provider I/O.
+6. **Generate a Markdown checkpoint.** An actual candidate attempt uses the separately configured compaction profile when present, or the active main profile as a backward-compatible fallback. The candidate profile may identify a different model or provider and owns candidate context/reserve, maximum output, reasoning, temperature, timeout, retry, sensitivity, and pricing. Candidate requests advertise no tools, use the `Summary` workload when independently configured, set a request-specific model-output ceiling equal to 80% of the summary budget by default, and cross the normal managed before/after model-request hook boundary. They are real model requests: profile identity, reported usage, missing usage, call count, duration, and any partial usage emitted before a later failure are accounted under each attempt's unique identity. One transient retry is allowed, for at most two candidate calls.
+7. **Validate the replacement.** The candidate returns one bounded Markdown summary. The host validates schema, the exact cumulative source-group range, host-observed file lists, sanitization, authority markers, and the total rendered summary budget. The host strips any model-emitted `Files read` or `Files changed` sections and appends its own cumulative file lists.
+8. **Build and re-estimate the replacement.** The model receives the complete prior summary on update attempts and returns one replacement checkpoint rather than an append-only delta. The candidate activates when the rebuilt complete request is smaller than before. It does not have to get below the pressure target in a single operation.
+9. **Replace atomically and continue.** On success, one assistant message labeled as untrusted earlier active-turn history replaces only the selected old prefix. Newer groups and frozen context remain exact, the history rewrite generation increments, and the same user turn continues with the rebuilt provider-neutral request.
+
+For example, suppose one request produces eight complete tool groups. Group 1 becomes eligible only after a later completed request has received it exactly; the same rule independently applies to every later group. If the full request then reaches pressure, Threadsmith might replace delivered groups 1–5 with summary version 1 while retaining groups 6–8 verbatim. If the turn continues and later reaches pressure again, the candidate receives the complete version-1 summary plus the next eligible raw prefix and returns one version-2 checkpoint. The original group results are not deleted from the evidence/audit record.
+
+Current host-owned defaults are:
+
+| Boundary | Default behavior |
+|---|---|
+| Pressure trigger | 75% of the effective active-main-model input budget |
+| Main output reserve | Active main profile's effective request reserve; 8,192 tokens only if no profile reserve is available |
+| Newest raw retention target | 12,000 tokens, scaled to current activation capacity; at least the newest complete group remains exact |
+| Activated summary budget | 16,384 estimated tokens total |
+| Model-written summary output | 80% of the summary budget by default; 13,107 tokens with the default 16,384-token budget |
+| Minimum required savings | Any positive rebuilt-request reduction |
+| Candidate profile | Trusted explicit profile when configured; otherwise the active main profile |
+| Candidate input | Lesser of 65,536 estimated tokens and the candidate profile's available input capacity |
+| Candidate source shape | At most 48 groups and 512 aggregate call/result messages |
+| Candidate summary shape | One bounded Markdown checkpoint; host appends file lists |
+| Task projection | Up to 4,000 objective characters and 32 required-first acceptance items, bounded to 1,000 characters each and 4,000 total characters |
+| Candidate attempts | One initial call plus at most one transient retry; two calls total |
+| Failure backoff | Skip candidate generation for the next two failed pressure assessments |
+
+To select an independent candidate model or tune trusted summary budgets, put settings in repository-excluding machine or user configuration—not repository configuration:
+
+```json
+{
+  "context": {
+    "activeTurnCompaction": {
+      "profileId": "00000000-0000-0000-0000-000000000000",
+      "summaryBudgetTokens": 16384,
+      "modelOutputBudgetPercent": 80
+    }
+  }
+}
+```
+
+The profile must come from the repository-excluding user/machine/host-owned catalog, be enabled, support streaming, and be intended for the `summary` workload or unrestricted by workload. It can reference another provider. Repository-only profiles and repository overrides of a user profile are not visible to this auxiliary dispatcher. Candidate credentials must come from user-owned-or-higher secret providers; repository secret stores cannot supply or replace them. The request-specific provider generation limit is the lower of the profile's effective output reserve and the configured model-output percentage of the summary budget. With defaults, a 16,384-token summary reserve sends `13,107` as the model-output ceiling. Removing the trusted profile setting or setting it to `null` restores the active-main-profile fallback. These settings are resolved at startup; restart Threadsmith after changing them. Repository configuration at this path is ignored, and candidate dispatch uses a separate repository-excluding catalog/provider snapshot, so repository content cannot add, rewrite, or reroute the model that receives candidate evidence. The main profile still owns the 75% trigger, emergency capacity, and rebuilt ordinary request—a smaller candidate profile does not make a large-context main model compact earlier.
+
+Compaction is deliberately lossy only in the model-visible working set. It does not change current user intent, host or repository instructions, trust, tool eligibility, approvals, mutation authority, output requirements, active main model, or sensitivity policy. Tool-result groups are conservatively classified as repository-sensitive for auxiliary routing; a configured candidate profile that prohibits sensitive input fails preflight with no hook or provider call. An active-turn summary never becomes system/developer/current-user content, durable conversation memory, or repository memory. The original sanitized tool events and evidence remain under the existing audit, artifact, retention, and redaction rules. Ordinary active-turn summary checkpoints are kept in memory for the running turn.
+
+Cancellation, hook denial, provider failure, invalid output, validation rejection, and zero-or-negative savings leave the original continuation active and start bounded backoff. If that unchanged request still fits, the turn continues with exact raw groups. If it reaches the emergency boundary, the deterministic compatibility reducer may shorten only older results that were already delivered verbatim. It never shortens a never-delivered group. If the request cannot fit without doing so, Threadsmith fails with a controlled message of the form `Tool continuation requires <tokens> input tokens but the selected model budget is <budget>.`
+
+`/context inspect` shows the latest assessment without exposing summary or tool-result content. Its `active-turn` line reports the status; before/after input estimate; pressure target and maximum; main output reserve; effective/configured retention; candidate profile ID; eligible, compacted, and retained group counts; retained tokens; summary version; cumulative pruned-item count; history generation; remaining backoff; and host rationale. Status values mean:
+
+| Status | Meaning |
+|---|---|
+| `Disabled` | Host composition did not provide active-turn compaction. |
+| `BelowPressure` | The canonical complete request is below the operational target. |
+| `NoEligiblePrefix` | Pressure was reached, but no complete previously delivered prefix can be cut. |
+| `Backoff` | A prior failure temporarily suppressed another candidate attempt. |
+| `Completed` | A validated cumulative summary atomically replaced the reported prefix. |
+| `ValidationRejected` | Candidate schema, fact, source, authority, sensitivity, range, or bound validation failed. |
+| `ProviderFailure` | Candidate generation exhausted its bounded call budget or was denied at the managed provider boundary. |
+| `Cancelled` | Cancellation retained the original continuation. |
+| `InsufficientSavings` | A valid candidate did not reduce the rebuilt canonical request. |
+| `EmergencyReduction` | The compatibility reducer shortened only older already-delivered result content. |
+| `CapacityExceeded` | The request could not fit without reducing a group that had not yet been delivered exactly. |
+
+Provider cache support and reporting vary. A successful rewrite increments a provider-neutral history generation, and compiled providers receive the complete rebuilt stateless request rather than reusing an incompatible opaque conversation identity. The unchanged stable prefix remains eligible for provider prefix caching. Threadsmith reports cache-read or cache-write tokens only when the provider supplies them; a missing counter is **unavailable**, not zero, and latency alone is never treated as proof of a cache hit.
+
+Outside the active-turn line, `/context inspect` reports logical content tokens, estimated provider-wire input and budget, stable-prefix tokens, native/textual tool transport, the effective mode and source, completed-turn summary version/range, included or omitted messages and memory, retrieval rationale/provenance, stale or superseded exclusions, and exact pressure reductions. `/context compact` remains the separate completed-turn compaction command: malformed output, cancellation, provider failure, or persistence failure leaves that prior completed-turn snapshot active. Headless callers receive the same host-owned inspection projection as stable JSON.
 
 Configure budgets under `context:conversation` in `.threadsmith/config.*`; `.threadsmith/config.example` documents recent-turn, summary, retrieval, pressure, artifact, and compaction bounds. Invalid values fail before model invocation. See [Conversation context operations](operations/conversation-context.md) for continuity defaults, failure behavior, retention, restoration, and headless contracts. See [Cache-optimized context operations](operations/cache-optimized-context.md) for request ordering, instruction confinement, diagnostics, and provider-acceleration safety.
 
@@ -311,7 +453,7 @@ Threadsmith has two validation layers around mutations:
 
 | Layer | When it runs | What it does | How to enable or disable |
 |---|---|---|---|
-| Plan sanity checks | Before plan review or auto-approval | Checks structured plan `fileIntents` for repository-relative path safety, empty or ambiguous scope, modify/delete/move/rename sources that are missing, create/move/rename destinations that already exist, protected/secret/`.git` paths, generated/binary files, lifecycle/delete/move risk, dependency/configuration changes, and bounded scope size. Repairable failures are returned to the model for plan revision. | Always on when a plan is proposed. `execution:maxPlanRevisionRepairAttempts` bounds automatic repair. `/plan-policy` controls approval after checks pass; it cannot disable checks. |
+| Plan sanity checks | Before plan review or auto-approval | Checks structured plan `fileIntents` for repository-relative path safety, empty or ambiguous scope, modify/delete/move/rename sources that are missing, create/move/rename destinations that already exist, protected/secret/`.git` paths, generated/binary files, lifecycle/delete/move risk, dependency/configuration changes, and bounded scope size. Repairable failures are returned to the model for plan revision. | Always on when a plan is proposed. `execution:maxCorrectiveTurns` bounds repair attempts. `/plan-policy` controls approval after checks pass; it cannot disable checks. |
 | Proposal/schema/path/baseline validation | Before staging | Validates typed mutation shape, plan-step correlation, scope, trust, repository-relative paths, baseline identities, exact replacement text, lifecycle preconditions, size limits, and budgets. | Always on. It cannot be disabled by repository configuration or approval policy. |
 | Pre-mutation Roslyn syntax screening | Before staging and before approval | Parses proposed `.cs` overlay text in memory and returns blocking syntax diagnostics for model repair. It does not write files or run a build. | Automatic for proposed `.cs` mutations when the pre-mutation analyzer is available. There is no separate user/repository toggle. Non-C# changes skip this layer. |
 | Pre-mutation Roslyn semantic/compilation screening | Before staging and before approval | Uses the loaded semantic workspace to run fast overlay compilation diagnostics without `dotnet build` when confidence permits. Unknown/orphan `.cs` files degrade to syntax-only analysis. | Enabled by having a loaded solution/project with semantic confidence. It degrades explicitly when the workspace is absent, stale, unloaded, or below required confidence. It is not controlled by `validation:stages`. |
@@ -320,7 +462,7 @@ Threadsmith has two validation layers around mutations:
 | Pre-write diagnostic baseline | After approval, before writes | Captures the authoritative diagnostic baseline used to distinguish baseline from introduced failures. | Controlled by `validation:stages`; semantic-only avoids build, compile/diagnostics uses affected `dotnet build --no-restore`. |
 | Post-mutation compile/diagnostic validation | After transactional apply | Builds affected projects and classifies/correlates diagnostics. | Include `compile` and/or `diagnostics` in `validation:stages`. Removing them narrows validation and is not the recommended default. |
 | Post-mutation affected tests | After successful affected build/diagnostics | Selects and runs relevant tests with host-authored rationale. | Include `tests` in `validation:stages`; configure `validation:testScope` where supported. |
-| Correction loop | After failed post-mutation validation | Lets the model propose a bounded correction; every correction repeats all proposal, pre-mutation, diff, policy, transaction, and post-validation gates. | Bounded by `execution:correctionBudget`; cannot bypass approval, transaction, or validation. |
+| Correction loop | After failed post-mutation validation | Lets the model propose a bounded correction; every correction repeats all proposal, pre-mutation, diff, policy, transaction, and post-validation gates. | Bounded by `execution:maxCorrectiveTurns`; cannot bypass approval, transaction, or validation. |
 
 The default repository configuration leaves post-mutation validation broad:
 
@@ -358,11 +500,9 @@ Mutation-related controls:
     "largeDiffThreshold": 500
   },
   "execution": {
-    "correctionBudget": 3,
-    "maxPlanProposalRepairAttempts": 3,
-    "maxPlanRevisionRepairAttempts": 3,
-    "maxMutationProposalRepairAttempts": 3,
-    "maxModelRounds": 16,
+    "maxCorrectiveTurns": 3,
+    "maxModelRounds": 0,
+    "maxPlanningToolRounds": 0,
     "maxStructuredOutputCharacters": 8388608
   },
   "formatting": {
@@ -376,11 +516,8 @@ Mutation-related controls:
 - `planning:approvalRepositoryIdentity` is a host-written repository marker for `AlwaysTrustRepo`; repository content alone cannot grant persistent plan trust without the matching user-owned plan-policy trust store.
 - `mutation:approvalPolicy` sets exact-diff mutation approval behavior; `/policy` changes it for the running session and persists only the explicit `alwaysTrustRepo` opt-in.
 - `mutation:largeDiffThreshold` controls when `ReviewRisky` treats an exact diff as large.
-- `execution:correctionBudget` bounds post-validation correction attempts.
-- `execution:maxPlanProposalRepairAttempts` bounds malformed `propose_plan` argument repair attempts.
-- `execution:maxPlanRevisionRepairAttempts` bounds automatic plan-revision attempts after repairable sanity-check failures.
-- `execution:maxMutationProposalRepairAttempts` bounds mutation-proposal repair attempts after repairable schema, exact-text, or pre-mutation validation failures.
-- `execution:maxModelRounds` and `execution:maxStructuredOutputCharacters` bound model continuation and mutation proposal output.
+- `execution:maxCorrectiveTurns` bounds active-turn correction attempts for recoverable malformed or invalid model-authored requests, including malformed `propose_plan` arguments, invalid pre-execution tool batches, repairable plan revisions, mutation-proposal retries, and post-validation correction attempts.
+- `execution:maxModelRounds` optionally bounds total model continuation rounds for a request, and `0` disables that separate cutoff; `execution:maxPlanningToolRounds` optionally bounds the initial planning rounds that advertise inspection tools before only `propose_plan` remains, and `0` disables that separate cutoff so exploration can use the full model-round budget; `execution:maxStructuredOutputCharacters` bounds mutation proposal output.
 - `formatting:applyOnMutation` controls configured formatting around proposed mutations where formatting support is available; formatting does not bypass exact diff review.
 
 ### Plan approval policies
@@ -435,13 +572,42 @@ Execution writes versioned checkpoints at safe phase boundaries and write-ahead 
 
 Threadsmith can delegate one bounded child layer for parallel exploration, isolated implementation, and independent security, test, performance, and architecture review. Child agents are asynchronous runs inside the Threadsmith process; they are never separate agent executables. Existing Git, build, test, MCP, and authorized tool processes remain tracked infrastructure and do not host an agent.
 
+During an ordinary trusted conversation with an open semantic workspace, the model can call `delegate_agents` to fork one to three Explorer assignments by default and wait for their joined result. The tool is advertised only when a configured model can satisfy its streaming, tool-call, structured-output, and child-context requirements; sensitive assignments repeat selection with the frozen sensitivity policy. Trusted machine/user configuration may adjust the child count only within the compiled one-to-eight ceiling. Each child request contains only `task`, `context`, and `toolAccess`:
+
+```json
+{
+  "agents": [
+    {
+      "task": "Trace how child assignments are admitted and joined.",
+      "context": "Focus on the execution scheduler and cite current repository files.",
+      "toolAccess": "readOnly"
+    },
+    {
+      "task": "Review cancellation and checkpoint behavior.",
+      "context": "Identify terminal outcomes and any explicit omissions.",
+      "toolAccess": "inherit"
+    }
+  ]
+}
+```
+
+`readOnly` admits only approval-free, non-network read tools that were visible to the parent request. `inherit` starts from the parent's exact currently eligible read-only surface and may retain eligible network-backed read tools, but both modes remove mutation, process/code-execution, approval-required, workflow-transition, and delegation tools. Every retained call remains narrowed by child trust, path, phase, per-tool bounds, network, and sensitivity policy, so children cannot approve, mutate, run commands, change host state, or create descendants. Model-supplied child context is untrusted data and cannot widen those boundaries.
+
+The parent waits asynchronously at the tool-call boundary while children run concurrently through the existing scheduler. The joined result leads with a delegation ID and includes assignment IDs, statuses, cited findings, uncertainties, omissions, conservative same-subject disagreement signals, and bounded usage. Raw child transcripts, hidden reasoning, provider payloads, and raw tool JSON do not cross the join. The host stores the joined checkpoint before validated findings enter parent evidence, and monotonically revisioned persistence rejects stale progress writes that arrive after terminal state. An ordinary child with no usable cited finding is failed rather than presented as complete research; usable siblings still join as `Partial`.
+
 Every child has a frozen role, objective, tasks, stopping condition, output schema, baseline, scope, model and reasoning selection, tool allow/deny set, trust ceiling, sensitivity, deadline, dependencies, and hierarchical budget. Read-only children cannot receive mutation tools or mutation trust. Children receive bounded governed evidence—not the parent or sibling transcript—and only schema-valid cited findings cross the join boundary.
 
 Implementation workers require an approved Plan-37 plan and host-proven non-overlapping ownership. Ambiguous paths, directories, symbols, projects, generated outputs, solution files, central package/build configuration, or other shared surfaces fall back to serial execution. Each eligible worker gets a detached worktree under the host-managed temporary root and repeats the normal mutation proposal, exact-diff, approval, transaction, validation, correction, and cancellation gates there. A worktree isolates file state; it is not a security sandbox.
 
 Worker results are frozen structured change sets, not branches to merge. Before selected changes enter the primary worktree, Threadsmith rejects incomplete or stale packages, out-of-scope paths, worker overlap, and changed parent baselines. The parent converts and restages selected changes through the existing transactional workspace, presents one fresh aggregate diff under the current mutation policy, and reruns aggregate affected builds/tests. Threadsmith does not merge, commit, rebase, cherry-pick, push, or resolve conflicts automatically.
 
-Use `/agents <delegation-id>` to inspect the durable run tree. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative admission limits under `agents` as documented in `.threadsmith/config.example`. See [parallel-agent operations](operations/parallel-agents.md).
+When an accepted checkpoint is durably recorded, the TUI immediately prints the stable delegation ID. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, terminal status, bounded usage, reason, and next legal action; raw child prose and hidden reasoning are not interleaved into the conversation. Headless callers use `StartDelegationCommand`, `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher. Configure conservative scheduler admission limits under `agents` as documented in `.threadsmith/config.example`; trusted machine/user `agents:delegation` settings remain separately bounded by compiled ceilings. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
+
+During an active conversation, the TUI shows `Running — Enter to steer; Esc Esc to stop.` Enter creates one idempotent request and immediately acknowledges that Threadsmith is waiting for the current model/tool boundary. Pressing Enter again while the request is pending has no additional effect.
+
+Threadsmith finishes the in-flight provider response or tool batch before opening the ordinary PrettyPrompt composer as `steer >`. During a delegation, every still-running child first pauses before its next provider request or becomes terminal. The parent run remains paused while the composer is displayed, so further tool/model output cannot scroll it away. Submitted text becomes sanitized lower-authority user context for the parent and eligible children; empty/cancel resumes unchanged. Bare `/agents` can recover delegation and assignment IDs from the steering prompt before a detailed inspection or cancellation command. Completed children are not reopened and are counted as undelivered in the joined steering summary.
+
+Press unmodified Escape twice within 850 ms to cooperatively cancel the active run. `Ctrl+C` remains supported. An in-flight provider or tool must still observe cancellation normally; neither shortcut fabricates mid-operation suspension. Ordinary non-hot-key typing and multi-key paste bursts received during a run are buffered for the next PrettyPrompt composer.
 
 ## Tools and tool availability
 
@@ -481,7 +647,7 @@ These settings narrow runtime use independently of availability:
 
 ### Built-in tools
 
-The catalog includes repository listing/reading/search, typed local Git inspection, normalized .NET inventory, semantic symbol/reference/implementation discovery, controlled process execution, current date/time, and other host-governed capabilities. Recursive repository listing and text search skip prohibited/reparse-point descendants; installed releases include a RID-matched ripgrep executable and use it through a bounded `rg` fast path for whole-repository literal text search, respecting repository ignore files while including relevant hidden files. Source-development launches prefer the same app-local `tools/rg(.exe)` layout and may use an `rg` found on `PATH` when no staged payload exists. Regex searches, narrowed globs, configured prohibited-path boundaries, unavailable ripgrep, or a failed native invocation use the confined managed scanner. Search prunes `.git`, `bin`, `obj`, SQLite databases (including `.threadsmith/threadsmith.db`), and oversized files as applicable; files that become locked, inaccessible, or unavailable are skipped without aborting the managed scan. Results and native output remain bounded. On Windows these tools also skip reserved DOS device-name entries such as `nul` so one unopenable path cannot abort the remaining inspection. Use `find_symbol` followed by `find_references` or `find_implementations` for structural code questions; use `search` for exact text and regular expressions.
+The catalog includes repository listing/reading/search, typed local Git inspection, normalized .NET inventory, semantic symbol/reference/implementation discovery, controlled process execution, current date/time, and other host-governed capabilities. Recursive repository listing and text search skip prohibited/reparse-point descendants; installed releases include a RID-matched ripgrep executable and use it through a bounded `rg` fast path for whole-repository literal text searches, respecting repository ignore files while including relevant hidden files. Source-development launches prefer the same app-local `tools/rg(.exe)` layout and may use an `rg` found on `PATH` when no staged payload exists. Regex searches, narrowed globs, configured prohibited-path boundaries, unavailable ripgrep, or a failed native invocation use the confined managed scanner. Search prunes `.git`, `bin`, `obj`, SQLite databases (including `.threadsmith/threadsmith.db`), and oversized files as applicable; files that become locked, inaccessible, or unavailable are skipped without aborting the managed scan. Results and native output remain bounded. On Windows these tools also skip reserved DOS device-name entries such as `nul` so one unopenable path cannot abort the remaining inspection. Use `code_explore` when natural-language C# questions, exact C# symbols, stable symbol IDs, or repository-relative C# paths should return current source or safe current-context back-references, compiler-proven flow among named anchors, dispatch branches, or compact impact context; use granular semantic tools for exact follow-up; use `search` for exact text and regular expressions.
 
 The typed Git tools are `git_diff`, `git_log`, `git_show`, `git_blame`, and `git_compare_branches`. They accept closed modes and validated revision tokens, treat path filters as literal repository-relative data after `--`, preserve unusual filenames through NUL-delimited normalization, classify blobs before text decoding, disable pagers/color/external diff and text-conversion behavior, perform no remote access, and truthfully report bounded commits, paths, lines, patches, bytes, and execution time. `git_diff` supports working-tree, staged, root/ordinary commit, direct-range, and merge-base comparisons. Branch comparison reports its merge base, ahead/behind counts, and normalized changed paths. Git is evaluated by executable policy, and recursive evidence omits descendants outside approved roots or matching prohibited paths.
 
@@ -499,13 +665,55 @@ The .NET health and validation catalog includes `nuget_health`, `dotnet_build`, 
 
 Every result from these exploratory .NET tools is labeled `Exploratory`. These tools cannot replace, overwrite, or satisfy authoritative baseline, affected-project, test-selection, acceptance, or correction evidence. Process cancellation kills the tracked tree; output, dependencies, advisories, diagnostics, tests, time, and pagination are bounded. Interactive and headless turns use the same registry and normalized results.
 
+#### `code_explore`: task-sufficient C# exploration
+
+Use `code_explore` when a question is primarily about **how loaded C# code is structured or behaves** and the answer needs current source, semantic identity, flow, impact, or nearby prompt/configuration context. It is the high-level semantic exploration tool: it often replaces a manual sequence of `find_symbol` → `find_references`/`call_hierarchy` → `read_file` → `search` for ordinary code-understanding turns.
+
+For the host-side declaration catalog, retrieval, ranking, graph, source-allocation, continuation, and output-fitting design, see [`docs/architecture/code-explore-tool.md`](architecture/code-explore-tool.md).
+
+Good fits include:
+
+- “How does this request reach the response builder?”
+- “Show the source for this exact type, overload, or stable symbol ID.”
+- “What declaration is at `src/Foo.cs` line 42?”
+- “How do these two named methods connect?”
+- “What callers/projects/tests look affected if this method changes?”
+- “This C# method loads a prompt/config/resource; include the checked-in artifact that explains the behavior.”
+- “I know the feature words but not the exact symbol names; find the likely compiler-known declarations.”
+
+`code_explore` requires an opened repository at `TrustedBuild` with a semantic workspace loaded to at least partial compilation. Headless repository requests wait for semantic readiness before submitting a model request and fail closed instead of advertising unusable semantic tools when readiness is too low.
+
+The model-facing schema is intentionally strict and minimal: required `query` plus optional `maxFiles`. Unknown fields are rejected. Users and models do not pass separate mode, path-anchor, artifact-anchor, traversal-depth, graph-size, source-limit, artifact-limit, timeout, digest, workspace-generation, or cursor fields; the host owns those controls.
+
+Use the `query` text for:
+
+- **Natural-language C# questions** — ordinary words are tokenized into bounded identifiers, qualified names, path-like spans, and ranking terms.
+- **Exact C# symbols** — simple names, qualified names, overload-like signatures, or stable symbol IDs returned by earlier semantic tools.
+- **Repository-relative `.cs` paths** — include the path, and optionally a line or line-range description, in the query text rather than as a separate argument.
+- **Focused code terms** — feature words, type/member names, or nearby phrases when the exact symbol is unknown.
+- **Host-issued continuation cursors** — paste the entire `code_explore:continue:...` value from a Markdown follow-up target as the next `query` to replay exact source, artifact, or impact continuation identity.
+
+The host derives the internal exploration emphasis from the query and resolved anchors. Dependency, caller, affected-project, blast-radius, or test-impact wording derives the internal impact path so single-symbol questions such as “what depends on Foo?” return caller/project/test evidence without a model-visible `mode` field. Call-flow evidence appears when the resolved question supports a bounded compiler-proven path; broad tool-capability and structural-survey questions do not receive unsolicited flow or blast-radius sections.
+
+The default model-visible result is concise Markdown. It includes an exploration heading, relevant symbol/file count, blast-radius or call-flow evidence when relevant, grouped line-numbered current source or precise current-context back-references, associated artifacts when useful, bounded artifact completeness/omission notes, a kind-diverse set of follow-up targets with pasteable retry query cursors when truncation occurs, and bounded omissions. Blast-radius Markdown shows returned/total counts plus representative callers, implementations, projects, and tests. Before terminal model bounding, host totals and omission state remain in the structured result, but progressive bounding may remove individual impact items and follow-up targets. The structured result and rendered Markdown share the selected-model byte ceiling; if the final Markdown still exceeds it, Threadsmith closes any open code fence and replaces the remaining tail with an explicit output note. At the 1 KiB terminal envelope, the structured projection may retain only workspace generation, confidence, conservative incomplete coverage, and, when it fits, a bounded top-level omission. Candidate-ranking tables, allocation summaries, adaptive-budget details, file/range SHA-256 digests, workspace generation values, emitted-range records, and other audit metadata remain available through diagnostic/structured projections only while they fit.
+
+Natural-language discovery is deterministic and Roslyn-backed. Query text is inert data: it is never executed, provider-reranked, embedded, or treated as an unbounded repository text search. Ranking favors exact/pinned evidence, qualified names, distinctive identifiers, multi-term/co-located structure, graph connectivity, and explicit generated/test focus over isolated common-word collisions. If the result is ambiguous or incomplete, it reports alternatives, omissions, and continuation targets rather than silently guessing.
+
+`code_explore` can also return **associated non-C# artifacts** as a separate supplement to the C# semantic spine. Automatic discovery keeps relationships proven by selected C# source, including repository-relative literals, logical prompt/configuration names, and bounded exact-name matches. Roslyn additional documents, analyzer configuration documents, loaded project metadata files, and bounded textual project item/resource references are added only when artifact/configuration evidence is explicitly requested or a host-issued artifact continuation enables them. The same physical project artifact is emitted once even when several selected projects load it. Markdown labels returned artifacts with their relationship, evidence strength, origin C# source, content excerpt when available, and deduplicated omission/completeness notes when content is absent or truncated; the authoritative structured result also carries media kind, current digest, line range, completeness, and replay metadata. Raw project-file item text is marked as weaker textual inference when item conditions/imports/removes have not been evaluated. Prompt templates, JSON/YAML configuration, XML/resx/project metadata, Markdown, schemas, and text templates remain untrusted repository data: Threadsmith never executes, evaluates, imports, renders, expands external entities, or grants authority from their contents.
+
+Source and artifact output have independent host-owned limits and may also be clamped by the selected model budget. Overflow is reported through omissions and Markdown follow-up targets; paste a `code_explore:continue:...` retry cursor as the next `query` to replay exact host-owned continuation state. Artifacts are omitted when they are binary-shaped, malformed, oversized, missing, changed during read, outside approved roots, prohibited, reparse/device paths, secret/credential-shaped, Git metadata, build output, generated transient output, unsupported media, or unavailable through bounded inventory. Exact-name artifact lookup uses declared, policy-allowlisted host-owned Git inventory when available, parses NUL-framed records before sanitization, caches repeated directory inventories within the query, and fails closed if inventory cannot be trusted.
+
+For overlapping follow-ups, unchanged complete C# source ranges may be replaced with compact back-references only when the host proves the exact range is still present verbatim in the current canonical model request for the same repository, workspace, generation, path, and digest, and only when the serialized pointer is smaller than the source it replaces. Edits, compaction, different sessions/repositories, short spans, partial output, pointer-larger-than-source cases, policy denial, or uncertainty cause safe re-emission or omission. Artifact range deduplication is intentionally separate and conservative.
+
+Use the granular tools when they are the better fit: `find_symbol` for exact symbol lists, `find_references` or `find_implementations` for focused follow-up, `call_hierarchy` or `symbol_impact` for a standalone graph query, `generated_code_query` for generated-document inventory, and `search`/`read_file` for exact text or non-C# files not related by `code_explore` evidence.
+
 Compiler-backed semantic analysis includes `call_hierarchy`, `symbol_impact`, `csharp_pattern_search`, and `generated_code_query`. All four require an opened `TrustedBuild` semantic workspace, are read-only, run no process/network/build/restore/generator/mutation operation, and execute against one captured workspace generation. If invalidation or reload changes that generation before completion, the late result is discarded rather than projected as current.
 
-`call_hierarchy` accepts a stable symbol ID, incoming/outgoing/both direction, and explicit depth/node/edge/time limits. Edges report caller, callee, source call site, direct/static/constructor/interface/virtual/extension/local-function/delegate/unknown dispatch, ambiguity, and cycle closure. Dynamic, reflection, and runtime-only targets are omissions; results never claim whole-program completeness.
+`call_hierarchy` accepts a stable symbol ID, optional incoming/outgoing/both direction, and one optional depth hint. Node counts, edge counts, timeouts, and all other traversal limits are host-owned. The default model-visible projection is a compact call list: caller, callee, source call site, direct/static/constructor/interface/virtual/extension/local-function/delegate/unknown dispatch, ambiguity, cycle closure, and bounded omissions. The richer structured result remains host-owned audit data. Dynamic, reflection, and runtime-only targets are omissions; results never claim whole-program completeness.
 
-`symbol_impact` returns a reasoned bounded graph over loaded references, callers, implementations/overrides, dependent projects and test projects, plus generated/linked source classification. Every edge explains why it was included. Runtime effects and diagnostics not present in the loaded snapshot are explicitly not inferred, so impact is planning evidence rather than proof or mutation authorization.
+`symbol_impact` accepts only a stable symbol ID. Traversal depth, node counts, edge counts, and timeouts are host-owned. The default model-visible projection is a deterministic ranked impact list over loaded references, callers, implementations/overrides, dependent projects and test projects, plus generated/linked source classification, with compact reasons and omissions. Runtime effects and diagnostics not present in the loaded snapshot are explicitly not inferred, so impact is planning evidence rather than proof or mutation authorization.
 
-`csharp_pattern_search` accepts only version 1 of the host-owned inert pattern object. Supported shapes are declaration, type, method, property, field, attribute, invocation, object creation, and member access. Optional predicates are an exact simple name, exact containing type, a closed set of C# modifiers, exact attribute names, and one bounded named whole-match capture. Arbitrary source snippets, regex, scripts, callbacks, analyzers, assemblies, and executable predicates are not schema fields; unknown versions/modifiers and malformed or oversized names fail closed. An optional repository-relative path narrows the search and remains subject to normal path policy.
+`csharp_pattern_search` uses a flat inert model schema: required shape kind plus optional exact name, containing type, repository-relative path, closed C# modifiers, and exact attribute names. Supported shapes are declaration, type, method, property, field, attribute, invocation, object creation, and member access. Version fields, nested pattern wrappers, capture names, result limits, timeouts, arbitrary source snippets, regex, scripts, callbacks, analyzers, assemblies, and executable predicates are not model-facing schema fields; unsupported modifiers and malformed or oversized names fail closed. The compact model-visible projection lists bounded file/range matches and omissions, while confidence, workspace generation, and richer structured fields remain host-owned audit data.
 
 `generated_code_query` inventories only documents already classified in the loaded workspace through `.g.cs`/`.generated.cs`/`obj` convention or Roslyn source-generator exposure. It reports project, path/name, linked classification, explicit origin (`FileConvention`, `SourceGenerator`, `CompilerOrSdk`, or `Unknown`), and optional bounded source content. Missing generator identity is unknown rather than guessed; document/content limits disclose truncation, and the query never runs a generator implicitly.
 
@@ -852,10 +1060,10 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Success` | General successful outcomes. |
 | `Warning` | Warnings. |
 | `Error` | Errors and failures. |
-| `UserPrompt` | User-authored transcript content when projected by a surface; ordinary composer submissions are not redundantly echoed. |
+| `UserPrompt` | User-authored transcript content. TUIKit moves each committed ordinary composer entry into its retained transcript once; the original frontend keeps the native prompt line in terminal scrollback. |
 | `ComposerPrompt` | The interactive repository-name composer prompt. |
 | `ThinkingIndicator` | The transient `THINKING` indicator. |
-| `Reasoning` | Reasoning revealed with `/thinking` or `Ctrl+T`. |
+| `Reasoning` | Streaming reasoning enabled with `/thinking` or `Ctrl+T`. |
 | `DiffAdded` | Added diff lines. |
 | `DiffRemoved` | Removed diff lines. |
 | `DiffContext` | Neutral/context diff lines, including hunk/file headers and display-only hunk spacing. |
@@ -928,6 +1136,8 @@ Set `tui:renderMarkdown=false` to restore terminal-safe model-source chunk caden
 
 The setting follows normal layered configuration precedence and is snapshotted by the interactive shell. It does not affect reasoning, tool/MCP markers, diffs, status, historical transcript restoration, or headless output.
 
+When a model emits recoverable malformed or invalid tool, plan, mutation, pre-mutation, or post-apply validation output, Threadsmith appends bounded corrective feedback to the active turn and asks the model to retry rather than silently repairing the request. If one sibling in a tool batch is invalid before execution, the whole batch is rejected before any sibling runs; after a successful correction, rejected corrective messages are removed from future model history while successful executed evidence remains. `execution:maxCorrectiveTurns` is the single correction budget; exhaustion fails closed without approving, staging, or executing invalid output.
+
 Operation durations are enabled by default through `tui:showOperationDurations`. One Boolean controls interactive request, ordinary-tool, extension-tool, and MCP duration text together. Active request timing covers the complete accepted turn and resumes from the original start after a tool continuation. Ordinary-tool completion timing covers only `ITool.ExecuteAsync`; MCP completion timing covers the remote transport invocation. Completed rows use compact invariant formatting (`47ms`, `8.6s`, `1:02`, `1:02:03`). Missing or invalid legacy timing is omitted rather than shown as zero.
 
 Tool activity also includes concise context when a built-in explicitly defines a safe display field. For example, file reads show the repository-relative path and requested line range, listings show their root, searches show the query, and `run_process` shows the command. The host sanitizes, collapses to one line, and rune-safely bounds this detail before it reaches activity events or the terminal. Process-command display additionally masks common named CLI credential switches such as `--api-key`, `--password`, and `--client-secret`, including whitespace-separated values; avoid placing credentials directly on command lines because no redactor can recognize every application-specific syntax. Raw argument objects, extension arguments, and MCP arguments remain hidden by default.
@@ -940,7 +1150,7 @@ Tool activity also includes concise context when a built-in explicitly defines a
    └ dotnet test src/Threadsmith.sln
 ```
 
-Structured plan proposals, plan auto-approval notices, mutation proposal status, and applied mutation notices use the same one-character-indented interactive lifecycle block family. Proposal bodies, steps, mutation-attempt rows, correction reasons, and applied-mutation detail are guided muted text; auto-approval shows plan-approval provenance and, when prior TUI context explains the classification, a concise risk basis. It does not imply mutation approval.
+Structured plan proposals, plan auto-approval notices, mutation proposal status, generic correction status, and applied mutation notices use the same one-character-indented interactive lifecycle block family. Proposal bodies, steps, mutation-attempt rows, correction reasons, and applied-mutation detail are guided muted text; auto-approval shows plan-approval provenance and, when prior TUI context explains the classification, a concise risk basis. It does not imply mutation approval.
 
 ```text
  PLAN: revision 1
@@ -957,10 +1167,11 @@ Structured plan proposals, plan auto-approval notices, mutation proposal status,
  └ Reason: Policy AutoApproveAllValid approved a High risk plan after sanity checks.
 
  MUTATION: Preparing preview
- └ Attempt: 1/2
+ └ Attempt: 1/4
 
- MUTATION: Retrying proposal with correction evidence
- │ Attempt: 2/2
+ CORRECTION: Retrying model request
+ │ Attempt: 1/3
+ ├ Category: MutationProposal
  └ Reason: ReplaceText expectedText was not found in 'src/File.cs'.
 
  MUTATION: Applied under the active approval policy
@@ -1012,9 +1223,9 @@ Threadsmith also discovers bounded metadata from `.claude/skills/<name>/SKILL.md
 
 Discovery reads only safe bounded frontmatter from explicit nonlinked roots. Explicit activation resolves the current catalog generation, reparses and compares frontmatter, revalidates confinement, rejects linked/reparse roots and descendants plus unsafe YAML features, loads strict-UTF-8 instructions/text resources under aggregate limits, and computes a deterministic SHA-256 identity over path, length, and raw bytes. Scripts and binaries are identity inputs but never execute automatically. `allowed-tools` is advisory; mappings still pass through repository availability, trust, phase, consent, and the central tool policy. Hook, agent, fork, dynamic-shell, or unmapped requirements remain restricted or unsupported rather than acquiring authority.
 
-Use `/skills verify claude:<scope>:<name>` to compute and inspect the exact identity, `/skills enable claude:<scope>:<name>` to persist an external digest/source authorization outside the repository, and `/skills use claude:<scope>:<name> <json>` to invoke it through the same Plan-39 workflow/checkpoint boundary used by native packages. Headless skill commands and `invoke_skill` accept the same selector. Source changes invalidate the old authorization and any resume attempt under its digest.
+Use `/skills verify claude:<scope>:<name>` to compute and inspect the exact identity, `/skills enable claude:<scope>:<name>` to persist an external digest/source authorization outside the repository, and `/skills use claude:<scope>:<name> <json>` to invoke it through the same governed workflow/checkpoint boundary used by native packages. Headless skill commands and `invoke_skill` accept the same selector. Source changes invalidate the old authorization and any resume attempt under its digest.
 
-See [the pinned compatibility contract](skill-compatibility-spec-v1.md) and [skill operations](operations/skills.md). Native Plan-39 signed packages retain stronger verification and distinct `native:` listing labels.
+See [the pinned compatibility contract](skill-compatibility-spec-v1.md) and [skill operations](operations/skills.md). Native signed packages retain stronger verification and distinct `native:` listing labels.
 
 ### Finding and selecting skills
 
@@ -1055,7 +1266,7 @@ Maintained packages are enabled after their shipped integrity verifies:
 
 - `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
-- `review-pr` — returns bounded security, test, performance, and architecture findings without publishing or mutating.
+- `review-pr` — returns bounded security, test, performance, and architecture findings without publishing or mutating;
 - `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
 
 For a natural question such as “How do I compact context?”, the model prefers `threadsmith-docs-help` when `invoke_skill`, the maintained package, current trust, and a compatible model are available. The skill can use only existing `search` and `read_file` capabilities rebound to `ThreadsmithDocs`; it cannot inspect the opened repository, access the network or secrets, execute processes, or mutate anything. If the shipped docs are missing or do not answer the question, it returns `partial` or `unavailable` and states the gap instead of guessing. Shipped documentation is evidence, not policy, and cannot override current host behavior, user instructions, approvals, or repository instructions.
@@ -1170,7 +1381,7 @@ The complete manifest must still declare and hash every referenced asset and sat
 1. `/skills use` runs the bounded `scope` procedure with the selected skill model.
 2. The workflow pauses and displays the complete typed `ProposeDelegation` payload.
 3. The host validates that request against the delegation policy: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
-4. Only an accepted host request creates a delegation ID. Inspect it with `/agents <delegation-id>` and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
+4. Only an accepted host request creates a delegation ID, which the TUI prints immediately. Use bare `/agents` to list observed delegation and assignment IDs, inspect with `/agents <delegation-id>`, and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
 5. After the delegation reaches its authoritative structured join, the adapter supplies that real result through `/skills continue <invocation-id> <delegation-result-json>`. The next workflow step receives only the schema-valid structured result—not raw child transcripts or hidden reasoning.
 
 Model selection is hierarchical. The skill model selected above prepares the proposal; each accepted child receives a host-selected model/reasoning choice constrained by the parent, repository policy, role template, sensitivity, and remaining aggregate budget. A package preference can narrow candidates but cannot force an incompatible model, elevate a child, or bypass the parent ledger. Implementation agents additionally require an approved plan, host-proven non-overlapping ownership, isolated worktrees, parent restaging, a fresh aggregate diff decision, and aggregate validation.
@@ -1222,7 +1433,7 @@ See [Lifecycle hook operations](operations/lifecycle-hooks.md), [hook authoring]
 
 ## Headless and automated use
 
-The headless adapter uses the same command dispatcher and policy path as the TUI. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
+The headless adapter uses the same command dispatcher and policy path as the TUI. `ForceSemanticRefreshAsync` dispatches `ForceSemanticRefreshCommand` and returns the same structured refresh result as `/semantic_refresh`; it does not create a model run. Active-model automation uses `ListActiveModelsCommand`, `GetActiveModelSelectionCommand`, `SelectActiveModelCommand`, and `SetActiveReasoningCommand`; selection and persistence behavior is identical to `/models` and `/reasoning`. Skill automation uses `RefreshSkillsCommand`, `ListSkillsCommand`, `GetSkillCommand`, `GetSkillCompatibilityCommand`, `InstallSkillCommand`, `UninstallSkillCommand`, `VerifySkillCommand`, `SetSkillEnabledCommand`, `PinSkillCommand`, `InvokeSkillCommand`, `ContinueSkillCommand`, `ResumeSkillCommand`, `GetSkillInvocationCommand`, and `CancelSkillInvocationCommand`; verification, schema, compatibility, workflow, persistence, and restoration behavior is identical to `/skills`.
 
 Headless mode writes model/tool activity to standard output and uses these primary exit codes:
 
@@ -1311,7 +1522,7 @@ Interactive lifecycle commands are:
 /mcp auth|logout|revoke|switch-account|diagnose [profile]
 ```
 
-Omitted profile or capability IDs open bounded numbered selectors. `logout`, `revoke`, and `switch-account` show the exact profile and sanitized endpoint before confirmation. Switch-account asks whether to perform local logout or advertised remote revocation first. Resource and prompt values containing spaces may be quoted (for example, `name="review this file"`). Resource and prompt output is marked untrusted, bounded, and displayed only for the explicit operation; aggregate truncation remains visible when server items are omitted, and content is not silently added to model context. `/mcp enable|disable` delegates to the ordinary tool-availability authority. Imported tools start disabled and require an exact repository-bound, capability/schema-digest-bound approval stored outside repository control in the user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` and `tools:defaultEnabledOverrides` entries cannot grant that approval, so a different repository or changed server schema fails closed until explicitly reviewed and enabled again. Servers that advertise list-change notifications trigger a debounced complete rediscovery within the 256-capability connection bound; registry publication is replaced atomically, the manager generation advances, and previously resolved tools from the replaced capability generation can no longer invoke.
+Omitted profile or capability IDs open bounded numbered selectors. `logout`, `revoke`, and `switch-account` show the exact profile and sanitized endpoint before confirmation. Switch-account asks whether to perform local logout or advertised remote revocation first. Resource and prompt values containing spaces may be quoted (for example, `name="review this file"`). Resource and prompt output is marked untrusted, bounded, and displayed only for the explicit operation; aggregate truncation remains visible when server items are omitted, and content is not silently added to model context. `/mcp enable|disable` delegates to the ordinary tool-availability authority. Imported tools start disabled and require an exact repository-bound, capability/schema-digest-bound approval stored outside repository control in the user-owned `~/.threadsmith/mcp-tool-approvals.json` file. Repository `tools:enabled` and `tools:defaultEnabledOverrides` entries cannot grant that approval, so a different repository or changed server schema fails closed until explicitly reviewed and enabled again. Imported tool ids are profile-qualified canonical ids such as `profile:tool`; providers that require narrower function-name syntax receive an internal per-request alias, but host configuration, enablement, policy, and diagnostics continue to use the canonical id. Servers that advertise list-change notifications trigger a debounced complete rediscovery within the 256-capability connection bound; registry publication is replaced atomically, the manager generation advances, and previously resolved tools from the replaced capability generation can no longer invoke.
 
 Headless automation uses the same manager and stable JSON result envelope:
 
@@ -1363,9 +1574,9 @@ A stdio command must be a bare executable name—path-qualified commands are rej
 
 HTTP `headers` support ordinary values and static-token SSO. A `secrets:` header value resolves only when the exact reference is also in `secretScope`; values are not retained in connection status or logs.
 
-For interactive SSO, set `oauth.enabled` to `true`, provide a pre-registered `clientId`, requested `scopes`, and a loopback `redirectPort` (or `0` for an ephemeral port). An optional `clientSecret` must be a logical `secrets:` reference included in `secretScope`. OAuth is HTTP/SSE-only and cannot be combined with an `Authorization` header. Threadsmith uses the official MCP SDK for protected-resource and advertised authorization-server discovery, authorization-code + PKCE, state and issuer validation, token exchange, bearer attachment, and refresh. The configured scopes are an upper bound even when the server advertises broader scopes. `oauth.discoveryUrl` is rejected because the pinned SDK does not support an arbitrary discovery-document override.
+For interactive SSO, set `oauth.enabled` to `true`, requested `scopes`, and a loopback `redirectPort` (or `0` for an ephemeral port). You may provide a pre-registered `clientId`; if it is omitted, an explicit connect or authentication operation asks the MCP SDK to use advertised OAuth metadata plus dynamic client registration for a public native PKCE client. A configured `clientSecret` requires `clientId` and must be a logical `secrets:` reference included in `secretScope`. OAuth is HTTP/SSE-only and cannot be combined with an `Authorization` header. Threadsmith uses the official MCP SDK for protected-resource and advertised authorization-server discovery, dynamic registration when needed, authorization-code + PKCE, state and issuer validation, token exchange, bearer attachment, and refresh. The configured scopes are an upper bound even when the server advertises broader scopes. `oauth.discoveryUrl` is rejected because the pinned SDK does not support an arbitrary discovery-document override.
 
-Interactive mode binds the localhost callback listener before opening the system browser. Automatic startup and repository-rebind connections may reuse or refresh a cached OAuth identity but cannot invoke the authorization callback; missing or unusable identity remains an explicit connect/authentication action instead of opening a browser or waiting for input during list, inspect, or diagnose. Headless mode writes the authorization URL and complete pasted-callback prompt to standard error only for an explicit connect/authentication operation, bypasses optional extension startup even when `--tui` is also present, and preserves the single-JSON standard-output contract. Access and refresh tokens are cached outside the repository in the user-owned `~/.threadsmith/mcp-oauth-tokens.json` secret cache under `mcp:oauth:<profileId>:*`; Unix cache files are owner-only, malformed optional cache content is recoverable, and credentials never appear in connection status, logs, projections, or repository configuration. Listing, inspection, and diagnostics never launch a browser. Local logout clears only the selected profile namespace and makes no remote claim. Remote revoke requires a same-origin advertised HTTPS revocation endpoint; metadata redirects are not followed, request timeouts and other unconfirmed outcomes remain explicit, and explicitly authorized local-only cleanup still clears the selected cache after a timeout. One identity remains cached per profile; switch-account replaces it rather than retaining multiple accounts. Dynamic client registration and stdio OAuth remain out of scope. See [MCP connections](operations/mcp-connections.md) for command details, lifecycle behavior, and live-test variables.
+Interactive mode binds the localhost callback listener before opening the system browser. Automatic startup and repository-rebind connections may reuse or refresh a coherent cached OAuth identity but cannot invoke dynamic registration or the authorization callback; missing or unusable identity remains an explicit connect/authentication action instead of creating a remote client, opening a browser, or waiting for input. Headless mode writes the authorization URL and complete pasted-callback prompt to standard error only for an explicit connect/authentication operation, bypasses optional extension startup even when `--tui` is also present, and preserves the single-JSON standard-output contract. Access tokens, refresh tokens, dynamically registered client ids/secrets, and token metadata are cached outside the repository in the user-owned `~/.threadsmith/mcp-oauth-tokens.json` secret cache as one atomically replaced grant under `mcp:oauth:<profileId>:*`; each read uses one immutable grant snapshot, superseded grants and staged registrations are pruned, Unix cache files are owner-only, malformed optional cache content is recoverable, and credentials never appear in connection status, logs, projections, diagnostic bundles, or repository configuration. Cached dynamic-registration client credentials are reused only when their redirect URI exactly matches the current callback URI; with `redirectPort: 0`, a later explicit re-authentication may require local logout to force a fresh registration. Listing, inspection, and diagnostics never launch a browser. Local logout clears only the selected profile namespace and makes no remote claim. Remote revoke requires a same-origin advertised HTTPS revocation endpoint and uses the grant-bound `none`, `client_secret_post`, or `client_secret_basic` authentication method; configured client credentials remain authoritative and their secret reference is resolved afresh so rotation takes effect. Metadata redirects are not followed, request timeouts and other unconfirmed outcomes remain explicit, and explicitly authorized local-only cleanup still clears the selected cache after a timeout. One identity remains cached per profile; switch-account replaces it rather than retaining multiple accounts. Stdio OAuth remains out of scope. See [MCP connections](operations/mcp-connections.md) for command details, lifecycle behavior, and live-test variables.
 
 ## Safety model
 
@@ -1401,6 +1612,10 @@ Pass `--solution <repository-relative-path>`. A successful selection is remember
 
 Confirm the file still exists beneath the repository and that `.threadsmith/config.json` contains nested `solution.path`. Missing entries are cleared automatically; escaping, prohibited, or linked paths are rejected.
 
+### Semantic refresh failed or requests remain blocked
+
+Run `/semantic_refresh` after confirming the selected solution still exists and the repository remains readable at its current trust level. The command forces a complete reload and reports bounded failure detail without exposing source or exception dumps. Compiler errors can yield a successful reduced-confidence refresh; repeated infrastructure failure leaves the workspace dirty so a model request cannot start from known-stale semantics. Reopen the repository when its root or selected solution changed.
+
 ### A tool is missing
 
 Check, in order:
@@ -1434,6 +1649,10 @@ This is expected when it has never been enabled or when the server capability/sc
 
 Verify the endpoint is the complete chat-completions URL, the profile advertises the capabilities required by the interactive flow, and the logical secret reference resolves. Credentials are intentionally absent from logs.
 
+### Startup reports a prompt catalog error
+
+Restore the complete `prompts/` directory from the same Threadsmith build or reinstall that build. Do not mix files from different versions. The startup diagnostic identifies safe filename/category metadata but deliberately omits prompt bodies and rendered token values.
+
 ### Terminal output has no colors or status row
 
 Styling is suppressed under `NO_COLOR`, redirected output, or limited-terminal detection. The status row is also absent when `tui:footer:enabled` is false.
@@ -1449,11 +1668,14 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 ## Further reference
 
 - [Opening a repository](operations/opening-a-repository.md)
+- [Semantic refresh](operations/semantic-refresh.md)
 - [Session lifecycle, resume, and clone](operations/session-lifecycle.md)
 - [Interactive commands and keys](operations/keyboard-shortcuts.md)
 - [Tool runtime operations](operations/tools.md)
 - [MCP connections and lifecycle](operations/mcp-connections.md)
 - [Model providers](operations/model-providers.md)
+- [Prompt file reference](prompt-file-reference.md)
+- [Deployed prompt assets](operations/prompts.md)
 - [TUI themes](operations/tui-themes.md)
 - [Project prompt append](operations/project-prompt-append.md)
 - [Cache-optimized context](operations/cache-optimized-context.md)

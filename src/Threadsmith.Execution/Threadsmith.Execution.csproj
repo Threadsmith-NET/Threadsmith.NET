@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.ParallelAgents.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -3,6 +3,7 @@ namespace Threadsmith.Execution;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -13,79 +14,78 @@ using Threadsmith.Models;
 using Threadsmith.Tools;
 
 /// <summary>Coordinates scripted sessions through application commands.</summary>
-public sealed class SessionApplication :
+public sealed partial class SessionApplication :
     ICommandHandler<CreateSessionCommand, SessionId>,
     ICommandHandler<SubmitRequestCommand, RunId>,
     ICommandHandler<WaitForRunCommand, bool>,
     ICommandHandler<CancelRunCommand, bool>,
+    ICommandHandler<RequestRunSteeringPauseCommand, RunSteeringPauseRequestResult>,
+    ICommandHandler<WaitForRunSteeringPauseCommand, RunSteeringPauseWaitResult>,
+    ICommandHandler<SubmitRunSteeringCommand, RunSteeringSubmissionResult>,
     ICommandHandler<ApprovePlanCommand, bool>,
     ICommandHandler<RejectPlanCommand, bool>,
     ICommandHandler<RevisePlanCommand, bool>,
     ICommandHandler<SetConversationContextModeCommand, bool>,
-    ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>
+    ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>,
+    ISemanticRefreshPublicationGate
 {
     private const string ProposePlanToolName = "propose_plan";
     private const string ProposePlanArgumentsSchema = """
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schemaVersion", "plan"],
+          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
           "properties": {
-            "schemaVersion": { "type": "integer", "const": 1 },
-            "plan": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
-              "properties": {
-                "schemaVersion": { "type": "integer", "const": 2 },
-                "revision": { "type": "integer", "minimum": 1 },
-                "summary": { "type": "string" },
-                "steps": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
-                    "properties": {
-                      "stepId": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["value"],
-                        "properties": { "value": { "type": "string", "format": "uuid" } }
-                      },
-                      "title": { "type": "string" },
-                      "description": { "type": "string" },
-                      "fileIntents": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["kind", "path"],
-                          "properties": {
-                            "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
-                            "path": { "type": "string" },
-                            "destinationPath": { "type": "string" }
-                          }
-                        }
-                      },
-                      "expectedOutcome": { "type": "string" },
-                      "validation": { "type": "array", "items": { "type": "string" } }
+            "schemaVersion": { "type": "integer", "const": 2 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "summary": { "type": "string" },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+                "properties": {
+                  "stepId": { "type": "string", "format": "uuid" },
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "fileIntents": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "path"],
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
+                        "path": { "type": "string" },
+                        "destinationPath": { "type": "string" }
+                      }
                     }
-                  }
-                },
-                "risks": { "type": "array", "items": { "type": "string" } },
-                "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "expectedOutcome": { "type": "string" },
+                  "validation": { "type": "array", "items": { "type": "string" } }
+                }
               }
-            }
+            },
+            "risks": { "type": "array", "items": { "type": "string" } },
+            "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
           }
         }
         """;
+
+    private static readonly Meter _meter = new("Threadsmith.Execution");
+    private static readonly Histogram<double> _semanticAdmissionWait = _meter.CreateHistogram<double>(
+        "threadsmith.semantic.refresh.admission_wait.duration",
+        "ms");
 
     private readonly Func<IBudget> _budgetFactory;
     private readonly IContextAssembler? _contextAssembler;
     private readonly IConversationCompactor? _conversationCompactor;
     private readonly IConversationMemoryGovernor? _conversationGovernor;
     private readonly IConversationStore? _conversationStore;
+    private readonly IConversationToolSnapshotStore? _conversationToolSnapshots;
+    private readonly CorrectiveMessageFactory _correctiveMessages;
+    private readonly IPromptLoader _prompts;
     private readonly ConversationContextMode _defaultConversationMode;
     private readonly ModelProfileId? _defaultModelProfileId;
     private readonly IEvidenceStore? _evidenceStore;
@@ -93,17 +93,24 @@ public sealed class SessionApplication :
     private readonly IHookCoordinator? _hooks;
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IPlanSanityChecker? _planSanityChecker;
+    private readonly IRepositoryMemoryGovernor? _repositoryMemoryGovernor;
+    private readonly ISemanticRefreshCoordinator? _semanticRefreshCoordinator;
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
 
     private readonly Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
         _planSanityRequestFactory;
 
+    private readonly IActiveTurnCompactor? _activeTurnCompactor;
+    private readonly ActiveTurnCompactionPolicy _activeTurnCompactionPolicy;
+    private readonly ActiveTurnCompactionCandidateProfile? _activeTurnCompactionProfile;
     private readonly IDomainEventStream _events;
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
+    private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
+    private readonly RunSteeringCoordinator _steering;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ConcurrentDictionary<SessionId, byte> _sessions = new();
     private readonly Func<SessionId, CancellationToken, Task<ToolInvocationContext>>?
@@ -116,6 +123,8 @@ public sealed class SessionApplication :
     private readonly IToolRegistry? _toolRegistry;
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>?
+        _selectActiveModel;
 
     /// <summary>Gets whether any model or governed run is still active.</summary>
     public bool HasActiveWork => _runs.Values.Any(registration => !registration.Completion.Task.IsCompleted);
@@ -137,6 +146,48 @@ public sealed class SessionApplication :
         }
 
         _sessions.TryAdd(sessionId, 0);
+    }
+
+    /// <inheritdoc />
+    public async Task<TResult> PublishAsync<TResult>(
+        SessionId sessionId,
+        WorkspaceId workspaceId,
+        Func<CancellationToken, Task<TResult>> publication,
+        CancellationToken cancellationToken = default)
+    {
+        if (sessionId == default)
+        {
+            throw new ArgumentException("The session id cannot be default.", nameof(sessionId));
+        }
+
+        ArgumentNullException.ThrowIfNull(publication);
+        var admissionGate = _semanticAdmissionGates.GetOrAdd(
+            SemanticAdmissionKey.Create(sessionId, workspaceId),
+            static _ => new SemaphoreSlim(1, 1));
+        await admissionGate.WaitAsync(cancellationToken);
+        try
+        {
+            // These completion tasks are the intentional cross-command terminal signals owned by each run.
+#pragma warning disable VSTHRD003
+            var activeRuns = _runs.Values
+                .Where(registration => workspaceId == default
+                    ? registration.WorkspaceId == default && registration.SessionId == sessionId
+                    : registration.WorkspaceId == workspaceId)
+                .Where(registration => !registration.Completion.Task.IsCompleted)
+                .Select(registration => registration.Completion.Task)
+                .ToArray();
+#pragma warning restore VSTHRD003
+            foreach (var activeRun in activeRuns)
+            {
+                await WaitForTerminalStateAsync(activeRun, cancellationToken);
+            }
+
+            return await publication(cancellationToken);
+        }
+        finally
+        {
+            admissionGate.Release();
+        }
     }
 
     /// <summary>Initializes a new instance of the <see cref="SessionApplication"/> class.</summary>
@@ -170,13 +221,25 @@ public sealed class SessionApplication :
         IPlanSanityChecker? planSanityChecker = null,
         IPlanApprovalPolicy? planApprovalPolicy = null,
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
-            planSanityRequestFactory = null)
+            planSanityRequestFactory = null,
+        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
+        IActiveTurnCompactor? activeTurnCompactor = null,
+        ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
+        ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
+        Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectActiveModel = null,
+        IConversationToolSnapshotStore? conversationToolSnapshots = null,
+        RunSteeringCoordinator? steering = null,
+        CorrectiveMessageFactory? correctiveMessages = null,
+        IPromptLoader? prompts = null,
+        ISemanticRefreshCoordinator? semanticRefreshCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(correctiveMessages);
+        ArgumentNullException.ThrowIfNull(prompts);
         if ((toolPipeline is null) != (toolContextFactory is null))
         {
             throw new ArgumentException(
@@ -206,15 +269,26 @@ public sealed class SessionApplication :
         _planSanityChecker = planSanityChecker;
         _planApprovalPolicy = planApprovalPolicy;
         _planSanityRequestFactory = planSanityRequestFactory;
+        _repositoryMemoryGovernor = repositoryMemoryGovernor;
+        _activeTurnCompactor = activeTurnCompactor;
+        _activeTurnCompactionPolicy = activeTurnCompactionPolicy ?? new ActiveTurnCompactionPolicy();
+        _activeTurnCompactionPolicy.Validate();
+        _activeTurnCompactionProfile = activeTurnCompactionProfile;
         _userUrlIntake = userUrlIntake;
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
         _limits = limits ?? ExecutionLimits.Default;
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
+        _selectActiveModel = selectActiveModel;
         _conversationStore = conversationStore;
         _conversationGovernor = conversationGovernor;
         _conversationCompactor = conversationCompactor;
+        _conversationToolSnapshots = conversationToolSnapshots;
+        _steering = steering ?? new RunSteeringCoordinator();
+        _correctiveMessages = correctiveMessages;
+        _prompts = prompts;
+        _semanticRefreshCoordinator = semanticRefreshCoordinator;
         if (!Enum.IsDefined(defaultConversationMode))
         {
             throw new ArgumentOutOfRangeException(nameof(defaultConversationMode));
@@ -247,7 +321,7 @@ public sealed class SessionApplication :
     }
 
     /// <inheritdoc />
-    public Task<RunId> HandleAsync(
+    public async Task<RunId> HandleAsync(
         SubmitRequestCommand command,
         CancellationToken cancellationToken = default)
     {
@@ -258,31 +332,66 @@ public sealed class SessionApplication :
             throw new InvalidOperationException($"Session {command.SessionId.Value:D} does not exist.");
         }
 
-        var runId = RunId.New();
-        var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var criteria = command.AcceptanceCriteria?.Select(criterion =>
+        if (_semanticRefreshCoordinator is null)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(criterion.Description);
-            return criterion with
-            {
-                Description = _sanitizer.Sanitize(criterion.Description),
-            };
-        }).ToArray() ?? [];
-        var task = new TaskSpecification(
-            _sanitizer.Sanitize(command.Request),
-            criteria);
-        var machine = new RunStateMachine(command.SessionId, runId, _events);
-        var runBudget = _budgetFactory()
-            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
-        var registration = new RunRegistration(command.SessionId, linkedSource, task, machine, runBudget);
-        if (!_runs.TryAdd(runId, registration))
-        {
-            linkedSource.Dispose();
-            throw new InvalidOperationException("The run identifier already exists.");
+            return AdmitRun(command, default, cancellationToken);
         }
 
-        _ = ExecuteRunAsync(command, runId, registration);
-        return Task.FromResult(runId);
+        var admissionStarted = Stopwatch.GetTimestamp();
+        try
+        {
+            while (true)
+            {
+                var refreshResult = await _semanticRefreshCoordinator.EnsureCurrentAsync(
+                    command.SessionId,
+                    SemanticRefreshReason.UserAdmission,
+                    cancellationToken);
+
+                var expectedWorkspaceId = refreshResult.WorkspaceId;
+                var admissionGate = _semanticAdmissionGates.GetOrAdd(
+                    SemanticAdmissionKey.Create(command.SessionId, expectedWorkspaceId),
+                    static _ => new SemaphoreSlim(1, 1));
+                var runId = default(RunId);
+                RunRegistration? registration = null;
+                var admitted = false;
+                await admissionGate.WaitAsync(cancellationToken);
+                try
+                {
+                    admitted = _semanticRefreshCoordinator.TryAdmitCurrent(
+                        command.SessionId,
+                        expectedWorkspaceId,
+                        () => TryRegisterRun(
+                            command,
+                            expectedWorkspaceId,
+                            cancellationToken,
+                            out runId,
+                            out registration));
+                }
+                finally
+                {
+                    admissionGate.Release();
+                }
+
+                if (!admitted)
+                {
+                    continue;
+                }
+
+                if (registration is null)
+                {
+                    throw new InvalidOperationException(
+                        "Semantic admission completed without registering a run.");
+                }
+
+                _ = ExecuteRunAsync(command, runId, registration);
+                return runId;
+            }
+        }
+        finally
+        {
+            _semanticAdmissionWait.Record(
+                Stopwatch.GetElapsedTime(admissionStarted).TotalMilliseconds);
+        }
     }
 
     /// <inheritdoc />
@@ -359,6 +468,83 @@ public sealed class SessionApplication :
         }
 
         return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringPauseRequestResult> HandleAsync(
+        RequestRunSteeringPauseCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = _steering.RequestPause(command.SessionId, command.RunId);
+        if (result.Status == RunSteeringPauseRequestStatus.Accepted)
+        {
+            await _events.PublishAsync(
+                new RunSteeringPauseRequested(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    result.PauseId),
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringPauseWaitResult> HandleAsync(
+        WaitForRunSteeringPauseCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _steering.WaitForPauseAsync(
+            command.SessionId,
+            command.RunId,
+            command.PauseId,
+            cancellationToken);
+        if (result.Status == RunSteeringPauseWaitStatus.Ready
+            && _steering.TryMarkPausedPublished(command.SessionId, command.RunId, command.PauseId))
+        {
+            await _events.PublishAsync(
+                new RunSteeringPaused(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    command.PauseId),
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<RunSteeringSubmissionResult> HandleAsync(
+        SubmitRunSteeringCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var sanitized = string.IsNullOrWhiteSpace(command.Text)
+            ? null
+            : _sanitizer.Sanitize(command.Text);
+        var result = _steering.Submit(
+            command.SessionId,
+            command.RunId,
+            command.PauseId,
+            sanitized);
+        if (result.Status is RunSteeringSubmissionStatus.Accepted
+            or RunSteeringSubmissionStatus.Dismissed)
+        {
+            await _events.PublishAsync(
+                new RunSteeringSubmitted(
+                    command.SessionId,
+                    DateTimeOffset.UtcNow,
+                    command.RunId,
+                    command.PauseId,
+                    result.Sequence,
+                    result.Status == RunSteeringSubmissionStatus.Accepted),
+                cancellationToken);
+        }
+
+        return result;
     }
 
     /// <inheritdoc />
@@ -465,7 +651,7 @@ public sealed class SessionApplication :
                 return false;
             }
 
-            string instructions = _sanitizer.Sanitize(command.RevisionInstructions);
+            var instructions = _sanitizer.Sanitize(command.RevisionInstructions);
             await _events.PublishAsync(
                 new PlanRevisionRequested(
                     command.SessionId,
@@ -482,18 +668,22 @@ public sealed class SessionApplication :
                 ],
             };
             registration.PendingApprovalId = null;
+            var stopwatch = Stopwatch.StartNew();
             try
             {
-                var revisedPlan = await GeneratePlanAsync(
+                var revisedPublication = await GeneratePlanAsync(
                     command.RunId,
                     registration,
                     RunPhase.AwaitingPlanApproval,
                     cancellationToken) ?? throw new MalformedModelOutputException(
                         "The revision response did not contain a structured plan.");
-                await PrepareAndPublishPlanAsync(
+                stopwatch.Stop();
+                AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+                await PublishPlanAsync(
                     command.RunId,
                     registration,
-                    revisedPlan,
+                    revisedPublication.Plan,
+                    revisedPublication.Decision,
                     cancellationToken);
                 return true;
             }
@@ -569,6 +759,88 @@ public sealed class SessionApplication :
                 cancellationToken);
     }
 
+    private CorrectiveMessageFactory RequireCorrectiveMessages()
+    {
+        return _correctiveMessages;
+    }
+
+    private IPromptLoader RequirePrompts()
+    {
+        return _prompts;
+    }
+
+    private static async Task WaitForTerminalStateAsync(
+        Task<bool> activeRun,
+        CancellationToken cancellationToken)
+    {
+        // Run failure and cancellation are already projected by ExecuteRunAsync. Publication needs only
+        // the terminal boundary, while cancellation of this waiter must remain observable to its caller.
+        await ((Task)activeRun)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private RunId AdmitRun(
+        SubmitRequestCommand command,
+        WorkspaceId workspaceId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryRegisterRun(
+            command,
+            workspaceId,
+            cancellationToken,
+            out var runId,
+            out var registration))
+        {
+            throw new InvalidOperationException("The run identifier already exists.");
+        }
+
+        _ = ExecuteRunAsync(command, runId, registration);
+        return runId;
+    }
+
+    private bool TryRegisterRun(
+        SubmitRequestCommand command,
+        WorkspaceId workspaceId,
+        CancellationToken cancellationToken,
+        out RunId runId,
+        [NotNullWhen(true)] out RunRegistration? registration)
+    {
+        runId = RunId.New();
+        var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var criteria = command.AcceptanceCriteria?.Select(criterion =>
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(criterion.Description);
+            return criterion with
+            {
+                Description = _sanitizer.Sanitize(criterion.Description),
+            };
+        }).ToArray() ?? [];
+        var task = new TaskSpecification(
+            _sanitizer.Sanitize(command.Request),
+            criteria);
+        var machine = new RunStateMachine(command.SessionId, runId, _events);
+        var runBudget = _budgetFactory()
+            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
+        registration = new RunRegistration(
+            command.SessionId,
+            workspaceId,
+            linkedSource,
+            task,
+            machine,
+            runBudget);
+        if (!_runs.TryAdd(runId, registration))
+        {
+            linkedSource.Dispose();
+            registration = null;
+            return false;
+        }
+
+        _steering.RegisterRun(command.SessionId, runId);
+        return true;
+    }
+
     private async Task ExecuteRunAsync(
         SubmitRequestCommand command,
         RunId runId,
@@ -596,7 +868,14 @@ public sealed class SessionApplication :
                 registration.CurrentTurnHostContext =
                 [
                     .. userUrlReferences.Select(reference =>
-                        $"Host-authorized current-user URL candidate #{reference.Ordinal}: use web_fetch userUrlId '{reference.Id}'."),
+                        _prompts.Render(
+                            PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["Ordinal"] = reference.Ordinal.ToString(
+                                    System.Globalization.CultureInfo.CurrentCulture),
+                                ["UserUrlId"] = reference.Id,
+                            })),
                 ];
             }
 
@@ -643,20 +922,15 @@ public sealed class SessionApplication :
                 "request accepted",
                 registration.Cancellation.Token);
 
-            var plan = await GeneratePlanAsync(
+            var publication = await GeneratePlanAsync(
                 runId,
                 registration,
                 registration.Machine.Phase,
                 registration.Cancellation.Token);
+            stopwatch.Stop();
+            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
 
-            var elapsed = registration.Budget.Accrue(
-                new BudgetDimensions(0, 0, stopwatch.Elapsed));
-            if (elapsed.IsExhausted)
-            {
-                throw new BudgetExceededException(elapsed.Reason ?? "Execution budget exhausted.");
-            }
-
-            if (plan is not null)
+            if (publication is not null)
             {
                 if (registration.Machine.Phase == RunPhase.EvidenceCollection)
                 {
@@ -666,10 +940,11 @@ public sealed class SessionApplication :
                         registration.Cancellation.Token);
                 }
 
-                await PrepareAndPublishPlanAsync(
+                await PublishPlanAsync(
                     runId,
                     registration,
-                    plan,
+                    publication.Plan,
+                    publication.Decision,
                     registration.Cancellation.Token);
                 return;
             }
@@ -679,6 +954,7 @@ public sealed class SessionApplication :
                 "scripted activity completed",
                 registration.Cancellation.Token);
             await PromoteHostObservedMemoryAsync(
+                runId,
                 registration,
                 completedWork: [$"Completed request: {registration.Task.Intent}"],
                 cancellationToken: registration.Cancellation.Token);
@@ -703,7 +979,7 @@ public sealed class SessionApplication :
         }
         catch (Exception exception)
         {
-            string sanitizedMessage = _sanitizer.Sanitize(exception.Message);
+            var sanitizedMessage = _sanitizer.Sanitize(exception.Message);
             _logger.LogError(
                 "Run {RunId} failed for session {SessionId}: {Classification}: {Message}",
                 runId.Value,
@@ -727,6 +1003,10 @@ public sealed class SessionApplication :
                 CancellationToken.None);
             registration.Completion.TrySetException(exception);
         }
+        finally
+        {
+            _steering.CompleteRun(command.SessionId, runId);
+        }
     }
 
     private async Task CompleteExecutionAsync(
@@ -740,11 +1020,20 @@ public sealed class SessionApplication :
             var outcome = await orchestrator.WaitForOutcomeAsync(
                 runId,
                 registration.Cancellation.Token);
-            bool succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
+            var succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
             await registration.Machine.TransitionAsync(
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
                 CancellationToken.None);
+            if (succeeded)
+            {
+                await PromoteHostObservedMemoryAsync(
+                    runId,
+                    registration,
+                    completedWork: [$"Completed approved execution: {registration.Task.Intent}"],
+                    cancellationToken: CancellationToken.None);
+            }
+
             await _events.PublishAsync(
                 new RunCompleted(
                     registration.SessionId,
@@ -825,29 +1114,149 @@ public sealed class SessionApplication :
     }
 
     private async Task PromoteHostObservedMemoryAsync(
+        RunId runId,
         RunRegistration registration,
         IReadOnlyList<string>? decisions = null,
         IReadOnlyList<string>? unresolvedQuestions = null,
         IReadOnlyList<string>? completedWork = null,
         CancellationToken cancellationToken = default)
     {
-        if (_conversationGovernor is null || registration.SourceMessage is not { } sourceMessage)
+        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
+        if (_conversationGovernor is not null && registration.SourceMessage is { } sourceMessage)
+        {
+            await _conversationGovernor.PromoteAsync(
+                new ConversationPromotionRequest
+                {
+                    SessionId = registration.SessionId,
+                    SourceMessage = sourceMessage,
+                    Decisions = decisions ?? [],
+                    UnresolvedQuestions = unresolvedQuestions ?? [],
+                    CompletedWork = completedWork ?? [],
+                    RepositoryEvidence = repositoryEvidence,
+                },
+                cancellationToken);
+        }
+
+        try
+        {
+            await PromoteHostObservedRepositoryMemoryAsync(
+                runId,
+                registration,
+                decisions ?? [],
+                unresolvedQuestions ?? [],
+                completedWork ?? [],
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Repository-memory promotion failed for run {RunId}; the authoritative run outcome is unchanged.",
+                runId.Value);
+        }
+    }
+
+    private async Task PromoteHostObservedRepositoryMemoryAsync(
+        RunId runId,
+        RunRegistration registration,
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork,
+        CancellationToken cancellationToken)
+    {
+        if (_repositoryMemoryGovernor is null
+            || string.IsNullOrWhiteSpace(registration.RepositoryIdentity))
         {
             return;
         }
 
-        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
-        await _conversationGovernor.PromoteAsync(
-            new ConversationPromotionRequest
+        var repositoryIdentity = RepositoryIdentity.Create(registration.RepositoryIdentity);
+        foreach (var (kind, content) in CreateRepositoryMemoryCandidates(
+            decisions,
+            unresolvedQuestions,
+            completedWork))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(content))
             {
-                SessionId = registration.SessionId,
-                SourceMessage = sourceMessage,
-                Decisions = decisions ?? [],
-                UnresolvedQuestions = unresolvedQuestions ?? [],
-                CompletedWork = completedWork ?? [],
-                RepositoryEvidence = repositoryEvidence,
-            },
-            cancellationToken);
+                continue;
+            }
+
+            var result = await _repositoryMemoryGovernor.PromoteHostObservedAsync(
+                new HostObservedRepositoryMemoryPromotion(
+                    registration.SessionId,
+                    runId,
+                    repositoryIdentity,
+                    kind,
+                    content),
+                cancellationToken);
+            foreach (var change in result.StateUpdates.Where(change => change.PreviousValidity != change.Validity))
+            {
+                await _events.PublishAsync(
+                    new RepositoryMemoryValidityChanged(
+                        registration.SessionId,
+                        DateTimeOffset.UtcNow,
+                        repositoryIdentity,
+                        change.MemoryId,
+                        change.Validity,
+                        change.Reason),
+                    cancellationToken);
+            }
+
+            if (!result.WasInserted)
+            {
+                continue;
+            }
+
+            await _events.PublishAsync(
+                new RepositoryMemoryRemembered(
+                    registration.SessionId,
+                    DateTimeOffset.UtcNow,
+                    repositoryIdentity,
+                    result.Item.Id,
+                    result.Item.Kind,
+                    result.Item.Authority),
+                cancellationToken);
+        }
+    }
+
+    private static IReadOnlyList<(RepositoryMemoryKind Kind, string Content)> CreateRepositoryMemoryCandidates(
+        IReadOnlyList<string> decisions,
+        IReadOnlyList<string> unresolvedQuestions,
+        IReadOnlyList<string> completedWork)
+    {
+        return
+        [
+            .. decisions.Select(content => (RepositoryMemoryKind.ArchitectureDecision, content)),
+            .. unresolvedQuestions.Select(content => (RepositoryMemoryKind.UnresolvedQuestion, content)),
+            .. completedWork.Select(content => (RepositoryMemoryKind.WorkflowFact, content)),
+        ];
+    }
+
+    private static void AccrueUnchargedWallClockOrThrow(
+        RunRegistration registration,
+        TimeSpan elapsed)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        var chargedModelWallClock = registration.ModelRequestWallClockAccrued
+            - registration.ModelRequestWallClockSettled;
+        if (chargedModelWallClock < TimeSpan.Zero)
+        {
+            chargedModelWallClock = TimeSpan.Zero;
+        }
+
+        var unchargedWallClock = elapsed > chargedModelWallClock
+            ? elapsed - chargedModelWallClock
+            : TimeSpan.Zero;
+        registration.ModelRequestWallClockSettled = registration.ModelRequestWallClockAccrued;
+        var elapsedStatus = registration.Budget.Accrue(new BudgetDimensions(
+            0,
+            0,
+            unchargedWallClock));
+        if (elapsedStatus.IsExhausted)
+        {
+            throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
+        }
     }
 
     private static string RenderLegacyContinuation(
@@ -863,46 +1272,52 @@ public sealed class SessionApplication :
             "\n",
             continuationMessages.Select(message =>
                 $"<continuation role=\"{message.Role}\" tool=\"{message.ToolName}\" call=\"{message.ToolCallId}\">"
-                + $"{System.Security.SecurityElement.Escape(string.Concat(message.Content.Select(part => part.Content)))}"
+                + $"{System.Security.SecurityElement.Escape(message.GetModelVisibleContent())}"
                 + "</continuation>"));
     }
 
-    private static void BoundContinuationMessages(
+    private static bool BoundContinuationMessages(
         List<ModelMessage> continuationMessages,
         ContextAssemblyResult context,
         IReadOnlyList<ModelToolDefinition> tools,
-        ModelRequestLayout layout)
+        ModelRequestLayout layout,
+        int? firstNeverDeliveredMessageIndex)
     {
         if (continuationMessages.Count == 0)
         {
-            return;
+            return false;
         }
 
-        int tokenBudget = context.Inspection.TokenBudget;
+        var tokenBudget = context.Inspection.TokenBudget;
+        var reductionApplied = false;
         ModelWireEstimate Estimate() => ModelWireEstimator.Estimate(
             [.. context.Messages ?? [], .. continuationMessages],
             tools,
             ToolTransportMode.Native,
             layout.StablePrefixMessageCount,
-            context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
+            context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
+            context.ProviderInstructions);
         var estimate = Estimate();
-        foreach (int index in continuationMessages
+        foreach (var index in continuationMessages
             .Select((message, index) => (message, index))
             .Where(item => item.message.Role == ModelMessageRole.Tool)
-            .OrderByDescending(item => item.message.Content.Sum(part => part.Content.Length))
+            .Where(item => firstNeverDeliveredMessageIndex is null
+                || item.index < firstNeverDeliveredMessageIndex.Value)
+            .OrderByDescending(item => item.message.GetModelVisibleContentLength())
             .Select(item => item.index))
         {
             if (estimate.WireInputTokens <= tokenBudget)
             {
-                return;
+                return reductionApplied;
             }
 
             var original = continuationMessages[index];
-            string content = string.Concat(original.Content.Select(part => part.Content));
-            int low = 0;
-            int high = Math.Max(0, content.Length - 1);
+            var content = original.GetModelVisibleContent();
+            var low = 0;
+            var high = Math.Max(0, content.Length - 1);
             var smallest = CreateReducedToolResultMessage(original, content, 0);
             continuationMessages[index] = smallest;
+            reductionApplied = true;
             estimate = Estimate();
             if (estimate.WireInputTokens > tokenBudget)
             {
@@ -912,7 +1327,7 @@ public sealed class SessionApplication :
             var best = smallest;
             while (low <= high)
             {
-                int middle = low + ((high - low) / 2);
+                var middle = low + ((high - low) / 2);
                 var candidate = CreateReducedToolResultMessage(original, content, middle);
                 continuationMessages[index] = candidate;
                 estimate = Estimate();
@@ -928,7 +1343,7 @@ public sealed class SessionApplication :
             }
 
             continuationMessages[index] = best;
-            return;
+            return true;
         }
 
         if (estimate.WireInputTokens > tokenBudget)
@@ -936,6 +1351,8 @@ public sealed class SessionApplication :
             throw new BudgetExceededException(
                 $"Tool continuation requires {estimate.WireInputTokens} input tokens but the selected model budget is {tokenBudget}.");
         }
+
+        return reductionApplied;
     }
 
     private static ModelMessage CreateReducedToolResultMessage(
@@ -943,7 +1360,7 @@ public sealed class SessionApplication :
         string content,
         int previewCharacters)
     {
-        string reduced = previewCharacters == 0
+        var reduced = previewCharacters == 0
             ? "{\"isTruncated\":true}"
             : JsonSerializer.Serialize(new
             {
@@ -953,11 +1370,21 @@ public sealed class SessionApplication :
         return original with { Content = [CreateJsonContentPart(reduced)] };
     }
 
-    private static ModelContentPart CreateJsonContentPart(string content)
+    private static ModelContentPart CreateJsonContentPart(string content, bool isModelVisible = true)
     {
         return new ModelContentPart
         {
             Kind = ModelContentPartKind.Json,
+            Content = content,
+            IsModelVisible = isModelVisible,
+        };
+    }
+
+    private static ModelContentPart CreateTextContentPart(string content)
+    {
+        return new ModelContentPart
+        {
+            Kind = ModelContentPartKind.Text,
             Content = content,
         };
     }
@@ -980,19 +1407,27 @@ public sealed class SessionApplication :
     private static ModelMessage CreateToolResultMessage(
         string toolCallId,
         string toolName,
-        string content)
+        string content,
+        bool isJson,
+        string? structuredContent)
     {
+        List<ModelContentPart> contentParts = [isJson ? CreateJsonContentPart(content) : CreateTextContentPart(content)];
+        if (!isJson && !string.IsNullOrWhiteSpace(structuredContent))
+        {
+            contentParts.Add(CreateJsonContentPart(structuredContent, isModelVisible: false));
+        }
+
         return new ModelMessage
         {
             Role = ModelMessageRole.Tool,
             SectionId = "tool-result",
             ToolCallId = toolCallId,
             ToolName = toolName,
-            Content = [CreateJsonContentPart(content)],
+            Content = contentParts,
         };
     }
 
-    private static bool TryCreateSemanticFirstSearchCorrection(
+    private bool TryCreateSemanticFirstSearchCorrection(
         ToolRequestModelOutput tool,
         bool workspaceAvailable,
         bool semanticToolAttempted,
@@ -1003,27 +1438,55 @@ public sealed class SessionApplication :
         if (!workspaceAvailable
             || semanticToolAttempted
             || !string.Equals(tool.ToolName, "search", StringComparison.OrdinalIgnoreCase)
-            || !modelTools.Any(static definition => string.Equals(
-                definition.Name,
-                "find_symbol",
-                StringComparison.OrdinalIgnoreCase))
-            || !TryGetSearchQuery(tool.ArgumentsJson, out string? query)
+            || !TryGetSearchQuery(tool.ArgumentsJson, out var query)
             || !LooksLikeCSharpSymbolOrFileQuery(query))
         {
             return false;
         }
 
-        string boundedQuery = BoundSingleLine(query, 160);
-        string suggestedQuery = BoundSingleLine(StripCSharpExtension(query), 160);
-        content = "A semantic workspace is loaded and find_symbol is advertised. Do not use search first for C# type, class, symbol, or .cs filename lookup. "
-            + $"Call find_symbol with query '{suggestedQuery}' before text search. The rejected search query was '{boundedQuery}'. "
-            + "Use search only after semantic tools fail, report incomplete evidence, or no semantic tool applies.";
+        var hasCodeExplore = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "code_explore",
+            StringComparison.OrdinalIgnoreCase));
+        var hasFindSymbol = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "find_symbol",
+            StringComparison.OrdinalIgnoreCase));
+        if (!hasCodeExplore && !hasFindSymbol)
+        {
+            return false;
+        }
+
+        var boundedQuery = BoundSingleLine(query, 160);
+        var isFileQuery = boundedQuery.Contains(".cs", StringComparison.OrdinalIgnoreCase);
+        var isExactPathQuery = isFileQuery && LooksLikeExactCSharpPathQuery(boundedQuery);
+        var isExactSymbolQuery = !isFileQuery && LooksLikeExactCSharpSymbolQuery(boundedQuery);
+        if (!isExactPathQuery && !isExactSymbolQuery && !hasFindSymbol)
+        {
+            return false;
+        }
+
+        var suggestedQuery = isExactPathQuery || isExactSymbolQuery
+            ? boundedQuery
+            : isFileQuery
+                ? BoundSingleLine(GetCSharpFileSymbolQuery(query), 160)
+                : BoundSingleLine(GetDiscoverableSymbolQuery(query), 160);
+        var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
+            ? "code_explore"
+            : "find_symbol";
+        content = RequireCorrectiveMessages().CreateSemanticFirstSearchReason(
+            suggestedTool,
+            suggestedQuery,
+            boundedQuery,
+            isExactPathQuery,
+            isExactSymbolQuery);
         return true;
     }
 
     private static bool IsSemanticInspectionTool(string toolName)
     {
-        return string.Equals(toolName, "find_symbol", StringComparison.OrdinalIgnoreCase)
+        return string.Equals(toolName, "code_explore", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(toolName, "find_symbol", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "find_references", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "find_implementations", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "call_hierarchy", StringComparison.OrdinalIgnoreCase)
@@ -1037,7 +1500,7 @@ public sealed class SessionApplication :
         query = null;
         try
         {
-            using JsonDocument document = JsonDocument.Parse(argumentsJson);
+            using var document = JsonDocument.Parse(argumentsJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("query", out var queryElement)
                 || queryElement.ValueKind != JsonValueKind.String)
@@ -1056,14 +1519,14 @@ public sealed class SessionApplication :
 
     private static bool LooksLikeCSharpSymbolOrFileQuery(string query)
     {
-        string trimmed = query.Trim();
+        var trimmed = query.Trim();
         if (trimmed.Contains(".cs", StringComparison.OrdinalIgnoreCase)
             || ContainsDeclarationKeyword(trimmed))
         {
             return true;
         }
 
-        foreach (string token in ExtractIdentifierTokens(trimmed))
+        foreach (var token in ExtractIdentifierTokens(trimmed))
         {
             if (token.Length >= 3
                 && token.Any(char.IsUpper)
@@ -1084,10 +1547,61 @@ public sealed class SessionApplication :
             || query.Contains("struct", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool LooksLikeExactCSharpPathQuery(string query)
+    {
+        var trimmed = query.Trim();
+        return trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && (trimmed.Contains('/', StringComparison.Ordinal)
+                || trimmed.Contains('\\', StringComparison.Ordinal)
+                || trimmed.StartsWith(".", StringComparison.Ordinal));
+    }
+
+    private static bool LooksLikeExactCSharpSymbolQuery(string query)
+    {
+        var trimmed = query.Trim();
+        var parameterStart = trimmed.IndexOf('(');
+        var name = parameterStart < 0 ? trimmed : trimmed[..parameterStart];
+        return !string.IsNullOrWhiteSpace(name)
+            && !name.Any(char.IsWhiteSpace)
+            && LooksLikeQualifiedIdentifier(name)
+            && (parameterStart < 0 || trimmed.EndsWith(")", StringComparison.Ordinal));
+    }
+
+    private static bool LooksLikeQualifiedIdentifier(string value)
+    {
+        var parts = value.Split('.');
+        return parts.Length > 0 && parts.All(IsIdentifierLike);
+    }
+
+    private static bool IsIdentifierLike(string value)
+    {
+        if (value.Length == 0 || (!char.IsLetter(value[0]) && value[0] != '_'))
+        {
+            return false;
+        }
+
+        return value.Skip(1).All(character => char.IsLetterOrDigit(character) || character == '_');
+    }
+
+    private static string GetCSharpFileSymbolQuery(string query)
+    {
+        var trimmed = query.Trim();
+        var separator = Math.Max(trimmed.LastIndexOf('/'), trimmed.LastIndexOf('\\'));
+        var fileName = separator < 0 ? trimmed : trimmed[(separator + 1)..];
+        return StripCSharpExtension(fileName);
+    }
+
+    private static string GetDiscoverableSymbolQuery(string query)
+    {
+        var token = ExtractIdentifierTokens(query)
+            .LastOrDefault(token => token.Any(char.IsUpper) && token.Any(char.IsLower));
+        return token ?? StripCSharpExtension(query);
+    }
+
     private static IEnumerable<string> ExtractIdentifierTokens(string query)
     {
         var builder = new StringBuilder(query.Length);
-        foreach (char character in query)
+        foreach (var character in query)
         {
             if (char.IsLetterOrDigit(character) || character == '_')
             {
@@ -1110,7 +1624,7 @@ public sealed class SessionApplication :
 
     private static string StripCSharpExtension(string query)
     {
-        string trimmed = query.Trim();
+        var trimmed = query.Trim();
         return trimmed.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
             ? trimmed[..^3]
             : trimmed;
@@ -1118,46 +1632,10 @@ public sealed class SessionApplication :
 
     private static string BoundSingleLine(string value, int maximumCharacters)
     {
-        string normalized = value.ReplaceLineEndings(" ").Trim();
+        var normalized = value.ReplaceLineEndings(" ").Trim();
         return normalized.Length <= maximumCharacters
             ? normalized
             : normalized[..maximumCharacters];
-    }
-
-    /// <summary>Determines whether a conversational tool may be advertised under effective policy.
-    /// Explicit denial and non-empty tool allowlists remain authoritative. Read-only capabilities that
-    /// require approval are withheld because the ordinary invocation pipeline cannot prompt interactively.
-    /// </summary>
-    private static bool IsAdvertisedToModel(ToolDefinition definition, ToolInvocationContext? context)
-    {
-        if (context is null)
-        {
-            return true;
-        }
-
-        if (context.TrustLevel < definition.RequiredTrust)
-        {
-            return false;
-        }
-
-        if (context.DeniedToolIds.Count > 0 && context.DeniedToolIds.Contains(definition.Id))
-        {
-            return false;
-        }
-
-        if (context.DenyAllTools
-            || (context.AllowedToolIds.Count > 0 && !context.AllowedToolIds.Contains(definition.Id)))
-        {
-            return false;
-        }
-
-        if (context.RequireApprovalToolIds.Count > 0
-            && context.RequireApprovalToolIds.Contains(definition.Id))
-        {
-            return false;
-        }
-
-        return true;
     }
 
     private static ReasoningLevel ResolveRequestReasoning(
@@ -1165,594 +1643,6 @@ public sealed class SessionApplication :
         ModelProfileId? resolvedProfileId)
     {
         return preference?.ResolveFor(resolvedProfileId) ?? ReasoningLevel.None;
-    }
-
-    private async Task<ImplementationPlan?> GeneratePlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        RunPhase phase,
-        CancellationToken cancellationToken)
-    {
-        int maximumModelRounds = _limits.MaxModelRounds;
-        int maximumPlanningToolRounds = Math.Clamp(
-            _limits.MaxPlanningToolRounds,
-            1,
-            Math.Max(1, maximumModelRounds - 1));
-        ToolInvocationContext? invocationContext = null;
-        if (_toolContextFactory is not null)
-        {
-            invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
-            registration.RepositoryIdentity = invocationContext?.RepositoryPath;
-        }
-
-        bool workspaceAvailable = invocationContext?.WorkspaceId is not null;
-        var invokedToolKeys = new HashSet<string>(StringComparer.Ordinal);
-        var continuationMessages = new List<ModelMessage>();
-        ContextAssemblyResult? frozenContext = null;
-        const int maximumRetainedToolCalls = 256;
-        int maximumOutputCharacters = _limits.MaxStructuredOutputCharacters;
-        int retainedOutputCharacters = 0;
-        int retainedToolCalls = 0;
-        bool semanticToolAttempted = false;
-        int planProposalRepairAttempts = 0;
-        int maximumPlanProposalRepairAttempts = Math.Max(0, _limits.MaxPlanProposalRepairAttempts);
-        for (int modelRound = 1; modelRound <= maximumModelRounds; modelRound++)
-        {
-            bool planningToolsWithheld = phase == RunPhase.EvidenceCollection
-                && modelRound > maximumPlanningToolRounds;
-            ToolDefinition[] conversationDefinitions = !planningToolsWithheld
-                && _toolPipeline is not null
-                && _toolRegistry is not null
-                ? [.. _toolRegistry.GetDefinitions(registration.SessionId, runId)
-                    .Where(definition => definition.SideEffect == ToolSideEffect.ReadOnly
-                        || definition.ConversationAvailable)
-                    .Where(definition => IsAdvertisedToModel(definition, invocationContext))]
-                : [];
-            IEnumerable<ToolDefinition> availableDefinitions = conversationDefinitions;
-            if (!workspaceAvailable)
-            {
-                availableDefinitions = conversationDefinitions
-                    .Where(definition => !definition.RequiresWorkspace);
-            }
-
-            List<ModelToolDefinition> modelTools = [.. availableDefinitions.Select(definition => new ModelToolDefinition
-            {
-                Name = definition.Id,
-                Description = definition.Description,
-                ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
-            })];
-            if (phase == RunPhase.EvidenceCollection)
-            {
-                modelTools.Add(new ModelToolDefinition
-                {
-                    Name = ProposePlanToolName,
-                    Description = "Propose a governed implementation plan when the user requests repository changes. Calling this tool never mutates files.",
-                    ArgumentsJsonSchema = ProposePlanArgumentsSchema,
-                });
-            }
-
-            modelTools = [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
-            var modelPreference = _sessionPreferences?.Capture();
-            var context = frozenContext;
-            if (_contextAssembler is not null && context is null)
-            {
-                ContextToolSchema[] toolSchemas = [.. modelTools.Select(definition =>
-                    new ContextToolSchema(
-                        definition.Name,
-                        definition.Description,
-                        definition.ArgumentsJsonSchema))];
-                context = await _contextAssembler.AssembleAsync(
-                    new ContextAssemblyRequest
-                    {
-                        SessionId = registration.SessionId,
-                        RunId = runId,
-                        Phase = phase,
-                        Task = registration.Task,
-                        RepositoryPath = invocationContext?.RepositoryPath
-                            ?? Directory.GetCurrentDirectory(),
-                        WorkingScope = RepositoryWorkingScope.Resolve(
-                            invocationContext?.RepositoryPath ?? Directory.GetCurrentDirectory(),
-                            registration.PendingPlan?.Steps.SelectMany(step => step.GetAffectedPaths()),
-                            Directory.GetCurrentDirectory()),
-                        ProhibitedPaths = invocationContext?.ProhibitedPaths ?? [],
-                        ToolSchemas = toolSchemas,
-                        RequiredCapabilities = new ModelCapabilitySet
-                        {
-                            Streaming = true,
-                            StructuredOutput = phase != RunPhase.EvidenceCollection,
-                            ToolCalls = modelTools.Count > 0,
-                        },
-                        DefaultModelProfileId = modelPreference?.ProfileId
-                            ?? _defaultModelProfileId,
-                        PlanUnderRevision = phase == RunPhase.AwaitingPlanApproval
-                            ? registration.PendingPlan
-                            : null,
-                        CurrentTurnHostContext = registration.CurrentTurnHostContext,
-                        CurrentMessageId = registration.CurrentMessageId,
-                        ConversationModeOverride = registration.ConversationMode,
-                        ConversationModeSource = "session-state",
-                    },
-                    cancellationToken);
-                frozenContext = context;
-            }
-
-            var textOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
-            ImplementationPlan? plan = null;
-            bool toolInvoked = false;
-            var usageRequestId = new ModelRequestUsageId(
-                runId,
-                "conversation",
-                modelRound - 1,
-                Guid.NewGuid());
-            ModelUsage? reportedUsage = null;
-            bool modelSucceeded = false;
-            IReadOnlyList<ModelMessage> requestMessages =
-            [
-                .. context?.Messages ?? [],
-                .. continuationMessages,
-            ];
-            var wireEstimate = context?.WireEstimate;
-            if (context?.Layout is { } requestLayout)
-            {
-                BoundContinuationMessages(
-                    continuationMessages,
-                    context,
-                    modelTools,
-                    requestLayout);
-                requestMessages =
-                [
-                    .. context.Messages ?? [],
-                    .. continuationMessages,
-                ];
-                wireEstimate = ModelWireEstimator.Estimate(
-                    requestMessages,
-                    modelTools,
-                    ToolTransportMode.Native,
-                    requestLayout.StablePrefixMessageCount,
-                    context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0);
-            }
-
-            var modelRequest = new ModelStreamRequest
-            {
-                RunId = runId,
-                Input = RenderLegacyContinuation(
-                    context?.ModelInput ?? registration.Task.Intent,
-                    continuationMessages),
-                Seed = 42,
-                ToolContinuationRound = modelRound - 1,
-                WorkloadClass = context?.WorkloadClass ?? WorkloadClass.General,
-                ContainsSensitiveData = context?.ModelConstraints.ContainsSensitiveData
-                    ?? false,
-                RequiredCapabilities = context?.RequiredCapabilities
-                    ?? new ModelCapabilitySet
-                    {
-                        Streaming = true,
-                        StructuredOutput = phase != RunPhase.EvidenceCollection,
-                        ToolCalls = modelTools.Count > 0,
-                    },
-                SelectionConstraints = context?.ModelConstraints ?? new ModelSelectionConstraints(),
-                ResolvedProfileId = context?.ModelResolution?.ProfileId,
-                ReasoningLevel = ResolveRequestReasoning(
-                    modelPreference,
-                    context?.ModelResolution?.ProfileId),
-                Tools = modelTools,
-                Messages = requestMessages,
-                Layout = context?.Layout,
-                ToolTransportMode = ToolTransportMode.Native,
-                WireEstimate = wireEstimate,
-            };
-            var modelOperationId = usageRequestId.InvocationId;
-            if (_hooks is not null)
-            {
-                var hookDecision = await _hooks.InvokeAsync(
-                    HookPoint.BeforeModelRequest,
-                    registration.SessionId,
-                    runId,
-                    invocationContext?.RepositoryPath,
-                    modelOperationId,
-                    modelRound - 1,
-                    new Dictionary<string, string>
-                    {
-                        ["workload"] = modelRequest.WorkloadClass.ToString(),
-                        ["containsSensitiveData"] = modelRequest.ContainsSensitiveData.ToString(),
-                        ["toolCount"] = modelRequest.Tools.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    },
-                    cancellationToken: cancellationToken);
-                if (hookDecision.Decision == HookDecisionKind.Block)
-                {
-                    throw new UnauthorizedAccessException("A trusted managed lifecycle policy blocked the model request.");
-                }
-            }
-
-            try
-            {
-                int toolCallOrdinal = 0;
-                var pendingToolCalls = new List<ToolBatchRequest>();
-                await foreach (var chunk in _model.StreamAsync(modelRequest, cancellationToken))
-                {
-                    if (chunk.Reasoning is not null)
-                    {
-                        AddRetainedOutputCharacters(
-                            chunk.Reasoning.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        await _events.PublishAsync(
-                            new ModelReasoningObserved(
-                                registration.SessionId,
-                                DateTimeOffset.UtcNow,
-                                _sanitizer.Sanitize(chunk.Reasoning)),
-                            cancellationToken);
-                    }
-
-                    if (chunk.Text is not null)
-                    {
-                        AddRetainedOutputCharacters(
-                            chunk.Text.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        textOutput.Append(chunk.Text);
-                        await _events.PublishAsync(
-                            new ModelOutputObserved(
-                                registration.SessionId,
-                                DateTimeOffset.UtcNow,
-                                _sanitizer.Sanitize(chunk.Text)),
-                            cancellationToken);
-                    }
-
-                    if (chunk.Output is PlanModelOutput planOutput)
-                    {
-                        ModelOutputValidator.Validate(planOutput);
-                        AddRetainedPlanOutputCharacters(
-                            planOutput.Plan,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        plan = planOutput.Plan;
-                    }
-
-                    if (chunk.Output is ToolRequestModelOutput tool)
-                    {
-                        AddRetainedOutputCharacters(
-                            tool.ToolName.Length + tool.ArgumentsJson.Length,
-                            maximumOutputCharacters,
-                            ref retainedOutputCharacters);
-                        retainedToolCalls++;
-                        if (retainedToolCalls > maximumRetainedToolCalls)
-                        {
-                            throw new MalformedModelOutputException(
-                                "The model exceeded the host's maximum retained tool-call count.");
-                        }
-
-                        bool suppressPipelineInvocation = false;
-                        bool isProposePlanTool = string.Equals(
-                            tool.ToolName,
-                            ProposePlanToolName,
-                            StringComparison.OrdinalIgnoreCase);
-                        if (isProposePlanTool)
-                        {
-                            if (phase != RunPhase.EvidenceCollection)
-                            {
-                                throw new MalformedModelOutputException(
-                                    "The model requested propose_plan outside the initial conversational turn.");
-                            }
-
-                            try
-                            {
-                                ModelOutputValidator.Validate(tool);
-                                plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson).Plan;
-                            }
-                            catch (MalformedModelOutputException)
-                                when (modelRound < maximumModelRounds
-                                    && planProposalRepairAttempts < maximumPlanProposalRepairAttempts)
-                            {
-                                planProposalRepairAttempts++;
-                                toolCallOrdinal++;
-                                string toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
-                                    + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                                continuationMessages.Add(CreateToolCallMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    tool.ArgumentsJson));
-                                const string repairContent =
-                                    "The propose_plan arguments did not match the required plan schema. Do not return a text plan. "
-                                    + "Call propose_plan again with strict JSON: {schemaVersion:1, plan:{schemaVersion:2, revision:int, summary:string, steps:[{stepId:{value:guid}, title:string, description:string, fileIntents:[{kind:string, path:string, destinationPath:string?}], expectedOutcome:string, validation:string[]}], risks:string[], outstandingQuestions:string[]}}. "
-                                    + "Use kind Modify, Create, Delete, Move, or Rename; Move/Rename require destinationPath and other kinds must omit it.";
-                                continuationMessages.Add(CreateToolResultMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    repairContent));
-                                toolInvoked = true;
-                                suppressPipelineInvocation = true;
-                            }
-                        }
-                        else
-                        {
-                            ModelOutputValidator.Validate(tool);
-                            if (IsSemanticInspectionTool(tool.ToolName))
-                            {
-                                semanticToolAttempted = true;
-                            }
-
-                            // Tool activity is published by the pipeline via ToolInvocationStarted /
-                            // ToolInvocationCompleted; no transcript answer text is emitted here.
-                        }
-
-                        if (!suppressPipelineInvocation
-                            && plan is null
-                            && _toolPipeline is not null
-                            && invocationContext is not null)
-                        {
-                            toolCallOrdinal++;
-                            string toolCallId = $"host-tool-{modelRound.ToString(System.Globalization.CultureInfo.InvariantCulture)}-"
-                                + toolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                            continuationMessages.Add(CreateToolCallMessage(
-                                toolCallId,
-                                tool.ToolName,
-                                tool.ArgumentsJson));
-                            if (planningToolsWithheld)
-                            {
-                                const string convergenceContent =
-                                    "The host planning-exploration limit was reached, so this inspection tool was not invoked. "
-                                    + "Use the gathered evidence and call propose_plan now, or answer directly if no repository change is needed.";
-                                continuationMessages.Add(CreateToolResultMessage(
-                                    toolCallId,
-                                    tool.ToolName,
-                                    convergenceContent));
-                                toolInvoked = true;
-                            }
-                            else
-                            {
-                                string toolKey = $"{tool.ToolName}|{tool.ArgumentsJson}";
-                                if (TryCreateSemanticFirstSearchCorrection(
-                                    tool,
-                                    workspaceAvailable,
-                                    semanticToolAttempted,
-                                    modelTools,
-                                    out string? semanticFirstContent))
-                                {
-                                    if (_evidenceStore is not null)
-                                    {
-                                        await _evidenceStore.AddAsync(
-                                            new Evidence
-                                            {
-                                                EvidenceId = EvidenceId.New(),
-                                                SessionId = registration.SessionId,
-                                                RunId = runId,
-                                                Kind = EvidenceKind.Failure,
-                                                Content = semanticFirstContent,
-                                                Provenance = new EvidenceProvenance
-                                                {
-                                                    Source = "tool:search:semantic-first",
-                                                    SemanticConfidence = SemanticConfidenceLevel.FullSemantic,
-                                                },
-                                                CollectedAt = DateTimeOffset.UtcNow,
-                                                Relevance = 1,
-                                                EstimatedTokens = Math.Max(1, (semanticFirstContent.Length + 3) / 4),
-                                                InvalidationKeys = ["repository", "semantic"],
-                                            },
-                                            cancellationToken);
-                                    }
-
-                                    continuationMessages.Add(CreateToolResultMessage(
-                                        toolCallId,
-                                        tool.ToolName,
-                                        semanticFirstContent));
-                                    toolInvoked = _contextAssembler is not null;
-                                }
-                                else if (invokedToolKeys.Contains(toolKey))
-                                {
-                                    if (_evidenceStore is not null)
-                                    {
-                                        string repeatContent =
-                                            $"Tool '{tool.ToolName}' was already called with these arguments. "
-                                            + "Do not repeat it; use the earlier result or answer the user directly.";
-                                        await _evidenceStore.AddAsync(
-                                            new Evidence
-                                            {
-                                                EvidenceId = EvidenceId.New(),
-                                                SessionId = registration.SessionId,
-                                                RunId = runId,
-                                                Kind = EvidenceKind.Failure,
-                                                Content = repeatContent,
-                                                Provenance = new EvidenceProvenance
-                                                {
-                                                    Source = $"tool:{tool.ToolName}:duplicate",
-                                                    SemanticConfidence = SemanticConfidenceLevel.None,
-                                                },
-                                                CollectedAt = DateTimeOffset.UtcNow,
-                                                Relevance = 1,
-                                                EstimatedTokens = Math.Max(1, (repeatContent.Length + 3) / 4),
-                                                InvalidationKeys = ["repository"],
-                                            },
-                                            cancellationToken);
-                                        continuationMessages.Add(CreateToolResultMessage(
-                                            toolCallId,
-                                            tool.ToolName,
-                                            repeatContent));
-                                        toolInvoked = _contextAssembler is not null;
-                                    }
-                                }
-                                else
-                                {
-                                    invokedToolKeys.Add(toolKey);
-                                    pendingToolCalls.Add(new ToolBatchRequest(
-                                        toolCallOrdinal,
-                                        toolCallId,
-                                        new ToolInvocationRequest
-                                        {
-                                            SessionId = registration.SessionId,
-                                            RunId = runId,
-                                            Phase = phase,
-                                            ToolId = tool.ToolName,
-                                            ArgumentsJson = tool.ArgumentsJson,
-                                            Context = invocationContext,
-                                        }));
-                                }
-                            }
-                        }
-                    }
-
-                    if (chunk.Usage is not null)
-                    {
-                        reportedUsage = chunk.Usage;
-                        _sessionUsage?.Observe(
-                            registration.SessionId,
-                            usageRequestId,
-                            chunk.Usage);
-                        var usage = registration.Budget.Accrue(new BudgetDimensions(
-                            chunk.Usage.InputTokens + chunk.Usage.OutputTokens,
-                            1,
-                            TimeSpan.Zero,
-                            chunk.Usage.EstimatedCost));
-                        if (usage.IsExhausted)
-                        {
-                            throw new BudgetExceededException(
-                                usage.Reason ?? "Execution budget exhausted.");
-                        }
-                    }
-                }
-
-                if (pendingToolCalls.Count > 0 && _toolPipeline is not null)
-                {
-                    var batchResults = await _toolPipeline.InvokeBatchAsync(
-                        pendingToolCalls,
-                        cancellationToken);
-                    foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
-                    {
-                        var result = batchResult.Result;
-                        string content = result.ResultJson ?? result.Error ?? "Tool completed.";
-                        if (_evidenceStore is not null)
-                        {
-                            var source = result.Sources.FirstOrDefault();
-                            await _evidenceStore.AddAsync(
-                                new Evidence
-                                {
-                                    EvidenceId = EvidenceId.New(),
-                                    SessionId = registration.SessionId,
-                                    RunId = runId,
-                                    Kind = result.Succeeded ? EvidenceKind.ToolResult : EvidenceKind.Failure,
-                                    Content = content,
-                                    Provenance = new EvidenceProvenance
-                                    {
-                                        SourcePath = source?.Identifier,
-                                        ToolInvocationId = result.ToolInvocationId,
-                                        SemanticConfidence = SemanticConfidenceLevel.None,
-                                        Source = $"tool:{result.ToolId}",
-                                    },
-                                    CollectedAt = DateTimeOffset.UtcNow,
-                                    Relevance = result.Succeeded ? 0.8 : 1,
-                                    EstimatedTokens = Math.Max(1, (content.Length + 3) / 4),
-                                    InvalidationKeys = result.ToolId is "find_symbol"
-                                        or "find_references"
-                                        or "find_implementations"
-                                        ? ["repository", "semantic"]
-                                        : ["repository"],
-                                },
-                                cancellationToken);
-                        }
-
-                        continuationMessages.Add(CreateToolResultMessage(
-                            batchResult.CorrelationId,
-                            result.ToolId,
-                            content));
-                    }
-
-                    toolInvoked = _contextAssembler is not null;
-                }
-
-                modelSucceeded = true;
-            }
-            finally
-            {
-                if (_hooks is not null)
-                {
-                    _ = await _hooks.InvokeAsync(
-                        HookPoint.AfterModelRequest,
-                        registration.SessionId,
-                        runId,
-                        invocationContext?.RepositoryPath,
-                        modelOperationId,
-                        modelRound - 1,
-                        new Dictionary<string, string>
-                        {
-                            ["succeeded"] = modelSucceeded.ToString(),
-                            ["usageReported"] = (reportedUsage is not null).ToString(),
-                        },
-                        cancellationToken: CancellationToken.None);
-                }
-
-                if (reportedUsage is null)
-                {
-                    _sessionUsage?.ObserveMissing(registration.SessionId, usageRequestId);
-                }
-            }
-
-            if (plan is null && context is not null && phase != RunPhase.EvidenceCollection)
-            {
-                string candidate = textOutput.ToString().Trim();
-                if (candidate.StartsWith('{'))
-                {
-                    plan = ModelOutputValidator.ParsePlan(candidate).Plan;
-                }
-            }
-
-            if (plan is not null)
-            {
-                plan = plan with
-                {
-                    Summary = _sanitizer.Sanitize(plan.Summary),
-                    Steps = plan.Steps.Select(step => step with
-                    {
-                        Title = _sanitizer.Sanitize(step.Title),
-                        Description = _sanitizer.Sanitize(step.Description),
-                        FileIntents = step.FileIntents.Select(intent => intent with
-                        {
-                            Path = intent.Path,
-                            DestinationPath = intent.DestinationPath,
-                        }).ToArray(),
-                        ExpectedOutcome = _sanitizer.Sanitize(step.ExpectedOutcome),
-                        Validation = step.Validation
-                            .Select(_sanitizer.Sanitize)
-                            .ToArray(),
-                    }).ToArray(),
-                    Risks = plan.Risks.Select(_sanitizer.Sanitize).ToArray(),
-                    OutstandingQuestions = plan.OutstandingQuestions
-                        .Select(_sanitizer.Sanitize)
-                        .ToArray(),
-                };
-                ModelOutputValidator.Validate(new PlanModelOutput(plan));
-
-                if (registration.PendingPlan is { } previousPlan)
-                {
-                    plan = plan with { Revision = previousPlan.Revision + 1 };
-                }
-
-                return plan;
-            }
-
-            if (!toolInvoked)
-            {
-                string finalResponse = textOutput.ToString();
-                if (!string.IsNullOrWhiteSpace(finalResponse))
-                {
-                    await ArchiveVisibleMessageAsync(
-                        registration.SessionId,
-                        runId,
-                        ConversationRole.Assistant,
-                        finalResponse,
-                        cancellationToken);
-                }
-
-                return null;
-            }
-
-            if (modelRound == maximumModelRounds)
-            {
-                throw new InvalidOperationException(
-                    $"The model exceeded the limit of {maximumModelRounds} tool continuation rounds.");
-            }
-        }
-
-        throw new UnreachableException();
     }
 
     private async Task<ConversationMessage?> ArchiveVisibleMessageAsync(
@@ -1767,8 +1657,8 @@ public sealed class SessionApplication :
             return null;
         }
 
-        string sanitized = _sanitizer.Sanitize(content);
-        string hash = Convert.ToHexStringLower(
+        var sanitized = _sanitizer.Sanitize(content);
+        var hash = Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(sanitized)));
         return await _conversationStore.ArchiveMessageAsync(
             new ConversationMessage
@@ -1788,119 +1678,6 @@ public sealed class SessionApplication :
                 OccurredAt = DateTimeOffset.UtcNow,
             },
             cancellationToken);
-    }
-
-    private async Task PrepareAndPublishPlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan plan,
-        CancellationToken cancellationToken)
-    {
-        var publication = await RunPlanSanityAndPolicyAsync(
-            runId,
-            registration,
-            plan,
-            cancellationToken);
-        await PublishPlanAsync(
-            runId,
-            registration,
-            publication.Plan,
-            publication.Decision,
-            cancellationToken);
-    }
-
-    private async Task<PlanPublication> RunPlanSanityAndPolicyAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan initialPlan,
-        CancellationToken cancellationToken)
-    {
-        var currentPlan = initialPlan;
-        int maximumRepairs = Math.Max(0, _limits.MaxPlanRevisionRepairAttempts);
-        for (int attempt = 0; attempt <= maximumRepairs; attempt++)
-        {
-            var evaluation = await CheckPlanSanityAsync(
-                registration,
-                currentPlan,
-                cancellationToken);
-            var sanity = evaluation.Result;
-            await _events.PublishAsync(
-                new PlanSanityCheckCompleted(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    currentPlan.Revision,
-                    sanity.Risk,
-                    sanity.Issues.Count,
-                    sanity.Issues.Count(issue => issue.IsBlocking),
-                    sanity.Issues.Count(issue => issue.IsBlocking && issue.IsRepairable),
-                    sanity.NormalizedAffectedPaths.Count),
-                cancellationToken);
-
-            if (sanity.HasNonRepairableBlockingIssues)
-            {
-                throw new MalformedModelOutputException(
-                    "The plan violates a non-repairable sanity-check guardrail.");
-            }
-
-            if (sanity.HasRepairableBlockingIssues && attempt < maximumRepairs)
-            {
-                string repair = _sanitizer.Sanitize(CreatePlanRepairInstructions(sanity));
-                await _events.PublishAsync(
-                    new PlanRevisionRequested(
-                        registration.SessionId,
-                        DateTimeOffset.UtcNow,
-                        runId,
-                        repair),
-                    cancellationToken);
-                registration.Task = registration.Task with
-                {
-                    UserConstraints =
-                    [
-                        .. registration.Task.UserConstraints ?? [],
-                        $"Plan sanity repair request: {repair}",
-                    ],
-                };
-                registration.PendingPlan = currentPlan;
-                var repairStopwatch = Stopwatch.StartNew();
-                var repairedPlan = await GeneratePlanAsync(
-                    runId,
-                    registration,
-                    RunPhase.AwaitingPlanApproval,
-                    cancellationToken);
-                AccrueRepairWallClock(registration, repairStopwatch.Elapsed);
-                currentPlan = repairedPlan ?? throw new MalformedModelOutputException(
-                    "The plan sanity repair response did not contain a structured plan.");
-                continue;
-            }
-
-            if (!sanity.Passed)
-            {
-                string reason = sanity.HasRepairableBlockingIssues
-                    ? "The plan still has repairable sanity-check failures after the revision budget was exhausted."
-                    : "The plan violates a non-repairable sanity-check guardrail.";
-                throw new MalformedModelOutputException(reason);
-            }
-
-            var decision = evaluation.CanAutoApprove
-                ? _planApprovalPolicy?.Decide(sanity, ResolveTrust(registration))
-                    ?? RequireManualPlanReview(
-                        sanity,
-                        PlanApprovalPolicy.ReviewAll,
-                        "Plan approval policy is not configured; manual review is required.")
-                : RequireManualPlanReview(
-                    sanity,
-                    _planApprovalPolicy?.CurrentPolicy ?? PlanApprovalPolicy.ReviewAll,
-                    "Required plan sanity evidence is unavailable; policy auto-approval is forbidden.");
-            if (decision.Kind == PlanApprovalDecisionKind.Blocked)
-            {
-                throw new UnauthorizedAccessException(decision.Reason);
-            }
-
-            return new PlanPublication(currentPlan, decision);
-        }
-
-        throw new UnreachableException();
     }
 
     private async Task<PlanSanityEvaluation> CheckPlanSanityAsync(
@@ -1965,31 +1742,6 @@ public sealed class SessionApplication :
         };
     }
 
-    private static void AccrueRepairWallClock(RunRegistration registration, TimeSpan elapsed)
-    {
-        var status = registration.Budget.Accrue(new BudgetDimensions(0, 0, elapsed));
-        if (status.IsExhausted)
-        {
-            throw new BudgetExceededException(
-                status.Reason ?? "Execution wall-clock budget exhausted during plan repair.");
-        }
-    }
-
-    private static string CreatePlanRepairInstructions(PlanSanityCheckResult sanity)
-    {
-        string[] issueSummaries =
-        [
-            .. sanity.Issues
-                .Where(issue => issue.IsBlocking && issue.IsRepairable)
-                .Take(6)
-                .Select(issue => issue.RelativePath is null
-                    ? $"{issue.Kind}: {issue.Message}"
-                    : $"{issue.Kind} ({issue.RelativePath}): {issue.Message}"),
-        ];
-        return "Revise the structured plan before approval. Use exact repository-relative fileIntents and fix: "
-            + string.Join("; ", issueSummaries);
-    }
-
     private static RepositoryTrustLevel ResolveTrust(RunRegistration registration)
     {
         return registration.PendingSanityTrust ?? RepositoryTrustLevel.UntrustedInspection;
@@ -2026,7 +1778,7 @@ public sealed class SessionApplication :
         }
 
         registration.PendingPlan = plan;
-        bool autoApproved = decision.Kind == PlanApprovalDecisionKind.AutoApproved;
+        var autoApproved = decision.Kind == PlanApprovalDecisionKind.AutoApproved;
         registration.PendingApprovalId = autoApproved ? null : approvalId;
         await _events.PublishAsync(
             new PlanProposed(
@@ -2140,6 +1892,7 @@ public sealed class SessionApplication :
                     registration.Cancellation.Token);
                 _ = CompleteExecutionAsync(runId, registration);
                 await PromoteHostObservedMemoryAsync(
+                    runId,
                     registration,
                     decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
                     unresolvedQuestions: approvedPlan.OutstandingQuestions,
@@ -2192,6 +1945,7 @@ public sealed class SessionApplication :
             "plan approved in compatibility planning mode",
             cancellationToken);
         await PromoteHostObservedMemoryAsync(
+            runId,
             registration,
             decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
             unresolvedQuestions: approvedPlan.OutstandingQuestions,
@@ -2217,7 +1971,7 @@ public sealed class SessionApplication :
             planStructuralCharacters + plan.Summary.Length,
             maximumCharacters,
             ref retainedCharacters);
-        foreach (string risk in plan.Risks)
+        foreach (var risk in plan.Risks)
         {
             AddRetainedOutputCharacters(
                 itemStructuralCharacters + risk.Length,
@@ -2225,7 +1979,7 @@ public sealed class SessionApplication :
                 ref retainedCharacters);
         }
 
-        foreach (string question in plan.OutstandingQuestions)
+        foreach (var question in plan.OutstandingQuestions)
         {
             AddRetainedOutputCharacters(
                 itemStructuralCharacters + question.Length,
@@ -2242,7 +1996,7 @@ public sealed class SessionApplication :
                     + step.ExpectedOutcome.Length,
                 maximumCharacters,
                 ref retainedCharacters);
-            foreach (string path in step.GetAffectedPaths())
+            foreach (var path in step.GetAffectedPaths())
             {
                 AddRetainedOutputCharacters(
                     itemStructuralCharacters + path.Length,
@@ -2250,7 +2004,7 @@ public sealed class SessionApplication :
                     ref retainedCharacters);
             }
 
-            foreach (string validation in step.Validation)
+            foreach (var validation in step.Validation)
             {
                 AddRetainedOutputCharacters(
                     itemStructuralCharacters + validation.Length,
@@ -2300,16 +2054,30 @@ public sealed class SessionApplication :
         PlanSanityCheckResult Result,
         bool CanAutoApprove);
 
+    private readonly record struct SemanticAdmissionKey(
+        WorkspaceId WorkspaceId,
+        SessionId SessionId)
+    {
+        public static SemanticAdmissionKey Create(SessionId sessionId, WorkspaceId workspaceId)
+        {
+            return workspaceId == default
+                ? new SemanticAdmissionKey(default, sessionId)
+                : new SemanticAdmissionKey(workspaceId, default);
+        }
+    }
+
     private sealed class RunRegistration
     {
         public RunRegistration(
             SessionId sessionId,
+            WorkspaceId workspaceId,
             CancellationTokenSource cancellation,
             TaskSpecification task,
             RunStateMachine machine,
             IBudget budget)
         {
             SessionId = sessionId;
+            WorkspaceId = workspaceId;
             Cancellation = cancellation;
             Task = task;
             Machine = machine;
@@ -2333,6 +2101,10 @@ public sealed class SessionApplication :
 
         public RunStateMachine Machine { get; }
 
+        public TimeSpan ModelRequestWallClockAccrued { get; set; }
+
+        public TimeSpan ModelRequestWallClockSettled { get; set; }
+
         public ApprovalId? PendingApprovalId { get; set; }
 
         public ImplementationPlan? PendingPlan { get; set; }
@@ -2346,6 +2118,8 @@ public sealed class SessionApplication :
         public ConversationMessage? SourceMessage { get; set; }
 
         public TaskSpecification Task { get; set; }
+
+        public WorkspaceId WorkspaceId { get; }
     }
 }
 

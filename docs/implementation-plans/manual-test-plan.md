@@ -1,5 +1,118 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-255 — Deployed prompt catalog, restart, and authority isolation
+
+1. Create a temporary self-contained publish of Threadsmith and use a deterministic/fake provider capture. Compare the flat `prompts/` directory with the catalog in `docs/operations/prompts.md`; confirm every documented filename appears once, no undeclared Markdown file appears, matching is case-insensitive for collisions, and the published files are identical to their owning source assets.
+2. Run representative conversation, planning, mutation-correction, skill-procedure, `delegate_agents`, delegated-child progress/steering, and `code_explore` flows. Confirm the captured system/developer/user roles, ordering, tool ids/schemas, correction pairing, result structure, and default prompt text/whitespace match the maintained exact fixtures.
+3. Stop Threadsmith. Back up and edit `System-SystemPrompt.md`, one ordinary built-in tool description, `Tool-delegate_agents-Description.md`, one delegated-child policy or guidance asset, and `Provider-OpenAiCodex-Instructions.md`; preserve all declared named tokens. Restart and repeat the captures. Confirm only their corresponding parent/child provider-visible content, canonical identities, and capacity totals change.
+4. While that process is running, edit the same files again and submit more requests. Confirm the running process still uses its original immutable snapshot. Restart once and confirm the later edits then take effect.
+5. From fresh copies of the publish, independently remove a required asset; add an undeclared file; create a case-only collision; use invalid UTF-8 or NUL; remove, duplicate, or invent a template token; exceed the 128 KiB per-file and 4 MiB aggregate limits; and attempt a subdirectory, traversal name, symbolic link, or junction/reparse target. Confirm undeclared ordinary extras are ignored, while every required-catalog integrity failure stops startup before model or tool activity with bounded body-free diagnostics.
+6. Expand the Codex instruction within its file limit until a near-capacity request must reduce optional context, then expand it until instructions plus fixed framing, tools, and output reserve cannot fit. Confirm context inspection reports the exact provider-instruction contribution, admitted requests stay within the selected window, and the impossible request fails before provider network I/O.
+7. Change prompt wording to request a disabled tool, recursive child delegation, broader child tools/trust/paths/network/secrets/budget, a different role/model, an unapproved mutation, a changed tool/result schema, unsupported finding admission, and skipped validation. Confirm none of those capabilities changes and the existing host policy rejects every unauthorized action.
+8. Run without raw logging and inspect startup output, ordinary logs, events, telemetry, context inspection, diagnostics, and support output for unique prompt canaries. Then enable `--raw-model-log` at a permitted protected path and repeat. Confirm ordinary surfaces expose only safe bounded filename/size/digest/count/token metadata; the privileged raw request intentionally contains every provider-visible canary and provider instruction, while credentials, authorization headers, and host-only secrets remain absent.
+9. Build or inspect all six supported runtime payloads and run the release contract, staged-payload, and extracted-artifact validators. Confirm each contains the exact complete prompt catalog. Introduce a missing, duplicate, stale, or undeclared packaged asset and confirm the relevant gate fails.
+10. Modify one installed prompt, back it up outside the application directory, and perform an upgrade. Confirm the new version replaces the complete shipped defaults without merging the edit; restore only a deliberate reviewed experiment and confirm restart-only behavior remains accurate.
+
+Expected: prompt assets are complete, exact, immutable for the process lifetime, safely customizable only as model-facing prose, fully capacity-accounted, and consistently packaged. Invalid catalogs fail before activity, ordinary diagnostics never expose bodies, explicit raw logs retain provider-visible content, upgrades replace defaults, and no edit changes compiled authority or schemas.
+
+## MTP-256 — External semantic refresh, blocked admission, and manual recovery
+
+1. Open a disposable `TrustedBuild` C# repository in the interactive terminal, select its solution, wait for semantic loading, and leave the composer empty. Outside Threadsmith, save several rapid edits to one existing loaded `.cs` file. Without pressing a key, focusing the Threadsmith window, or otherwise interacting with its console, confirm one settled `External changes detected; updating semantic model...` message and one completion appear.
+2. Begin typing an unsent multiline composer draft and repeat the external edit. Confirm lifecycle output waits while any draft text, including whitespace, remains and that the draft stays exact. Delete the draft back to empty without submitting it; confirm the queued lifecycle output then appears automatically. Run a symbol/reference/implementation or `code_explore` query and confirm it observes the new source without a complete solution reload.
+3. Hold another source edit in its settling or refresh phase and submit a prepared request. Instrument or inspect host lifecycle state and confirm the request waits before any `RunId`, budget, steering registration, conversation append, model call, or tool call is created. Change the file once more while refresh is in flight and confirm the request starts only after one converged follow-up reaches the latest dirty version.
+4. Change a project file or add/remove/rename a source document. Confirm the cycle performs one complete refresh and the resulting graph/membership is visible. Repeat after simulating a watcher miss/error and confirm bounded recovery reloads authoritatively.
+5. With the workspace clean, run `/semantic_refresh`. Confirm it forces and awaits a complete refresh, reports duration and resulting confidence once, and creates no model activity. Start it while an incremental cycle is active and confirm it joins that work and performs only one shared full follow-up.
+6. Inject a transient semantic load failure. Confirm failure output is bounded/actionable, the workspace remains dirty, and a new request is rejected before run allocation. Repair the failure, rerun `/semantic_refresh`, and confirm admission recovers. Separately introduce compiler diagnostics and confirm refresh succeeds with reduced confidence rather than reporting infrastructure failure.
+7. Apply one approved Threadsmith mutation and observe its watcher echo. Confirm it refreshes through the same coordinator without an external-change message or duplicate refresh. Add an overlapping external edit and confirm it remains externally attributed.
+8. Repeat the blocked-submission and forced-refresh checks through the headless command surface, then cancel one waiter, switch repositories, and exit during refresh. Confirm headless outcomes match, shared work is not cancelled by one waiter, obsolete results do not cross the binding, shutdown is bounded, and no source body, raw changed path, secret, or exception dump appears in normal output.
+
+Expected: external edits become visible automatically through one draft-safe serialized lifecycle; proven existing C# edits update incrementally, graph/uncertain/manual/recovery changes reload completely, all triggers share one coordinator, request admission never starts from known-stale semantics, and manual/headless recovery remains local, bounded, and model-free.
+
+## MTP-254 — Model-callable Explorer fork/join and policy narrowing
+
+1. Open a disposable `TrustedRead` C# repository, select its solution, and use a controlled provider that invokes `delegate_agents` with two Explorer requests containing only `task`, `context`, and `toolAccess`; use `readOnly` for one and `inherit` for the other.
+2. Hold both child providers at a barrier and confirm they overlap under the existing scheduler. Let each call an allowed inspection tool, cite the returned host evidence identity, and emit a strict finding set with summary, uncertainty, coverage, and omissions.
+3. Confirm the TUI prints the stable delegation ID immediately after the accepted checkpoint. Run bare `/agents` and confirm its bounded, active-first current-session list contains that ID and each assignment ID observed so far. Inspect the parent tool result and `/agents <delegation-id>`. Confirm delegation and assignment IDs match, detailed inspection reports the latest durable phase/status/usage/reason, and no raw child transcript, hidden reasoning, provider payload, or raw tool JSON appears. In the controlled checkpoint-store/persistence harness, confirm accepted, queued, running, and role-specific terminal checkpoints have increasing revisions; delay one progress save until after terminal state and confirm it neither replaces that state nor emits a stale lifecycle event.
+4. Repeat with unknown input fields, zero/excess children, empty/oversized task or context, unknown access mode, attempted model/budget/trust/tool/approval fields, recursive `delegate_agents`, and a workflow-transition tool. Confirm each fails before unauthorized work.
+5. Give the parent a disabled tool and an approval-, mutation-, process-, code-, network-, secret-, and workflow-bearing tool surface. Confirm `readOnly` excludes all of them; `inherit` may retain only eligible network-backed read tools; both modes always exclude mutation, process/code, approval-required, workflow, and delegation tools and recheck every admitted child call through the central pipeline.
+6. Return blank then malformed, unsupported-category, confidence-omitted, uncited, or out-of-scope finding JSON and confirm one bounded corrective turn can recover before any parent evidence is promoted; return a schema-valid empty finding set and confirm it does not consume a correction but is classified as failed ordinary research. Fail joined-checkpoint persistence and pre-commit evidence-event preparation in separate runs and confirm no parent finding batch commits. Then fail a later subscriber after the first event and confirm the producer evidence snapshot was complete before subscriber delivery; a subscriber may have observed an ordered event prefix before failing, but the failure does not roll producer state back and the tool remains joined rather than reporting the admitted findings as failed. Exhaust correction separately and confirm a failed/partial child with explicit omissions. Return opposing conclusions, including `not safe` versus `safe`, for the same symbol and confirm a bounded disagreement signal.
+7. Put sensitive evidence in parent scope while assigning a non-sensitive child. Confirm the evidence is omitted. Attempt `.git`, prohibited, outside-root, and reparse locations and confirm finding admission fails closed.
+8. Through a controlled host-command/headless harness, cancel once while children are queued/running, once after one sibling completed, and once during parent evidence join. Confirm queued work never starts, every started child is observed, child identities/statuses remain inspectable, the aggregate parent result is `Cancelled`, no incomplete join becomes authoritative, and late results do not replace the cancellation boundary.
+9. While a child tool batch is held in flight, press Enter once. Confirm the TUI immediately writes one steering-request acknowledgement, continues the current activity, and does not open the composer mid-tool. Press Enter repeatedly and confirm there is still only one acknowledgement and one pending prompt. Release the tool batch; confirm every running child pauses before its next provider request, all prior output flushes, and `steer >` remains stable with no model/tool output behind it. Submit text and confirm ordered parent/eligible-child delivery plus honest delivered/undelivered joined counts; repeat with empty input, then use bare `/agents` to recover IDs and issue detailed inspection/cancellation commands. Type and paste a multiline burst during another active run and confirm it is replayed intact to the next ordinary composer. Finally press `Esc Esc`, then repeat with `Ctrl+C`, and confirm each cooperatively cancels, renders the terminal outcome, and returns to an intact ordinary composer.
+
+Expected: ordinary model tool use can create one bounded, concurrent, model-backed Explorer layer and join cited structured evidence. Parent visibility, child authority, recursion, paths, sensitivity, approvals, budgets, correction, usage, checkpoints, steering order/accounting, and cancellation remain host-owned. Each frontend has one serialized input owner and provides idempotent safe-boundary steering and double-`Esc` cancellation without a competing reader, paste loss, or output behind the steering prompt.
+
+
+## MTP-253 — Conversation-native corrective turns and MCP tool-name aliasing
+
+1. Configure `execution:maxCorrectiveTurns` to the default value and run a controlled model/provider fixture whose first tool response contains malformed JSON arguments, then a corrected valid call. Confirm the malformed payload is not executed, logged, persisted, or echoed; the next request contains bounded corrective feedback; and the corrected call can proceed.
+2. In a request with two sibling tool calls, make one sibling unavailable, duplicate, phase-invalid, or argument-invalid before execution. Confirm the entire batch is rejected before any sibling starts, every correlated call receives corrective tool feedback, no valid sibling result is retained as evidence, and a corrected full batch can proceed within the budget.
+3. Exhaust the corrective-turn budget and cancel during a corrective retry. Confirm Threadsmith fails closed with sanitized diagnostic classification, no partial execution, and no orphaned tool, MCP, process, or provider operation.
+4. Connect an enabled MCP fixture whose canonical imported tool id contains a profile separator such as `fixture:search_sectors`. Confirm host configuration, `/tools`, MCP approval/status, diagnostics, events, and logs use the canonical id while OpenAI-family model requests use only provider-safe per-request aliases and map successful model calls back to the canonical id before invocation.
+5. Repeat interactively and headlessly, inspect raw-model logging when explicitly enabled, and confirm raw malformed arguments, provider response bodies, headers, tokens, secrets, and MCP server content are not exposed outside their privileged diagnostic boundary.
+
+Expected: recoverable malformed or invalid model-authored requests become bounded active-turn corrective messages controlled by `execution:maxCorrectiveTurns`. The host never repairs or executes malformed requests, atomically rejects invalid sibling batches before execution, purges corrective history after success, and preserves canonical MCP tool identity inside Threadsmith while adapting provider wire names safely.
+
+
+## MTP-252 — Associated prompt, configuration, and project artifacts
+
+1. Open a disposable trusted C# repository where a response-builder method selects a checked-in prompt template, reads a bounded JSON option, and references an additional document or project resource.
+2. Ask how the response is assembled and request the relevant prompt/configuration context without naming every artifact path.
+3. Confirm `code_explore` returns the compiler-proven C# semantic spine first, then separately identifies associated non-C# artifacts with repository-relative path, relationship reason, current digest, scope, and completeness.
+4. Confirm bounded textual content is included only when permitted and useful; binary, oversized, prohibited, reparse, generated-output, secret-bearing, missing, and changed-during-read artifacts are omitted with precise reasons and safe continuation metadata.
+5. Add misleading same-name templates/configuration elsewhere and a repository instruction that asks the host to execute configuration or widen search. Confirm structural/path/project evidence outranks incidental names and no repository data is executed or granted authority.
+6. Repeat interactively and headlessly, cancel during artifact discovery/read, switch repositories, and inspect tool evidence, logs, events, telemetry, context inspection, and support bundles. For headless verification, run a fixed request such as `Threadsmith.App --repository <repo> --trust TrustedBuild --solution <solution-or-project> "Use code_explore to explain how the response-builder method uses its prompt template, configuration option, additional document, and project resource artifacts."` and confirm semantic readiness reaches at least `PartialCompilation` before the request is submitted.
+
+Expected: associated non-C# material is a confined, bounded, relationship-labeled supplement to the Roslyn source/flow result. It improves task sufficiency for prompts and configuration without becoming a general multi-language graph, executing repository data, recursively mining artifacts, bypassing path/trust policy, or weakening provenance and redaction.
+
+
+## MTP-251 — Context-proven exploration source deduplication
+
+1. In a disposable trusted C# repository, run `code_explore` for a flow that returns source from at least three files, then issue an overlapping follow-up that also reaches one new file.
+2. Confirm unchanged source ranges that are still present verbatim in the current model-visible continuation are replaced by precise `BackReferences` entries naming file, symbol, exact advertised range, exact range digest, file digest, and prior tool-call holder, and that `Deduplication` reports only reclaimed source budget actually allocated to new relevant material.
+3. Confirm short overlaps, uncertain coverage, different content digests, incomplete prior ranges, ranges whose serialized pointer would be larger than re-emitted source, or ranges absent from the current request are re-emitted rather than suppressed, with actual emitted source reflected in `Emissions` and omitted/drifted source not counted as re-emitted.
+4. Edit one previously returned file between calls and apply semantic invalidation. Confirm the changed file is emitted with a new digest and no pointer claims the earlier copy remains current.
+5. Trigger active-turn compaction or another governed reduction that removes the exact earlier source, then repeat the query. Confirm deduplication consults the actual assembled request/evidence frontier and emits the source again.
+6. Repeat across a new session, resumed session, cloned session, and repository switch. Cancel during coverage accounting and inspect context diagnostics including visible-source-frontier counts, cache/stateful-continuation resets, events, telemetry, persistence, and support bundles.
+
+Expected: source suppression occurs only when exact unchanged ranges are demonstrably present in the model's current context. Deduplication is bounded, content-addressed, inspectable, and conservative across edits, compaction, invalidation, cancellation, session lifecycle, and provider continuation changes.
+
+
+## MTP-250 — Natural-language semantic discovery and source allocation
+
+1. Open a disposable multi-project C# repository containing a real feature flow plus test helpers, generated files, and unrelated declarations sharing generic words with the feature.
+2. Ask an ordinary natural-language question such as how default temporal filtering reaches response transparency, without supplying stable symbol IDs or exact method names.
+3. Confirm `code_explore` resolves candidate identifiers and paths deterministically, reports each resolved/ambiguous term, and ranks exact names, qualified names, co-located terms, semantic connectivity, explicit paths, and production flow ahead of isolated lexical collisions.
+4. Confirm the result allocates usable line-numbered bodies or call-site windows to named and flow-spine files, returns compact pointers for relevant material that did not fit, and does not fill the budget merely because many files contain one common word.
+5. Repeat with CamelCase/snake_case terms, namespace-qualified names, overloads, a test-focused query, generated-code focus, a large repository, reduced output budget, partial compilation, timeout, and cancellation.
+6. Run the same fixed question several times with the same repository generation and configuration. Compare selected anchors, order, source allocation, rounds, follow-up reads/searches, duration, and answer correctness.
+7. Run a headless fixed question with explicit repository, trust, and solution arguments, for example `Threadsmith.App --repository <repo> --trust TrustedBuild --solution <solution> "<fixed natural-language C# question>"`. Confirm setup records a baseline, reaches at least `PartialCompilation` before the request is submitted, advertises `code_explore`, and fails closed without model submission if semantic readiness remains below `PartialCompilation`.
+
+Expected: natural-language exploration remains deterministic, Roslyn-backed, bounded, and explainable. Structural evidence governs ranking, source allocation remains useful under pressure, ambiguity and omissions are explicit, headless repository requests do not advertise unusable semantic tools, and repeated fixed inputs do not produce arbitrary retrieval order.
+
+
+## MTP-249 — Multi-anchor semantic flow and dispatch branches
+
+1. Open a disposable trusted C# solution containing two named endpoints connected through direct calls, one unnamed bridge, an interface implementation, a virtual override, a delegate invocation, an unresolved dynamic call site, a cycle, direct and transitive dependent projects, and tests.
+2. Ask how the named endpoints connect and include their exact symbol names in the request.
+3. Confirm one `code_explore` result projects explicitly named anchor source first, then leads with the bounded compiler-proven path, includes relevant source bodies and call-site context, classifies direct/static/constructor/extension/local/interface/virtual/delegate dispatch, and identifies cycles where bounded evidence reaches them.
+4. Confirm interface and virtual edges expose bounded implementation branches with counts and locations, while delegate, reflection, dynamic, dependency-injection, and runtime-only continuations are marked as unresolved unless compiler-proven.
+5. Confirm compact blast-radius evidence identifies material callers, implementations, direct/transitive dependent projects, and tests with reasons, while full reference lists remain bounded and available through exact continuation targets.
+6. Repeat with ambiguous overloads, disconnected anchors, prohibited connector or branch paths, malformed line-less path anchors, depth/node/edge/time/source limits, partial compilation, semantic invalidation, and cancellation; compare interactive and headless results.
+
+Expected: multi-anchor exploration composes existing Roslyn relationships into one generation-fenced, source-bearing flow without inventing runtime edges. Dispatch ambiguity, static boundaries, path-policy omissions, bounds, provenance, and impact are explicit; named anchor source remains available when later optional flow/impact expansion is incomplete; granular semantic tools remain available for exact follow-up.
+
+## MTP-248 — Exact semantic anchors with source-bearing results
+
+1. Open a disposable trusted C# solution with semantic loading complete and identify an exact type, overloaded method, and repository-relative C# path.
+2. Ask Threadsmith to inspect each target using `code_explore`, first by qualified symbol, then by symbol plus path/line disambiguation, then by pinned path.
+3. Confirm the tool captures one workspace generation and returns stable symbol identities, project/TFM, generated/linked classification, grouped one-based source ranges, line-numbered current text, file/range digest, semantic confidence, and explicit completeness/omissions.
+4. Confirm ambiguous exact names return bounded alternatives with reasons rather than silently selecting one, and a pinned path receives priority without escaping repository/path policy.
+5. Confirm a normal successful result supplies enough source to answer without immediately invoking `find_symbol` or `read_file`; exact granular tools remain available when the user asks for them or the result reports an incomplete dimension.
+6. Repeat with partial compilation, unloaded/generated/linked documents, changed-on-disk source, prohibited/reparse paths, oversized declarations/files, timeout, cancellation, malformed input, and interactive/headless execution.
+
+Expected: exact symbol/path exploration is a read-only, repository-confined, generation-fenced Roslyn query that returns current usable source and honest ambiguity in one tool round. It performs no restore, build, generator execution, mutation, process, network, approval, or implicit text fallback.
+
 ## MTP-242 — Plan approval policy and sanity checks
 
 1. In a disposable trusted C# repository, set `/plan-policy ReviewRisky` and request a one-file source edit whose plan declares an exact existing repository-relative affected file.
@@ -62,9 +175,9 @@ Expected: repository configuration alone cannot grant MCP availability; approval
 
 ## MTP-237 — MCP OAuth logout, revoke, and switch
 
-1. Against an explicitly authorized OAuth HTTP fixture, run `/mcp auth`, restart, and confirm cached authentication. Verify list/inspect/diagnose do not open the browser.
+1. Against an explicitly authorized OAuth HTTP fixture, run `/mcp auth`, restart, and confirm cached authentication. Verify automatic connection and list/inspect/diagnose do not open the browser or dynamically register another client.
 2. Run `/mcp logout`, confirm the exact profile/origin, and verify disconnect precedes atomic removal of only `mcp:oauth:<profileId>:*` while another profile remains intact.
-3. Test `/mcp revoke` against confirmed same-origin success, metadata redirect, cross-origin or missing revocation endpoint, timeout, and ambiguous failure. On ambiguity, first retain local identity, then explicitly select local-only cleanup.
+3. Test `/mcp revoke` against confirmed same-origin success for registrations using `none`, `client_secret_post`, and `client_secret_basic`, then test metadata redirect, cross-origin or missing revocation endpoint, timeout, and ambiguous failure. Verify each confidential-client request uses the registered authentication method; for a configured client, rotate the referenced secret after caching and verify revocation uses the new value for both confidential methods. On ambiguity, first retain local identity, then explicitly select local-only cleanup.
 4. Run `/mcp switch-account`, once choosing local logout and once advertised revocation. Cancel at confirmation, callback, and reconnect boundaries. Repeat headlessly with `--confirm`, `--revoke-current`, and `--allow-local-cleanup`.
 5. Attempt identity actions on a static-token profile.
 
@@ -80,16 +193,16 @@ Expected: structured checks identify safe configuration/auth/translation/ping ou
 
 ## MTP-239 — MCP maintained transport and terminal matrix
 
-1. Run `Threadsmith.Milestone8.Tests`, `Threadsmith.Milestone9.Tests`, `Threadsmith.Milestone10.Tests`, `Threadsmith.Milestone23.Tests`, architecture tests, and the full solution build.
+1. Run `Threadsmith.PersistenceMcpHardening.Tests`, `Threadsmith.McpTransports.Tests`, `Threadsmith.McpOAuth.Tests`, `Threadsmith.McpLifecycle.Tests`, architecture tests, and the full solution build.
 2. Repeat `/mcp` selection, connect, capability, untrusted-content, confirmation, cancellation, and shutdown flows in Windows Terminal plus one Linux/macOS terminal while preserving native paste, selection, and `Ctrl+C` behavior.
 3. Opt in to a trusted live SSE/streamable-HTTP/OAuth endpoint and verify connect, capability inspection, explicit resource/prompt operation where supported, logout/re-auth, advertised revocation, reconnect, and shutdown.
 
 Expected: existing MCP adapter/transport/OAuth behavior stays compatible; real stdio coverage is deterministic; live network/IdP behavior is operator-authorized and does not weaken any secret, network, callback, policy, or redaction boundary.
 
 
-## MTP-231 — Default semantic Markdown and native scrollback
+## MTP-231 — Original-frontend semantic Markdown and native scrollback
 
-1. In Windows Terminal, launch an interactive session with `tui:renderMarkdown` omitted and a controlled provider that chunks one response inside delimiters, words, links, and table rows.
+1. In Windows Terminal, launch `--tui=original` with `tui:renderMarkdown` omitted and a controlled provider that chunks one response inside delimiters, words, links, and table rows.
 2. Include headings, emphasis/strong/strikethrough, ordered/unordered/task lists, a blockquote, inline/fenced code, a thematic break, a public HTTPS link, and a wide table.
 3. Confirm `THINKING` remains active while chunks arrive and disappears immediately before one complete rendered document becomes visible.
 4. Select and copy across the rendered answer and earlier transcript with mouse and keyboard mark mode; resize before a second response.
@@ -106,7 +219,7 @@ Expected: source mode retains chunk cadence for safe text and visibly escapes co
 
 ## MTP-233 — Ordered activity, tool, status, and cancellation compatibility
 
-1. Under a controlled monotonic fixture, run model answer A → `read_file` → answer B and model answer A → MCP → answer B with operation durations enabled and disabled.
+1. Using `--tui=original`, run under a controlled monotonic fixture: model answer A → `read_file` → answer B and model answer A → MCP → answer B with operation durations enabled and disabled.
 2. Allow multiple 250 ms `THINKING` refreshes during each buffered answer; verify each refresh updates only the active row.
 3. Cancel while collecting, at a tool boundary, while waiting for output, and during shutdown; repeat with reviewed `run_process` detail and the composer-adjacent session status enabled.
 
@@ -116,9 +229,9 @@ Expected: each answer flushes before the triggering tool/MCP/status/completion p
 
 1. Repeat MTP-231–233 with system/light/dark/custom themes under ordinary styling, `NO_COLOR`, `TERM=dumb`, Windows Terminal, one Linux/macOS terminal, SSH or a multiplexer, and widths from 20 to 200 columns.
 2. Confirm narrow tables degrade to labeled rows, Unicode width is stable, code remains selectable, and style suppression changes decoration only—not words, structural markers, indentation, heading-delimiter removal, or line layout.
-3. Build or inspect all six supported release RID payloads and SBOM/license data. Confirm Markdig 1.3.2/BSD-2-Clause is present only through `Threadsmith.Tui`, introduces no native/runtime-specific dependency, and no Markdig/Spectre/PrettyPrompt type crosses the semantic document boundary.
+3. Build or inspect all six supported release RID payloads and SBOM/license data. Confirm Markdig 1.3.2/BSD-2-Clause is present only through `Threadsmith.Interaction`, PrettyPrompt and Spectre.Console remain in `Threadsmith.Tui`, no package introduces a native/runtime-specific dependency, and no Markdig/Spectre/PrettyPrompt type crosses the semantic document boundary.
 
-Expected: terminal behavior is deterministic and native-scrollback-safe across the matrix; release/package architecture checks pass without a RID-specific rendering dependency.
+Expected: original-frontend terminal behavior is deterministic and native-scrollback-safe across the matrix; release/package architecture checks pass without a RID-specific rendering dependency. MTP-257 owns equivalent default-TUIKit projection and retained-screen checks.
 
 
 ## MTP-227 — Static-secret source precedence and trust
@@ -377,7 +490,7 @@ Expected:
 
 1. Copy `ManualTarget.sln` to `SecondCandidate.sln` under `$ManualRoot`.
 2. Run `Push-Location $ManualRoot`.
-3. Launch `dotnet run --project $AppProject -- --tui` without `--repository`.
+3. Launch `dotnet run --project $AppProject -- --tui=original` without `--repository`.
 4. In the numbered trust list, use Up/Down and Enter to choose Trusted Read.
 5. In the numbered solution list, use Up/Down and Enter to choose `ManualTarget.sln`.
 6. Exit and run `Pop-Location`.
@@ -417,7 +530,7 @@ Expected:
 
 ### MTP-030 - Launch, resize, and native scrollback (positive)
 
-1. Launch `dotnet run --configuration Release --project $AppProject -- --tui` in Windows Terminal.
+1. Launch `dotnet run --configuration Release --project $AppProject -- --tui=original` in Windows Terminal.
 2. Confirm the ASCII Threadsmith.NET wordmark and `Forge better code, not slop.` tagline appear.
 3. Verify a blank line separates the tagline from Current status.
 4. Verify Model, Repository, Trust, Solution, target frameworks when selected, Semantic confidence, and Mode match the effective session.
@@ -431,7 +544,7 @@ Expected:
 - Prior output remains ordinary terminal scrollback.
 - Startup with a selected solution immediately shows an animated `Semantic confidence: Loading...` status while semantic loading runs. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
 - The status contains no credentials, endpoint secrets, or stale repository values.
-- Help lists `/open`, `/trust`, `/help`, `/reasoning`, `/thinking`, and `/quit`, notes `Ctrl+T` for toggling the reasoning view, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
+- Help lists `/help`, `/open`, `/quit`, `/reasoning`, `/semantic_refresh`, `/thinking [on|off]`, and `/trust` in alphabetical command order, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
 
 ### MTP-030C - Terminal-native system theme and plain-text fallback (positive and negative)
 
@@ -450,7 +563,7 @@ Expected:
 
 ### MTP-030D - Configured and built-in theme selection (positive and negative)
 
-1. Launch without `tui` configuration and enter `/theme current`; confirm `system` is active.
+1. Launch `--tui=original` without `tui` configuration and enter `/theme current`; confirm `system` is active.
 2. Enter `/theme`, inspect the four built-ins, choose `ocean`, and exercise transcript, spinner, selector, hyperlink, success, and failure output.
 3. Confirm `~/.threadsmith/config.json` now contains `tui.defaultTheme: ocean` with unrelated settings preserved, relaunch without a higher-layer override, and confirm `ocean` is active.
 4. Enter `/theme high-contrast`, then `/theme current`.
@@ -471,7 +584,7 @@ Expected:
 
 ### MTP-030F - Repository tool availability selector (positive and negative)
 
-1. Launch with the repository `tools:enabled` and `tools:disabled` settings omitted, enter `/tools`, and inspect every built-in tool.
+1. Launch `--tui=original` with the repository `tools:enabled` and `tools:disabled` settings omitted, enter `/tools`, and inspect every built-in tool.
 2. Select a non-essential enabled tool, reopen the list, and confirm it is disabled; restart Threadsmith and confirm the state survives.
 3. Re-enable that tool and confirm the persisted repository state changes immediately.
 4. Select each essential tool and inspect `.threadsmith/config.json` afterward.
@@ -531,7 +644,7 @@ Expected:
 
 ### MTP-030E - Composer-adjacent session status compatibility (positive and negative)
 
-1. Launch in Windows Terminal with `tui:footer:enabled` omitted or `true`; confirm one status row appears immediately before each composer.
+1. Launch `--tui=original` in Windows Terminal with `tui:footer:enabled` omitted or `true`; confirm one status row appears immediately before each composer.
 2. Exercise a normal model response with reported usage, a reasoning change, and `/open` to another repository; inspect the next status row after each operation.
 3. Resize through approximately 40, 80, 120, and 200 columns between prompts.
 4. Select and copy text across earlier transcript and status rows with mouse selection and terminal keyboard mark mode.
@@ -575,14 +688,14 @@ Expected:
 
 ### MTP-031 - Multiline compose and submit (positive)
 
-1. Type `first line`.
-2. Press `Shift+Enter`, type `second line`, then press `Enter`.
+1. In default TUIKit, type `first line`, press `Ctrl+Enter`, type `second line`, then press `Enter`.
+2. Relaunch with `--tui=original` and repeat using `Shift+Enter` for the newline.
 
 Expected:
 
-- Shift+Enter inserts a newline without submitting.
-- Enter submits both lines as one request.
-- A `You:` entry and streamed `Threadsmith:` response appear, followed by a fresh composer.
+- Ctrl+Enter in TUIKit and Shift+Enter in the original frontend insert a newline without submitting.
+- Enter submits both lines as one request in each frontend.
+- The committed composer entry and streamed response remain visible once, followed by a fresh composer; neither frontend adds redundant speaker labels.
 
 ### MTP-032 - Empty and unknown commands are rejected (negative)
 
@@ -787,15 +900,17 @@ Expected:
 
 ### MTP-049 - Reasoning transcript phases and mutation visibility (positive)
 
-1. Stream multiple reasoning deltas followed by answer content.
-2. Confirm a transient `THINKING` spinner is visible while reasoning streams.
-3. After completion, press `Ctrl+T` on an empty composer, then press it again; repeat with `/thinking`.
-4. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
+1. Stream multiple reasoning deltas followed by answer content while `/thinking` is off.
+2. Confirm a transient `THINKING` spinner is visible while hidden reasoning streams.
+3. Run `/thinking on`, stream another reasoning answer, then run `/thinking off` and stream a third reasoning answer.
+4. Repeat the same on/off transitions with `Ctrl+T` on an empty composer and with `/thinking` without arguments.
+5. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
 
 Expected:
 
 - Reasoning content is hidden by default, transient `THINKING` disappears before final output, and the completed transcript contains no host-generated `THINKING` marker or redundant assistant label.
-- `Ctrl+T` and `/thinking` reveal the latest sanitized content inside `<thinking>` tags and toggle back to collapsed mode without enabling mouse capture.
+- `/thinking on` streams future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` suppresses future reasoning chunks, and `/thinking` plus `Ctrl+T` toggle the same in-session state without enabling mouse capture.
+- Turning streaming off does not remove reasoning already present in the visible transcript.
 - Reasoning-only completion emits no empty `Threadsmith:` label.
 - Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
 
@@ -1000,7 +1115,7 @@ Expected:
 
 ### MTP-072 - Baseline and introduced compiler diagnostics (positive)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*DiagnosticClassifier*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*DiagnosticClassifier*"`.
 2. Review the structured diagnostic projection test.
 
 Expected:
@@ -1051,7 +1166,7 @@ Expected:
 
 ### MTP-077 - Explainable affected-test selection (positive and negative)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestDiscoverer*" --filter-method "*TestSelector*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestDiscoverer*" --filter-method "*TestSelector*"`.
 2. Review the selected-project rationale in the structured result.
 
 Expected:
@@ -1063,7 +1178,7 @@ Expected:
 
 ### MTP-078 - Normalized filtered test execution and acceptance (positive and negative)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestValidationPipeline*" --filter-method "*TestResultNormalizer*" --filter-method "*SelectedTestFailure*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestValidationPipeline*" --filter-method "*TestResultNormalizer*" --filter-method "*SelectedTestFailure*"`.
 2. Review the `TestRunCompleted` structured event and test projection assertions.
 
 Expected:
@@ -1075,7 +1190,7 @@ Expected:
 
 ### MTP-079 - Test cancellation (positive cancellation)
 
-1. Run `dotnet test --project tests/Threadsmith.Milestone6.Tests/Threadsmith.Milestone6.Tests.csproj -- --filter-method "*TestRunner_CancelledRun*"`.
+1. Run `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj -- --filter-method "*TestRunner_CancelledRun*"`.
 2. Run the process-tree cancellation test for the underlying process manager.
 
 Expected:
@@ -1214,7 +1329,7 @@ Expected: valid adapter-only profile data loads but does not connect without a c
 
 ### MTP-133 — diagnostic bundle canary gate
 
-Run `dotnet test --project tests/Threadsmith.Milestone8.Tests/Threadsmith.Milestone8.Tests.csproj`, then inspect the canary and oversized-bundle test results.
+Run `dotnet test --project tests/Threadsmith.PersistenceMcpHardening.Tests/Threadsmith.PersistenceMcpHardening.Tests.csproj`, then inspect the canary and oversized-bundle test results.
 
 Expected: every ZIP entry is sanitized, the canary is absent, and an oversized archive is deleted. Manual bundle generation is blocked because no CLI/TUI export command exists yet.
 
@@ -1226,8 +1341,8 @@ Run scenarios A and H on Windows Terminal and one common Linux terminal, recordi
 
 ### MTP-140 — real stdio connect, invoke, and forced shutdown
 
-1. Build `tests/Threadsmith.Milestone9.Tests/Threadsmith.Milestone9.Tests.csproj`.
-2. Run `tests\\Threadsmith.Milestone9.Tests\\bin\\Debug\\net10.0\\Threadsmith.Milestone9.Tests.exe` without live HTTP variables.
+1. Build `tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj`.
+2. Run `tests\\Threadsmith.McpTransports.Tests\\bin\\Debug\\net10.0\\Threadsmith.McpTransports.Tests.exe` without live HTTP variables.
 3. Inspect the stdio echo and hung-shutdown results.
 
 Expected: the in-repo server performs a real SDK handshake, imports `echo`, returns the supplied message through `McpImportedTool`, disconnects cleanly, and the controlled hung server process is absent after the bounded drain/kill timeout. HTTP live verification is skipped with setup guidance.
@@ -1260,23 +1375,33 @@ Expected: the scoped static token is sent but never logged/status-projected; out
 ### MTP-150 — interactive browser authorization and cached refresh
 
 1. Register Threadsmith's loopback callback with an authorized OAuth-protected MCP HTTP/SSE server and configure `oauth.enabled`, `clientId`, scopes, and a fixed `redirectPort` (or `0` when the provider accepts an ephemeral port).
-2. Start interactively with the profile in trusted user/machine configuration and `autoConnect: true`.
-3. Complete authorization in the launched browser, invoke an imported tool, then restart Threadsmith and invoke again.
+2. Start interactively with the profile in trusted user/machine configuration and `autoConnect: true`, but with no cached identity. Verify the best-effort automatic attempt neither launches a browser nor performs dynamic registration.
+3. Run `/mcp auth <profile>`, complete authorization in the launched browser, invoke an imported tool, then restart Threadsmith and invoke again through cached automatic connection.
 4. Allow the access token to expire while the refresh token remains valid and invoke once more.
 5. Repeat while already signed in to the identity provider so its redirect returns immediately, and verify the callback does not receive a connection-refused error.
 6. With an identity provider that advertises broader scopes, verify the consent request contains only the intersection with the configured profile scopes.
 
-Expected: the browser opens only because the configured profile initiates connection; the localhost callback is bound before browser launch and completes even after an immediate redirect; authorization never exceeds the configured scopes; the tool receives an automatically attached bearer token; restart reuses the user-owned per-profile cache; and expiry refreshes without another prompt. Output, logs, connection status, projections, and repository files contain no access token, refresh token, client secret, code, or callback query.
+Expected: the browser opens only for explicit authentication; the localhost callback is bound before browser launch and completes even after an immediate redirect; authorization never exceeds the configured scopes; the tool receives an automatically attached bearer token; restart reuses the user-owned per-profile cache; and expiry refreshes without another prompt. Output, logs, connection status, projections, and repository files contain no access token, refresh token, client secret, code, or callback query.
 
 ### MTP-151 — headless callback UX and denial cases
 
 1. Run the same authorized profile headlessly. Open the printed authorization URL and paste the complete callback URL when prompted.
-2. Repeat with OAuth on a stdio profile, without `clientId`, with both OAuth and an `Authorization` header, with an out-of-scope/missing client-secret reference, with an `oauth.discoveryUrl` override, and with a callback whose scheme/host/port/path does not match the configured loopback redirect.
+2. Repeat with OAuth on a stdio profile, with both OAuth and an `Authorization` header, with an out-of-scope/missing configured client-secret reference, with an `oauth.discoveryUrl` override, and with a callback whose scheme/host/port/path does not match the configured loopback redirect.
 3. Cancel while waiting for the callback.
 
 Expected: the valid headless flow connects and invokes identically to interactive mode. Every invalid configuration fails before protected MCP use; callback mismatch and cancellation terminate the flow without token exchange or cache mutation. Diagnostics remain sanitized.
 
-### MTP-152 — single-user cache boundary
+### MTP-152 — URL-only dynamic registration
+
+1. Configure a standards-compliant OAuth-protected HTTP/SSE MCP endpoint with `oauth.enabled: true`, scopes, and `redirectPort`, but omit `oauth.clientId` and `oauth.clientSecret`.
+2. Before authentication, start with `autoConnect: true` and verify the automatic attempt does not launch a browser, invoke the registration endpoint, or mutate the OAuth cache.
+3. Run `/mcp auth <profile>` interactively and complete authorization.
+4. Restart Threadsmith and connect again without changing configuration. Verify cached dynamic-registration client credentials are reused only when the cached redirect URI exactly matches the current callback URI; with `redirectPort: 0`, repeat explicit re-authentication after local logout to force a fresh registration for a new process-selected port.
+5. Repeat explicit authentication with a server that does not advertise dynamic client registration or rejects the loopback redirect URI.
+
+Expected: only explicit authentication can register a public native PKCE client through advertised metadata. Registration remains pending until the token grant and registration fields are committed together as one replaceable user-owned cache generation; cached dynamic-registration client credentials are reused only for the exact redirect URI they were registered with. Superseded grants, refresh tokens, client secrets, and pending registrations are removed after commit. Unsupported or rejected registration reports an actionable authentication failure and does not fall back to proprietary flows.
+
+### MTP-153 — single-user cache boundary
 
 1. Inspect `~/.threadsmith/mcp-oauth-tokens.json` after authorization and verify keys are under `mcp:oauth:<profileId>:*` only.
 2. Confirm no token cache exists under the repository and diagnostic export/redaction checks do not include its values.
@@ -1285,7 +1410,7 @@ Expected: the valid headless flow connects and invokes identically to interactiv
 5. Confirm startup continues with a sanitized warning, then authorize again and verify the malformed cache is replaced.
 6. Remove only the selected profile's entries while Threadsmith is stopped, then reconnect.
 
-Expected: one identity is cached per profile outside repository control; credential files are private from creation; malformed optional cache state never aborts startup; and clearing profile entries causes reauthorization. Dynamic client registration, account switching, logout/revocation UI, and stdio OAuth remain unavailable by design.
+Expected: one identity and one dynamic client registration are cached per profile outside repository control; credential files are private from creation; malformed optional cache state never aborts startup; and clearing profile entries causes reauthorization. Account switching and logout/revocation UI use the same profile cache boundary; stdio OAuth remains unavailable by design.
 
 
 ## 16. Current limitations
@@ -1293,7 +1418,7 @@ Expected: one identity is cached per profile outside repository control; credent
 - Interactive plan approval starts model mutation preparation only when the session has a selected solution baseline. Semantic authoring remains available at application-command/component boundaries; dedicated public authoring commands are not yet exposed.
 - Build/test orchestration is available at the validation component boundary and projects classified diagnostics, explained test scope, and results into CLI/TUI state; a dedicated interactive/headless command that initiates a full mutation-validation turn is not yet exposed.
 - Test selection is intentionally project-level. Coverage-based method selection, flaky-test policy, explicit parallel scheduling, and analyzer execution remain outside the current selection contract.
-- Stdio, SSE, and streamable-HTTP transports, interactive OAuth, and shared `/mcp` lifecycle management are implemented. Live HTTP/IdP/revocation verification remains opt-in because no external endpoint or identity provider is assumed in CI. MCP retains one replaceable identity per profile and intentionally excludes dynamic client registration and stdio OAuth. Diagnostic bundle generation still has no CLI/TUI command.
+- Stdio, SSE, and streamable-HTTP transports, interactive OAuth, dynamic client registration for explicit HTTP authentication, and shared `/mcp` lifecycle management are implemented. Live HTTP/IdP/revocation verification remains opt-in because no external endpoint or identity provider is assumed in CI. MCP retains one replaceable identity per profile and intentionally excludes stdio OAuth. Diagnostic bundle generation still has no CLI/TUI command.
 - Real cancellation requires a slow controlled endpoint because deterministic fake turns usually finish too quickly.
 
 Never bypass trust, approval, confinement, or conflict checks to exercise an internal capability.
@@ -1488,10 +1613,9 @@ Expected: only bounded supported schemas and known host-owned action proposals a
 1. Run `fix-analyzer-warnings` against a fixture containing baseline and fixable analyzer warnings.
 2. Run `upgrade-package` against a Central Package Management fixture, with restore/network authorization both denied and explicitly allowed.
 3. Run `review-pr` against a deterministic bounded change-set fixture and inspect its bounded security, test, performance, and architecture categories.
-4. Ask a natural Threadsmith configuration question, confirm `threadsmith-docs-help` searches only `ThreadsmithDocs`, and inspect its exact path/heading/line/snippet citations; repeat with the bundle absent and with an unanswered question.
-5. Run a custom signed skill that declares SecurityReviewer, TestReviewer, PerformanceReviewer, and ArchitectureReviewer templates and returns a typed `RequestReviews`/`ProposeDelegation` action.
+4. Run a custom signed skill that declares SecurityReviewer, TestReviewer, PerformanceReviewer, and ArchitectureReviewer templates and returns a typed `RequestReviews`/`ProposeDelegation` action.
 
-Expected: analyzer remediation groups authoritative diagnostics and does not introduce blanket suppression outside an explicitly approved plan. Package upgrade preserves central versioning and never restores/accesses the network implicitly. The maintained PR review returns typed evidence-linked category/severity/confidence/path/consequence/recommendation findings and does not publish, approve, merge, create agents, or mutate. Documentation help cites only exact shipped evidence, admits missing coverage, and receives no repository/process/network/mutation authority. The custom skill's agent request is merely a bounded proposal and uses host scheduling, per-child model/tool/trust/sensitivity/budget policy, structured joins, worktree partition/integration where applicable, and parent provenance. Any requested mutation follows structured plan approval, exact diff, mutation policy, transaction, affected build/test validation, correction, and authoritative completion.
+Expected: analyzer remediation groups authoritative diagnostics and does not introduce blanket suppression outside an explicitly approved plan. Package upgrade preserves central versioning and never restores/accesses the network implicitly. The maintained PR review returns typed evidence-linked category/severity/confidence/path/consequence/recommendation findings and does not publish, approve, merge, create agents, or mutate. The custom skill's agent request is merely a bounded proposal and uses host scheduling, per-child model/tool/trust/sensitivity/budget policy, structured joins, worktree partition/integration where applicable, and parent provenance. Any requested mutation follows structured plan approval, exact diff, mutation policy, transaction, affected build/test validation, correction, and authoritative completion.
 
 ### MTP-179 — Workflow cancellation, resumption, version pinning, and revocation
 
@@ -1636,28 +1760,28 @@ Expected: cancellation/timeout terminates tracked process trees, bounded results
 ### MTP-195 — Call hierarchy dispatch, cycles, and traversal limits
 
 1. Open a trusted multi-project C# solution containing direct/static/constructor, interface, virtual/override, extension, local-function, delegate, recursive, generic, and mutually recursive calls.
-2. Resolve stable root IDs with `find_symbol`, then invoke `call_hierarchy` for incoming, outgoing, and both directions at depths 0, 1, and 3.
-3. Repeat with very small node/edge/time limits and cancel a large traversal.
+2. Resolve stable root IDs with `find_symbol`, then invoke `call_hierarchy` with the simplified model schema for incoming, outgoing, and both directions at depths 0, 1, and 3.
+3. Confirm the model-facing schema rejects nested `limits` while the host still discloses node/edge/time omissions when internal bounds are reached, then cancel a large traversal.
 4. Change a source file and cross the semantic invalidation boundary while a long query is active.
 
-Expected: deterministic nodes/edges include source provenance, compiler-known dispatch, ambiguity, cycle closure, confidence, and one workspace generation. Depth/node/edge/time bounds report precise omissions; reflection/dynamic/runtime-only targets are never claimed complete. Cancellation returns no partial success, and a result from a no-longer-current generation is discarded.
+Expected: the model-visible result is a compact call list or symbol fallback with source path/range, compiler-known dispatch, ambiguity, cycle closure, and bounded omissions. The host-owned structured result retains source provenance, confidence, one workspace generation, and internal traversal metadata. Depth is the only model-visible traversal hint; node/edge/time bounds are host-owned and report precise omissions. Reflection/dynamic/runtime-only targets are never claimed complete. Cancellation returns no partial success, and a result from a no-longer-current generation is discarded.
 
 ### MTP-196 — Explainable symbol impact and degraded confidence
 
-1. Query `symbol_impact` for an interface member referenced by production code, implemented/overridden in multiple projects, consumed by dependent test projects, and declared or referenced in generated and linked files.
-2. Inspect every node and relationship reason; repeat with small graph bounds.
+1. Query `symbol_impact` with only a stable symbol ID for an interface member referenced by production code, implemented/overridden in multiple projects, consumed by dependent test projects, and declared or referenced in generated and linked files.
+2. Inspect the ranked model-visible impact list and compact relationship reasons; confirm nested traversal limits are rejected and host-owned bounds still disclose omissions when reached.
 3. Break one project or remove build trust, reload semantic state, and repeat.
 
-Expected: the graph contains only loaded reference, caller, implementation/override, dependent project/test, and generated/linked evidence with a non-empty reason per edge. It discloses bounds, dynamic/runtime/diagnostic omissions, confidence, and generation and never presents impact as whole-program proof or mutation approval. Below `PartialCompilation`, the tool is unavailable/fails with the current confidence rather than silently using text heuristics.
+Expected: the model-visible result contains ranked loaded reference, caller, implementation/override, dependent project/test, and generated/linked evidence with compact reasons and bounded omissions. The host-owned structured graph retains confidence, generation, and internal traversal metadata. Impact never presents itself as whole-program proof or mutation approval. Below `PartialCompilation`, the tool is unavailable/fails with the current confidence rather than silently using text heuristics.
 
 ### MTP-197 — Closed C# pattern schema and malicious-input denial
 
-1. Invoke `csharp_pattern_search` for declaration, type, method, property, field, attribute, invocation, object-creation, and member-access shapes.
-2. Exercise exact name, containing type, each documented closed modifier, attribute matching with and without the `Attribute` suffix, named capture, file/directory scope, result limit, and time limit.
-3. Submit an unknown schema version, unsupported modifier, malformed/oversized identifier or capture, rooted/escaping scope, source/regex/script fragments, and unexpected executable fields.
+1. Invoke `csharp_pattern_search` with the flat model schema for declaration, type, method, property, field, attribute, invocation, object-creation, and member-access shapes.
+2. Exercise exact name, containing type, file/directory scope, each documented closed modifier, and attribute matching with and without the `Attribute` suffix.
+3. Confirm nested `pattern`, schema version, capture, result-limit, and timeout fields are rejected; submit unsupported modifier, malformed/oversized identifier, rooted/escaping scope, source/regex/script fragments, and unexpected executable fields.
 4. Hash the repository before and after and monitor child process/network activity.
 
-Expected: matches carry exact source ranges, bounded capture text, confidence, generation, completeness, and omissions. Unsupported or escaping input fails before query execution. No assembly/analyzer/plugin is loaded, no process/network starts, and repository hashes remain unchanged.
+Expected: the model-visible result contains bounded file/range matches and omissions, while the host-owned structured result retains confidence, generation, and completeness metadata. Unsupported or escaping input fails before query execution. No assembly/analyzer/plugin is loaded, no process/network starts, and repository hashes remain unchanged.
 
 ### MTP-198 — Generated-code inventory, provenance, bounds, and parity
 
@@ -1725,11 +1849,11 @@ Expected: selectable profiles emit only their exact compiled reasoning fragment;
 
 ### MTP-205 — Reasoning response isolation and privacy migration
 
-1. Stream fragmented `reasoning_content`, legacy `reasoning`, visible content, tool calls, usage, and `[DONE]` from a deterministic server under their matching response modes.
-2. Toggle `/thinking`, complete the turn, restart Threadsmith, and inspect SQLite `domain_events`, diagnostics, telemetry, hook audit, conversation archive, memory, and context inspection.
+1. Stream fragmented `reasoning_content`, legacy `reasoning`, `reasoning_text`, visible content, tool calls, usage, and `[DONE]` from a deterministic server under their matching response modes.
+2. Enable `/thinking on`, complete the turn, disable `/thinking off`, restart Threadsmith, and inspect SQLite `domain_events`, diagnostics, telemetry, hook audit, conversation archive, memory, and context inspection.
 3. Seed a legacy `modelReasoningObserved` row containing a unique canary, run startup migration 7, and inspect the database directly.
 
-Expected: accepted reasoning appears only in the live collapsed/revealed display and is never visible content. The canary appears in no new durable or general observer output; migration 7 removes the historical row transactionally while preserving ordinary events.
+Expected: accepted reasoning appears only in live transient streaming when enabled and is never archived as visible assistant content. The canary appears in no new durable or general observer output; migration 7 removes the historical row transactionally while preserving ordinary events.
 
 
 ## MTP-243 — Claude-style metadata discovery and inspection
@@ -1911,7 +2035,23 @@ Expected: interaction stays responsive and selectable, labels remain bounded, `T
 ## Public release legal closure
 
 1. Run `pwsh -File eng/release/Test-ReleaseContracts.ps1`; confirm closed/current evidence, deterministic notice/SPDX output, expired-decision rejection, exact RID runtime staging, and aggregate compliance binding pass.
-2. On each maintained runner, build its two exact RIDs from an empty output root. Inspect the staged payload and resulting archive/installer for `LICENSE`, ripgrep provenance, `third-party/THIRD-PARTY-NOTICES.txt`, `third-party/sbom.spdx.json`, all three `third-party/dotnet-runtime/` files, `release-compliance.json`, and the manifest-bound `ThreadsmithDocs` bundle; confirm no `ThreadsmithDocs/docs/implementation-plans/` or `ThreadsmithDocs/docs/features/` content is present.
-3. Confirm PrettyPrompt's MPL full text/source URL and SQLitePCLRaw's Apache/SQLite notice appear, and confirm SBOM package identities equal the exact reviewed restore closure.
+2. On each maintained runner, build its two exact RIDs from an empty output root. Inspect the staged payload and resulting archive/installer for `LICENSE`, ripgrep provenance, `third-party/THIRD-PARTY-NOTICES.txt`, `third-party/sbom.spdx.json`, all three `third-party/dotnet-runtime/` files, and `release-compliance.json`.
+3. Confirm PrettyPrompt's MPL full text/source URL, SQLitePCLRaw's Apache/SQLite notice, TUIKit's MIT package license, and the supplemental embedded-font attribution/WTFPL notices appear. Confirm SBOM package identities and TUIKit's aggregate embedded-resource entry equal the exact reviewed restore closure.
 4. Remove or modify one runtime notice, SBOM, compliance sidecar, artifact, RID, or digest and confirm packaging/aggregate publication fails before attachment. Expire the Windows decision in a temporary evidence copy and confirm validation rejects it without changing repository authority.
 5. Rehearse Windows x64/arm64 install, upgrade, uninstall and legal-file accessibility; Linux x64/arm64 archive/install/uninstall; macOS x64/arm64 package/sign/notarize/install/uninstall. Confirm clean reruns, user-state preservation, immutable tag/head fencing, and no signing/OAuth canary leakage.
+
+### MTP-257 — Default retained TUIKit parity and terminal lifecycle
+
+Run this on Windows Terminal/PowerShell, a Linux terminal, and macOS Terminal; record the OS, terminal, and dimensions for each run.
+
+1. Confirm `--tui` and `--tui=tuikit` both select TUIKit, while `--tui=original` selects PrettyPrompt/Spectre. Confirm `--tui=pretty`, empty/unknown selectors, and duplicate selectors fail before startup. Check MCP/auth precedence without creating a terminal UI.
+2. Open a trusted solution with a deliberately delayed initial semantic load. Type `hello`, press Enter before loading completes, and immediately type `next draft`. Confirm `hello` moves once into the retained transcript as the composer clears, the activity row says the message is queued, no run/model call begins before semantic readiness, `hello` is submitted exactly once afterward, and `next draft` remains editable and unsent.
+3. Enter two lines using Ctrl+Enter. Confirm Ctrl+Enter inserts a newline and ordinary Enter moves the exact multiline text once into the retained transcript before submitting it. Verify the model request contains that text unchanged as the `current-user` message after sanitization. Repeat with multiline Unicode paste including combining marks and emoji, history, undo/redo, indentation, selection replacement, OS clipboard paste, and terminal bracketed paste.
+4. Confirm the repository prompt and first input cell share the same composer row and all four composer rows form one contiguous surface without partial-width background blocks. Confirm the status footer occupies the final terminal row with no blank row beneath it, remains fixed while output scrolls, and has no protruding cell or scroll artifact at the right edge.
+5. Open F1 help. Confirm it is a static list without a selection marker, arrow-key selection, or stray characters at the left edge; Esc closes it. Open model, reasoning, theme, repository/session, MCP, and retained-link selectors; confirm each clears the complete frame above the status row with no underlying characters visible at either edge. Verify F7 focus, F8 validated-link copying, F12 terminal-native selection handoff, and return to application mouse control.
+6. Select text in the transcript and composer, then press Ctrl+C. Confirm the selected text reaches the clipboard and the process remains running. Clear all selection and press Ctrl+C; confirm normal cancellation/exit behavior. Repeat with F6 and Ctrl+Shift+C according to the displayed help.
+7. Verify detached transcript scrolling and unseen-output count, resize below and above 40 x 12, F2 long option details, themes, and `NO_COLOR`. Run every Scenario AR workflow with the same scripted fixture and compare host outcomes. While output streams and a selector is open, verify the footer refreshes usage/context without moving focus or changing option IDs. Verify exact ordinary draft restoration after secondary/steering prompts and cancelled selections.
+8. Submit an ordinary greeting and a repository request. Confirm both invoke the configured model after applicable semantic admission, neither reports `ChannelClosedException` or `channel has been closed`, and commands, reviews, trust, session, repository, model, reasoning, tool, mutation, and cancellation outcomes match `--tui=original`.
+9. Exit normally and via `/quit`, Ctrl+C, cancellation during a modal, startup failure, and render failure. Verify cooked input, echo, cursor, mouse reporting, bracketed paste, enhanced keyboard flags, and alternate-screen restoration.
+
+Expected: TUIKit is the default interactive frontend and the original remains explicitly available. Committed ordinary input remains visible once and is assembled as the exact `current-user` content; input is never silently discarded; retained rendering has no composer/help/footer artifacts; copy and newline keys match their documentation; shared host outcomes remain frontend-neutral; and every exit restores terminal state. Record observed results. A successful headless check is not a physical-terminal sign-off.

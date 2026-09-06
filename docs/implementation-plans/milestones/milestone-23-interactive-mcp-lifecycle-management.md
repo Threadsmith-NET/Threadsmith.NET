@@ -30,7 +30,7 @@
 - `McpManager` and Core MCP management DTOs provide the shared authority and stable result classifications.
 - SDK transports normalize tools/resources/templates/prompts, debounce advertised list changes into atomic bounded replacements, and redact explicit untrusted content before Core projection.
 - MCP tool preferences bind Plan-27 availability to the capability digest; repository rebinding invalidates live generations, and identity lifecycle is exact-profile scoped with same-origin non-redirecting revocation.
-- `/mcp` and `--mcp` dispatch the same command; `Threadsmith.Milestone23.Tests` includes a real full-capability stdio fixture.
+- `/mcp` and `--mcp` dispatch the same command; `Threadsmith.McpLifecycle.Tests` includes a real full-capability stdio fixture.
 - ADR-45, Scenario Y, MTP-235–239, the user guide, and MCP operations guide own maintained behavior and remaining live/terminal checks.
 
 **Prerequisites:** plans 08, 18-23, 27, 35, 40, 49, 51, 56-57, and 62.

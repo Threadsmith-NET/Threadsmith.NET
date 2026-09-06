@@ -16,8 +16,8 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - `ClaudeSkillCompatibilityCatalog.cs` — pinned safe scalar frontmatter parsing, explicit-root metadata discovery, compatibility/tool projection, confinement, strict-UTF-8 resource loading, and deterministic immutable activation digests.
 - The Claude compatibility adapter owns combined native/Claude catalog projection, activation-time exact verification and external policy, content adaptation, shared invocation, and exact-digest resume fencing.
 - `SkillApplication.cs` / `InvokeSkillTool.cs` — shared command and model-tool adapters.
+- `Prompts/` — host-owned `invoke_skill` description and model procedure system/request/continuation prose.
 - `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, `review-pr`, and `threadsmith-docs-help` packages copied to output when newer.
-- `PackagedDocumentationPolicy.cs` — maintained docs-skill identity, application-owned `ThreadsmithDocs` tool rebinding, and exact citation validation.
 
 ## Local Contracts
 
@@ -30,13 +30,15 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - Archive installation is user-initiated, same-volume quarantined, verified before atomic import, and content-addressed. Uninstall is user-scope only and must reject pinned packages and packages retained by active workflows; update/rollback changes pins between coexisting immutable versions.
 - Invocation pins scope/id/version/digest. Unqualified invocation resolves an exact saved pin before ordinary ambiguity checks. Every restore/action boundary revalidates exact content, current session phase/trust/workspace, enablement, compatibility, schema, and budget facts; never switch versions implicitly or continue after a workspace change.
 - Tool-originated invocation uses the authoritative caller phase. `InvokeProcedure`, `CollectEvidence`, and `Summarize` are all model-backed and must fail compatibility before checkpointing when no compatible configured model exists.
+- `invoke_skill` accepts the selected package input as an actual JSON value, validates its bounded raw representation against the package schema, retains invocation identity/digest, JSON-string host-action payloads, and terminal output JSON in the full host result, and exposes a compact model projection with parsed JSON-shaped action payloads and terminal output.
+- `PackagedDocumentationPolicy` applies only after catalog resolution proves both maintained scope and the normalized `threadsmith-docs-help` id. Its procedure search/read calls are rebound to application-owned `ThreadsmithDocs`; repository packages with a colliding id retain ordinary repository scope. Cited ranges must stay within the governing Markdown section.
 - Checkpoint persistence is compare-and-swap on expected generation/status. Resume and continuation advance the generation, stale writers fail without publishing a boundary, and age retention removes terminal checkpoints only so nonterminal workflows keep their durable package reference.
 - Schemas use the closed supported keyword/type subset. No `$ref`, remote resolution, regex/custom format execution, dynamic type activation, or unknown action/step kinds.
 - Required content that cannot fit fails explicitly. Optional references are omitted deterministically. Strict UTF-8, hashes, sanitizer, confinement, and provenance apply to every loaded segment.
-- Procedure turns advertise only declared available tools and call them through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
+- Procedure turns advertise only declared available tools while preserving provider-neutral tool metadata such as strict-argument preference, request at most one model tool call per response, and call it through `IToolInvocationPipeline`. Skill prose cannot grant tools/trust, approve work, create children, mutate, validate, or author terminal success.
+- Procedure prompt assets use the application-wide immutable loader and declared named tokens. Skill package content remains separately framed untrusted input; externalized host prose does not become a package override surface.
 - Workflow host actions remain proposals. The execution subsystem owns planning/mutation/validation; the delegation subsystem owns scheduling/worktrees/review/integration. Nested skills, arbitrary loops, and package-owned concurrency are prohibited.
 - Maintained packages use exactly the same manifest/hash/schema/content/model/tool/workflow/persistence path as third-party packages.
-- The maintained docs-help package has only `search` and `read_file`; composition rebinds those calls to `ThreadsmithDocs`, clears workspace/process/network/secret authority, and validates non-unavailable citations against exact local headings, ranges, and snippets.
 
 ## Work Guidance
 
@@ -48,9 +50,9 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 ## Verification
 
 - `dotnet build src\Threadsmith.Skills\Threadsmith.Skills.csproj --no-restore`
-- `tests\Threadsmith.Milestone12.Tests\bin\Debug\net10.0\Threadsmith.Milestone12.Tests.exe`
+- `tests\Threadsmith.Skills.Tests\bin\Debug\net10.0\Threadsmith.Skills.Tests.exe`
 - `tests\Threadsmith.Architecture.Tests\bin\Debug\net10.0\Threadsmith.Architecture.Tests.exe`
-- `tests\Threadsmith.Milestone1.Tests\bin\Debug\net10.0\Threadsmith.Milestone1.Tests.exe`
-- `tests\Threadsmith.Milestone8.Tests\bin\Debug\net10.0\Threadsmith.Milestone8.Tests.exe`
+- `tests\Threadsmith.CoreRuntime.Tests\bin\Debug\net10.0\Threadsmith.CoreRuntime.Tests.exe`
+- `tests\Threadsmith.PersistenceMcpHardening.Tests\bin\Debug\net10.0\Threadsmith.PersistenceMcpHardening.Tests.exe`
 
 ## Child DOX Index

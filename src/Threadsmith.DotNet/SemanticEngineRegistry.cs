@@ -124,6 +124,21 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
         }
     }
 
+    /// <summary>Loads semantic state while the lifecycle observer controls terminal publication.</summary>
+    internal Task<SemanticLoadResult> LoadForBindingAsync(
+        SemanticLoadRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return GetEngine(request.WorkspaceId)
+            .LoadCoreAsync(
+                request,
+                publishLoadCompleted: false,
+                publishConfidenceChanged: false,
+                allowTextFallback: true,
+                cancellationToken);
+    }
+
     /// <summary>Gets the concrete engine for an internal serialized semantic mutation.</summary>
     internal SemanticEngine GetEngine(WorkspaceId workspaceId)
     {

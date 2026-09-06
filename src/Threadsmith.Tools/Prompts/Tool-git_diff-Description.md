@@ -1,0 +1,1 @@
+Gets a host-bounded Git diff. Use mode WorkingTree for unstaged changes, Staged for index changes, Commit with baseRevision set to the commit/ref, and Range or MergeBase with both baseRevision and targetRevision.

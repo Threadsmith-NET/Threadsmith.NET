@@ -129,9 +129,9 @@ public sealed class GitWorktreeManager
                 throw new InvalidOperationException("Git did not start.");
             }
 
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            Task<string> errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            using CancellationTokenRegistration cancellationRegistration = cancellationToken.Register(() =>
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            using var cancellationRegistration = cancellationToken.Register(() =>
             {
                 try
                 {

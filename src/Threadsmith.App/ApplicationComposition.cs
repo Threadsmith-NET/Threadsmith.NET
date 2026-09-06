@@ -588,7 +588,7 @@ internal static class ApplicationComposition
             var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader);
             tools.ToolRegistry.RegisterOrReplace(
                 invokeSkillTool,
-                new ToolActivitySource(ToolActivitySourceKind.BuiltIn));
+                new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "invoke-skill"));
             var hookApplication = new HookManagementApplication(tools.HookCoordinator, persistence.HookStore, host.Events);
             var sessionLifecycle = new SessionLifecycleApplication(
                 host.Paths.RepositoryRoot,

@@ -6,7 +6,16 @@ Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives mode
 
 ## Current state
 
-Threadsmith.NET is currently under active testing and is best described as pre-alpha. I am testing its tools and other functionality, but not everything has been thoroughly validated. Until version 1.0, the project is presented as-is. There are still going to be a lot of bugs, but I am working through them.
+Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to Alpha. 
+
+Some recent enhancements:
+- Optimization of tool calling
+- Integrated documentation native skill
+- New, re-designed alternate TUI (now the default, original is still available)
+- Broad code cleanup and optimizations
+- build out of the "code_explore" tool to refine natural language abilities, improve ranking, and optimize model-facing markdown output
+- introduced sub-agent delegation tool to allow model to invoke sub-agents using the already-existing delegator
+- and more! 
 
 If you are interested in helping, contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details or contact me at [mwright556@gmail.com](mailto:mwright556@gmail.com). Areas that need substantial testing include the Codex provider and its authentication flow, as well as MCP support—particularly SSO authentication flows. This work will take time, and I maintain the project alongside a demanding full-time job.
 

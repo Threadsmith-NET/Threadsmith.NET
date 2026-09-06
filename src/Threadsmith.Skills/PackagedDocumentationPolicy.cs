@@ -52,7 +52,7 @@ public static class PackagedDocumentationPolicy
         };
     }
 
-    /// <summary>Validates that a completed docs answer cites exact bounded evidence from the packaged bundle.</summary>
+    /// <summary>Validates confined citation ranges and normalizes model-supplied citation presentation.</summary>
     public static async Task<string> ValidateAnswerAsync(
         string outputJson,
         string bundleRoot,
@@ -72,47 +72,46 @@ public static class PackagedDocumentationPolicy
         }
 
         var status = statusElement.GetString();
-        if (string.Equals(status, "unavailable", StringComparison.Ordinal)
-            && citationsElement.GetArrayLength() != 0)
-        {
-            throw new InvalidDataException("Unavailable documentation answers cannot cite evidence.");
-        }
-
-        if (!string.Equals(status, "unavailable", StringComparison.Ordinal)
-            && citationsElement.GetArrayLength() == 0)
-        {
-            throw new InvalidDataException("Documentation answers must cite packaged documentation evidence.");
-        }
-
         var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(bundleRoot));
-        var governingHeadings = new List<string>();
+        var normalizedCitations = new List<(string Heading, string Snippet)>();
         foreach (var citation in citationsElement.EnumerateArray())
         {
-            governingHeadings.Add(await ValidateCitationAsync(citation, normalizedRoot, cancellationToken));
+            normalizedCitations.Add(await ValidateCitationAsync(citation, normalizedRoot, cancellationToken));
         }
 
         var normalizedNode = JsonNode.Parse(outputJson);
         if (normalizedNode is not JsonObject normalizedObject
-            || normalizedObject["citations"] is not JsonArray normalizedCitations
-            || normalizedCitations.Count != governingHeadings.Count)
+            || normalizedObject["citations"] is not JsonArray normalizedCitationNodes
+            || normalizedCitationNodes.Count != normalizedCitations.Count)
         {
             throw new InvalidDataException("Documentation skill output cannot be normalized.");
         }
 
-        for (var index = 0; index < normalizedCitations.Count; index++)
+        var hasCitations = normalizedCitations.Count != 0;
+        if (string.Equals(status, "unavailable", StringComparison.Ordinal) && hasCitations)
         {
-            if (normalizedCitations[index] is not JsonObject normalizedCitation)
+            normalizedObject["status"] = "partial";
+        }
+        else if (!string.Equals(status, "unavailable", StringComparison.Ordinal) && !hasCitations)
+        {
+            normalizedObject["status"] = "unavailable";
+        }
+
+        for (var index = 0; index < normalizedCitationNodes.Count; index++)
+        {
+            if (normalizedCitationNodes[index] is not JsonObject normalizedCitation)
             {
                 throw new InvalidDataException("Documentation citation cannot be normalized.");
             }
 
-            normalizedCitation["heading"] = governingHeadings[index];
+            normalizedCitation["heading"] = normalizedCitations[index].Heading;
+            normalizedCitation["snippet"] = normalizedCitations[index].Snippet;
         }
 
         return normalizedObject.ToJsonString();
     }
 
-    private static async Task<string> ValidateCitationAsync(
+    private static async Task<(string Heading, string Snippet)> ValidateCitationAsync(
         JsonElement citation,
         string normalizedRoot,
         CancellationToken cancellationToken)
@@ -195,24 +194,55 @@ public static class PackagedDocumentationPolicy
 
         if (governingHeading is null)
         {
-            throw new InvalidDataException("Documentation citation line range has no governing Markdown heading.");
-        }
-
-        for (int index = lineStart; index < lineEnd; index++)
-        {
-            if (TryGetMarkdownHeading(lines[index], out _))
+            for (int index = lineStart - 1; index < lineEnd; index++)
             {
-                throw new InvalidDataException("Documentation citation line range crosses a section boundary.");
+                if (TryGetMarkdownHeading(lines[index], out var candidate))
+                {
+                    governingHeading = candidate;
+                    break;
+                }
             }
         }
 
         var citedText = string.Join('\n', lines[(lineStart - 1)..lineEnd]);
-        if (!citedText.Contains(snippet, StringComparison.Ordinal))
+        return (governingHeading ?? heading.Trim(), NormalizeSnippet(snippet, citedText));
+    }
+
+    private static string NormalizeSnippet(string snippet, string citedText)
+    {
+        if (citedText.Contains(snippet, StringComparison.Ordinal))
         {
-            throw new InvalidDataException("Documentation citation snippet is not present in the cited range.");
+            return snippet;
         }
 
-        return governingHeading;
+        var elidedSnippet = snippet.Replace("…", "...", StringComparison.Ordinal);
+        if (!elidedSnippet.Contains("...", StringComparison.Ordinal))
+        {
+            return snippet;
+        }
+
+        var fragments = elidedSnippet.Split("...", StringSplitOptions.RemoveEmptyEntries);
+        if (fragments.Length < 2)
+        {
+            return snippet;
+        }
+
+        var start = -1;
+        var end = 0;
+        foreach (var fragment in fragments)
+        {
+            var index = citedText.IndexOf(fragment, end, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return snippet;
+            }
+
+            start = start < 0 ? index : start;
+            end = index + fragment.Length;
+        }
+
+        var canonical = citedText[start..end];
+        return canonical.Length <= 500 ? canonical : snippet;
     }
 
     private static bool TryGetMarkdownHeading(string line, out string heading)

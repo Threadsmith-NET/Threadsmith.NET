@@ -86,7 +86,7 @@ A skill can produce only a typed proposal. Repository mutation still requires go
 - `fix-analyzer-warnings` — verifies supplied diagnostics and proposes a bounded remediation plan; it never adds blanket suppression or edits directly.
 - `upgrade-package` — assesses a Central Package Management upgrade and proposes compatibility, rollback, build, and test steps; it never restores or accesses the network implicitly.
 - `review-pr` — produces and deduplicates bounded security/test/performance/architecture findings; it never publishes, approves, merges, or mutates.
-- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns exact local path/heading/line/snippet citations or an explicit documentation gap. The host validates every cited range and snippet against the Markdown source and replaces supplied heading text with the exact governing heading.
+- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns bounded local citations or an explicit documentation gap. The host strictly validates bundle confinement and cited path/range existence. It canonicalizes headings when available, opportunistically expands recognizable snippet elisions, and normalizes status/citation consistency. Presentation-level model choices do not fail an otherwise valid cited answer.
 
 They use the same manifest, hash, schema, content loader, model/tool, workflow, persistence, and event pipeline as third-party packages.
 

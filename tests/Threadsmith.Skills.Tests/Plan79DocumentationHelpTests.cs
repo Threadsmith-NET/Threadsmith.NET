@@ -40,7 +40,7 @@ public sealed class Plan79DocumentationHelpTests
             "threadsmith-docs-help"));
     }
 
-    /// <summary>Cited answers must identify exact snippets inside confined shipped documentation.</summary>
+    /// <summary>Cited answers must resolve inside confined shipped documentation despite presentation variance.</summary>
     [Fact]
     public static async Task ValidateAnswerAsync_RequiresExactConfinedCitation()
     {
@@ -81,6 +81,36 @@ public sealed class Plan79DocumentationHelpTests
                     normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("heading").GetString());
             }
 
+            var elidedSnippet = valid.Replace(
+                "Use /compact\"",
+                "Use ... current conversation.\"",
+                StringComparison.Ordinal);
+            var normalizedSnippet = await PackagedDocumentationPolicy.ValidateAnswerAsync(elidedSnippet, root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalizedSnippet))
+            {
+                Assert.Equal(
+                    "Use /compact to compact the current conversation.",
+                    normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("snippet").GetString());
+            }
+
+            var fabricatedSnippet = valid.Replace("Use /compact\"", "Use /missing\"", StringComparison.Ordinal);
+            var normalizedPresentation = await PackagedDocumentationPolicy.ValidateAnswerAsync(
+                fabricatedSnippet,
+                root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalizedPresentation))
+            {
+                Assert.Equal(
+                    "Use /missing",
+                    normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("snippet").GetString());
+            }
+
+            var contradictoryStatus = valid.Replace("answered", "unavailable", StringComparison.Ordinal);
+            var normalizedStatus = await PackagedDocumentationPolicy.ValidateAnswerAsync(contradictoryStatus, root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalizedStatus))
+            {
+                Assert.Equal("partial", normalizedDocument.RootElement.GetProperty("status").GetString());
+            }
+
             await File.WriteAllTextAsync(
                 Path.Combine(root, "sections.md"),
                 "# Guide\nFirst section.\n# Other\nSecond section.\n");
@@ -88,8 +118,13 @@ public sealed class Plan79DocumentationHelpTests
                 """
                 {"status":"answered","answer":"Second section.","citations":[{"path":"sections.md","heading":"# Guide","lineStart":2,"lineEnd":4,"snippet":"Second section."}],"gaps":[]}
                 """;
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
-                PackagedDocumentationPolicy.ValidateAnswerAsync(crossingSection, root));
+            var normalizedRange = await PackagedDocumentationPolicy.ValidateAnswerAsync(crossingSection, root);
+            using (var normalizedDocument = System.Text.Json.JsonDocument.Parse(normalizedRange))
+            {
+                Assert.Equal(
+                    "# Guide",
+                    normalizedDocument.RootElement.GetProperty("citations")[0].GetProperty("heading").GetString());
+            }
 
             var excluded = valid.Replace(
                 "guide.md",

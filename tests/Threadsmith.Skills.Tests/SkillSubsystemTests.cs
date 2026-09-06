@@ -35,9 +35,9 @@ public sealed class SkillSubsystemTests
         Assert.False(candidate.Enabled);
     }
 
-    /// <summary>Verifies all three maintained packages discover and integrity-verify.</summary>
+    /// <summary>Verifies all maintained packages discover and integrity-verify.</summary>
     [Fact]
-    public async Task MaintainedCatalog_ContainsThreeVerifiedWorkflows()
+    public async Task MaintainedCatalog_ContainsVerifiedWorkflows()
     {
         // Arrange
         var root = MaintainedRoot();
@@ -53,12 +53,13 @@ public sealed class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(3, verified.Length);
+        Assert.Equal(4, verified.Length);
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "upgrade-package");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review-pr");
+        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
     }
 
     /// <summary>Verifies a body changed after metadata discovery fails integrity verification.</summary>
@@ -331,8 +332,10 @@ public sealed class SkillSubsystemTests
         Assert.Contains("\"invocationId\":\"", hostResultJson, StringComparison.Ordinal);
         Assert.Contains("\"status\":\"Completed\"", hostResultJson, StringComparison.Ordinal);
         Assert.Contains("\"payloadJson\":\"{\\u0022question", hostResultJson, StringComparison.Ordinal);
+        Assert.Contains("\"outputJson\":\"{\\u0022summary", hostResultJson, StringComparison.Ordinal);
         Assert.NotNull(execution.ModelResultContent);
         Assert.Contains("\"payload\":{\"question\":\"continue?\"}", execution.ModelResultContent, StringComparison.Ordinal);
+        Assert.Contains("\"output\":{\"summary\":\"done\"}", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("invocationId", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("digest", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
@@ -1088,6 +1091,7 @@ public sealed class SkillSubsystemTests
                 InvocationId = request.InvocationId,
                 Package = package,
                 Status = SkillInvocationStatus.Completed,
+                OutputJson = "{\"summary\":\"done\"}",
                 HostActions =
                 [
                     new SkillHostActionProposal

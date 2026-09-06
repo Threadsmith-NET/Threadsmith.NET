@@ -686,6 +686,19 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario AN - Packaged Local Documentation Help Skill
+
+1. Build every supported release payload. Confirm the manifest-bound `ThreadsmithDocs` bundle contains curated user, operator, authoring, architecture, testing, guardrail, license, and reference material, while implementation/feature plans and runtime state are absent.
+2. Ask a natural Threadsmith help question. Confirm the ordinary request adds no docs-specific tool, may use the maintained `threadsmith-docs-help` package through `invoke_skill`, and returns a bounded answer with exact local path, heading, line, and snippet citations.
+3. Open a repository with conflicting docs, prompts, skills, hooks, MCP content, and configuration. Confirm none replaces the application-owned docs root or widens the skill beyond `search` and `read_file`.
+4. Disable `invoke_skill`, lower trust, enter an ineligible phase, remove the docs bundle, and ask an unanswered question. Confirm invocation is denied or reports an explicit bounded gap without affecting ordinary startup or inventing an answer.
+5. Inspect the bundle manifest, skill/tool events, output, diagnostics, and support data. Confirm identities, counts, outcomes, omissions, and failure reasons are bounded and secret-free, without hidden reasoning, raw provider payloads, unbounded excerpts, or private citation paths.
+
+**Verifies:** packaged documentation, maintained skill integrity and natural invocation, cited local answers, no global tool-schema growth, repository isolation, fail-closed authority, and bounded diagnostics.
+
+
+---
+
 ## Cross-cutting note
 
 Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise the **Execution Turn & Concurrency Contract (§10.7)** and the **Semantic Confidence Levels (§13.x)** under load. Scenario M separately verifies that hook execution preserves the same turn and authority boundaries. These scenarios explicitly assert:

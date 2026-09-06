@@ -1,6 +1,6 @@
 # Governed skills and reusable workflows
 
-Milestone 12 adds host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
+Threadsmith skills are host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
 
 ## Catalog scopes and discovery
 
@@ -31,7 +31,7 @@ Threadsmith also discovers bounded frontmatter from `<repo>/.claude/skills/<name
 
 `/skills verify claude:<scope>:<name>` activates only that candidate, confines and hashes every eligible file, and reports the exact immutable digest without enabling it. `/skills enable` repeats that verification, then writes the exact digest/publisher/source decision to the same repository-excluding `%USERPROFILE%\.threadsmith\skill-policy.json` used by native packages. `/skills disable` records an exact deny. A source byte/path change creates a different identity and blocks old exact selectors and resume checkpoints.
 
-`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` Plan-39 workflow. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
+`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` workflow. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
 
 ## Trust, verification, and enablement
 
@@ -86,8 +86,11 @@ A skill can produce only a typed proposal. Repository mutation still requires go
 - `fix-analyzer-warnings` — verifies supplied diagnostics and proposes a bounded remediation plan; it never adds blanket suppression or edits directly.
 - `upgrade-package` — assesses a Central Package Management upgrade and proposes compatibility, rollback, build, and test steps; it never restores or accesses the network implicitly.
 - `review-pr` — produces and deduplicates bounded security/test/performance/architecture findings; it never publishes, approves, merges, or mutates.
+- `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns exact local path/heading/line/snippet citations or an explicit documentation gap.
 
 They use the same manifest, hash, schema, content loader, model/tool, workflow, persistence, and event pipeline as third-party packages.
+
+When `invoke_skill` is available and this maintained package is compatible, ordinary model guidance prefers it for Threadsmith commands, configuration, context, providers, operations, troubleshooting, and authoring questions. No documentation-specific tool is added to ordinary requests. The local docs remain help evidence rather than policy; current host checks, user instructions, and repository instructions stay authoritative.
 
 ## Persistence and recovery
 

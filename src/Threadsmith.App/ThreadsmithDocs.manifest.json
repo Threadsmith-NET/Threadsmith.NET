@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "threadsmith-docs",
+  "bundleVersion": 1,
+  "allowedFiles": [
+    "manifest.json",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+    "docs/index.md",
+    "docs/user-guide.md",
+    "docs/prompt-file-reference.md",
+    "docs/skill-authoring.md",
+    "docs/skill-compatibility-spec-v1.md",
+    "docs/hook-authoring.md"
+  ],
+  "includedPrefixes": [
+    "docs/operations/",
+    "docs/extension-authoring/",
+    "docs/testing/",
+    "docs/architecture/",
+    "docs/guardrails/"
+  ],
+  "requiredFiles": [
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+    "docs/index.md",
+    "docs/user-guide.md",
+    "docs/skill-authoring.md",
+    "docs/skill-compatibility-spec-v1.md",
+    "docs/hook-authoring.md",
+    "docs/operations/README.md",
+    "docs/operations/skills.md",
+    "docs/operations/tools.md",
+    "docs/operations/release-packaging.md",
+    "docs/extension-authoring/authoring-guide.md",
+    "docs/testing/fake-model-scripts.md",
+    "docs/architecture/README.md",
+    "docs/architecture/adr-34-governed-declarative-skills.md",
+    "docs/guardrails/portable-csharp-guardrails.md"
+  ],
+  "excludedPrefixes": [
+    "docs/implementation-plans/",
+    "docs/features/",
+    ".threadsmith/"
+  ]
+}

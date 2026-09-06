@@ -164,6 +164,17 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     throw new InvalidDataException("Skill procedure returned empty output.");
                 }
 
+                if (PackagedDocumentationPolicy.IsDocumentationSkill(
+                    plan.Scope,
+                    plan.Package.SkillId.Value))
+                {
+                    var documentationContext = await CreateToolContextAsync(plan, cancellationToken);
+                    await PackagedDocumentationPolicy.ValidateAnswerAsync(
+                        output,
+                        documentationContext.RepositoryPath,
+                        cancellationToken);
+                }
+
                 return new SkillProcedureResult(output, round + 1, toolCalls);
             }
 
@@ -184,7 +195,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
             }
 
-            var context = await _toolContext(plan.Request, cancellationToken);
+            var context = await CreateToolContextAsync(plan, cancellationToken);
             var result = await _toolPipeline.InvokeAsync(
                 new ToolInvocationRequest
                 {
@@ -237,6 +248,18 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 PreferStrictArguments = definition.PreferStrictArguments,
             };
         }).ToArray();
+    }
+
+    private async Task<ToolInvocationContext> CreateToolContextAsync(
+        SkillInvocationPlan plan,
+        CancellationToken cancellationToken)
+    {
+        var context = await _toolContext(plan.Request, cancellationToken);
+        return PackagedDocumentationPolicy.IsDocumentationSkill(
+            plan.Scope,
+            plan.Package.SkillId.Value)
+                ? PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory)
+                : context;
     }
 
     private string BuildPrompt(

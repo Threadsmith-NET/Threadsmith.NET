@@ -163,4 +163,4 @@ Persistence migration 2 owns archive, mode, memory, provenance-edge, and summary
 
 ## Verification
 
-Automated acceptance coverage is in `Threadsmith.ConversationContext.Tests`, including named Scenario I coverage for promotion, compaction, repository invalidation, all three modes, restart restoration, deterministic retrieval, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in `docs/implementation-plans/manual-test-plan.md` §12.
+Automated acceptance coverage is in `Threadsmith.ConversationContext.Tests`, including promotion, compaction, repository invalidation, all three modes, restart restoration, deterministic retrieval, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in the source-repository [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md).

@@ -24,7 +24,8 @@ public sealed record InvokeSkillOutput(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("nextAction")] string NextAction,
-    [property: JsonPropertyName("hostActions")] IReadOnlyList<InvokeSkillHostActionOutput> HostActions);
+    [property: JsonPropertyName("hostActions")] IReadOnlyList<InvokeSkillHostActionOutput> HostActions,
+    [property: JsonPropertyName("outputJson")] string? OutputJson);
 
 /// <summary>One bounded host action in the full skill invocation result.</summary>
 public sealed record InvokeSkillHostActionOutput(
@@ -87,7 +88,8 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             result.HostActions.Select(action => new InvokeSkillHostActionOutput(
                 action.Kind.ToString(),
                 action.StepId,
-                action.PayloadJson)).ToArray());
+                action.PayloadJson)).ToArray(),
+            result.OutputJson);
         var modelOutput = new InvokeSkillModelOutput(
             result.Package.SkillId.Value,
             result.Package.Version,
@@ -97,7 +99,8 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             result.HostActions.Select(action => new InvokeSkillModelHostAction(
                 action.Kind.ToString(),
                 action.StepId,
-                ParsePayload(action.PayloadJson))).ToArray());
+                ParsePayload(action.PayloadJson))).ToArray(),
+            ParseOptionalPayload(result.OutputJson));
         return new ToolExecution<InvokeSkillOutput>(
             output,
             [new ToolProvenanceSource(
@@ -141,7 +144,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             OutputSchema = new ToolSchema(
                 nameof(InvokeSkillOutput),
                 1,
-                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"invocationId\",\"skillId\",\"version\",\"digest\",\"status\",\"reason\",\"nextAction\",\"hostActions\"],\"properties\":{\"invocationId\":{\"type\":\"string\",\"format\":\"uuid\"},\"skillId\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"digest\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"Accepted\",\"Running\",\"AwaitingHost\",\"Completed\",\"Failed\",\"Cancelled\"]},\"reason\":{\"type\":\"string\"},\"nextAction\":{\"type\":\"string\"},\"hostActions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"stepId\",\"payloadJson\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"ProposePlan\",\"ExecuteApprovedPlan\",\"ProposeDelegation\",\"Validate\",\"AskUserInput\"]},\"stepId\":{\"type\":\"string\"},\"payloadJson\":{\"type\":\"string\"}}}}}"),
+                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"invocationId\",\"skillId\",\"version\",\"digest\",\"status\",\"reason\",\"nextAction\",\"hostActions\",\"outputJson\"],\"properties\":{\"invocationId\":{\"type\":\"string\",\"format\":\"uuid\"},\"skillId\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"digest\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"Accepted\",\"Running\",\"AwaitingHost\",\"Completed\",\"Failed\",\"Cancelled\"]},\"reason\":{\"type\":\"string\"},\"nextAction\":{\"type\":\"string\"},\"hostActions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"stepId\",\"payloadJson\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"ProposePlan\",\"ExecuteApprovedPlan\",\"ProposeDelegation\",\"Validate\",\"AskUserInput\"]},\"stepId\":{\"type\":\"string\"},\"payloadJson\":{\"type\":\"string\"}}}},\"outputJson\":{\"type\":[\"string\",\"null\"]}}}"),
             RequiredTrust = RepositoryTrustLevel.TrustedRead,
             RequiredApproval = ApprovalLevel.None,
             SideEffect = ToolSideEffect.ReadOnly,
@@ -159,6 +162,13 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         return document.RootElement.Clone();
     }
 
+    private static JsonElement? ParseOptionalPayload(string? payloadJson)
+    {
+        return string.IsNullOrWhiteSpace(payloadJson)
+            ? null
+            : ParsePayload(payloadJson);
+    }
+
     private sealed record InvokeSkillModelHostAction(
         string Kind,
         string StepId,
@@ -170,5 +180,6 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         string Status,
         string Reason,
         string NextAction,
-        IReadOnlyList<InvokeSkillModelHostAction> HostActions);
+        IReadOnlyList<InvokeSkillModelHostAction> HostActions,
+        JsonElement? Output);
 }

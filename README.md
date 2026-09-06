@@ -10,9 +10,9 @@ Threadsmith.NET is currently under active testing and is best described as pre-a
 
 If you are interested in helping, contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details or contact me at [mwright556@gmail.com](mailto:mwright556@gmail.com). Areas that need substantial testing include the Codex provider and its authentication flow, as well as MCP support—particularly SSO authentication flows. This work will take time, and I maintain the project alongside a demanding full-time job.
 
-I aim to provide complete cross-platform installers, and the groundwork is already in place. I do not own or have access to a Mac, so macOS testing and packaging are major areas where help would be especially valuable. GitHub-hosted releases and the remaining release automation are also planned, but are not yet complete. I will not however be using any paid Github features, as I can't pay out-of-pocket to give software away.
+I aim to provide complete cross-platform installers, and the groundwork is already in place. I do not own or have access to a Mac, so macOS testing and packaging are major areas where help would be especially valuable. GitHub-hosted releases and the remaining release automation are also planned, but are not yet complete. I will not use paid GitHub features because I cannot pay out of pocket to give software away.
 
-Detailed implementation and milestone status remains in [the milestone plan](docs/implementation-plans/milestones.md).
+Detailed implementation and milestone status remains in [the source-repository milestone plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md).
 
 ## Key principles
 
@@ -34,7 +34,7 @@ This approach should reduce common large-project failures through:
 
 The expected benefit is greatest for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only edits unreliable. When enabled, earlier semantic feedback can reject many malformed or incorrectly bound changes before a full build, while affected-project validation avoids repeatedly building and testing unrelated work. For simpler changes, ordinary text mutations still pass through host-owned scope, baseline, exact-diff, approval, and validation gates. Bounded context, conversation compaction, and structured evidence should also reduce the amount of unchanged source, transcript, and diagnostic text sent back to the model.
 
-### Who is Threadsmith for? ###
+### Who is Threadsmith for?
 
 Short answer - me. There is no shortage of coding harnesses out there (in fact, I almost named this YACH - Yet Another Coding Harness). I'm a huge .NET fan and have been using it consistently since version 1.0 in the early 2000s. IMO it's the best general-purpose language available. Not perfect by any means, but over the last 8+ years it has truly become a viable cross platform, high-performance option suitable for large scale, enterprise development projects. You may disagree. We all have our favorites. Anyone who knows me also knows my preference for strongly-typed languages. In fact, I believe that - especially for agentic engineering - that type safety and more structure allow for agents to produce _better_ code that is cleaner and less prone to runtime errors.
 
@@ -73,7 +73,7 @@ Accordingly, Threadsmith aims for better **validated completion per token and pe
 ## Requirements
 
 - .NET 10 SDK
-- PowerShell for the examples below, but Bash, GitBash, etc. should all be supported, however every combination has not yet been tested. 
+- PowerShell for the examples below. Bash and Git Bash should also work, although every combination has not been tested.
 
 ## Quick start
 
@@ -123,7 +123,7 @@ Threadsmith keeps its SQLite session store and content-addressed artifacts under
 
 ## Tools and governed changes
 
-Threadsmith registers built-in runtime tools. Repository configuration, trust, invocation policy, semantic-workspace availability, and user approval determine which tools are available for a request.
+Threadsmith registers a built-in runtime tool catalog. Repository configuration, trust, invocation policy, semantic-workspace availability, and user approval determine which tools are available for a request.
 
 **Notable Features**
 - Tools may be enabled/disabled at the machine, user, and repository levels for any reason (such as to reduce context size by removing unused tools)
@@ -171,9 +171,9 @@ See the [user guide](docs/user-guide.md#tools-and-tool-availability) for tool av
 
 ## Governed skills quick example
 
-Milestone 12 adds metadata-first, immutable declarative skills and resumable workflows. Maintained packages ship with the host and use the same trust, model, tool, planning, delegation, mutation, and validation boundaries as third-party packages.
+Threadsmith supports metadata-first, immutable declarative skills and resumable workflows. Maintained packages ship with the host and use the same trust, model, tool, planning, delegation, mutation, and validation boundaries as third-party packages. The maintained `threadsmith-docs-help` package answers product and authoring questions from the installed local documentation bundle with exact citations and no access to the opened repository.
 
-Milestone 13 adds host-owned typed lifecycle hooks with advisory-by-default executable, HTTP, MCP, and extension adapters. Repository declarations require exact external approval and remain advisory/fail-open; only repository-excluding managed policy can grant bounded blocking authority at eligible pre-action points. Migration 6 stores approvals and redacted audit outside repository control.
+Host-owned typed lifecycle hooks support advisory-by-default executable, HTTP, MCP, and extension adapters. Repository declarations require exact external approval and remain advisory/fail-open; only repository-excluding managed policy can grant bounded blocking authority at eligible pre-action points. Approvals and redacted audit data are stored outside repository control.
 
 ```text
 /skills list analyzer
@@ -267,22 +267,23 @@ Not so much a "framework" but an addition to AGENTS.MD - this project uses the p
 
 ## Documentation
 
-The documentation folder contains user and developer docs, as well as implementation milestones, requirerments, checklists, plans, etc. I have made a best-effort to keep everything aligned and in sync with the actual state of the code. If you find any gaps or inconsistencies, please let me know or submit a PR with the correction.
+The documentation folder contains user and developer references plus implementation milestones, requirements, checklists, and plans. The installed documentation bundle intentionally omits implementation plans, feature proposals, and release-readiness assessments because those can describe future or provisional behavior. If you find a gap or inconsistency, please report it or submit a pull request with the correction.
 
 - **[User guide](docs/user-guide.md)** — installation, repository onboarding, trust, commands, governed changes, tools, models, configuration, extensions, automation, safety, and troubleshooting.
 - [Contributing guide](CONTRIBUTING.md) — local setup, coding standards, tests, commits, and pull-request expectations.
-- [Repository configuration example](.threadsmith/config.example) — complete annotated configuration schema.
-- [Operations references](docs/operations/) — focused command, conversation-context, provider, tool, theme, and repository workflows.
+- [Repository configuration example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/config.example) — complete annotated configuration schema in the source repository.
+- [Documentation index](docs/index.md) — entry point for the user, operations, authoring, architecture, testing, and guardrail references.
+- [Operations references](docs/operations/README.md) — focused command, conversation-context, provider, tool, theme, and repository workflows.
 - [Conversation context operations](docs/operations/conversation-context.md) — modes, `/context`, inspection, compaction, configuration, retention, and restoration.
 - [Parallel-agent operations](docs/operations/parallel-agents.md) — delegation limits, `/agents`, worktree isolation, cancellation, conflicts, and recovery.
 - [Governed skills operations](docs/operations/skills.md) — catalogs, verification, enablement, `/skills`, invocation, workflows, and recovery.
 - [Declarative skill authoring](docs/skill-authoring.md) — package layout, manifests, safe schemas, workflows, signing, import, and testing.
 - [Extension authoring guide](docs/extension-authoring/authoring-guide.md) — stable extension contracts and lifecycle guidance.
-- [Architecture decisions](docs/architecture/) — ADRs and subsystem contracts.
-- [Implementation roadmap](docs/implementation-plans/README.md) — sequenced plans, milestones, acceptance scenarios, and manual verification.
-- [Milestones](docs/implementation-plans/milestones.md)
+- [Architecture decisions](docs/architecture/README.md) — ADRs and subsystem contracts.
+- [Implementation roadmap](https://github.com/Threadsmith-NET/Threadsmith.NET/tree/main/docs/implementation-plans) — source-repository plans, milestones, acceptance scenarios, and manual verification; not installed as product help.
+- [Milestones](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md)
 - [C# guardrails](docs/guardrails/portable-csharp-guardrails.md) — required repository coding standards.
-- [AGENTS.md](AGENTS.md) — behavioral contract for coding agents working in this repository.
+- [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md) — source-repository behavioral contract for coding agents.
 
 ## License
 

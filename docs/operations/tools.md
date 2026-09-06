@@ -13,7 +13,7 @@ The built-in read-only registry contains:
 | `find_references` | `TrustedRead` | None | Compiler references, or explicit `TextOnly` fallback. |
 | `find_implementations` | `TrustedBuild` | None | Compiler-backed implementations. |
 | `run_process` | `TrustedBuild` | User | Allow-listed non-interactive process execution. |
-| `invoke_skill` | `TrustedRead` | None | Invoke one explicit verified/enabled/compatible declarative package through the Plan-39 workflow boundary. |
+| `invoke_skill` | `TrustedRead` | None | Invoke one explicit verified/enabled/compatible declarative package through the governed workflow boundary. |
 
 `code_explore` intentionally uses a minimal model contract: required `query` plus optional `maxFiles`. The query may be a natural-language architecture or behavior question, an exact C# symbol, a repository-relative `.cs` path, focused code terms, or a host-issued `code_explore:continue:...` retry cursor copied from an earlier Markdown follow-up target. The repository is selected by the host. Traversal depth, graph sizes, source and artifact character/byte budgets, timeouts, exact internal anchors, mode/emphasis, and continuation identity remain host-owned and are never exposed as model arguments. `maxFiles` is only a hint and is clamped to host limits without a corrective model turn. For dependency, caller, affected-project, or test-impact wording, the adapter derives the internal impact emphasis from `query`; users and models do not pass a separate `mode` field.
 

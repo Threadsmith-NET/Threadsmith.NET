@@ -17,7 +17,7 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - The Claude compatibility adapter owns combined native/Claude catalog projection, activation-time exact verification and external policy, content adaptation, shared invocation, and exact-digest resume fencing.
 - `SkillApplication.cs` / `InvokeSkillTool.cs` — shared command and model-tool adapters.
 - `Prompts/` — host-owned `invoke_skill` description and model procedure system/request/continuation prose.
-- `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, and `review-pr` packages copied to output when newer.
+- `MaintainedSkills/` — immutable `fix-analyzer-warnings`, `upgrade-package`, `review-pr`, and `threadsmith-docs-help` packages copied to output when newer.
 
 ## Local Contracts
 
@@ -30,7 +30,8 @@ Own metadata-first skill discovery, package integrity/trust/enablement, bounded 
 - Archive installation is user-initiated, same-volume quarantined, verified before atomic import, and content-addressed. Uninstall is user-scope only and must reject pinned packages and packages retained by active workflows; update/rollback changes pins between coexisting immutable versions.
 - Invocation pins scope/id/version/digest. Unqualified invocation resolves an exact saved pin before ordinary ambiguity checks. Every restore/action boundary revalidates exact content, current session phase/trust/workspace, enablement, compatibility, schema, and budget facts; never switch versions implicitly or continue after a workspace change.
 - Tool-originated invocation uses the authoritative caller phase. `InvokeProcedure`, `CollectEvidence`, and `Summarize` are all model-backed and must fail compatibility before checkpointing when no compatible configured model exists.
-- `invoke_skill` accepts the selected package input as an actual JSON value, validates its bounded raw representation against the package schema, retains invocation identity/digest and JSON-string host-action payloads in the full host result, and exposes a compact model projection with parsed JSON-shaped action payloads.
+- `invoke_skill` accepts the selected package input as an actual JSON value, validates its bounded raw representation against the package schema, retains invocation identity/digest, JSON-string host-action payloads, and terminal output JSON in the full host result, and exposes a compact model projection with parsed JSON-shaped action payloads and terminal output.
+- `PackagedDocumentationPolicy` applies only after catalog resolution proves both maintained scope and the normalized `threadsmith-docs-help` id. Its procedure search/read calls are rebound to application-owned `ThreadsmithDocs`; repository packages with a colliding id retain ordinary repository scope. Cited ranges must stay within the governing Markdown section.
 - Checkpoint persistence is compare-and-swap on expected generation/status. Resume and continuation advance the generation, stale writers fail without publishing a boundary, and age retention removes terminal checkpoints only so nonterminal workflows keep their durable package reference.
 - Schemas use the closed supported keyword/type subset. No `$ref`, remote resolution, regex/custom format execution, dynamic type activation, or unknown action/step kinds.
 - Required content that cannot fit fails explicitly. Optional references are omitted deterministically. Strict UTF-8, hashes, sanitizer, confinement, and provenance apply to every loaded segment.

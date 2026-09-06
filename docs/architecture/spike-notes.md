@@ -60,7 +60,7 @@ Recorded 2026-09-04 on branch `feat/plan-100-tuikit-frontend`, based on commit
 `418530025723fe95228bc6d25eb1f1353f00fc4f`. **Initial stock-editor precheck: FAIL.**
 Both packaged stock editors fail the checks below. This result does not evaluate
 a Threadsmith-owned composer or establish a complete adapter no-go. The revised
-[implementation plan](../implementation-plans/plan-100-tuikit-alternate-interactive-frontend.md#681-recovery-design-a-threadsmith-composer-hosted-by-tuikit)
+[implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-100-tuikit-alternate-interactive-frontend.md#681-recovery-design-a-threadsmith-composer-hosted-by-tuikit)
 defines an owned composer and a same-version public-API recovery. That recovery
 was first implemented in an isolated throwaway spike; its measurements follow the
 historical stock-editor evidence below. The original failures are retained.
@@ -217,7 +217,7 @@ rejected rather than silently falling back.
 
 ### Candidate licensing disposition and remaining acceptance
 
-The [digest-bound candidate licensing bundle](../../eng/release/legal/TUIKit-0.10.1-candidate/README.md)
+The [digest-bound candidate licensing bundle](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/eng/release/legal/TUIKit-0.10.1-candidate/README.md)
 preserves the pinned TUIKit MIT source license, bundled attribution/removal
 statements, all 83 embedded font headers, per-resource hashes and the full WTFPL
 v2 license. Three font headers name MIT, six name WTFPL v2, eighteen contain

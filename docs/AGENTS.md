@@ -9,6 +9,7 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 ## Ownership
 
 - `docs/user-guide.md` — Primary comprehensive user-facing guide for currently implemented behavior.
+- `docs/index.md` — Installed and source documentation landing page.
 - `docs/prompt-file-reference.md` — Categorized user-facing prompt-file catalog and complete placeholder glossary.
 - `docs/skill-authoring.md` — Declarative package layout, manifest/schema/workflow/signing/import/testing guide.
 - `docs/operations/prompts.md` — Complete deployed prompt-asset catalog, safe customization, restart, capacity, logging, and upgrade behavior.
@@ -29,6 +30,11 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 - Document implemented user-facing behavior only; planned features remain in implementation plans until they ship.
 - Cover installation, startup, repository onboarding, trust, interaction, governed changes, tools, models, configuration, extensions, automation, safety, and troubleshooting.
 - Keep the root README concise: product overview, quick start, repository build/test commands, layout, status, and links belong there; operational detail belongs in the guide.
+
+### Packaged documentation
+
+- The installed `ThreadsmithDocs` bundle includes only files selected by `src/Threadsmith.App/ThreadsmithDocs.manifest.json` and the matching project items. Implementation plans, feature proposals, release-readiness assessments, repository runtime state, and generated artifacts stay source-only.
+- Local Markdown links in shipped files must resolve inside the bundle. Link source-only material with an absolute repository URL.
 
 ### Prompt asset references
 
@@ -71,7 +77,7 @@ Maintain the architectural source of truth and implementation roadmap for Thread
 
 ## Verification
 
-- Architecture tests verify the deployed prompt catalogs and placeholder glossary against code-owned metadata. Manual review ensures consistency between implementation records, ADRs, guardrails, implemented contracts, shared context, and declared dependencies.
+- Architecture tests verify the deployed prompt catalogs and placeholder glossary against code-owned metadata. `eng/release/Test-PackagedDocumentation.ps1` verifies the installed docs manifest, bounds, exclusions, links, and link/reparse safety. Manual review ensures consistency between implementation records, ADRs, guardrails, implemented contracts, shared context, and declared dependencies.
 
 ## Child DOX Index
 

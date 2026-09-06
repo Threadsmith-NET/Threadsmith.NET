@@ -1,6 +1,6 @@
 # Implementation Plan 79: Packaged Local Documentation Help Skill
 
-**Status:** Planned
+**Status:** Complete
 
 **Delivery track:** M26 - Packaged Local Documentation Help Skill
 **Strategy source:** User-requested natural in-app documentation Q&A without always-advertised documentation tools; plans 39, 45, 51-55, 63, 69-72, and 77
@@ -22,7 +22,7 @@ The desired UX is natural: a user asks "How do I compact context?" and the model
 - Include user/operator/authoring/architecture/testing documentation required to answer product usage questions locally.
 - Add release packaging rules for every supported RID payload/installer to include the curated docs bundle.
 - Add artifact validation that fails if required docs are missing or implementation-plan files are included.
-- Add a maintained native skill, names illustrative `threadsmith-docs-help`, with a simple question input schema and bounded cited answer output.
+- Add a maintained native skill named `threadsmith-docs-help`, with a simple question input schema and bounded cited answer output.
 - Configure the skill to use existing governed search/read/file tools over the packaged docs root, not the opened repository root.
 - Add model-facing guidance that Threadsmith product/help/configuration questions should use the maintained docs skill when `invoke_skill` is available and the skill is enabled/compatible.
 - Ensure answers cite local documentation path/heading/source snippets and report uncertainty or missing docs rather than inventing behavior.
@@ -39,7 +39,7 @@ The desired UX is natural: a user asks "How do I compact context?" and the model
 
 ## 5. Current State
 
-Threadsmith has extensive repository documentation, including `docs/user-guide.md`, operations docs, authoring docs, architecture docs, testing docs, guardrails, and implementation plans. Release packaging focuses on application/runtime/legal payloads and does not provide a documented local docs-search skill. The existing `invoke_skill` tool is default-enabled when ordinary tool availability, trust, and phase policy allow it, but there is no maintained docs-help package.
+Threadsmith publishes a manifest-controlled `ThreadsmithDocs` directory containing durable product, operations, authoring, architecture, testing, and guardrail documentation while excluding plans, feature proposals, and release-readiness assessments. The maintained `threadsmith-docs-help` package uses the existing `invoke_skill`, `search`, and `read_file` paths. The host recognizes the resolved maintained package identity, rebinds its tool context to the application bundle, and validates exact path/heading/line/snippet citations before returning an answer.
 
 ## 6. Proposed Design
 
@@ -204,9 +204,9 @@ When implemented, update:
 - release packaging docs for included/excluded documentation files;
 - architecture docs if a new docs-bundle/search-scope decision is required.
 
-## 17. Open Decisions
+## 17. Resolved Decisions
 
-- Final maintained skill id/version and display name.
-- Exact docs bundle root in published artifacts.
-- Whether root `README.md`, `CONTRIBUTING.md`, and legal inventory docs are included in the searchable docs bundle.
-- Whether the skill should answer from architecture/guardrail docs by default or only when the question asks for implementation/authoring detail.
+- The maintained package is `threadsmith-docs-help` version `1.0.0`, displayed as “Threadsmith Documentation Help.”
+- Published documentation is rooted at `ThreadsmithDocs` beside the application payload.
+- The bundle includes root `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `LICENSE`, but excludes internal legal/readiness assessments.
+- Architecture and guardrail references are available for implementation or authoring questions; the skill prefers user and operations references for currently available behavior.

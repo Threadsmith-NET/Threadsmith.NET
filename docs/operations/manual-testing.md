@@ -1,29 +1,32 @@
-# Current Manual Test Surface
+# Installed-Release Smoke Test
 
-The authoritative, maintained regression procedure is the [Threadsmith.NET manual test plan](../implementation-plans/manual-test-plan.md). Keep this concise overview aligned with that plan.
+This is a short operator check for a packaged release. The exhaustive regression plan remains [source-repository material](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) and is intentionally not installed as product help.
 
-Launch from the repository you want to inspect:
+Run `Threadsmith.App --tui` from a small repository you can safely inspect. Bare `--tui` launches the retained TUIKit frontend; use `--tui=original` only when testing the previous PrettyPrompt/Spectre frontend. Add `--repository`, `--trust`, or `--solution` when the current directory and automatic choices are unsuitable.
 
-```powershell
-dotnet run --project C:\source\repos\Threadsmith\src\Threadsmith.App -- --tui
-```
+## Startup and terminal
 
-The current directory is the default repository. Use `--repository`, `--trust`, and `--solution` to override startup values. When trust or a solution remains ambiguous, a numbered highlighted selector accepts Up/Down and Enter.
+1. Confirm startup identifies the effective model, repository, trust, solution, semantic confidence, and selected frontend.
+2. In TUIKit, confirm `Enter` submits, `Ctrl+Enter` inserts a newline, paste arrives as one operation, `F7` switches transcript/composer focus, and `Ctrl+C` copies selected text or cancels when nothing is selected.
+3. Submit one message during initial semantic loading. Confirm it is retained as queued and sends automatically when repository semantics become available.
+4. Run `/help` and compare the displayed catalog with the [interactive command reference](keyboard-shortcuts.md).
+5. Run `/open` against another disposable repository and confirm the composer label and fixed status rows change only after selection succeeds.
 
-## Expected to work
+## Governed behavior
 
-- Native transcript: submitted inputs, streamed responses, repository results, plans, and diffs remain ordinary terminal scrollback. Mouse selection or terminal keyboard mark mode plus `Ctrl+C` copies prior text.
-- Startup: an ASCII Threadsmith.NET wordmark and `Forge better code, not slop.` followed by a blank line precede a status block containing the effective model, repository, trust, solution, session-status mode, target frameworks when known, semantic confidence, and interactive mode. Pending initial semantic discovery displays `Loading...` and later appends its resolved confidence.
-- Composer: the prompt is `<current-repository-name> >` and changes after `/open`. `Enter` submits, `Shift+Enter` inserts a newline, `Ctrl+V` performs bulk paste, and `Ctrl+C` cancels input or active work when the terminal has no native selection.
-- Repository startup: the current directory opens automatically. A single solution selects automatically; multiple solutions require explicit selection.
-- Startup cancellation: Cancel in a trust, upgrade, or solution selector exits before the composer; cancelling an in-session `/open` remains non-terminal.
-- Host commands include `/help`, `/open [path]`, `/quit`, `/semantic_refresh`, and `/trust [inspect|read|build|mutation]`. Unknown slash commands fail locally and never reach the model. `/semantic_refresh` forces a complete reload through the shared coordinator without creating a model run.
-- Trust: Trusted Read permits content inventory without repository execution. Trusted Build warns that repository code may execute. Trusted Mutation additionally permits explicitly approved confined changes. Persisted higher trust is not downgraded.
-- Review: structured plan and mutation decisions use sequential fail-closed prompts backed by application commands.
-- Headless parity: positional text submits a request. With no positional request, repository discovery uses `--repository` or the current directory.
+1. Start at inspection or read trust and confirm build- or mutation-requiring operations are unavailable or denied with a reason.
+2. Run `/tools`, inspect one non-essential tool, and cancel without changing its state.
+3. Ask a read-only repository question and confirm tool activity is bounded and the final response does not claim omitted evidence was inspected.
+4. If mutation testing is appropriate, use a disposable clean repository. Confirm plan review precedes implementation, the exact staged diff is shown before authorization, and rejection leaves the repository unchanged.
+5. Cancel an active request with `Esc Esc` and confirm the shell returns to a usable composer without late output being presented as current.
 
-## Present but not interactive yet
+## Installed documentation
 
-- Dedicated build, diagnostic, and direct tool commands remain model/tool surfaces rather than local command routers.
-- Direct mutation authoring is not yet a public terminal command; exact M5 previews and approval/discard prompts render when the engine stages a proposal.
-- Read-only semantic and filesystem tools are visible when invoked through a configured model; there is no direct tool-browser command yet.
+1. Confirm `ThreadsmithDocs/manifest.json`, `README.md`, `LICENSE`, `docs/index.md`, `docs/user-guide.md`, and `docs/operations/skills.md` exist beside the application payload.
+2. Ask a natural Threadsmith usage question and confirm the maintained documentation skill returns local path, heading, line, and snippet citations.
+3. Ask a question the installed documentation does not answer and confirm the result reports a partial or unavailable answer instead of guessing.
+4. Confirm the bundle contains no `docs/implementation-plans`, `docs/features`, release-readiness assessment, repository runtime state, or linked files.
+
+## Headless parity
+
+Submit a harmless positional request and confirm standard output is one structured result. Repeat with an invalid argument and verify the documented nonzero exit behavior without an interactive prompt.

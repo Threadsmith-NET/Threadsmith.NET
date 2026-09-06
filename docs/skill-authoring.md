@@ -58,7 +58,7 @@ Dependencies must form a bounded DAG. `maximumIterations` is a fixed positive ce
 
 Procedure instructions should state a narrow objective, evidence expectations, structured output, stopping condition, uncertainties, and meaningful validation. Do not claim host policy precedence, approval, trust, write authority, or successful validation. Such prose has no authority and adversarial claims are ignored by the host.
 
-Host-action steps return typed proposals only. Repository changes still use Plan 37; delegation/review still uses Plan 38. A package must expect a durable wait followed by schema-validated host result continuation.
+Host-action steps return typed proposals only. Repository changes still use the governed plan, exact-diff, approval, and validation flow; delegation and review still use host-owned bounded scheduling. A package must expect a durable wait followed by schema-validated host result continuation.
 
 ## Signing and enablement
 
@@ -80,7 +80,7 @@ Unsigned packages may be enabled only through that exact external tuple. Reposit
 
 Authors targeting both Agent Skills/Claude Code and Threadsmith may instead provide `.claude/skills/<name>/SKILL.md` using the pinned contract in [skill-compatibility-spec-v1.md](skill-compatibility-spec-v1.md). Keep the lowercase hyphenated directory and `name` identical, provide a bounded scalar `description`, use only closed mapped `allowed-tools`, and make the Markdown procedure instruction-only. Confined `.md`, `.txt`, `.json`, `.yaml`, and `.yml` references may be loaded as inert context.
 
-Do not require hooks, forked contexts, subagents, dynamic shell injection, automatic script/binary execution, MCP assumptions, wildcard shell access, credentials, or repository-controlled enablement. Threadsmith reports such requirements as restricted or unsupported. Every source requires external exact-digest enablement and runs through the same Plan-39 model, tool, checkpoint, cancellation, and resume boundary; Claude-style format does not provide native signatures or workflow schemas.
+Do not require hooks, forked contexts, subagents, dynamic shell injection, automatic script/binary execution, MCP assumptions, wildcard shell access, credentials, or repository-controlled enablement. Threadsmith reports such requirements as restricted or unsupported. Every source requires external exact-digest enablement and runs through the same governed model, tool, checkpoint, cancellation, and resume boundary; Claude-style format does not provide native signatures or workflow schemas.
 
 ## Import and test
 
@@ -97,4 +97,4 @@ Before distribution:
 7. test every proposed action through ordinary Plan-37/38 policy and validation;
 8. confirm events, logs, persistence, and diagnostic bundles contain no package body, secret, raw provider payload, or hidden reasoning.
 
-See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and [Plan 39](implementation-plans/plan-39-governed-skills-reusable-workflows.md).
+See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).

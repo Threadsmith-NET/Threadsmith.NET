@@ -71,11 +71,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
         var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
-        var maximumPromptCharacters = checked(plan.EffectiveBudget.ContentTokens * 8);
-        if (prompt.Length > maximumPromptCharacters)
-        {
-            throw new InvalidOperationException("Skill procedure prompt exceeds its context bound.");
-        }
 
         var seenCalls = new HashSet<string>(StringComparer.Ordinal);
         for (var round = 0; round < maximumRounds; round++)
@@ -226,10 +221,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     ["ToolName"] = toolRequest.ToolName,
                     ["ToolResult"] = boundedResult,
                 });
-            if (prompt.Length > maximumPromptCharacters)
-            {
-                throw new InvalidOperationException("Skill procedure continuation exceeds its context bound.");
-            }
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");

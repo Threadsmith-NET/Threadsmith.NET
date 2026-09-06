@@ -340,9 +340,9 @@ public sealed class SkillSubsystemTests
         Assert.DoesNotContain("digest", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Verifies skill procedure model-tool projection preserves strict argument preference.</summary>
+    /// <summary>Verifies content budgets stay asset-only while procedure tool metadata is preserved.</summary>
     [Fact]
-    public async Task ModelSkillProcedureRunner_PropagatesStrictToolArgumentPreference()
+    public async Task ModelSkillProcedureRunner_UsesContentBudgetOnlyForAssetsAndPreservesToolMetadata()
     {
         // Arrange
         var model = new CapturingSkillToolModelProvider();
@@ -374,7 +374,7 @@ public sealed class SkillSubsystemTests
             InputJson = "{}",
             Trust = RepositoryTrustLevel.TrustedBuild,
             Phase = RunPhase.EvidenceCollection,
-            HostBudget = new SkillBudget { ContentTokens = 1_000, ModelTurns = 1, ToolCalls = 1 },
+            HostBudget = new SkillBudget { ContentTokens = 1, ModelTurns = 1, ToolCalls = 1 },
         };
         var plan = new SkillInvocationPlan
         {
@@ -404,6 +404,7 @@ public sealed class SkillSubsystemTests
         // Assert
         Assert.Equal("{\"summary\":\"ok\"}", result.OutputJson);
         var modelRequest = Assert.Single(model.Requests);
+        Assert.True(modelRequest.Input.Length > request.HostBudget.ContentTokens * 8);
         var tool = Assert.Single(modelRequest.Tools, definition => definition.Name == "code_explore");
         Assert.True(tool.PreferStrictArguments);
         Assert.False(modelRequest.AllowMultipleToolCalls);

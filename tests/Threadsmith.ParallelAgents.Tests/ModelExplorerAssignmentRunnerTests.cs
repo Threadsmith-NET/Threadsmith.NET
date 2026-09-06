@@ -1096,7 +1096,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         ModelProfile profile,
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
-        SessionUsageProjection? usage = null)
+        SessionUsageProjection? usage = null,
+        DelegateAgentsOptions? options = null)
     {
         return CreateRunner(
             provider,
@@ -1106,7 +1107,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             [profile],
             parentContext,
             registrations,
-            usage);
+            usage,
+            options);
     }
 
     private static ModelExplorerAssignmentRunner CreateRunner(
@@ -1117,7 +1119,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         IReadOnlyList<ModelProfile> profiles,
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
-        SessionUsageProjection? usage = null)
+        SessionUsageProjection? usage = null,
+        DelegateAgentsOptions? options = null)
     {
         var catalog = new ConfiguredModelCatalog(profiles);
         return new ModelExplorerAssignmentRunner(
@@ -1129,7 +1132,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             evidence,
             new StubInstructionProvider(),
             sanitizer,
-            CreateOptions(),
+            options ?? CreateOptions(),
             parentContext,
             registrations,
             TestPromptLoader.Instance,
@@ -1318,11 +1321,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     private sealed class InspectMetadataTool : Tool<InspectMetadataInput, string>
     {
         private readonly string _modelResultContent;
+        private readonly IReadOnlyList<ToolProvenanceSource> _sources;
 
         /// <summary>Initializes a new instance of the <see cref="InspectMetadataTool"/> class.</summary>
-        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.")
+        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null)
         {
             _modelResultContent = modelResultContent;
+            _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
+            Definition = Definition with { MaximumOutputBytes = maximumOutputBytes };
         }
 
         public ToolInvocationContext? LastInvocationContext { get; private set; }
@@ -1358,7 +1364,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             LastInvocationContext = context.Invocation;
             return Task.FromResult(new ToolExecution<string>(
                 "metadata",
-                [new ToolProvenanceSource("file", "src/Test.cs")],
+                _sources,
                 ModelResultContent: _modelResultContent));
         }
 

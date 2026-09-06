@@ -28,11 +28,11 @@ Common editing rules:
 | System and phase prompts | 24 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 191 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 192 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **298** | Complete deployed catalog. |
+| **Total** | **299** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -120,10 +120,10 @@ Active-turn, summary, steering, and delegated-child context framing.
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Context-ActiveTurnCompaction-Initial.md` | Context framing for `ActiveTurnCompaction-Initial`. | `None` |
-| `Context-ActiveTurnCompaction-OutputContract.md` | Context framing for `ActiveTurnCompaction-OutputContract`. | `None` |
+| `Context-ActiveTurnCompaction-Initial.md` | Initial parent/child working notes, retaining useful evidence-ID associations. | `None` |
+| `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
-| `Context-ActiveTurnCompaction-Update.md` | Context framing for `ActiveTurnCompaction-Update`. | `None` |
+| `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
 
 #### `ActiveTurnSummary` family
 
@@ -332,6 +332,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | `None` |
+| `Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | `None` |
 
 #### `code_explore` family
 

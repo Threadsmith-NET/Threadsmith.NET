@@ -232,6 +232,9 @@ public sealed record DelegateAgentsOptions
     private readonly int _maximumSummaryCharacters = 1_024;
     private readonly AgentResultLimits _resultLimits = new();
 
+    /// <summary>Independent, optional history optimization for ordinary children.</summary>
+    public ChildAgentCompactionOptions Compaction { get; init; } = new();
+
     /// <summary>Whether operational limits are enforced; authority and semantic validation are never disabled.</summary>
     public bool EnforceOperationalLimits { get; init; } = true;
 
@@ -334,6 +337,8 @@ public sealed record DelegateAgentsOptions
     /// <summary>Validates configuration before it becomes execution policy.</summary>
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(Compaction);
+        Compaction.Validate();
         int[] limits =
         [
             MaximumAgents, MaximumTaskCharacters, MaximumContextCharacters, _maximumSummaryCharacters,

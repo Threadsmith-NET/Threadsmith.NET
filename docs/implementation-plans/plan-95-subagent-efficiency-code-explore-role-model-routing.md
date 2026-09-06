@@ -167,7 +167,7 @@ Give child requests a deterministic layout with stable sections first:
 5. evidence index and complete evidence;
 6. chronological tool calls/results, progress telemetry, technical tool-error feedback, and steering.
 
-Use the existing request-layout/wire-estimation contracts so providers with automatic or explicit prefix caching can reuse the unchanged prefix. Preserve every message and exact tool result. Do not rewrite earlier messages merely to improve a digest. Record cache-family and cache-read telemetry where the provider supports it.
+Use the existing request-layout/wire-estimation contracts so providers with automatic or explicit prefix caching can reuse the unchanged prefix. Preserve initial instructions and evidence. The approved child-history follow-up may summarize older complete exchanges while keeping original results retrievable by evidence ID; do not rewrite earlier messages merely to improve a digest. Keep prefixes stable between compactions and advance the provider history generation after a replacement. Record cache-family and cache-read telemetry where the provider supports it.
 
 If the complete stable prefix plus required assignment/evidence cannot fit the selected child model, fail before provider I/O with the exact capacity explanation. Do not silently drop prompt appends, host evidence, tool definitions, or assignment context to force a smaller request.
 
@@ -306,7 +306,7 @@ Do not add a new project unless existing dependency direction cannot express a c
 - Every resolved `AGENTS.md` and configured prompt append remains in deterministic order.
 - The evidence index is provenance-derived and does not replace evidence content.
 - Canonical stable sections retain stable digests across tool-continuation rounds.
-- Tool result chronology and exact payloads are retained.
+- Recent tool-result chronology stays exact; older complete exchanges may become working notes with the original payloads retrievable by evidence ID. Initial instructions and evidence remain unchanged.
 - Cache telemetry uses reported provider values when available and host estimates otherwise.
 - No-growth feedback cannot block a different relevant tool approach.
 - Ordinary final bodies, including empty text, JSON, missing legacy fields, and repeated wording, do not trigger parsing, answer grading, or response-format repair; failed/cancelled transport remains unsuccessful.

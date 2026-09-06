@@ -34,7 +34,7 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Maximum groups supplied to one candidate operation.</summary>
     public int MaximumSourceGroups { get; init; } = 48;
 
-    /// <summary>Maximum canonical wire-input estimate for one candidate request.</summary>
+    /// <summary>Maximum candidate wire input; zero uses the selected model's available input capacity.</summary>
     public int MaximumInputTokens { get; init; } = 65_536;
 
     /// <summary>Maximum aggregate call/result messages across one candidate prefix.</summary>
@@ -129,8 +129,7 @@ public sealed record ActiveTurnCompactionPolicy
         ArgumentOutOfRangeException.ThrowIfGreaterThan(RetainedRecentTokens, 262_144);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumSourceGroups);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumSourceGroups, 128);
-        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumInputTokens, 512);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumInputTokens, 131_072);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumInputTokens);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumCandidateMessages, 2);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumCandidateMessages, 2_048);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumSourceIdentifierCharacters, 64);
@@ -523,6 +522,15 @@ public sealed record ActiveTurnCompactionCandidateProfile
 /// <summary>Bounded provider-neutral active-turn candidate input.</summary>
 public sealed record ActiveTurnCompactionRequest
 {
+    /// <summary>Whether a separately tracked file inventory should be appended to the working notes.</summary>
+    public bool IncludeFileLists { get; init; } = true;
+
+    /// <summary>Workload accepted by the active profile when no separate candidate profile is configured.</summary>
+    public WorkloadClass WorkloadClass { get; init; } = WorkloadClass.General;
+
+    /// <summary>Reasoning for active-profile summaries; separate candidate profiles retain their own setting.</summary>
+    public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.None;
+
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 
@@ -824,7 +832,8 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
                 summaryText,
                 filesRead,
                 filesChanged,
-                _prompts);
+                _prompts,
+                request.IncludeFileLists);
             if (!string.Equals(_sanitizer.Sanitize(content), content, StringComparison.Ordinal))
             {
                 errors.Add("Candidate summary does not satisfy sanitization policy.");
@@ -953,10 +962,10 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         var profileInputCapacity = checked(
             profile.ContextWindowTokens - modelOutputTokens);
-        var maximumCandidateInputTokens = Math.Min(
-            _policy.MaximumInputTokens,
-            profileInputCapacity);
-        var maximumCandidateCharacters = checked(maximumCandidateInputTokens * 4);
+        var maximumCandidateInputTokens = _policy.MaximumInputTokens == 0
+            ? profileInputCapacity
+            : Math.Min(_policy.MaximumInputTokens, profileInputCapacity);
+        var maximumCandidateCharacters = (long)maximumCandidateInputTokens * 4;
         var fixedCharacters = EstimateFixedInputCharacters(request, summaryPrompt);
         var maximumRawGroupCount = 0;
         var aggregateCharacters = fixedCharacters;
@@ -1189,8 +1198,8 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 request.ProfileId,
                 request.ProfileContextWindowTokens,
                 request.ProfileOutputReserveTokens,
-                ReasoningLevel.None,
-                WorkloadClass.General,
+                request.ReasoningLevel,
+                request.WorkloadClass,
                 new ModelCapabilitySet { Streaming = true },
                 request.SelectionConstraints with { ContainsSensitiveData = containsSensitiveData },
                 null,
@@ -1622,7 +1631,8 @@ public sealed class ActiveTurnCompactor : IActiveTurnCompactor
             generation.Candidate.SummaryText,
             generation.Candidate.FilesRead,
             generation.Candidate.FilesChanged,
-            _prompts);
+            _prompts,
+            request.IncludeFileLists);
         var summary = new ActiveTurnCompactionSummary
         {
             Version = version,
@@ -1700,12 +1710,18 @@ public static class ActiveTurnSummaryFormatter
         string summaryText,
         IReadOnlyList<string> filesRead,
         IReadOnlyList<string> filesChanged,
-        IPromptLoader prompts)
+        IPromptLoader prompts,
+        bool includeFileLists = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(summaryText);
         ArgumentNullException.ThrowIfNull(filesRead);
         ArgumentNullException.ThrowIfNull(filesChanged);
         ArgumentNullException.ThrowIfNull(prompts);
+        if (!includeFileLists)
+        {
+            return summaryText.Trim();
+        }
+
         var fileLists = PromptAssetRenderer.RenderWithPlatformLineEndings(
             prompts,
             PromptFileNames.ContextActiveTurnSummaryHostFileLists,

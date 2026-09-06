@@ -39,6 +39,7 @@ public sealed class DelegateAgentsToolExecutionTests
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
+        Assert.Same(fixture.Tool, new ToolRegistry([fixture.Tool]).Get(DelegateAgentsContract.ToolId));
 
         // Act
         var definition = fixture.Tool.Definition;
@@ -59,6 +60,7 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(ToolIdempotency.NonIdempotent, definition.Idempotency);
         Assert.Equal(ToolConcurrencyMode.ExclusiveSession, definition.Scheduling.ConcurrencyMode);
         Assert.True(definition.SupportsCancellation);
+        Assert.Equal(Timeout.InfiniteTimeSpan, definition.Timeout);
         Assert.True(definition.ConversationAvailable);
         Assert.True(definition.RequiresWorkspace);
         Assert.True(definition.PreferStrictArguments);
@@ -768,6 +770,53 @@ public sealed class DelegateAgentsToolExecutionTests
             execution.Value.Children,
             child => child.Omissions.Any(omission => omission.Contains("retained", StringComparison.Ordinal)));
         Assert.True(execution.IsTruncated);
+    }
+
+    /// <summary>Failed children remain reportable with disabled, zero, and configurable summary limits.</summary>
+    [Theory]
+    [InlineData(false, 128, false)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 128, true)]
+    [InlineData(true, 4_096, false)]
+    public async Task Project_FailedChild_RespectsSummaryConfiguration(bool enforce, int maximum, bool truncated)
+    {
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var options = new DelegateAgentsOptions
+        {
+            EnforceOperationalLimits = enforce,
+            MaximumSummaryCharacters = maximum,
+        };
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()), options);
+        var plan = fixture.Plans.Create(CreateInput(1), fixture.Context);
+        var assignment = Assert.Single(plan.Assignments);
+        var reason = string.Join(" ", Enumerable.Repeat("The child could not finish its inspection.", 50));
+        var outcome = new AgentRunOutcome
+        {
+            AssignmentId = assignment.AssignmentId,
+            ChildRunId = assignment.ChildRunId,
+            Role = assignment.Role,
+            Generation = plan.Provenance.Generation,
+            Status = AgentRunStatus.Failed,
+            Usage = new AgentResourceUsage(),
+            Reason = reason,
+        };
+
+        var projection = new DelegateAgentsResultProjector(options, TestPromptLoader.Instance)
+            .Project(plan, CreateJoinedCheckpoint(plan, outcome));
+
+        var child = Assert.Single(projection.Result.Children);
+        Assert.Equal("Failed", child.Status);
+        if (truncated)
+        {
+            Assert.True(child.Summary.Length <= maximum);
+            Assert.NotEqual(reason, child.Summary);
+        }
+        else
+        {
+            Assert.Equal(reason, child.Summary);
+        }
     }
 
     /// <summary>The production envelope retains eight response statuses with host-populated legacy finding metadata.</summary>

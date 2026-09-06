@@ -1019,6 +1019,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolChildAgentToolInvocationCompleted prompt asset.</summary>
     public const string ToolChildAgentToolInvocationCompleted = "Tool-ChildAgent-ToolInvocation-Completed.md";
 
+    /// <summary>Gets the child evidence retrieval description.</summary>
+    public const string ToolReadAgentEvidenceDescription = "Tool-ReadAgentEvidence-Description.md";
+
     /// <summary>Gets all required filenames in deterministic ordinal order.</summary>
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
@@ -1320,6 +1323,7 @@ public static class PromptFileNames
         ToolCodeExploreSourceBudgetRelevanceSuffix,
         ToolToolInvocationCompleted,
         ToolChildAgentToolInvocationCompleted,
+        ToolReadAgentEvidenceDescription,
     ]);
 }
 
@@ -1452,6 +1456,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
             PromptFileNames.ToolToolInvocationCompleted,
             PromptFileNames.ToolChildAgentToolInvocationCompleted,
+            PromptFileNames.ToolReadAgentEvidenceDescription,
         };
         var dotNetAssets = new HashSet<string>(
             PromptFileNames.All

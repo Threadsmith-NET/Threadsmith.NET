@@ -43,6 +43,8 @@ Own phase-specific evidence governance, bounded cross-turn conversation memory, 
 
 ## Work Guidance
 
+- Ordinary children reuse active-turn compaction contracts, complete-prefix selection, candidate generation, validation, and summary formatting with independent request-size tuning. Their initial instruction/evidence snapshot and steering are not eligible for replacement. Preserve useful evidence-ID associations in working notes without imposing a final-answer format. Original tool results remain in the evidence store; child lookup checks previously delivered IDs and staleness.
+
 - For every model-callable delegated role, preserve every policy-eligible parent evidence item and every resolved instruction source; never reduce them to fit a synthetic cumulative token budget.
 - Ordinary role amendments guide work without required response fields, citation GUIDs, semantic grading, or response-format repair. Keep delivered-evidence citation checks for legacy structured admission and actual approved mutation validation separate from unrestricted ordinary replies. Tool evidence, sensitivity classification, context accounting, actual request capacity, and frozen authority still apply. Retain configured/effective provider/profile/reasoning, selection source, and fallback provenance independently of body claims; trusted model routing belongs in Models/App.
 - Keep prompt append paths inside the repository, reject prohibited paths and reparse traversal, and preserve configured order.

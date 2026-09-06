@@ -66,7 +66,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var profileId = plan.ModelProfileId.Value;
         var profile = _catalog?.Get(profileId);
         var providerInstructions = _providerInstructionResolver?.Resolve(profileId);
-        var modelTools = BuildToolDefinitions(plan.AvailableToolIds);
         var maximumRounds = Math.Max(1, plan.EffectiveBudget.ModelTurns);
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
@@ -76,6 +75,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         for (var round = 0; round < maximumRounds; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var modelContext = await CreateToolContextAsync(plan, cancellationToken);
+            var modelTools = BuildToolDefinitions(modelContext.AllowedToolIds);
             var text = new StringBuilder();
             ToolRequestModelOutput? toolRequest = null;
             IReadOnlyList<ModelMessage> messages =
@@ -113,7 +114,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     RequiredCapabilities = new ModelCapabilitySet
                     {
                         Streaming = true,
-                        ToolCalls = plan.AvailableToolIds.Count > 0,
+                        ToolCalls = modelTools.Count > 0,
                         StructuredOutput = true,
                     },
                     SelectionConstraints = new ModelSelectionConstraints
@@ -199,11 +200,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     Phase = plan.Request.Phase,
                     ToolId = toolRequest.ToolName,
                     ArgumentsJson = toolRequest.ArgumentsJson,
-                    Context = context with
-                    {
-                        AllowedToolIds = plan.AvailableToolIds,
-                        RequestedBy = $"skill:{plan.Package.SkillId.Value}:{plan.Request.InvocationId.Value:D}",
-                    },
+                    Context = context,
                 },
                 cancellationToken);
             var boundedResult = result.Succeeded
@@ -246,11 +243,24 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         CancellationToken cancellationToken)
     {
         var context = await _toolContext(plan.Request, cancellationToken);
-        return PackagedDocumentationPolicy.IsDocumentationSkill(
+        context = PackagedDocumentationPolicy.IsDocumentationSkill(
             plan.Scope,
             plan.Package.SkillId.Value)
                 ? PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory)
                 : context;
+        var allowedTools = plan.AvailableToolIds.Where(toolId =>
+            !context.DenyAllTools
+            && (context.AllowedToolIds.Count == 0
+                || context.AllowedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase))
+            && !context.DeniedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
+        return context with
+        {
+            AllowedToolIds = allowedTools,
+
+            // An empty computed intersection must not become the policy's unrestricted empty list.
+            DenyAllTools = context.DenyAllTools || allowedTools.Length == 0,
+            RequestedBy = $"skill:{plan.Package.SkillId.Value}:{plan.Request.InvocationId.Value:D}",
+        };
     }
 
     private string BuildPrompt(

@@ -431,12 +431,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     var usage = TryReadUsage(root);
                     if (usage is not null)
                     {
+                        // Completed requests consume tokens even when their output is rejected.
+                        yield return new ModelChunk { Usage = usage };
                         if (usage.OutputTokens > maximumOutputTokens)
                         {
                             throw new ModelProviderException("The Codex response usage exceeded the requested output-token limit.");
                         }
-
-                        yield return new ModelChunk { Usage = usage };
                     }
 
                     var toolOutputs = CreateCodexToolOutputs(pendingToolCalls, toolNameMap);

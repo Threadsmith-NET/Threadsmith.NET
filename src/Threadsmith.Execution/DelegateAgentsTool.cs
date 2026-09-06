@@ -279,7 +279,9 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
-            Timeout = options.ChildBudget.WallTime + TimeSpan.FromSeconds(30),
+
+            // Assignment deadlines and caller cancellation already control the delegation lifetime.
+            Timeout = Timeout.InfiniteTimeSpan,
             MaximumOutputBytes = DelegateAgentsContract.MaximumOutputBytes,
             ConversationAvailable = true,
             RequiresWorkspace = true,

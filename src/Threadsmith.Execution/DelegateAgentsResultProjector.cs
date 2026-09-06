@@ -32,7 +32,6 @@ internal sealed class DelegateAgentsResultProjector
     private const int MaximumFindingTitleCharacters = 1_024;
     private const int MaximumLocationCharacters = 1_024;
     private const int MaximumOmissionCharacters = 512;
-    private const int MaximumProjectedSummaryCharacters = 1_024;
     private const int MaximumSymbolCharacters = 1_024;
     private readonly DelegateAgentsProjectionLimits _limits;
     private readonly DelegateAgentsOptions _options;
@@ -395,10 +394,12 @@ internal sealed class DelegateAgentsResultProjector
             summary = outcome.Findings?.Findings.FirstOrDefault()?.Summary ?? outcome.Reason;
         }
 
-        var value = BoundedText.Truncate(
-            summary,
-            Math.Min(_options.MaximumSummaryCharacters, MaximumProjectedSummaryCharacters),
-            out var isTruncated);
+        if (_options.MaximumSummaryCharacters == 0)
+        {
+            return new SummaryProjection(summary, false);
+        }
+
+        var value = BoundedText.Truncate(summary, _options.MaximumSummaryCharacters, out var isTruncated);
         return new SummaryProjection(value, isTruncated);
     }
 

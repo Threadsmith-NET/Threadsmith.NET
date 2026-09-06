@@ -14,7 +14,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Verifies governed skill discovery, trust, schemas, loading, workflow, restoration, and persistence.</summary>
-public sealed class SkillSubsystemTests
+public sealed partial class SkillSubsystemTests
 {
     /// <summary>Verifies startup discovery reads metadata while a declared body is exclusively locked.</summary>
     [Fact]
@@ -1041,7 +1041,11 @@ public sealed class SkillSubsystemTests
                 .. Snapshot.Candidates.Where(item => string.Equals(
                     item.Metadata.SkillId.Value,
                     selector,
-                    StringComparison.Ordinal)),
+                    StringComparison.Ordinal)
+                    || string.Equals(
+                        $"{item.Provenance.Scope}:{item.Identity.SkillId.Value}@{item.Identity.Version}+{item.Identity.Digest.Value}",
+                        selector,
+                        StringComparison.Ordinal)),
             ];
             return matches.Length == 1
                 ? matches[0]

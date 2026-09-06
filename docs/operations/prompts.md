@@ -45,15 +45,16 @@ For a category-organized explanation of every file and a glossary defining what 
 | `System-ToolInventory-TextFallback.md` | `Threadsmith.Models` | `prompts/System-ToolInventory-TextFallback.md` | System framing for `ToolInventory-TextFallback`. | `ToolId`, `Description`, `Schema` |
 | `System-ToolInventory-NativeSeparate.md` | `Threadsmith.Context` | `prompts/System-ToolInventory-NativeSeparate.md` | Fixed governed-request guidance when native tool definitions are supplied separately. | None |
 | `Context-ActiveTurnCompaction-System.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | None |
-| `Context-ActiveTurnCompaction-Initial.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-Initial.md` | Context framing for `ActiveTurnCompaction-Initial`. | None |
-| `Context-ActiveTurnCompaction-Update.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-Update.md` | Context framing for `ActiveTurnCompaction-Update`. | None |
-| `Context-ActiveTurnCompaction-OutputContract.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-OutputContract.md` | Context framing for `ActiveTurnCompaction-OutputContract`. | None |
+| `Context-ActiveTurnCompaction-Initial.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-Initial.md` | Initial parent/child working notes, retaining useful evidence-ID associations. | None |
+| `Context-ActiveTurnCompaction-Update.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | None |
+| `Context-ActiveTurnCompaction-OutputContract.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | None |
 | `Context-ActiveTurnSummary-UntrustedWrapper.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnSummary-UntrustedWrapper.md` | Context framing for `ActiveTurnSummary-UntrustedWrapper`. | `Version`, `SummaryContent` |
 | `Context-ActiveTurnSummary-HostFileLists.md` | `Threadsmith.Context` | `prompts/Context-ActiveTurnSummary-HostFileLists.md` | Context framing for `ActiveTurnSummary-HostFileLists`. | `FilesRead`, `FilesChanged` |
 | `Context-ActiveRun-Steering.md` | `Threadsmith.Execution` | `prompts/Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | `Sequence`, `SubmittedAt`, `Text` |
 | `Context-CurrentTurn-HostAuthorizedUserUrl.md` | `Threadsmith.Execution` | `prompts/Context-CurrentTurn-HostAuthorizedUserUrl.md` | Host-authorized current-turn URL guidance. | `Ordinal`, `UserUrlId` |
 | `Tool-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a parent tool invocation with no other result content. | None |
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | None |
+| `Tool-ReadAgentEvidence-Description.md` | `Threadsmith.Execution` | `prompts/Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | None |
 | `Tool-list_files-Description.md` | `Threadsmith.Tools` | `prompts/Tool-list_files-Description.md` | Advertised description for `list_files`. | None |
 | `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Advertised description for `read_file`. | None |
 | `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | None |

@@ -464,7 +464,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(3, Assert.Single(chunks, chunk => chunk.Usage is not null).Usage?.OutputTokens);
     }
 
-    /// <summary>Reported token usage still enforces the actual requested output limit.</summary>
+    /// <summary>Rejected output still reports consumed tokens before enforcing the request limit.</summary>
     [Fact]
     public async Task Provider_ReportedOutputTokensRespectRequestLimit()
     {
@@ -474,12 +474,21 @@ public sealed class Plan50OpenAiCodexTests
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
         });
         var provider = await CreateProviderAsync(handler, "token");
+        var chunks = new List<ModelChunk>();
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
-            await provider.StreamAsync(
+        {
+            await foreach (var chunk in provider.StreamAsync(
                 WithCapacity(CreateStreamRequest() with { MaximumOutputTokens = 4 }),
-                TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+                TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
 
         Assert.Contains("output-token limit", exception.Message, StringComparison.Ordinal);
+        var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks).Usage);
+        Assert.Equal(3, usage.InputTokens);
+        Assert.Equal(5, usage.OutputTokens);
     }
 
     /// <summary>Configured finite tool-call limits reject excess calls and allow larger requested limits.</summary>

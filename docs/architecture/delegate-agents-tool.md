@@ -131,9 +131,9 @@ The request does not contain:
 
 - parent or sibling transcripts;
 - hidden reasoning;
-- tools absent from the exact parent request;
+- repository/network tools absent from the exact parent request; the child-local `read_agent_evidence` lookup is a separate read capability restricted to previously delivered IDs;
 - mutable global model or tool state;
-- evidence removed by token pressure.
+- initial evidence removed by token pressure.
 
 Primary implementation:
 
@@ -143,6 +143,14 @@ Primary implementation:
 - `ChildAgentInstructions` resolves the applicable repository instruction bundle.
 
 ### 6. The child returns its own final response
+
+`ChildAgentHistory` tracks completed call/result batches plus their progress or correction messages. The common active-turn compactor can replace an older, previously delivered prefix with working notes, using child-specific token/percentage triggers and a recent-context target. Initial role/task/instruction/evidence messages and user steering are never eligible. The newest batch remains exact. Replacement must reduce the fully estimated request by the configured minimum, including the summary and archived evidence index. A failed attempt leaves the same messages active and observes the configured interval before retry. `HistoryRewriteGeneration` invalidates provider continuation state after each replacement. Normal request prefixes remain stable between replacements.
+
+Child summaries use the already sanitized result content for useful paths and code locations. They do not send a duplicate raw-provenance file inventory or append an empty inventory claiming that no files were read. Every archived evidence ID remains in the child's separate index, without limiting it to the summary generator's metadata projection.
+
+The summary request uses the child's selected provider/profile and the shared deployed compaction prompts, with no tools or requirements on the child's eventual response. Summary usage contributes to both session and child totals. An ActivitySource named `Threadsmith.Execution.ChildAgentCompaction` records before/after estimates and outcome without source content. Tuning lives in trusted `agents:delegation:compaction`; see the [user guide](../user-guide.md#subagent-history-and-evidence).
+
+`ChildAgentEvidenceTool` is a request-local capability, not a new parent or repository tool registration. The loop passes it through the central invocation pipeline with a context allowing only that lookup. All ordinary inspection registrations still come from the exact parent snapshot. Typed lookup arguments and the ordinary batch are prepared before execution; repository inspections use the existing batch pipeline and memory lookups use direct pipeline invocation. The lookup checks session, child run, delivered-ID membership, and current evidence staleness. It returns only the original sanitized stored content, with no fresh filesystem or network access. A lookup does not duplicate evidence or gain another child's access. Children with deny-all tool policy or an explicit lookup deny do not receive this capability.
 
 `ChildAgentModelLoop` streams model output, executes validated read-only tool batches, stores each tool result as child-owned evidence, and sends a bounded tool-result continuation back to the child. Valid JSON tool content is embedded directly in the continuation envelope instead of being serialized as an escaped JSON string inside that envelope; non-JSON content remains a string. Provider adapters still encode the complete envelope according to their transport protocol. One immutable tool-schema estimate is reused across continuation rounds. Wire accounting includes message content, tool-call IDs, tool names, framing, tool schemas, and output reserve.
 

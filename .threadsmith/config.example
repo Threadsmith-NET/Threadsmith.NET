@@ -124,6 +124,15 @@
     // inherited models do not gain the trusted role catalog's authority.
     // Legacy agents.roleProfiles is rejected in trusted configuration.
     // See docs/operations/model-providers.md for complete user JSON.
+    // Child history tuning also belongs in trusted user/machine configuration:
+    // "delegation": { "compaction": { "enabled": true, "triggerTokens": 40000,
+    //   "triggerPercent": 60, "targetTokens": 20000, "recentTokens": 12000,
+    //   "minimumRoundsBetweenAttempts": 3, "minimumSavingsTokens": 2000 } }
+    // Either trigger can start an attempt; zero disables that trigger.
+    // These are optimization targets, not task limits. enabled:false preserves
+    // full history. See the user guide for summary settings and limitations.
+    // Child compaction.summary.maximumInputTokens defaults to 0: use the
+    // selected model's input capacity, without an extra candidate-input cap.
   },
 
   // ── Governed skills and reusable workflows (M12 / plan 39) ───────────

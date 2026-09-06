@@ -19,12 +19,7 @@ internal sealed record ChildAgentModelResult(
 /// <summary>Runs bounded child model continuations and exact pipeline-fenced tool batches.</summary>
 internal sealed class ChildAgentModelLoop
 {
-    private const int MaximumChildOutputCharacters = 128 * 1024;
-    private const int MaximumCorrectionReasonCharacters = 512;
-    private const int MaximumModelToolArgumentBytes = 32 * 1024;
-    private const int MaximumModelToolArgumentsAggregateBytes = 96 * 1024;
-    private const int MaximumModelToolNameCharacters = 256;
-    private const int MaximumModelToolRequestsPerRound = 32;
+    private readonly DelegateAgentsOptions _options;
     private readonly IEvidenceStore _evidence;
     private readonly IModelProvider _models;
     private readonly IModelProvider? _trustedModels;
@@ -67,6 +62,7 @@ internal sealed class ChildAgentModelLoop
         _steering = steering;
         _selection = selection;
         _trustedModels = trustedModels;
+        _options = options;
     }
 
     /// <summary>Runs advertised tools until the model returns its response, without imposing an answer format.</summary>
@@ -79,7 +75,16 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelection model,
         CancellationToken cancellationToken)
     {
-        var registrations = ResolveRegistrations(assignment);
+        var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId).ToHashSet();
+        var registrations = ResolveRegistrations(assignment).ToList();
+        if (!childToolContext.DenyAllTools
+            && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase))
+        {
+            registrations.Add(new ToolRegistration(
+                new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts),
+                new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "child-evidence")));
+        }
+
         var toolDefinitions = ModelToolCanonicalizer.Canonicalize(
             ChildAgentPrompt.CreateToolDefinitions(registrations));
         var toolWireEstimate = ModelWireEstimator.EstimateTools(
@@ -90,7 +95,7 @@ internal sealed class ChildAgentModelLoop
             StringComparer.OrdinalIgnoreCase);
         var prompt = new ChildAgentPrompt(_prompts, assignment.Role);
         var messages = prompt.CreateMessages(context, instructions);
-        var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId).ToHashSet();
+        var history = new ChildAgentHistory(messages, _options.Compaction, _prompts);
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var stopwatch = Stopwatch.StartNew();
@@ -115,7 +120,22 @@ internal sealed class ChildAgentModelLoop
                     }
                 }
 
-                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round);
+                var summaryPolicy = _options.Compaction.Summary;
+                var provider = model.UsesTrustedCatalog ? _trustedModels ?? _models : _models;
+                var compactor = new ActiveTurnCompactor(
+                    new ModelActiveTurnCompactionCandidateProvider(provider, summaryPolicy, _prompts),
+                    new ActiveTurnCompactionValidator(summaryPolicy, _sanitizer, _prompts),
+                    summaryPolicy,
+                    _prompts);
+                await history.CompactAsync(
+                    assignment,
+                    model,
+                    toolWireEstimate,
+                    round,
+                    compactor,
+                    new ChildCompactionObserver(plan.Provenance.SessionId, _sessionUsage, ledger),
+                    cancellationToken);
+                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration);
                 model = fitted.Model;
                 childToolContext = childToolContext with
                 {
@@ -132,6 +152,7 @@ internal sealed class ChildAgentModelLoop
                     cancellationToken);
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
                 cancellationToken.ThrowIfCancellationRequested();
+                history.MarkDelivered();
                 if (response.ToolRequests.Count > 0)
                 {
                     if (_steering is not null)
@@ -148,6 +169,8 @@ internal sealed class ChildAgentModelLoop
                         }
                     }
 
+                    var exchangeStart = messages.Count;
+                    IReadOnlyList<EvidenceId> exchangeEvidence = [];
                     try
                     {
                         var continuation = await InvokeToolsAsync(
@@ -164,6 +187,7 @@ internal sealed class ChildAgentModelLoop
                         messages.AddRange(continuation.Messages);
                         messages.Add(prompt.CreateEvidenceProgressMessage(continuation.Progress));
                         deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
+                        exchangeEvidence = continuation.DeliveredEvidenceIds;
                     }
                     catch (Exception exception) when (exception is InvalidDataException
                         or ToolArgumentValidationException
@@ -179,6 +203,8 @@ internal sealed class ChildAgentModelLoop
                             assignment,
                             round);
                     }
+
+                    history.RecordExchange(exchangeStart, round, exchangeEvidence);
 
                     continue;
                 }
@@ -236,7 +262,8 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ModelMessage> messages,
         IReadOnlyList<ModelToolDefinition> tools,
         ModelWireToolEstimate toolEstimate,
-        int round)
+        int round,
+        long historyRewriteGeneration)
     {
         var attempted = new HashSet<ModelProfileId>();
         while (attempted.Add(model.ProfileId))
@@ -254,6 +281,7 @@ internal sealed class ChildAgentModelLoop
                 Input = assignment.Objective,
                 Seed = HashCode.Combine(assignment.AssignmentId.Value, round),
                 ToolContinuationRound = round,
+                HistoryRewriteGeneration = historyRewriteGeneration,
                 WorkloadClass = assignment.Role switch
                 {
                     AgentRole.Explorer => WorkloadClass.General,
@@ -276,7 +304,7 @@ internal sealed class ChildAgentModelLoop
                 ReasoningLevel = model.ReasoningLevel,
                 Tools = tools,
                 AllowMultipleToolCalls = true,
-                Messages = messages,
+                Messages = messages.ToArray(),
                 WireEstimate = estimate,
                 ProviderInstructions = model.ProviderInstructions,
             };
@@ -347,12 +375,9 @@ internal sealed class ChildAgentModelLoop
                 switch (chunk.Output)
                 {
                     case ToolRequestModelOutput toolRequest:
-                        var maximumToolRequests = assignment.Budget.EnforceLimits
-                            ? Math.Min(MaximumModelToolRequestsPerRound, assignment.Budget.ToolCalls)
-                            : MaximumModelToolRequestsPerRound;
-                        if (toolRequests.Count >= maximumToolRequests
+                        if (ExceedsLimit(toolRequests.Count + 1, _options.MaximumToolRequestsPerRound)
                             || string.IsNullOrWhiteSpace(toolRequest.ToolName)
-                            || toolRequest.ToolName.Length > MaximumModelToolNameCharacters)
+                            || ExceedsLimit(toolRequest.ToolName.Length, _options.MaximumToolNameCharacters))
                         {
                             throw new InvalidDataException(
                                 "The child response exceeds its tool-request count or name bound.");
@@ -360,8 +385,8 @@ internal sealed class ChildAgentModelLoop
 
                         var argumentBytes = Encoding.UTF8.GetByteCount(toolRequest.ArgumentsJson);
                         toolArgumentBytes = checked(toolArgumentBytes + argumentBytes);
-                        if (argumentBytes > MaximumModelToolArgumentBytes
-                            || toolArgumentBytes > MaximumModelToolArgumentsAggregateBytes)
+                        if (ExceedsLimit(argumentBytes, _options.MaximumToolArgumentBytes)
+                            || ExceedsLimit(toolArgumentBytes, _options.MaximumToolArgumentsAggregateBytes))
                         {
                             throw new InvalidDataException(
                                 "The child response exceeds its tool-argument payload bound.");
@@ -390,12 +415,12 @@ internal sealed class ChildAgentModelLoop
                     _sessionUsage?.Observe(sessionId, usageRequestId, chunk.Usage);
                 }
 
-                if (checked(text.Length + reasoningCharacters) > MaximumChildOutputCharacters)
+                if (ExceedsLimit(checked(text.Length + reasoningCharacters), _options.MaximumChildOutputCharacters))
                 {
                     throw new InvalidDataException("The child response exceeds its output bound.");
                 }
 
-                // Character estimates are telemetry, not an exact tokenizer. Keep the independent size cap above.
+                // Provider output capacity remains independent of the optional operational size cap.
                 if (usage?.OutputTokens > maximumOutputTokens)
                 {
                     throw new InvalidDataException("The child response exceeds its output token bound.");
@@ -433,6 +458,12 @@ internal sealed class ChildAgentModelLoop
         return checked((int)Math.Min(
             model.MaximumOutputTokens,
             model.OutputReserveTokens));
+    }
+
+    private bool ExceedsLimit(int actual, int configured)
+    {
+        var limit = _options.EffectiveLimit(configured);
+        return limit > 0 && actual > limit;
     }
 
     private static int EstimateCharacterTokens(int characters)
@@ -480,12 +511,21 @@ internal sealed class ChildAgentModelLoop
                         Phase = RunPhase.EvidenceCollection,
                         ToolId = request.ToolName,
                         ArgumentsJson = request.ArgumentsJson,
-                        Context = childContext,
+                        Context = registration.Tool is ChildAgentEvidenceTool
+                            ? childContext with { AllowedToolIds = [ChildAgentEvidenceTool.ToolId] }
+                            : childContext,
                     });
             }),
         ];
-        var preflight = _tools.PreflightBatch(batch);
-        if (!preflight.Succeeded || preflight.Preparation is null)
+        var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Tool is ChildAgentEvidenceTool).ToArray();
+        foreach (var read in reads)
+        {
+            registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
+        }
+
+        var ordinary = batch.Except(reads).ToArray();
+        var preflight = ordinary.Length > 0 ? _tools.PreflightBatch(ordinary) : null;
+        if (preflight is not null && (!preflight.Succeeded || preflight.Preparation is null))
         {
             throw new InvalidDataException(
                 $"The tool batch was not executed. Call {preflight.FailedOrdinal + 1} "
@@ -494,7 +534,18 @@ internal sealed class ChildAgentModelLoop
                 + " Other calls in this batch were not executed; this does not mean their paths or arguments were invalid.");
         }
 
-        var results = await _tools.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+        var results = new List<ToolBatchResult>();
+        if (preflight?.Preparation is { } preparation)
+        {
+            results.AddRange(await _tools.InvokePreparedBatchAsync(preparation, cancellationToken));
+        }
+
+        foreach (var read in reads)
+        {
+            var result = await _tools.InvokeAsync(read.Invocation, cancellationToken);
+            results.Add(new ToolBatchResult(read.Ordinal, read.CorrelationId, result));
+        }
+
         var coverageBefore = evidenceProgress.Capture();
         var messages = new List<ModelMessage>(results.Count * 2);
         var deliveredEvidenceIds = new List<EvidenceId>(results.Count);
@@ -502,7 +553,11 @@ internal sealed class ChildAgentModelLoop
         {
             var request = requests[result.Ordinal];
             messages.Add(ChildAgentPrompt.CreateToolCallMessage(result.CorrelationId, request));
-            var evidence = await StoreToolEvidenceAsync(
+            var evidence = result.Result.Succeeded && result.Result.ToolId == ChildAgentEvidenceTool.ToolId
+                ? new StoredToolEvidence(
+                    new EvidenceId(((ChildAgentEvidenceInput)registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(request.ArgumentsJson)).EvidenceId),
+                    result.Result.ModelResultContent ?? result.Result.ResultJson ?? string.Empty)
+                : await StoreToolEvidenceAsync(
                 plan,
                 assignment,
                 modelProfileId,
@@ -648,7 +703,7 @@ internal sealed class ChildAgentModelLoop
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
         var sanitized = BoundedText.Truncate(
             _sanitizer.Sanitize(reason),
-            MaximumCorrectionReasonCharacters,
+            _options.EffectiveLimit(_options.MaximumCorrectionReasonCharacters) is > 0 and var limit ? limit : int.MaxValue,
             out _);
         var error = JsonSerializer.Serialize(new { succeeded = false, executed = false, error = sanitized });
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)
@@ -686,6 +741,53 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ModelMessage> Messages,
         IReadOnlyList<EvidenceId> DeliveredEvidenceIds,
         ChildAgentEvidenceProgress Progress);
+
+    private sealed class ChildCompactionObserver : IActiveTurnCompactionAttemptObserver
+    {
+        private readonly SessionId _sessionId;
+        private readonly SessionUsageProjection? _usage;
+        private readonly AgentBudgetLedger _ledger;
+
+        public ChildCompactionObserver(SessionId sessionId, SessionUsageProjection? usage, AgentBudgetLedger ledger)
+        {
+            _sessionId = sessionId;
+            _usage = usage;
+            _ledger = ledger;
+        }
+
+        public Task BeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task AfterProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            ActiveTurnCompactionAttemptOutcome outcome,
+            ModelUsage? usage,
+            TimeSpan duration,
+            CancellationToken cancellationToken = default)
+        {
+            var id = new ModelRequestUsageId(request.RunId, "child-compaction", request.ToolContinuationRound, invocationId);
+            if (usage is null)
+            {
+                _usage?.ObserveMissing(_sessionId, id);
+            }
+            else
+            {
+                _usage?.Observe(_sessionId, id, usage);
+                _ledger.Charge(new AgentResourceUsage { ModelTokens = usage.InputTokens + usage.OutputTokens });
+            }
+
+            return Task.CompletedTask;
+        }
+    }
 }
 
 /// <summary>Preserves measured child failure details without changing the original exception contract.</summary>

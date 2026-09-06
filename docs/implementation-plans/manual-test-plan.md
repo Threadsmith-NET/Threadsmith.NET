@@ -1630,6 +1630,7 @@ Expected: incompatible skills remain metadata-discoverable with stable denial re
 1. Invoke a fixture with valid typed input and observe schema-validated output/action proposals.
 2. Repeat with malformed/excessive/cyclic schemas, invalid input/output, unknown action kinds, an undeclared tool request, and skill text claiming trust, approval, policy change, direct write, validation success, or permission to expose secrets.
 3. Attempt `invoke_skill` in an ineligible phase and twice in one turn.
+4. Use a verified fixture declaring `read_file` and `search` with `tools:allow = ["invoke_skill", "read_file"]`. Confirm only `read_file` is advertised to the procedure and a requested `search` is denied. Repeat with only `invoke_skill` allowed and confirm no inner tool executes. Add `read_file` to `tools:deny` and confirm deny wins. Restore the original configuration.
 
 Expected: only bounded supported schemas and known host-owned action proposals are accepted. Every actual tool/action is rechecked against current phase, availability, trust, model, policy, and budget. Skill prose cannot grant capabilities, approve itself, mutate directly, bypass exact diff/validation, or override authoritative outcomes. Invalid phase/duplicate calls fail deterministically.
 
@@ -1648,6 +1649,7 @@ Expected: analyzer remediation groups authoritative diagnostics and does not int
 2. Install a newer package version while an older invocation is paused; pin the newer version, pin the older version to roll back, and confirm `/skills uninstall` rejects the pinned/active package.
 3. Change repository state, disable a required tool, reduce trust, corrupt a referenced asset, and revoke the pinned package between interruption and resume.
 4. Attempt a workflow with a cycle, arbitrary expression/code, unbounded loop, nested skill, recursive agent delegation, skill-owned task/concurrency directive, overlapping workers, or excessive aggregate/agent budget.
+5. Pause a verified fixture before an incomplete procedure step, narrow `tools:allow` so one previously permitted declared tool is excluded, and reload configuration before `continue` or `resume`. Confirm the restored procedure neither advertises nor executes that tool despite its presence in the saved plan. Restore the original configuration.
 
 Expected: valid restoration resumes exactly one legal next action without duplicate model calls, children, findings, reviews, worktrees, approvals, mutations, integrations, validation, or terminal events and remains pinned to the original digest. Changed requirements/state/content or revocation fails closed. Invalid workflow graphs never start. Skills cannot create/schedule children directly; accepted agent steps compile to host delegation requests. Cancellation leaves an inspectable safe host/repository state.
 
@@ -2064,6 +2066,18 @@ Expected: interaction stays responsive and selectable, labels remain bounded, `T
 3. Confirm PrettyPrompt's MPL full text/source URL, SQLitePCLRaw's Apache/SQLite notice, TUIKit's MIT package license, and the supplemental embedded-font attribution/WTFPL notices appear. Confirm SBOM package identities and TUIKit's aggregate embedded-resource entry equal the exact reviewed restore closure.
 4. Remove or modify one runtime notice, SBOM, compliance sidecar, artifact, RID, or digest and confirm packaging/aggregate publication fails before attachment. Expire the Windows decision in a temporary evidence copy and confirm validation rejects it without changing repository authority.
 5. Rehearse Windows x64/arm64 install, upgrade, uninstall and legal-file accessibility; Linux x64/arm64 archive/install/uninstall; macOS x64/arm64 package/sign/notarize/install/uninstall. Confirm clean reruns, user-state preservation, immutable tag/head fencing, and no signing/OAuth canary leakage.
+
+### MTP-258 - Subagent working notes and exact evidence retrieval
+
+1. Open a trusted repository with raw model logging enabled. Use the default child compaction settings from the user guide. Ask an Explorer, SecurityReviewer, and ArchitectureReviewer to independently inspect how `delegate_agents` handles `readOnly` versus `inherit`, then compare conclusions without editing files.
+2. Inspect requests by child run ID. Confirm older completed tool exchanges can become working notes, initial role/task/instructions/evidence stay exact, recent call/result pairs remain together, and a replacement advances `HistoryRewriteGeneration`. Confirm summary requests are separated from ordinary role requests in the analysis and included in total usage.
+3. Ask a child to retrieve an earlier inspected result by evidence ID when exact detail is needed. Confirm `read_agent_evidence` returns stored content, does not repeat filesystem searches, and cannot read unknown, stale, cross-session, or another child's undisclosed IDs.
+4. Repeat with `agents:delegation:compaction:enabled=false` in trusted configuration. Confirm there are no child summary requests. Compare aggregate input, cache reads, output, requests, wall time, inspected sources, and usefulness. Do not count cache reads twice or treat a cheaper incomplete answer as a win.
+5. Vary scope with a cancellation review by Implementer/TestReviewer/PerformanceReviewer, a narrow configuration question, and an unrelated multi-file investigation. Test token-only and percentage-only triggers, cancellation during a summary, and a provider failure. Confirm failure preserves the old history and cancellation still stops the child.
+6. Set the child wall-time limit to zero, then separately disable operational limits. Confirm a long-running child is not stopped by an additional delegation-tool timer. Cancel one child while siblings are running; confirm usable sibling results survive the partial join, including when the cancelled child has no response and fallback-summary length is unlimited. Restore a positive child deadline and confirm it still applies.
+7. Include a completed tool exchange exceeding 65,536 tokens but fitting the selected model's input capacity. With child `compaction:summary:maximumInputTokens=0`, confirm that exchange can later enter a summary and does not permanently prevent further replacements. A configured smaller positive cap may reject the candidate without losing history. Restore temporary configuration after testing.
+
+Expected: Useful unconstrained role responses with periodic, optional history reduction and retrievable original evidence. Tuning targets do not become task limits, and the retained instructions or a large recent exchange may exceed the target.
 
 ### MTP-257 — Default retained TUIKit parity and terminal lifecycle
 

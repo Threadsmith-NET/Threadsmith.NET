@@ -619,6 +619,8 @@ The parent waits asynchronously at the tool-call boundary while children run con
 
 The ordinary body is stored in `AgentRunOutcome.Response`. It is not parsed into findings, semantically graded, or promoted to verified parent evidence. JSON-looking replies are still ordinary responses. Legacy structured outcomes and checkpoints remain supported separately; an empty response is distinct from a missing/null legacy response.
 
+Trusted `agents:delegation:childBudget:wallTime` sets the child deadline (five minutes by default). Zero disables it, as does `agents:delegation:enforceOperationalLimits: false`. The delegation tool adds no separate timer; caller cancellation and provider settings still apply. `maximumSummaryCharacters` controls fallback summaries for failed, cancelled, or legacy outcomes; zero or disabled operational limits preserves those summaries without clipping. Ordinary final responses are not clipped by that summary setting.
+
 Every child has a frozen role, objective, tasks, stopping condition, contract marker and runner version, baseline, scope, model and reasoning selection, tool allow/deny set, trust ceiling, sensitivity, deadline, dependencies, and hierarchical budget. The ordinary `agent-response/1` marker imposes no body shape. Read-only children cannot receive mutation tools or mutation trust. Children receive governed evidence and applicable instructions. The host checks identity, generation, authority, cancellation, and real model capacity independently of final-response contents.
 
 Trusted user/machine `agents:roleModels` configuration may select an existing provider, profile GUID, and optional reasoning level for each role. An application assignment pin takes precedence, then the role mapping, inherited preference, and compatible default. Each actual request is checked again; a compatible fallback and its reason remain visible. Assignments, checkpoints, and outcomes retain configured and effective provider/profile/reasoning and the selection source. Repository settings cannot change these trusted routes, including through a same-ID provider endpoint override. Changes require restart; the TUI does not edit role mappings. Legacy `agents:roleProfiles` is rejected in trusted configuration. See [models for delegated roles](operations/model-providers.md#models-for-delegated-roles).
@@ -632,6 +634,40 @@ The approved-plan workflow is separate from an ordinary `implementer` assignment
 The existing isolated-worker APIs require an approved plan and host-proven non-overlapping ownership. Ambiguous paths, directories, symbols, projects, generated outputs, solution files, central package/build configuration, or other shared surfaces fall back to serial execution. An authorized worktree worker uses a detached worktree under the host-managed temporary root and the normal mutation proposal, exact-diff, approval, transaction, validation, correction, and cancellation gates. A worktree isolates file state; it is not a security sandbox.
 
 Worker results are frozen structured change sets, not branches to merge. Before selected changes enter the primary worktree, Threadsmith rejects incomplete or stale packages, out-of-scope paths, worker overlap, and changed parent baselines. The parent converts and restages selected changes through the existing transactional workspace, presents one fresh aggregate diff under the current mutation policy, and reruns aggregate affected builds/tests. Threadsmith does not merge, commit, rebase, cherry-pick, push, or resolve conflicts automatically.
+
+#### Subagent history and evidence
+
+Each ordinary subagent keeps its own conversation. Its role prompt, task, supplied context, initial evidence, repository instructions, and later steering stay intact. Older completed tool exchanges may be replaced in the active request by ordinary working notes. Calls and results are removed together, and at least the latest complete exchange stays verbatim. This never prescribes the format of the final answer or shares sibling histories.
+
+Children with tool access also receive `read_agent_evidence`, a read-only lookup of results already delivered to that child. Working notes associate useful evidence IDs with findings; an `archivedEvidenceIds` index keeps the older IDs available even if a summary omits one. The lookup returns the stored sanitized result, not a fresh repository read. It cannot access another child's results, undisclosed session evidence, missing results, or stale evidence. It cannot run commands, modify files, or enlarge file/network permissions. Retrieved evidence does not create a duplicate stored result.
+
+Configure this independently of task limits in trusted user/machine `agents:delegation:compaction` settings, then restart. Repository configuration cannot change it:
+
+```json
+{
+  "agents": {
+    "delegation": {
+      "compaction": {
+        "enabled": true,
+        "triggerTokens": 40000,
+        "triggerPercent": 60,
+        "targetTokens": 20000,
+        "recentTokens": 12000,
+        "minimumRoundsBetweenAttempts": 3,
+        "minimumSavingsTokens": 2000
+      }
+    }
+  }
+}
+```
+
+Either trigger can start an attempt. `triggerPercent` uses the selected model's context window minus its output reserve. Set either trigger to `0` to disable it, or `enabled: false` to disable compaction altogether. `targetTokens: 0` uses only the recent-context target; `recentTokens: 0` retains the newest exchange. Zero spacing allows attempts at every boundary, and zero minimum savings still requires a smaller request. The default spacing is three rounds, including after failure. These are estimated-token tuning values, not task limits or guaranteed request sizes: complete exchanges and retained instructions can exceed the target.
+
+The same summary generator used for the parent conversation runs on the child's selected model and provider. Its configurable `compaction:summary` settings use `ActiveTurnCompactionPolicy`; child defaults set `summaryBudgetTokens` to 3000 and allow one provider call with no extra retry. Candidate-size and validation settings control whether a summary is usable, never whether the child may continue. An oversized, invalid, unsuccessful, or insufficiently smaller candidate leaves the original history active. The prefix stays unchanged between replacements. Reported summary usage, including usage received before a later failure, is included in session and child token totals; diagnostic activities record before/after estimates and the outcome. If an attempt ends before the provider sends usage, it is recorded as missing, not zero. Provider context/output capacity still applies even with compaction disabled.
+
+Smaller requests are not necessarily cheaper or faster. Summaries add model calls and output, and replacing history can reduce cache reuse. Compare total input, cached and uncached input, output, elapsed time, and answer usefulness with compaction enabled and disabled. Include failed summary attempts; totals with missing usage are lower bounds, not exact savings.
+
+Child summaries default `compaction:summary:maximumInputTokens` to `0`, meaning no additional input cap beyond the selected model's capacity. A positive value adds an optional cap. A cap too small for the oldest complete exchange can prevent compaction, so it should not be confused with the trigger or target. The parent's separate default remains 65,536 tokens. No setting can exceed the selected model's actual capacity.
 
 #### Inspecting and cancelling subagents
 
@@ -1450,6 +1486,8 @@ The second-to-last command rolls back future selection without modifying an alre
 ```
 
 Invocation validates bounded JSON input and current host/tool/trust/model/phase requirements before loading content. It loads only current-step assets, rechecks hashes, uses strict UTF-8 and sanitization, omits optional references under pressure, and fails if required content does not fit. Procedure turns advertise only declared available tools and still use the central tool pipeline.
+
+A skill's tool declarations cannot expand `tools:allow` or override `tools:deny`. Each procedure turn offers only the intersection of the skill's declared tools and current tool-ID policy, then checks current policy again before executing a call. No overlap means no tools are permitted. An absent or empty configured `tools:allow` keeps its existing meaning of no additional allowlist restriction; this is different from an empty computed intersection. The same checks apply after `continue` or `resume`, including policy narrowed while the workflow was paused. Calling a skill through the model also requires permission for the outer `invoke_skill` tool.
 
 A workflow may pause with a typed host action such as `ProposePlan`, `ExecuteApprovedPlan`, `ProposeDelegation`, `Validate`, or `AskUserInput`. The proposal does not perform the action. Normal planning, approval, exact-diff, transaction, build/test validation, Plan-38 scheduling/worktrees/reviews, cancellation, and authoritative outcomes remain mandatory. `continue` accepts the result only after the corresponding host action completes and validates it against the declared step-result schema.
 

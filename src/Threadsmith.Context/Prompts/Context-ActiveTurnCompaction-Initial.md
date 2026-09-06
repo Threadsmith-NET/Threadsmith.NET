@@ -1,1 +1,2 @@
 Create a context checkpoint from the current task and new tool activity. Record what the user wants, constraints, completed and current work, blockers, decisions, next steps, and critical details needed to continue. Keep every section concise. Preserve exact file paths, symbol names, commands, errors, and unresolved questions when they matter.
+When tool results include evidenceId values, associate the useful IDs with what was learned and the relevant code locations so exact details can be retrieved later. These are working notes, not requirements on the eventual answer.

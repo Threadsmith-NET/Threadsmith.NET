@@ -40,7 +40,11 @@ internal static class ModelComposition
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
-        trustedConfiguration ??= configuration;
+        var effectiveTrustedConfiguration = trustedConfiguration ?? ConfigurationBootstrap.BuildTrusted(paths);
+        using var ownedTrustedConfiguration = trustedConfiguration is null
+            ? effectiveTrustedConfiguration as IDisposable
+            : null;
+        trustedConfiguration = effectiveTrustedConfiguration;
 
         var validatedRawModelLogPath = await ValidateRawModelLogPathAsync(
             paths.RepositoryRoot,
@@ -122,6 +126,7 @@ internal static class ModelComposition
 
             var catalog = effectiveCatalog?.ModelCatalog
                 ?? ModelProfileConfigurationLoader.Load(configuration);
+            var roleModels = AgentRoleModelConfiguration.Load(trustedConfiguration, trustedCatalog, effectiveCatalog);
 
             // A configured catalog chooses a startup profile through the same host policy used at runtime.
             // An empty catalog deliberately retains the deterministic offline flow for local demonstrations.
@@ -202,7 +207,8 @@ internal static class ModelComposition
                     activeModels,
                     codexOAuth,
                     trustedModelCatalog,
-                    trustedProvider);
+                    trustedProvider,
+                    roleModels);
             }
 
             var script = new ScriptedSession
@@ -232,7 +238,8 @@ internal static class ModelComposition
                 preferredProfileId: null,
                 "Scripted demo (offline)",
                 new SessionModelPreferences(),
-                activeModels: null);
+                activeModels: null,
+                roleModels: roleModels);
         }
         catch
         {
@@ -243,7 +250,7 @@ internal static class ModelComposition
         }
     }
 
-    /// <summary>Resolves the optional trusted active-turn compaction profile and validates its static workload contract.</summary>
+    /// <summary>Resolves the shared trusted compaction model and reasoning for main and child loops.</summary>
     internal static ModelProfile? ResolveActiveTurnCompactionProfile(
         IConfiguration trustedConfiguration,
         ConfiguredModelCatalog catalog)
@@ -251,8 +258,15 @@ internal static class ModelComposition
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
         ArgumentNullException.ThrowIfNull(catalog);
         var configuredProfileId = trustedConfiguration["context:activeTurnCompaction:profileId"];
+        var configuredReasoning = trustedConfiguration["context:activeTurnCompaction:reasoningLevel"];
         if (configuredProfileId is null)
         {
+            if (configuredReasoning is not null)
+            {
+                throw new InvalidOperationException(
+                    "Trusted context:activeTurnCompaction:reasoningLevel requires profileId.");
+            }
+
             return null;
         }
 
@@ -273,6 +287,20 @@ internal static class ModelComposition
             throw new InvalidOperationException(
                 "Trusted active-turn compaction configuration refers to a missing or disabled model profile.",
                 exception);
+        }
+
+        if (configuredReasoning is not null)
+        {
+            if (!Enum.GetNames<ReasoningLevel>().Any(name =>
+                    string.Equals(name, configuredReasoning, StringComparison.OrdinalIgnoreCase))
+                || !Enum.TryParse<ReasoningLevel>(configuredReasoning, ignoreCase: true, out var reasoning)
+                || !profile.SupportsReasoningLevel(reasoning))
+            {
+                throw new InvalidOperationException(
+                    "Trusted context:activeTurnCompaction:reasoningLevel must be supported by the selected profile.");
+            }
+
+            profile = profile with { DefaultReasoningLevel = reasoning };
         }
 
         var negotiation = ModelCapabilityNegotiator.Negotiate(
@@ -674,7 +702,8 @@ internal sealed class ModelServices : IDisposable
         ActiveModelSelectionService? activeModels,
         IDisposable? additionalResource = null,
         ConfiguredModelCatalog? trustedCatalog = null,
-        IModelProvider? trustedProvider = null)
+        IModelProvider? trustedProvider = null,
+        AgentRoleModelPolicy? roleModels = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(catalog);
@@ -687,6 +716,7 @@ internal sealed class ModelServices : IDisposable
         Provider = provider;
         TrustedCatalog = trustedCatalog ?? catalog;
         TrustedProvider = trustedProvider ?? provider;
+        RoleModels = roleModels ?? new AgentRoleModelPolicy();
         StartupProfile = startupProfile;
         PreferredProfileId = preferredProfileId;
         Status = status;
@@ -705,6 +735,9 @@ internal sealed class ModelServices : IDisposable
 
     /// <summary>Gets the repository-excluding provider router used for trusted auxiliary model work.</summary>
     internal IModelProvider TrustedProvider { get; }
+
+    /// <summary>Gets the immutable startup role-routing policy and trusted provider identities.</summary>
+    internal AgentRoleModelPolicy RoleModels { get; }
 
     /// <summary>Gets the profile used to initialize session preferences, when configured.</summary>
     internal ModelProfile? StartupProfile { get; }
@@ -726,5 +759,12 @@ internal sealed class ModelServices : IDisposable
     {
         _additionalResource?.Dispose();
         _httpClient.Dispose();
+    }
+
+    /// <summary>Resolves the exact ordinary or trusted dispatcher selected for one child request.</summary>
+    internal IModelProvider ResolveAgentProvider(AgentModelSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return selection.UsesTrustedCatalog ? TrustedProvider : Provider;
     }
 }

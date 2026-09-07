@@ -13,9 +13,6 @@ using Threadsmith.Models;
 /// <summary>Streams chat completions from a configured OpenAI-compatible HTTP endpoint.</summary>
 internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 {
-    private const int DefaultMaximumStreamedCharacters = 8 * 1024 * 1024;
-    private const int MaximumAccumulatedToolCalls = 256;
-
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -25,7 +22,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     private readonly string? _apiKey;
     private readonly IReadOnlyDictionary<string, string> _headers;
     private readonly HttpClient _httpClient;
-    private readonly int _maximumStreamedCharacters;
+    private readonly int? _maximumStreamedCharacters;
     private readonly ModelProfile _profile;
     private readonly OpenAiReasoningCompatibilityConfiguration? _reasoningCompatibility;
 
@@ -37,11 +34,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         string? apiKey = null,
         IReadOnlyDictionary<string, string>? headers = null,
         OpenAiReasoningCompatibilityConfiguration? reasoningCompatibility = null,
-        int maximumStreamedCharacters = DefaultMaximumStreamedCharacters)
+        int? maximumStreamedCharacters = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStreamedCharacters, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumStreamedCharacters.GetValueOrDefault());
         if (!string.Equals(profile.Provider, "openai-compatible", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(profile.Provider, "openai", StringComparison.OrdinalIgnoreCase))
         {
@@ -102,7 +99,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        requestCancellation.CancelAfter(_profile.Timeout);
+        if (_profile.Timeout > TimeSpan.Zero)
+        {
+            requestCancellation.CancelAfter(_profile.Timeout);
+        }
+
         HttpResponseMessage? response = null;
         for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
         {
@@ -174,7 +175,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 MaximumOutputTokens = maximumOutputTokens,
                 Temperature = _profile.Temperature,
                 Seed = request.Seed,
-                ResponseFormat = request.RequiredCapabilities.StructuredOutput
+
+                // JSON-only grammars can prevent native tool-call emission.
+                ResponseFormat = request.RequiredCapabilities.StructuredOutput && tools.Count == 0
                     ? new OpenAiResponseFormat { Type = "json_object" }
                     : null,
                 ReasoningEffort = _reasoningCompatibility is null
@@ -263,8 +266,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         using (var reader = new StreamReader(stream, Encoding.UTF8))
         {
             var toolCalls = new Dictionary<int, ToolCallAccumulator>();
-            var completionCharacters = 0;
-            var streamedOutputCharacters = 0;
+            long completionCharacters = 0;
+            long toolCallCount = 0;
+            var outputTracker = new StreamedOutputTracker(_profile.MaximumStreamedBytes, _maximumStreamedCharacters);
             var usageReported = false;
             while (true)
             {
@@ -339,20 +343,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     var reasoning = ResolveReasoningDelta(choice.Delta);
                     if (reasoning is { Length: > 0 })
                     {
-                        AddCompletionCharacters(
-                            reasoning.Length,
-                            _maximumStreamedCharacters,
-                            ref streamedOutputCharacters);
+                        outputTracker.Add(reasoning);
                         completionCharacters += reasoning.Length;
                         yield return new ModelChunk { Reasoning = reasoning };
                     }
 
                     if (choice.Delta.Content is { Length: > 0 } content)
                     {
-                        AddCompletionCharacters(
-                            content.Length,
-                            _maximumStreamedCharacters,
-                            ref streamedOutputCharacters);
+                        outputTracker.Add(content);
                         completionCharacters += content.Length;
                         yield return new ModelChunk { Text = content };
                     }
@@ -361,7 +359,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         if (!toolCalls.TryGetValue(toolCall.Index, out var accumulator))
                         {
-                            if (toolCalls.Count >= MaximumAccumulatedToolCalls)
+                            toolCallCount++;
+                            if (_profile.MaximumToolCalls > 0 && toolCallCount > _profile.MaximumToolCalls)
                             {
                                 throw new MalformedModelOutputException(
                                     "The provider exceeded the maximum accumulated tool-call count.");
@@ -371,21 +370,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             toolCalls.Add(toolCall.Index, accumulator);
                         }
 
-                        accumulator.AppendId(
-                            toolCall.Id,
-                            _maximumStreamedCharacters,
-                            ref streamedOutputCharacters);
+                        accumulator.AppendId(toolCall.Id, outputTracker);
                         if (toolCall.Function is { } function)
                         {
-                            accumulator.AppendName(
-                                function.Name,
-                                _maximumStreamedCharacters,
-                                ref streamedOutputCharacters);
-                            accumulator.AppendArguments(
-                                function.Arguments,
-                                _maximumStreamedCharacters,
-                                ref streamedOutputCharacters);
-                            completionCharacters += (function.Name?.Length ?? 0)
+                            accumulator.AppendName(function.Name, outputTracker);
+                            accumulator.AppendArguments(function.Arguments, outputTracker);
+                            completionCharacters += (long)(function.Name?.Length ?? 0)
                                 + (function.Arguments?.Length ?? 0);
                         }
                     }
@@ -759,18 +749,38 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 exception);
     }
 
-    private static void AddCompletionCharacters(
-        int additionalCharacters,
-        int maximumCompletionCharacters,
-        ref int completionCharacters)
+    /// <summary>Counts streamed output independently of tokenizer estimates.</summary>
+    private sealed class StreamedOutputTracker
     {
-        if (additionalCharacters > maximumCompletionCharacters - completionCharacters)
+        private readonly long _maximumBytes;
+        private readonly int? _maximumCharacters;
+        private long _bytes;
+        private long _characters;
+
+        /// <summary>Initializes a new instance of the <see cref="StreamedOutputTracker"/> class.</summary>
+        public StreamedOutputTracker(long maximumBytes, int? maximumCharacters)
         {
-            throw new MalformedModelOutputException(
-                "The provider exceeded the configured maximum streamed output size.");
+            _maximumBytes = maximumBytes;
+            _maximumCharacters = maximumCharacters;
         }
 
-        completionCharacters += additionalCharacters;
+        /// <summary>Accounts for one delta before forwarding or retaining it.</summary>
+        public void Add(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            _bytes = checked(_bytes + Encoding.UTF8.GetByteCount(value));
+            _characters = checked(_characters + value.Length);
+            if ((_maximumBytes > 0 && _bytes > _maximumBytes)
+                || (_maximumCharacters is > 0 && _characters > _maximumCharacters.Value))
+            {
+                throw new MalformedModelOutputException(
+                    "The provider exceeded the configured maximum streamed output size.");
+            }
+        }
     }
 
     private sealed class ToolCallAccumulator
@@ -787,40 +797,36 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         public void AppendArguments(
             string? value,
-            int maximumCompletionCharacters,
-            ref int completionCharacters)
+            StreamedOutputTracker tracker)
         {
-            Append(_arguments, value, maximumCompletionCharacters, ref completionCharacters);
+            Append(_arguments, value, tracker);
         }
 
         public void AppendId(
             string? value,
-            int maximumCompletionCharacters,
-            ref int completionCharacters)
+            StreamedOutputTracker tracker)
         {
-            Append(_id, value, maximumCompletionCharacters, ref completionCharacters);
+            Append(_id, value, tracker);
         }
 
         public void AppendName(
             string? value,
-            int maximumCompletionCharacters,
-            ref int completionCharacters)
+            StreamedOutputTracker tracker)
         {
-            Append(_name, value, maximumCompletionCharacters, ref completionCharacters);
+            Append(_name, value, tracker);
         }
 
         private static void Append(
             StringBuilder builder,
             string? value,
-            int maximumCompletionCharacters,
-            ref int completionCharacters)
+            StreamedOutputTracker tracker)
         {
             if (string.IsNullOrEmpty(value))
             {
                 return;
             }
 
-            AddCompletionCharacters(value.Length, maximumCompletionCharacters, ref completionCharacters);
+            tracker.Add(value);
             builder.Append(value);
         }
     }

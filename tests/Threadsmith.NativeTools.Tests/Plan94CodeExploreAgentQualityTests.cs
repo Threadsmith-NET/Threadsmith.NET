@@ -282,6 +282,114 @@ public sealed class Plan94CodeExploreAgentQualityTests
             action.Kind == CodeExploreNextActionKind.UseGranularFallback);
     }
 
+    /// <summary>Named-file questions resolve each file rather than substituting loose declaration matches.</summary>
+    [Theory]
+    [InlineData("Explain tool validation in MissingTools.cs and MissingTests.cs", null, 2)]
+    [InlineData("Explain tool validation in CodeExploreTool.cs and MissingTests.cs", "src/Threadsmith.Tools/CodeExploreTool.cs", 1)]
+    [InlineData("Explain behavior in src/Threadsmith.App/WidgetService.cs and MissingTests.cs", "src/Threadsmith.App/WidgetService.cs", 1)]
+    public async Task CodeExplore_ProjectScopedNamedFiles_ReportsExactCoverage(string query, string? expectedPath, int missingCount)
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+            "src/Threadsmith.Tools/Threadsmith.Tools.csproj");
+        var tool = new CodeExploreOutputFormattingTool(
+            new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance);
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = query },
+            fixture.CreateToolExecutionContext(32_000),
+            TestContext.Current.CancellationToken);
+        var result = Assert.IsType<CodeExploreResult>(execution.Value);
+
+        Assert.Equal(2, result.ResolvedAnchors.Count);
+        Assert.Equal(missingCount, result.ResolvedAnchors.Count(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound));
+        if (expectedPath is null)
+        {
+            Assert.Empty(result.FileSections);
+        }
+        else
+        {
+            Assert.Equal(expectedPath, Assert.Single(result.FileSections).FilePath);
+            Assert.Equal(expectedPath, Assert.Single(result.ResolvedAnchors, anchor => anchor.Outcome == CodeExploreResolutionOutcome.Resolved).SelectedLocation?.FilePath);
+        }
+
+        Assert.Empty(result.CandidateSummaries ?? []);
+        var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
+        foreach (var missing in result.ResolvedAnchors.Where(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound))
+        {
+            Assert.Contains(missing.Input, markdown, StringComparison.Ordinal);
+            Assert.Contains("Other repository directories were not searched", missing.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
+        Assert.Contains(result.Availability?.RecommendedActions ?? [], action => action.Kind == CodeExploreNextActionKind.UseGranularFallback);
+    }
+
+    /// <summary>A filename shared by different files requires a path rather than silently selecting one.</summary>
+    [Fact]
+    public async Task CodeExplore_AmbiguousFileName_ReturnsPathsWithoutSource()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+            "src/Threadsmith.Tools/Threadsmith.Tools.csproj", duplicateFileNames: true);
+
+        var tool = new CodeExploreOutputFormattingTool(
+            new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance);
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = "Explain Shared.cs" },
+            fixture.CreateToolExecutionContext(32_000),
+            TestContext.Current.CancellationToken);
+        var result = Assert.IsType<CodeExploreResult>(execution.Value);
+
+        var resolution = Assert.Single(result.ResolvedAnchors);
+        Assert.Equal(CodeExploreResolutionOutcome.Ambiguous, resolution.Outcome);
+        Assert.Equal(
+            ["src/Threadsmith.Tools/First/Shared.cs", "src/Threadsmith.Tools/Second/Shared.cs"],
+            resolution.Alternatives.Select(alternative => alternative.Location?.FilePath));
+        Assert.Empty(result.FileSections);
+        var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
+        Assert.Contains("src/Threadsmith.Tools/First/Shared.cs", markdown, StringComparison.Ordinal);
+        Assert.Contains("src/Threadsmith.Tools/Second/Shared.cs", markdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>An unloaded exact root file wins over a loaded namesake; skipped named requests remain explicit.</summary>
+    [Fact]
+    public async Task CodeExplore_NamedFiles_PreservesRootFileAndReportsAnchorLimit()
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(rootFile: true);
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Explain CodeExploreTool.cs and WidgetService.cs",
+                Limits = CreateAgentQuestionLimits(maximumAnchors: 1),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("CodeExploreTool.cs", Assert.Single(result.FileSections).FilePath);
+        Assert.False(result.Coverage.SymbolResolutionComplete);
+        Assert.Contains(result.Omissions, omission => omission.Contains("omitted 1 named C# file", StringComparison.Ordinal));
+    }
+
+    /// <summary>Quoted file paths retain spaces instead of becoming a different suffix path.</summary>
+    [Theory]
+    [InlineData("Explain \"src/My Tests/Foo.cs\"")]
+    [InlineData("Explain `src/My Tests/Foo.cs`")]
+    [InlineData("Explain 'src/My Tests/Foo.cs'")]
+    public async Task CodeExplore_QuotedFilePath_PreservesWholePath(string query)
+    {
+        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(quotedPaths: true);
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest { Query = query, Limits = CreateAgentQuestionLimits() },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("src/My Tests/Foo.cs", Assert.Single(result.FileSections).FilePath);
+    }
+
     /// <summary>Generic tool/workflow prose falls back to repository declarations instead of forcing semantic-tool families.</summary>
     [Theory]
     [InlineData("Explain how deployment tools improve workflow efficiency.")]
@@ -864,7 +972,10 @@ public sealed class Plan94CodeExploreAgentQualityTests
         public WorkspaceId WorkspaceId { get; }
 
         public static async Task<CodeExploreAgentQualityFixture> CreateAsync(
-            string workspaceRelativePath = "Repo.slnx")
+            string workspaceRelativePath = "Repo.slnx",
+            bool duplicateFileNames = false,
+            bool rootFile = false,
+            bool quotedPaths = false)
         {
             var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan94-{Guid.NewGuid():N}");
             Directory.CreateDirectory(repositoryPath);
@@ -873,6 +984,22 @@ public sealed class Plan94CodeExploreAgentQualityTests
             WriteToolsProject(repositoryPath);
             WriteAppProject(repositoryPath);
             WriteDotNetProject(repositoryPath);
+            if (duplicateFileNames)
+            {
+                Write(repositoryPath, "src/Threadsmith.Tools/First/Shared.cs", "public class FirstShared { }");
+                Write(repositoryPath, "src/Threadsmith.Tools/Second/Shared.cs", "public class SecondShared { }");
+            }
+
+            if (rootFile)
+            {
+                Write(repositoryPath, "CodeExploreTool.cs", "public class RootCodeExplore { }");
+            }
+
+            if (quotedPaths)
+            {
+                Write(repositoryPath, "src/My Tests/Foo.cs", "public class ExpectedFoo { }");
+                Write(repositoryPath, "Tests/Foo.cs", "public class UnrelatedFoo { }");
+            }
 
             var events = new DomainEventStream();
             var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);

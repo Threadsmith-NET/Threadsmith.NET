@@ -13,7 +13,7 @@ using Xunit;
 /// <summary>Plan 80 ordinary-loop grouping, eligibility, replacement, and inspection tests.</summary>
 public static class Plan80ActiveTurnContinuationTests
 {
-    /// <summary>An older delivered group is compacted on positive savings while the newest group and frozen prefix remain exact.</summary>
+    /// <summary>Positive savings can compact an older group above pressure while retaining two recent groups and the frozen prefix.</summary>
     [Fact]
     public static async Task Long_turn_compacts_delivered_prefix_even_when_request_remains_above_pressure()
     {
@@ -43,14 +43,14 @@ public static class Plan80ActiveTurnContinuationTests
                 new ConfiguredModelCatalog([profile]),
                 new InMemoryModelPreferenceSnapshotProvider());
             var assembler = CreateAssembler(events, evidence, resolver, sanitizer);
-            var model = new TwoToolsThenTextProvider();
+            var model = new ToolsThenTextProvider { ToolRounds = 3 };
             var policy = new ActiveTurnCompactionPolicy
             {
                 PressureTargetPercent = 1,
                 OutputReserveTokens = 128,
                 SummaryBudgetTokens = 256,
                 MinimumSavingsTokens = 1,
-                RetainedRecentTokens = 64,
+                RetainedRecentTokens = 150,
             };
             var timeProvider = new ManualTimeProvider();
             var candidateDuration = TimeSpan.FromMilliseconds(500);
@@ -108,7 +108,8 @@ public static class Plan80ActiveTurnContinuationTests
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
-            Assert.Equal(3, model.Requests.Count);
+            Assert.Equal(4, model.Requests.Count);
+            var finalRequest = model.Requests[^1];
             Assert.Single(candidateProvider.Requests);
             Assert.Equal(
                 ActiveTurnCompactionInspectionStatus.Completed,
@@ -118,8 +119,10 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.Empty(compactionRequest.AcceptanceIntent);
             Assert.Equal(4_096, compactionRequest.ProfileContextWindowTokens);
             Assert.Equal(128, compactionRequest.ProfileOutputReserveTokens);
-            Assert.Equal(2, compactionRequest.ToolContinuationRound);
+            Assert.Equal(3, compactionRequest.ToolContinuationRound);
             var compactedGroup = Assert.Single(compactionRequest.EligiblePrefix);
+            Assert.True(compactedGroup.EstimatedTokens < policy.RetainedRecentTokens);
+            Assert.True(compactedGroup.EstimatedTokens * 2 >= policy.RetainedRecentTokens);
             Assert.True(compactedGroup.WasDeliveredVerbatim);
             Assert.Equal(1, compactedGroup.Sequence);
             Assert.Contains(
@@ -131,41 +134,51 @@ public static class Plan80ActiveTurnContinuationTests
                 message => message.ToolCallId == "host-tool-1-1"
                     && message.Role == ModelMessageRole.Tool);
             Assert.DoesNotContain(
-                model.Requests[2].Messages,
+                finalRequest.Messages,
                 message => message.ToolCallId == "host-tool-1-1");
-            var retainedCallIndex = model.Requests[2].Messages.ToList().FindIndex(message =>
+            var retainedCallIndex = finalRequest.Messages.ToList().FindIndex(message =>
                 message.ToolCallId == "host-tool-2-1"
                 && message.Role == ModelMessageRole.Assistant);
-            var retainedResultIndex = model.Requests[2].Messages.ToList().FindIndex(message =>
+            var retainedResultIndex = finalRequest.Messages.ToList().FindIndex(message =>
                 message.ToolCallId == "host-tool-2-1"
                 && message.Role == ModelMessageRole.Tool);
             Assert.True(retainedCallIndex >= 0);
             Assert.True(retainedResultIndex > retainedCallIndex);
+            Assert.Equal(
+                model.Requests[2].Messages.Where(message => message.ToolCallId == "host-tool-2-1"),
+                finalRequest.Messages.Where(message => message.ToolCallId == "host-tool-2-1"));
+            Assert.Collection(
+                finalRequest.Messages.Where(message => message.ToolCallId == "host-tool-3-1"),
+                message => Assert.Equal(ModelMessageRole.Assistant, message.Role),
+                message => Assert.Equal(ModelMessageRole.Tool, message.Role));
             Assert.Contains(
-                model.Requests[2].Messages,
+                finalRequest.Messages,
                 message => message.SectionId == "active-turn-summary"
                     && message.Role == ModelMessageRole.Assistant);
             Assert.Equal(0, model.Requests[0].HistoryRewriteGeneration);
             Assert.Equal(0, model.Requests[1].HistoryRewriteGeneration);
-            Assert.Equal(1, model.Requests[2].HistoryRewriteGeneration);
-            Assert.Equal(model.Requests[0].Tools, model.Requests[2].Tools);
+            Assert.Equal(0, model.Requests[2].HistoryRewriteGeneration);
+            Assert.Equal(1, finalRequest.HistoryRewriteGeneration);
+            Assert.Equal(model.Requests[0].Tools, finalRequest.Tools);
             Assert.Equal(
                 model.Requests[0].Messages,
-                model.Requests[2].Messages.Take(model.Requests[0].Messages.Count));
+                finalRequest.Messages.Take(model.Requests[0].Messages.Count));
 
             var inspection = Assert.IsType<ContextInspectionProjection>(assembler.GetInspection(runId));
             var activeTurn = Assert.IsType<ActiveTurnCompactionInspectionProjection>(
                 inspection.ActiveTurnCompaction);
             Assert.Equal(ActiveTurnCompactionInspectionStatus.Completed, activeTurn.Status);
-            Assert.Equal(3, activeTurn.AssessmentSequence);
+            Assert.Equal(4, activeTurn.AssessmentSequence);
             Assert.Equal(1, activeTurn.CompactedGroupCount);
-            Assert.Equal(1, activeTurn.RetainedGroupCount);
+            Assert.Equal(2, activeTurn.RetainedGroupCount);
+            Assert.Equal(policy.RetainedRecentTokens, activeTurn.ConfiguredRetentionTargetTokens);
+            Assert.Equal(policy.RetainedRecentTokens, activeTurn.EffectiveRetentionTargetTokens);
             Assert.True(activeTurn.AfterInputTokens < activeTurn.BeforeInputTokens);
             Assert.True(activeTurn.AfterInputTokens > activeTurn.PressureTargetTokens);
             Assert.Equal(1, activeTurn.HistoryRewriteGeneration);
             Assert.Equal(compactionProfileId.Value, activeTurn.CandidateProfileId);
             Assert.StartsWith("sha256:", activeTurn.SummaryContentHash, StringComparison.Ordinal);
-            Assert.Equal(2, evidence.Snapshot(sessionId).Count);
+            Assert.Equal(3, evidence.Snapshot(sessionId).Count);
 
             var compactionHooks = hooks.Invocations
                 .Where(invocation => string.Equals(
@@ -181,9 +194,9 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.Equal(
                 WorkloadClass.Summary.ToString(),
                 compactionHooks[0].Payload?["workload"]);
-            Assert.Equal(4, hooks.Invocations.Count(invocation =>
+            Assert.Equal(5, hooks.Invocations.Count(invocation =>
                 invocation.Point == HookPoint.BeforeModelRequest));
-            Assert.Equal(4, hooks.Invocations.Count(invocation =>
+            Assert.Equal(5, hooks.Invocations.Count(invocation =>
                 invocation.Point == HookPoint.AfterModelRequest));
             Assert.Collection(
                 activityEvents,
@@ -205,7 +218,7 @@ public static class Plan80ActiveTurnContinuationTests
                 });
             var usageSnapshot = usage.GetSnapshot(sessionId);
             Assert.True(usageSnapshot.HasUnknownUsage);
-            Assert.Equal(45, usageSnapshot.TotalTokens);
+            Assert.Equal(60, usageSnapshot.TotalTokens);
             Assert.Contains(operationBudget.Accruals, delta =>
                 delta.Tokens == 0
                 && delta.Calls == 1
@@ -249,7 +262,7 @@ public static class Plan80ActiveTurnContinuationTests
                 new ConfiguredModelCatalog([profile]),
                 new InMemoryModelPreferenceSnapshotProvider());
             var assembler = CreateAssembler(events, evidence, resolver, sanitizer);
-            var model = new TwoToolsThenTextProvider();
+            var model = new ToolsThenTextProvider();
             var policy = new ActiveTurnCompactionPolicy
             {
                 PressureTargetPercent = 1,
@@ -720,9 +733,11 @@ public static class Plan80ActiveTurnContinuationTests
         }
     }
 
-    private sealed class TwoToolsThenTextProvider : IModelProvider
+    private sealed class ToolsThenTextProvider : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
+
+        public int ToolRounds { get; init; } = 2;
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
@@ -731,7 +746,7 @@ public static class Plan80ActiveTurnContinuationTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (Requests.Count <= 2)
+            if (Requests.Count <= ToolRounds)
             {
                 yield return new ModelChunk
                 {

@@ -47,20 +47,28 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
-        var profileOutputLimit = _profile.EffectiveRequestOutputTokenReserve;
+        var profileOutputLimit = _profile.MaximumOutputTokens;
         if (request.MaximumOutputTokens is { } maximumOutputTokens
             && (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit))
         {
             throw new ModelProviderException(
-                $"The requested output ceiling must be between 1 and the resolved profile request reserve of "
+                $"The requested output ceiling must be between 1 and the resolved profile maximum of "
                 + $"{profileOutputLimit} tokens.");
         }
 
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
-        ValidateCapacity(request, canonicalTools, request.MaximumOutputTokens ?? profileOutputLimit);
+
+        // Codex cannot enforce a per-request token limit. Reserve input capacity here;
+        // completed usage is checked against the separate profile maximum.
+        var outputReserve = request.MaximumOutputTokens ?? _profile.EffectiveRequestOutputTokenReserve;
+        ValidateCapacity(request, canonicalTools, outputReserve);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_profile.Timeout);
+        if (_profile.Timeout > TimeSpan.Zero)
+        {
+            timeout.CancelAfter(_profile.Timeout);
+        }
+
         var accessToken = AccessToken;
         var replayedAfterAuthenticationRejection = false;
         var attempt = 0;
@@ -94,7 +102,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     await foreach (var chunk in ReadEventsAsync(
                         reader,
                         toolNameMap,
-                        request.MaximumOutputTokens ?? profileOutputLimit,
+                        profileOutputLimit,
+                        _profile.MaximumStreamedBytes,
+                        _profile.MaximumToolCalls,
                         timeout.Token).ConfigureAwait(false))
                     {
                         yield return chunk;
@@ -360,10 +370,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         StreamReader reader,
         ModelToolWireNameMap toolNameMap,
         int maximumOutputTokens,
+        long maximumStreamedBytes,
+        int maximumToolCalls,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var pendingToolCalls = new List<PendingCodexToolCall>();
         long streamedOutputBytes = 0;
+        long toolCallCount = 0;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -407,6 +420,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                         var arguments = GetString(item, "arguments");
                         AddStreamedOutput(name);
                         AddStreamedOutput(arguments);
+                        toolCallCount++;
+                        if (maximumToolCalls > 0 && toolCallCount > maximumToolCalls)
+                        {
+                            throw new ModelProviderException("The Codex response exceeded the configured tool-call limit.");
+                        }
+
                         pendingToolCalls.Add(new PendingCodexToolCall(name, arguments));
                     }
 
@@ -415,7 +434,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     var usage = TryReadUsage(root);
                     if (usage is not null)
                     {
+                        // Completed requests consume tokens even when their output is rejected.
                         yield return new ModelChunk { Usage = usage };
+                        if (usage.OutputTokens > maximumOutputTokens)
+                        {
+                            throw new ModelProviderException("The Codex response usage exceeded the configured profile output-token maximum.");
+                        }
                     }
 
                     var toolOutputs = CreateCodexToolOutputs(pendingToolCalls, toolNameMap);
@@ -443,14 +467,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 return;
             }
 
-            // Codex's byte-level tokenizer cannot produce more tokens than the UTF-8 bytes
-            // representing streamed model-visible output. Treating every byte as one token
-            // therefore enforces the ceiling conservatively without an endpoint parameter.
             streamedOutputBytes = checked(streamedOutputBytes + Encoding.UTF8.GetByteCount(value));
-            if (streamedOutputBytes > maximumOutputTokens)
+            if (maximumStreamedBytes > 0 && streamedOutputBytes > maximumStreamedBytes)
             {
                 throw new ModelProviderException(
-                    $"The Codex response exceeded the host-owned output ceiling of {maximumOutputTokens} tokens.");
+                    $"The Codex response exceeded the configured stream limit of {maximumStreamedBytes} bytes.");
             }
         }
     }

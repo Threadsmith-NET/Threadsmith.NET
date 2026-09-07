@@ -117,7 +117,6 @@ public sealed record AgentFindingAdmissionRequest(
 /// <summary>Validates cited child findings and admits bounded provenance-linked parent evidence.</summary>
 public sealed class AgentFindingAdmission
 {
-    private const int MaximumSummaryCharacters = 4_096;
     private readonly IEvidenceStore _evidence;
 
     /// <summary>Initializes a new instance of the <see cref="AgentFindingAdmission"/> class.</summary>
@@ -208,10 +207,17 @@ public sealed class AgentFindingAdmission
             || findings.AssignmentId != frozenAssignment.AssignmentId
             || findings.ChildRunId != frozenAssignment.ChildRunId
             || findings.Generation != plan.Provenance.Generation
-            || frozenAssignment.Role != AgentRole.Explorer
+            || !Enum.IsDefined(frozenAssignment.Role)
             || findings.Findings.Count == 0)
         {
             throw new InvalidDataException("Finding-set identity, generation, schema, or role is invalid.");
+        }
+
+        var limits = frozenAssignment.Policy.ResultLimits;
+        limits.Validate();
+        if (frozenAssignment.Role != AgentRole.Explorer && limits.Exceeds(findings.Findings.Count, limits.MaximumFindings))
+        {
+            throw new InvalidDataException("The child finding count exceeds its frozen result policy.");
         }
 
         foreach (var finding in findings.Findings)
@@ -219,7 +225,8 @@ public sealed class AgentFindingAdmission
             if (finding.FindingId == Guid.Empty
                 || string.IsNullOrWhiteSpace(finding.Category)
                 || string.IsNullOrWhiteSpace(finding.Summary)
-                || finding.Summary.Length > MaximumSummaryCharacters
+                || limits.Exceeds(finding.Summary.Length, limits.MaximumDetailCharacters)
+                || !double.IsFinite(finding.Confidence)
                 || finding.Confidence is < 0 or > 1
                 || finding.EvidenceIds.Count == 0
                 || finding.EvidenceIds.Any(id => !deliveredEvidenceIds.Contains(id)))

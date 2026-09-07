@@ -1,2 +1,3 @@
-Summary {{AssignmentId}}: {{Summary}}
+Response {{AssignmentId}}:
+{{Summary}}
 Usage: {{ModelTokens}} model tokens, {{ToolCalls}} tool calls

@@ -422,7 +422,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>The unsupported wire parameter is replaced by conservative streamed-output enforcement.</summary>
+    /// <summary>A configured byte limit rejects oversized output independently of the model token ceiling.</summary>
     [Fact]
     public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
     {
@@ -431,14 +431,101 @@ public sealed class Plan50OpenAiCodexTests
         {
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
         });
-        var provider = await CreateProviderAsync(handler, "token");
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with { MaximumStreamedBytes = 4 });
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(
-                WithCapacity(CreateStreamRequest() with { MaximumOutputTokens = 4 }),
+                CreateStreamRequest(),
                 TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
 
-        Assert.Contains("output ceiling of 4 tokens", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stream limit of 4 bytes", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Codex completion is not rejected for exceeding a reserve the endpoint cannot enforce.</summary>
+    [Fact]
+    public async Task Provider_OutputReserveDoesNotRejectCompletedResponse()
+    {
+        const string stream = """
+            data: {"type":"response.output_text.delta","delta":"abcdefghij"}
+
+            data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":5}}}
+
+            """;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with { MaximumStreamedBytes = 10 });
+        var chunks = await provider.StreamAsync(
+            WithCapacity(CreateStreamRequest() with { MaximumOutputTokens = 4 }),
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("abcdefghij", string.Concat(chunks.Select(chunk => chunk.Text)));
+        Assert.Equal(5, Assert.Single(chunks, chunk => chunk.Usage is not null).Usage?.OutputTokens);
+        Assert.Equal(ModelFinishReason.Stop, chunks[^1].FinishReason);
+    }
+
+    /// <summary>Rejected output still reports consumed tokens before enforcing the configured profile maximum.</summary>
+    [Fact]
+    public async Task Provider_ReportedOutputTokensRespectProfileMaximum()
+    {
+        const string stream = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":5}}}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            MaximumOutputTokens = 4,
+            RequestOutputTokenReserve = 4,
+        });
+        var chunks = new List<ModelChunk>();
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(
+                WithCapacity(CreateStreamRequest() with { MaximumOutputTokens = 4 }),
+                TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Contains("profile output-token maximum", exception.Message, StringComparison.Ordinal);
+        var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks).Usage);
+        Assert.Equal(3, usage.InputTokens);
+        Assert.Equal(5, usage.OutputTokens);
+    }
+
+    /// <summary>Configured finite tool-call limits reject excess calls and allow larger requested limits.</summary>
+    [Theory]
+    [InlineData(1, 2, true)]
+    [InlineData(300, 257, false)]
+    public async Task Provider_ToolCallCountUsesConfiguredLimit(int maximum, int count, bool rejected)
+    {
+        var stream = string.Join("\n\n", Enumerable.Range(0, count).Select(_ => "data: " + JsonSerializer.Serialize(new
+        {
+            type = "response.output_item.done",
+            item = new { type = "function_call", name = "inspect", arguments = "{}" },
+        }))) + "\n\ndata: {\"type\":\"response.completed\"}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with { MaximumToolCalls = maximum });
+        var request = WithCapacity(CreateStreamRequest() with
+        {
+            Tools = [new ModelToolDefinition { Name = "inspect", Description = "Inspect source.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}" }],
+        });
+        if (rejected)
+        {
+            await Assert.ThrowsAsync<ModelProviderException>(async () =>
+                await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            var chunks = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(count, chunks.Count(chunk => chunk.Output is ToolRequestModelOutput));
+        }
     }
 
     /// <summary>Provider-unsafe canonical tool ids use reversible wire aliases and return canonical ids.</summary>
@@ -627,7 +714,8 @@ public sealed class Plan50OpenAiCodexTests
         HttpMessageHandler handler,
         string accessToken,
         Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync = null,
-        int contextWindow = 128_000)
+        int contextWindow = 128_000,
+        Func<ModelProfile, ModelProfile>? configureProfile = null)
     {
         var catalogJson = JsonSerializer.Serialize(new
         {
@@ -649,6 +737,7 @@ public sealed class Plan50OpenAiCodexTests
         {
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero },
         };
+        profile = configureProfile?.Invoke(profile) ?? profile;
         return registration.CreateProvider(new ModelProviderActivationContext
         {
             HttpClient = new HttpClient(handler),

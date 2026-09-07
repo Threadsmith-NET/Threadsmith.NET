@@ -19,7 +19,7 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Fallback output reserve used only when no selected-profile reserve is available.</summary>
     public int OutputReserveTokens { get; init; } = 8_192;
 
-    /// <summary>Maximum estimated tokens in one projected active-turn summary.</summary>
+    /// <summary>Summary allowance used to request model output, not an exact rendered-text limit.</summary>
     public int SummaryBudgetTokens { get; init; } = 16_384;
 
     /// <summary>Percentage of the summary budget available to model-written text.</summary>
@@ -28,13 +28,13 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Minimum positive estimated reduction required before a candidate is activated.</summary>
     public int MinimumSavingsTokens { get; init; } = 1;
 
-    /// <summary>Newest raw continuation target retained after a cut.</summary>
+    /// <summary>Newest raw continuation target retained independently of the request pressure target.</summary>
     public int RetainedRecentTokens { get; init; } = 12_000;
 
     /// <summary>Maximum groups supplied to one candidate operation.</summary>
     public int MaximumSourceGroups { get; init; } = 48;
 
-    /// <summary>Maximum canonical wire-input estimate for one candidate request.</summary>
+    /// <summary>Maximum candidate wire input; zero uses the selected model's available input capacity.</summary>
     public int MaximumInputTokens { get; init; } = 65_536;
 
     /// <summary>Maximum aggregate call/result messages across one candidate prefix.</summary>
@@ -91,27 +91,6 @@ public sealed record ActiveTurnCompactionPolicy
         return Math.Min(policyLimit, profileOutputReserveTokens);
     }
 
-    /// <summary>Scales newest-raw retention to the current request's activation capacity.</summary>
-    public int ResolveEffectiveRetentionTarget(
-        int beforeInputTokens,
-        int fixedRequestTokens,
-        int pressureTargetTokens)
-    {
-        Validate();
-        ArgumentOutOfRangeException.ThrowIfNegative(beforeInputTokens);
-        ArgumentOutOfRangeException.ThrowIfNegative(fixedRequestTokens);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pressureTargetTokens);
-        var minimumSavingsTarget = Math.Max(
-            1,
-            beforeInputTokens - MinimumSavingsTokens);
-        var activationTargetTokens = Math.Min(pressureTargetTokens, minimumSavingsTarget);
-        var unboundedRecentTokens = activationTargetTokens
-            - fixedRequestTokens
-            - SummaryBudgetTokens;
-        var availableRecentTokens = Math.Max(1, unboundedRecentTokens);
-        return Math.Min(RetainedRecentTokens, availableRecentTokens);
-    }
-
     /// <summary>Validates every reliability bound and cross-bound relationship.</summary>
     public void Validate()
     {
@@ -129,8 +108,7 @@ public sealed record ActiveTurnCompactionPolicy
         ArgumentOutOfRangeException.ThrowIfGreaterThan(RetainedRecentTokens, 262_144);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumSourceGroups);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumSourceGroups, 128);
-        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumInputTokens, 512);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumInputTokens, 131_072);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumInputTokens);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumCandidateMessages, 2);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumCandidateMessages, 2_048);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumSourceIdentifierCharacters, 64);
@@ -303,7 +281,7 @@ public sealed record ActiveTurnContinuationGroup
     public bool WasDeliveredVerbatim { get; init; }
 }
 
-/// <summary>Selects only an oldest eligible prefix while retaining a profile-scaled newest raw window.</summary>
+/// <summary>Selects only an oldest eligible prefix while retaining the configured newest raw window.</summary>
 public static class ActiveTurnCompactionCutSelector
 {
     /// <summary>Returns the bounded complete delivered prefix eligible for replacement.</summary>
@@ -523,6 +501,15 @@ public sealed record ActiveTurnCompactionCandidateProfile
 /// <summary>Bounded provider-neutral active-turn candidate input.</summary>
 public sealed record ActiveTurnCompactionRequest
 {
+    /// <summary>Whether a separately tracked file inventory should be appended to the working notes.</summary>
+    public bool IncludeFileLists { get; init; } = true;
+
+    /// <summary>Workload accepted by the active profile when no separate candidate profile is configured.</summary>
+    public WorkloadClass WorkloadClass { get; init; } = WorkloadClass.General;
+
+    /// <summary>Reasoning for active-profile summaries; separate candidate profiles retain their own setting.</summary>
+    public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.None;
+
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 
@@ -546,6 +533,9 @@ public sealed record ActiveTurnCompactionRequest
 
     /// <summary>Whether host input bounding shortened the task objective.</summary>
     public bool TaskObjectiveWasTruncated { get; init; }
+
+    /// <summary>Optional complete assignment context, included as task data in the candidate input budget.</summary>
+    public string? TaskContext { get; init; }
 
     /// <summary>Required-first bounded sanitized acceptance intent for evidence preservation.</summary>
     public required IReadOnlyList<ActiveTurnAcceptanceIntent> AcceptanceIntent { get; init; }
@@ -721,7 +711,7 @@ public interface IActiveTurnCompactor
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Validates one model-written replacement summary against its selected source prefix and bounds.</summary>
+/// <summary>Validates one model-written replacement summary against its selected source prefix and policy.</summary>
 public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidator
 {
     private static readonly string[] DisallowedSummaryMarkers =
@@ -735,7 +725,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
         "you are now",
     ];
 
-    private readonly ActiveTurnCompactionPolicy _policy;
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
 
@@ -749,7 +738,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompts);
         policy.Validate();
-        _policy = policy;
         _sanitizer = sanitizer;
         _prompts = prompts;
     }
@@ -812,10 +800,9 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
             reason = ActiveTurnCompactionRejectionReason.Source;
         }
 
-        if (string.IsNullOrWhiteSpace(summaryText)
-            || summaryText.Length > checked(_policy.SummaryBudgetTokens * 4))
+        if (string.IsNullOrWhiteSpace(summaryText))
         {
-            errors.Add("Candidate summary text is empty or oversized.");
+            errors.Add("Candidate summary text is empty.");
             reason = ActiveTurnCompactionRejectionReason.Size;
         }
         else
@@ -824,7 +811,8 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
                 summaryText,
                 filesRead,
                 filesChanged,
-                _prompts);
+                _prompts,
+                request.IncludeFileLists);
             if (!string.Equals(_sanitizer.Sanitize(content), content, StringComparison.Ordinal))
             {
                 errors.Add("Candidate summary does not satisfy sanitization policy.");
@@ -835,21 +823,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
             {
                 errors.Add("Candidate summary contains a policy, permission, or instruction marker.");
                 reason = ActiveTurnCompactionRejectionReason.Authority;
-            }
-            else
-            {
-                var nextVersion = checked((request.PriorSummary?.Version ?? 0) + 1);
-                var estimate = ModelWireEstimator.Estimate(
-                    [ActiveTurnSummaryFormatter.CreateMessage(nextVersion, content, _prompts)],
-                    [],
-                    ToolTransportMode.Native,
-                    0,
-                    0);
-                if (estimate.WireInputTokens > _policy.SummaryBudgetTokens)
-                {
-                    errors.Add("Candidate summary exceeds the configured token budget.");
-                    reason = ActiveTurnCompactionRejectionReason.Size;
-                }
             }
         }
 
@@ -941,8 +914,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 WireEstimate = wireEstimate,
                 ProviderInstructions = profile.ProviderInstructions,
             },
-            input.Envelope,
-            checked(modelOutputTokens * 4));
+            input.Envelope);
     }
 
     private CandidateInputProjection CreateInput(
@@ -953,10 +925,10 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         var profileInputCapacity = checked(
             profile.ContextWindowTokens - modelOutputTokens);
-        var maximumCandidateInputTokens = Math.Min(
-            _policy.MaximumInputTokens,
-            profileInputCapacity);
-        var maximumCandidateCharacters = checked(maximumCandidateInputTokens * 4);
+        var maximumCandidateInputTokens = _policy.MaximumInputTokens == 0
+            ? profileInputCapacity
+            : Math.Min(_policy.MaximumInputTokens, profileInputCapacity);
+        var maximumCandidateCharacters = (long)maximumCandidateInputTokens * 4;
         var fixedCharacters = EstimateFixedInputCharacters(request, summaryPrompt);
         var maximumRawGroupCount = 0;
         var aggregateCharacters = fixedCharacters;
@@ -1015,6 +987,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             + _prompts.Get(PromptFileNames.ContextActiveTurnCompactionOutputContract).Length
             + summaryPrompt.Length
             + request.TaskObjective.Length
+            + (request.TaskContext?.Length ?? 0)
             + request.AcceptanceIntent.Sum(intent => (long)intent.Description.Length)
             + (request.PriorSummary?.Content.Length ?? 0)
             + (request.PriorSummary?.FilesRead.Sum(path => (long)path.Length) ?? 0)
@@ -1189,8 +1162,8 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 request.ProfileId,
                 request.ProfileContextWindowTokens,
                 request.ProfileOutputReserveTokens,
-                ReasoningLevel.None,
-                WorkloadClass.General,
+                request.ReasoningLevel,
+                request.WorkloadClass,
                 new ModelCapabilitySet { Streaming = true },
                 request.SelectionConstraints with { ContainsSensitiveData = containsSensitiveData },
                 null,
@@ -1246,6 +1219,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 text = request.TaskObjective,
                 wasTruncated = request.TaskObjectiveWasTruncated,
             },
+            taskContext = request.TaskContext,
             acceptanceIntent = request.AcceptanceIntent.Select(intent => new
             {
                 intent.Description,
@@ -1321,20 +1295,17 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     private sealed class ModelCandidateAttempt : IActiveTurnCompactionCandidateAttempt
     {
         private readonly CandidateEnvelope _envelope;
-        private readonly int _maximumResponseCharacters;
         private readonly IModelProvider _model;
         private readonly ModelStreamRequest _request;
 
         public ModelCandidateAttempt(
             IModelProvider model,
             ModelStreamRequest request,
-            CandidateEnvelope envelope,
-            int maximumResponseCharacters)
+            CandidateEnvelope envelope)
         {
             _model = model;
             _request = request;
             _envelope = envelope;
-            _maximumResponseCharacters = maximumResponseCharacters;
         }
 
         public ModelUsage? ObservedUsage { get; private set; }
@@ -1357,12 +1328,6 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
 
                 if (chunk.Text is not null)
                 {
-                    if (chunk.Text.Length > _maximumResponseCharacters - response.Length)
-                    {
-                        throw new MalformedModelOutputException(
-                            "The active-turn compaction model exceeded the bounded response size.");
-                    }
-
                     response.Append(chunk.Text);
                 }
             }
@@ -1622,7 +1587,8 @@ public sealed class ActiveTurnCompactor : IActiveTurnCompactor
             generation.Candidate.SummaryText,
             generation.Candidate.FilesRead,
             generation.Candidate.FilesChanged,
-            _prompts);
+            _prompts,
+            request.IncludeFileLists);
         var summary = new ActiveTurnCompactionSummary
         {
             Version = version,
@@ -1700,12 +1666,18 @@ public static class ActiveTurnSummaryFormatter
         string summaryText,
         IReadOnlyList<string> filesRead,
         IReadOnlyList<string> filesChanged,
-        IPromptLoader prompts)
+        IPromptLoader prompts,
+        bool includeFileLists = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(summaryText);
         ArgumentNullException.ThrowIfNull(filesRead);
         ArgumentNullException.ThrowIfNull(filesChanged);
         ArgumentNullException.ThrowIfNull(prompts);
+        if (!includeFileLists)
+        {
+            return summaryText.Trim();
+        }
+
         var fileLists = PromptAssetRenderer.RenderWithPlatformLineEndings(
             prompts,
             PromptFileNames.ContextActiveTurnSummaryHostFileLists,

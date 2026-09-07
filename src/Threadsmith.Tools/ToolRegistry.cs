@@ -312,7 +312,7 @@ public sealed class ToolRegistry : IToolRegistry
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentException.ThrowIfNullOrWhiteSpace(tool.Definition.Id);
         var scheduling = tool.Definition.Scheduling;
-        if (tool.Definition.Timeout <= TimeSpan.Zero
+        if ((tool.Definition.Timeout <= TimeSpan.Zero && tool.Definition.Timeout != Timeout.InfiniteTimeSpan)
             || tool.Definition.MaximumOutputBytes <= 0
             || scheduling.SchemaVersion != ToolSchedulingDescriptor.CurrentSchemaVersion
             || string.IsNullOrWhiteSpace(scheduling.ClaimResolverId)

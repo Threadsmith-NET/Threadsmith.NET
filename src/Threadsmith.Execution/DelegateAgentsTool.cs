@@ -1,9 +1,10 @@
 namespace Threadsmith.Execution;
 
+using System.Text.Json.Nodes;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 
-/// <summary>Runs one bounded host-owned Explorer fork/join from an ordinary model tool call.</summary>
+/// <summary>Runs role-directed children and returns their responses from an ordinary model tool call.</summary>
 public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgentsResult>
 {
     private const string OutputSchemaJson = """
@@ -22,7 +23,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 "required": ["assignmentId", "role", "toolAccess", "status", "summary", "findings", "omissions", "usage"],
                 "properties": {
                   "assignmentId": { "type": "string", "format": "uuid" },
-                  "role": { "type": "string", "enum": ["Explorer"] },
+                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer"] },
                   "toolAccess": { "type": "string", "enum": ["readOnly", "inherit"] },
                   "status": { "type": "string", "enum": ["Completed", "Failed", "Cancelled", "Discarded"] },
                   "summary": { "type": "string" },
@@ -38,10 +39,31 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                         "symbol": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
                         "evidence": { "type": "string" },
                         "confidence": { "type": "string", "enum": ["High", "Medium", "Low"] },
-                        "uncertainty": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                        "uncertainty": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "category": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["info", "warning", "blocking"] },
+                        "line": { "type": "integer", "minimum": 1 },
+                        "recommendation": { "type": "string" },
+                        "consequence": { "type": "string" }
                       }
                     }
                   },
+                  "modelSelection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["providerId", "profileId", "reasoningLevel", "source", "configuredProviderId", "configuredProfileId", "configuredReasoningLevel", "fallbackReason"],
+                    "properties": {
+                      "providerId": { "type": "string" },
+                      "profileId": { "type": "string", "format": "uuid" },
+                      "reasoningLevel": { "type": "string" },
+                      "source": { "type": "string" },
+                      "configuredProviderId": { "type": ["string", "null"] },
+                      "configuredProfileId": { "type": ["string", "null"] },
+                      "configuredReasoningLevel": { "type": ["string", "null"] },
+                      "fallbackReason": { "type": ["string", "null"] }
+                    }
+                  },
+                  "implementation": { "type": "object" },
                   "omissions": { "type": "array", "items": { "type": "string" } },
                   "usage": {
                     "type": "object",
@@ -95,7 +117,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             options,
             prompts,
             steering,
-            DelegateAgentsProjectionLimits.Production)
+            new DelegateAgentsProjectionLimits(options.EffectiveStructuredResultBytes()))
     {
     }
 
@@ -121,8 +143,8 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         _coordinator = coordinator;
         _options = options;
         _steering = steering;
-        _projector = new DelegateAgentsResultProjector(options, projectionLimits);
-        _renderer = new DelegateAgentsResultRenderer(prompts);
+        _projector = new DelegateAgentsResultProjector(options, projectionLimits, prompts);
+        _renderer = new DelegateAgentsResultRenderer(prompts, options.EffectiveModelProjectionCharacters());
         _definition = CreateDefinition(options, prompts);
     }
 
@@ -189,7 +211,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
     /// <inheritdoc />
     protected override string DescribeActivity(DelegateAgentsInput input)
     {
-        return $"{input.Agents.Count} Explorer assignment(s)";
+        return $"{input.Agents.Count} assignment(s): {string.Join(", ", input.Agents.Select(agent => agent.Role).Distinct())}";
     }
 
     /// <inheritdoc />
@@ -202,52 +224,19 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
 
     private static ToolDefinition CreateDefinition(DelegateAgentsOptions options, IPromptLoader prompts)
     {
-        var inputSchema = $$"""
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["agents"],
-              "properties": {
-                "agents": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": {{options.MaximumAgents}},
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["task", "context", "toolAccess"],
-                    "properties": {
-                      "task": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": {{options.MaximumTaskCharacters}},
-                        "description": "One narrow, non-overlapping research objective with explicit claims and expected citations."
-                      },
-                      "context": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": {{options.MaximumContextCharacters}},
-                        "description": "All known files, symbols, evidence, constraints, and stopping guidance relevant to this child."
-                      },
-                      "toolAccess": { "type": "string", "enum": ["readOnly", "inherit"] }
-                    }
-                  }
-                }
-              }
-            }
-            """;
+        var inputSchema = CreateInputSchema(options);
         return new ToolDefinition
         {
             Id = DelegateAgentsContract.ToolId,
             DisplayName = "Delegate agents",
             Source = "Built-in",
             EnabledByDefault = true,
-            Version = "1.0.0",
+            Version = "1.1.0",
             Description = prompts.Render(
                 PromptFileNames.ToolDelegateAgentsDescription,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["MaximumAgents"] = options.MaximumAgents.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["AgentCountDescription"] = options.FormatAgentCountDescription(),
                 }),
             Category = ToolCategory.Workflow,
             InputSchema = new ToolSchema(nameof(DelegateAgentsInput), 1, inputSchema),
@@ -257,8 +246,10 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
-            Timeout = options.ChildBudget.WallTime + TimeSpan.FromSeconds(30),
-            MaximumOutputBytes = DelegateAgentsContract.MaximumOutputBytes,
+
+            // Assignment deadlines and caller cancellation already control the delegation lifetime.
+            Timeout = Timeout.InfiniteTimeSpan,
+            MaximumOutputBytes = options.EffectiveToolOutputBytes(),
             ConversationAvailable = true,
             RequiresWorkspace = true,
             PreferStrictArguments = true,
@@ -269,5 +260,87 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 MaximumSourceConcurrency = 1,
             },
         };
+    }
+
+    private static string CreateInputSchema(DelegateAgentsOptions options)
+    {
+        var task = new JsonObject
+        {
+            ["type"] = "string",
+            ["minLength"] = 1,
+            ["description"] = "The task or question for this child.",
+        };
+        AddPositiveInteger(task, "maxLength", options.EffectiveLimit(options.MaximumTaskCharacters));
+        var context = new JsonObject
+        {
+            ["type"] = "string",
+            ["minLength"] = 1,
+            ["description"] = "All known files, symbols, evidence, constraints, and stopping guidance relevant to this child.",
+        };
+        AddPositiveInteger(context, "maxLength", options.EffectiveLimit(options.MaximumContextCharacters));
+        var agents = new JsonObject
+        {
+            ["type"] = "array",
+            ["minItems"] = 1,
+            ["items"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = CreateStringArray("task", "context", "toolAccess"),
+                ["properties"] = new JsonObject
+                {
+                    ["role"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = CreateStringArray(
+                            "explorer",
+                            "implementer",
+                            "securityReviewer",
+                            "testReviewer",
+                            "performanceReviewer",
+                            "architectureReviewer"),
+                        ["default"] = "explorer",
+                    },
+                    ["task"] = task,
+                    ["context"] = context,
+                    ["toolAccess"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = CreateStringArray("readOnly", "inherit"),
+                    },
+                },
+            },
+        };
+        AddPositiveInteger(agents, "maxItems", options.EffectiveLimit(options.MaximumAgents));
+        var schema = new JsonObject
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = false,
+            ["required"] = CreateStringArray("agents"),
+            ["properties"] = new JsonObject
+            {
+                ["agents"] = agents,
+            },
+        };
+        return schema.ToJsonString();
+    }
+
+    private static void AddPositiveInteger(JsonObject schema, string name, int value)
+    {
+        if (value > 0)
+        {
+            schema[name] = value;
+        }
+    }
+
+    private static JsonArray CreateStringArray(params string[] values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+        {
+            array.Add(value);
+        }
+
+        return array;
     }
 }

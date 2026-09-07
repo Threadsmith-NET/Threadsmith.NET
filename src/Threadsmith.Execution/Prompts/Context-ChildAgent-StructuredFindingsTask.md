@@ -1,1 +1,1 @@
-Return cited structured findings, explicit omissions, uncertainty, and coverage notes.
+Investigate the assigned objective and return a useful answer.

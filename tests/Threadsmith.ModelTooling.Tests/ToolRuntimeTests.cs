@@ -287,7 +287,7 @@ public static class ToolRuntimeTests
             "query",
             Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
         Assert.True(tool.Definition.PreferStrictArguments);
-        Assert.Contains("host owns all traversal", tool.Definition.Description, StringComparison.Ordinal);
+        Assert.Contains("traversal and result budgets are managed by the tool", tool.Definition.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("limits", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
@@ -636,6 +636,44 @@ public static class ToolRuntimeTests
         Assert.Equal(1, CountOccurrences(markdown, ModelBudgetPromptLoader.Omission));
         Assert.Equal(0, CountFenceLines(markdown) % 2);
         Assert.True(execution.IsTruncated);
+    }
+
+    /// <summary>Verbose ambiguity alternatives are reduced before otherwise-fitting source sections.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_AmbiguityDetail_DoesNotDisplaceSource()
+    {
+        var original = CreateModelBudgetOverflowCodeExploreResult();
+        var source = original.FileSections[0];
+        var alternativePath = "src/" + new string('p', 1_500) + "/Duplicate.cs";
+        var result = original with
+        {
+            FileSections = [source with { Source = source.Source with { Completeness = CodeExploreSourceCompleteness.Complete, OmittedRanges = [] } }],
+            ContinuationTargets = [],
+            ResolvedAnchors =
+            [
+                new CodeExploreAnchorResolution(
+                    "Duplicate.cs",
+                    CodeExploreAnchorKind.Path,
+                    CodeExploreResolutionOutcome.Ambiguous,
+                    null,
+                    null,
+                    [new CodeExploreAlternative(new SemanticSymbolIdentity("path:duplicate", "Duplicate.cs", "Path"), new CodeExploreLocation(string.Empty, string.Empty, alternativePath, new SourceRange(1, 1, 1, 1), false, false))],
+                    "Use an exact path."),
+            ],
+        };
+        var tool = new CodeExploreOutputFormattingTool(
+            new StaticCodeExploreResultTool(result),
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance);
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = "Inspect Worker.cs and Duplicate.cs" },
+            CreateCodeExploreExecutionContext(AppContext.BaseDirectory, modelEffectiveInputBudgetTokens: 1_000));
+        var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
+
+        Assert.Contains(source.Source.NumberedLines[^1], markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain(alternativePath, markdown, StringComparison.Ordinal);
+        Assert.Contains("1 ambiguity alternatives omitted", markdown, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(markdown) <= 3_000);
     }
 
     /// <summary>The production pipeline reapplies code-explore bounds after output sanitization expands content.</summary>
@@ -1890,7 +1928,7 @@ public static class ToolRuntimeTests
             new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
         Assert.Contains(
-            "MUST NOT replace an advertised semantic tool",
+            "Use this directly to locate relevant text within a known file",
             new SearchTextTool(TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
     }
@@ -2817,6 +2855,154 @@ public static class ToolRuntimeTests
             Assert.False(preflight.Succeeded);
             Assert.Equal(0, preflight.FailedOrdinal);
             Assert.Equal("valid_read", preflight.FailedToolId);
+            Assert.Equal(ToolErrorClassification.InvalidArguments, preflight.ErrorClassification);
+            Assert.Empty(executionOrder);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Optional root paths must not reject a batch of otherwise valid inspections.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" \t")]
+    [InlineData(".")]
+    public static async Task BatchPreflight_OptionalRootPaths_RunInspectionSiblings(string? path)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(repository, "sample.txt"), "sample marker");
+            await File.WriteAllTextAsync(Path.Combine(repository, "second.txt"), "second marker");
+            await File.WriteAllTextAsync(Path.Combine(repository, ".env"), "hidden marker");
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(
+                events,
+                [
+                    new ListFilesTool(TestPromptLoader.Instance),
+                    new SearchTextTool(TestPromptLoader.Instance),
+                    new ReadFileTool(TestPromptLoader.Instance),
+                ]);
+            var context = CreateContext(repository) with
+            {
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                ProhibitedPaths = [".env"],
+            };
+            ToolBatchRequest[] requests =
+            [
+                CreateBatchRequest(
+                    0,
+                    "list",
+                    "list_files",
+                    context,
+                    JsonSerializer.Serialize(new { path, maximumEntries = 100 })),
+                CreateBatchRequest(
+                    1,
+                    "search",
+                    "search",
+                    context,
+                    JsonSerializer.Serialize(new { query = "marker", path, maximumMatches = 100 })),
+                CreateBatchRequest(2, "read-first", "read_file", context, "{\"path\":\"sample.txt\"}"),
+                CreateBatchRequest(3, "read-second", "read_file", context, "{\"path\":\"second.txt\"}"),
+            ];
+
+            var preflight = pipeline.PreflightBatch(requests);
+            Assert.True(preflight.Succeeded, preflight.SafeReason);
+            var preparation = Assert.IsType<ToolBatchPreparation>(preflight.Preparation);
+            var results = await pipeline.InvokePreparedBatchAsync(preparation);
+
+            Assert.Equal([0, 1, 2, 3], results.Select(result => result.Ordinal));
+            Assert.All(results, result => Assert.True(result.Result.Succeeded, result.Result.Error));
+            Assert.Contains("sample.txt", results[0].Result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("second.txt", results[0].Result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("sample marker", results[1].Result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("second marker", results[1].Result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("sample marker", results[2].Result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("second marker", results[3].Result.ResultJson, StringComparison.Ordinal);
+            Assert.All(results, result =>
+            {
+                Assert.DoesNotContain(".env", result.Result.ResultJson, StringComparison.Ordinal);
+                Assert.DoesNotContain("hidden marker", result.Result.ResultJson, StringComparison.Ordinal);
+            });
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>A blank optional root path never expands an invocation's approved scope.</summary>
+    [Theory]
+    [InlineData("list_files", "{\"path\":\"\"}")]
+    [InlineData("search", "{\"query\":\"marker\",\"path\":\"\"}")]
+    public static async Task Pipeline_OptionalRootPaths_RespectApprovedRoots(string toolId, string argumentsJson)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(repository, "allowed"));
+            await File.WriteAllTextAsync(Path.Combine(repository, "outside.txt"), "outside marker");
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(
+                events,
+                [
+                    new ListFilesTool(TestPromptLoader.Instance),
+                    new SearchTextTool(TestPromptLoader.Instance),
+                ]);
+            var request = CreateBatchRequest(
+                0,
+                "restricted",
+                toolId,
+                CreateContext(repository) with
+                {
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    ApprovedRoots = ["allowed"],
+                },
+                argumentsJson);
+
+            var result = await pipeline.InvokeAsync(request.Invocation);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+            Assert.DoesNotContain("outside marker", result.ResultJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Required paths and queries remain invalid when blank, before siblings execute.</summary>
+    [Theory]
+    [InlineData("read_file", "{\"path\":\"\"}")]
+    [InlineData("search", "{\"query\":\"\",\"path\":\"\"}")]
+    public static async Task BatchPreflight_RequiredInspectionArguments_RejectBlank(string toolId, string argumentsJson)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var executionOrder = new ConcurrentQueue<string>();
+            var pipeline = CreatePipeline(
+                events,
+                [
+                    new ReadFileTool(TestPromptLoader.Instance),
+                    new SearchTextTool(TestPromptLoader.Instance),
+                    new OrderedReadTool("valid_read", ToolConcurrencyMode.ParallelSafe, executionOrder),
+                ]);
+            var context = CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.TrustedRead };
+            var preflight = pipeline.PreflightBatch(
+            [
+                CreateBatchRequest(0, "invalid", toolId, context, argumentsJson),
+                CreateBatchRequest(1, "valid", "valid_read", context),
+            ]);
+
+            Assert.False(preflight.Succeeded);
+            Assert.Equal(0, preflight.FailedOrdinal);
+            Assert.Equal(toolId, preflight.FailedToolId);
             Assert.Equal(ToolErrorClassification.InvalidArguments, preflight.ErrorClassification);
             Assert.Empty(executionOrder);
         }

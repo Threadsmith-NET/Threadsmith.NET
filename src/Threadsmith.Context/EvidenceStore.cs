@@ -240,7 +240,7 @@ public sealed class EvidenceStore : IEvidenceStore
         ArgumentNullException.ThrowIfNull(evidence.Provenance);
         return evidence with
         {
-            Content = _sanitizer.Sanitize(evidence.Content),
+            Content = JsonOutputSanitizer.SanitizeJsonOrText(evidence.Content, _sanitizer),
             InvalidationKeys = evidence.InvalidationKeys.ToArray(),
         };
     }

@@ -2,18 +2,27 @@ namespace Threadsmith.Execution;
 
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Renders complete model-visible detail blocks within a fixed character budget.</summary>
 internal sealed class DelegateAgentsResultRenderer
 {
-    private const int MaximumModelProjectionCharacters = 48 * 1024;
+    private readonly int _maximumModelProjectionCharacters;
     private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultRenderer"/> class.</summary>
     public DelegateAgentsResultRenderer(IPromptLoader prompts)
+        : this(prompts, new DelegateAgentsOptions().EffectiveModelProjectionCharacters())
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultRenderer"/> class.</summary>
+    internal DelegateAgentsResultRenderer(IPromptLoader prompts, int maximumModelProjectionCharacters)
     {
         ArgumentNullException.ThrowIfNull(prompts);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumModelProjectionCharacters);
+        _maximumModelProjectionCharacters = maximumModelProjectionCharacters;
         _prompts = prompts;
     }
 
@@ -21,21 +30,27 @@ internal sealed class DelegateAgentsResultRenderer
     public string Render(DelegateAgentsResult result, out bool truncated)
     {
         ArgumentNullException.ThrowIfNull(result);
-        var builder = new StringBuilder(MaximumModelProjectionCharacters);
+        var builder = new StringBuilder();
+        var maximumCharacters = _maximumModelProjectionCharacters;
         var maximumOmittedBlocks = checked(
             2
-            + (result.Children.Count * 2)
-            + result.Children.Sum(child => child.Findings.Count + child.Omissions.Count)
+            + (result.Children.Count * 3)
+            + result.Children.Sum(child => (child.Findings.Count * 2) + child.Omissions.Count)
             + result.Disagreements.Count
             + result.Omissions.Count);
-        var maximumFooter = RenderTruncationFooter(maximumOmittedBlocks);
-        if (maximumFooter.Length > MaximumModelProjectionCharacters)
+        var detailLimit = maximumCharacters;
+        if (maximumCharacters > 0)
         {
-            throw new InvalidOperationException(
-                "The delegate_agents truncation prompt exceeds the model projection bound.");
+            var maximumFooter = RenderTruncationFooter(maximumOmittedBlocks);
+            if (maximumFooter.Length > maximumCharacters)
+            {
+                throw new InvalidOperationException(
+                    "The delegate_agents truncation prompt exceeds the model projection bound.");
+            }
+
+            detailLimit = maximumCharacters - maximumFooter.Length;
         }
 
-        var detailLimit = MaximumModelProjectionCharacters - maximumFooter.Length;
         var omittedBlocks = 0;
         AppendCompleteBlockOrCountOmission(
             _prompts.Render(
@@ -65,6 +80,19 @@ internal sealed class DelegateAgentsResultRenderer
                     ("ModelTokens", $"{child.Usage.ModelTokens}"),
                     ("ToolCalls", $"{child.Usage.ToolCalls}")));
             AppendCompleteBlockOrCountOmission(summaryBlock);
+            if (child.ModelSelection is not null || child.Implementation is not null)
+            {
+                var details = JsonSerializer.Serialize(new
+                {
+                    modelSelection = child.ModelSelection,
+                    implementation = child.Implementation,
+                });
+                AppendCompleteBlockOrCountOmission(_prompts.Render(
+                    PromptFileNames.ToolDelegateAgentsChildDetails,
+                    Tokens(
+                        ("AssignmentId", child.AssignmentId),
+                        ("DetailsJson", details))));
+            }
         }
 
         var maximumFindings = result.Children.Max(child => child.Findings.Count);
@@ -73,6 +101,24 @@ internal sealed class DelegateAgentsResultRenderer
             foreach (var child in result.Children.Where(item => index < item.Findings.Count))
             {
                 AppendCompleteBlockOrCountOmission(RenderFinding(child, child.Findings[index]));
+                var finding = child.Findings[index];
+                if (finding.Severity is not null)
+                {
+                    var details = JsonSerializer.Serialize(new
+                    {
+                        finding.Title,
+                        finding.Category,
+                        finding.Severity,
+                        finding.Line,
+                        finding.Consequence,
+                        finding.Recommendation,
+                    });
+                    AppendCompleteBlockOrCountOmission(_prompts.Render(
+                        PromptFileNames.ToolDelegateAgentsReviewDetails,
+                        Tokens(
+                            ("AssignmentId", child.AssignmentId),
+                            ("DetailsJson", details))));
+                }
             }
         }
 
@@ -115,7 +161,7 @@ internal sealed class DelegateAgentsResultRenderer
         if (truncated)
         {
             var footer = RenderTruncationFooter(omittedBlocks);
-            if (!TryAppend(builder, footer))
+            if (!TryAppend(builder, footer, maximumCharacters))
             {
                 throw new InvalidOperationException(
                     "The complete delegate_agents truncation footer does not fit its reserved projection space.");
@@ -173,9 +219,9 @@ internal sealed class DelegateAgentsResultRenderer
     private static bool TryAppend(
         StringBuilder builder,
         string block,
-        int maximumCharacters = MaximumModelProjectionCharacters)
+        int maximumCharacters)
     {
-        if (builder.Length + block.Length > maximumCharacters)
+        if (maximumCharacters > 0 && builder.Length + block.Length > maximumCharacters)
         {
             return false;
         }

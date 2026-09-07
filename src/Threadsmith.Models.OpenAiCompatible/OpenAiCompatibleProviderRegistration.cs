@@ -153,7 +153,9 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 || openAiModel.EffectiveRequestOutputTokenReserve > openAiModel.MaximumOutputTokens
                 || openAiModel.Cost.InputPerMillionTokens < 0
                 || openAiModel.Cost.OutputPerMillionTokens < 0
-                || openAiModel.TimeoutSeconds <= 0
+                || openAiModel.TimeoutSeconds < 0
+                || openAiModel.MaximumStreamedBytes < 0
+                || openAiModel.MaximumToolCalls < 0
                 || openAiModel.RetryMaxAttempts <= 0
                 || openAiModel.RetryDelayMilliseconds < 0
                 || openAiModel.SupportedReasoningLevels.Count == 0
@@ -208,6 +210,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 ReasoningCapability = CreateEffectiveReasoningCapability(configured.Id, model),
                 Temperature = model.Temperature,
                 Timeout = TimeSpan.FromSeconds(model.TimeoutSeconds),
+                MaximumStreamedBytes = model.MaximumStreamedBytes,
+                MaximumToolCalls = model.MaximumToolCalls,
                 RetryPolicy = new ModelRetryPolicy
                 {
                     MaxAttempts = model.RetryMaxAttempts,
@@ -284,6 +288,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 SupportedReasoningLevels = profile.SupportedReasoningLevels,
                 Temperature = profile.Temperature,
                 TimeoutSeconds = checked((int)profile.Timeout.TotalSeconds),
+                MaximumStreamedBytes = profile.MaximumStreamedBytes,
+                MaximumToolCalls = profile.MaximumToolCalls,
                 RetryMaxAttempts = profile.RetryPolicy.MaxAttempts,
                 RetryDelayMilliseconds = checked((int)profile.RetryPolicy.Delay.TotalMilliseconds),
                 LegacyEndpointOverride = profile.Endpoint,

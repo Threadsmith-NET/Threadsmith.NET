@@ -257,10 +257,10 @@ public sealed record ActiveTurnCompactionInspectionProjection
     /// <summary>Output reserve included by pressure assessment.</summary>
     public required int OutputReserveTokens { get; init; }
 
-    /// <summary>Host-configured newest-raw retention target before profile scaling.</summary>
+    /// <summary>Configured newest-raw retention target, independent of request pressure.</summary>
     public required int ConfiguredRetentionTargetTokens { get; init; }
 
-    /// <summary>Request-specific newest-raw target remaining under activation gates.</summary>
+    /// <summary>Newest-raw target used for prefix selection; ordinary compaction uses the configured target unchanged.</summary>
     public required int EffectiveRetentionTargetTokens { get; init; }
 
     /// <summary>Complete delivered groups eligible for a prefix cut.</summary>

@@ -35,7 +35,8 @@ public sealed record ExecutionLimits
 
     /// <summary>
     /// Maximum characters of structured (JSON) mutation output the host accumulates from a
-    /// streaming model before rejecting it as malformed. Historical default: 8 MiB.
+    /// streaming model before rejecting it as malformed. Zero or less disables this configured cap.
+    /// Historical default: 8 MiB.
     /// </summary>
     public int MaxStructuredOutputCharacters { get; init; } = 8 * 1024 * 1024;
 

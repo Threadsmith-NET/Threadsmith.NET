@@ -1,5 +1,6 @@
 namespace Threadsmith.ParallelAgents.Tests;
 
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,12 +12,12 @@ using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
 
-/// <summary>Verifies the Plan 91 transcript-free model, tool, evidence, and correction loop.</summary>
-public sealed class ModelExplorerAssignmentRunnerTests
+/// <summary>Verifies transcript-free responses, tool authority, evidence metadata, and usage.</summary>
+public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Verifies child tool evidence survives a later observer failure and is admitted on join.</summary>
+    /// <summary>Child tool evidence survives observer failure without promoting answer claims on join.</summary>
     [Fact]
-    public async Task RunAsync_ToolCallAndCitedFinding_AdmitsEvidenceOnlyOnJoin()
+    public async Task RunAsync_ToolCallAndResponse_KeepsEvidenceMetadataWithoutPromotingClaims()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -69,16 +70,19 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.Equal(1, outcome.Usage.ToolCalls);
         Assert.True(outcome.Usage.ModelTokens > 70);
         Assert.Equal(profile.Id, outcome.ModelProfileId);
-        var finding = Assert.Single(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings);
+        Assert.Null(outcome.Findings);
+        Assert.Null(outcome.Review);
+        Assert.Null(outcome.Implementation);
         var childEvidence = Assert.Single(
             evidence.Snapshot(plan.Provenance.SessionId),
             item => item.RunId == assignment.ChildRunId);
-        Assert.Equal([childEvidence.EvidenceId], finding.EvidenceIds);
+        Assert.Equal([childEvidence.EvidenceId], outcome.DeliveredEvidenceIds);
+        Assert.Equal(CreateFindingJson(childEvidence.EvidenceId.Value.ToString("D"), "Tool-backed finding."), outcome.Response);
         Assert.Equal(assignment.ChildRunId, childEvidence.Provenance.ChildRunId);
         Assert.Equal(assignment.AssignmentId, childEvidence.Provenance.AgentAssignmentId);
         Assert.Equal(profile.Id, childEvidence.Provenance.ModelProfileId);
         Assert.Equal(plan.Provenance.BaselineIdentity, childEvidence.Provenance.BaselineIdentity);
-        Assert.Single(
+        Assert.DoesNotContain(
             evidence.Snapshot(plan.Provenance.SessionId),
             item => item.RunId == plan.Provenance.ParentRunId);
         Assert.Contains(observed, item => item is ToolInvocationStarted started
@@ -91,6 +95,8 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.All(provider.Requests, request =>
         {
             Assert.NotNull(request.WireEstimate);
+            Assert.False(request.RequiredCapabilities.StructuredOutput);
+            Assert.True(request.RequiredCapabilities.ToolCalls);
             Assert.DoesNotContain(request.Tools, definition =>
                 definition.Name == DelegateAgentsContract.ToolId);
         });
@@ -99,6 +105,13 @@ public sealed class ModelExplorerAssignmentRunnerTests
             && message.GetModelVisibleContent().Contains("bounded child context", StringComparison.Ordinal));
         Assert.DoesNotContain(provider.Requests[0].Messages, message =>
             message.SectionId.Contains("transcript", StringComparison.OrdinalIgnoreCase));
+        var toolResult = Assert.Single(
+            provider.Requests[1].Messages,
+            message => message.SectionId == "child-tool-result");
+        using var toolResultDocument = JsonDocument.Parse(toolResult.GetModelVisibleContent());
+        var toolResultContent = toolResultDocument.RootElement.GetProperty("content");
+        Assert.Equal(JsonValueKind.String, toolResultContent.ValueKind);
+        Assert.Equal("Compiler-backed metadata.", toolResultContent.GetString());
         Assert.NotNull(tool.LastInvocationContext);
         Assert.Equal(profile.ContextWindow, tool.LastInvocationContext.ModelContextWindowTokens);
         Assert.Equal(
@@ -110,9 +123,99 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.Null(tool.LastInvocationContext.VisibleSourceFrontier);
     }
 
-    /// <summary>Verifies malformed final JSON receives one bounded correction before valid findings.</summary>
+    /// <summary>Structured child tool output is embedded as JSON instead of an escaped JSON string.</summary>
     [Fact]
-    public async Task RunAsync_MalformedFindingResponse_UsesBoundedCorrection()
+    public async Task RunAsync_JsonToolResult_EmbedsStructuredContentWithoutNestedSerialization()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var tool = new StructuredMetadataTool();
+        var registry = new ToolRegistry([tool]);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var provider = new ToolThenFindingProvider(tool.Definition.Id, retrieveEvidence: true);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        // Act
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        // Assert
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(3, provider.Requests.Count);
+        var continuation = provider.Requests[1];
+        var toolResult = Assert.Single(
+            continuation.Messages,
+            message => message.SectionId == "child-tool-result");
+        using var document = JsonDocument.Parse(toolResult.GetModelVisibleContent());
+        var projectedContent = document.RootElement.GetProperty("content");
+        Assert.Equal(JsonValueKind.Object, projectedContent.ValueKind);
+        Assert.Equal("src/Test.cs", projectedContent.GetProperty("Path").GetString());
+        Assert.Equal(["first", "second"], projectedContent.GetProperty("Lines").EnumerateArray().Select(item => item.GetString()));
+        Assert.DoesNotContain("fixture-secret", projectedContent.GetRawText(), StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", projectedContent.GetProperty("Source").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("\\\"Path\\\"", toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
+        var storedEvidence = Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
+        using var stored = JsonDocument.Parse(storedEvidence.Content);
+        Assert.True(JsonElement.DeepEquals(projectedContent, stored.RootElement));
+        var retrieved = Assert.Single(provider.Requests[2].Messages, message =>
+            message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
+        Assert.Equal(storedEvidence.Content, retrieved.GetModelVisibleContent());
+    }
+
+    /// <summary>JSON-aware evidence and model-content sanitization must retain credential-field redaction.</summary>
+    [Theory]
+    [InlineData("123456", "password")]
+    [InlineData("{\"value\":\"fixture-secret\"}", "password")]
+    [InlineData("[\"fixture-secret\"]", "password")]
+    [InlineData("123456", "database_password")]
+    [InlineData("\"fixture-secret\"", "database_password")]
+    public async Task JsonSanitization_CredentialProperties_AreRedactedAtBothBoundaries(string credentialJson, string propertyName)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var content = "{" + JsonSerializer.Serialize(propertyName) + ":" + credentialJson + ",\"safe\":42}";
+        var tool = new InspectMetadataTool(content);
+        var registry = new ToolRegistry([tool]);
+        var plan = CreatePlan(CreateAssignment(ModelProfileId.New(), [tool.Definition.Id]));
+        var pipeline = CreatePipeline(registry, events, sanitizer);
+
+        await evidence.AddAsync(CreateParentEvidence(plan, EvidenceId.New(), content, EvidenceSensitivity.None));
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = plan.Provenance.SessionId,
+            RunId = plan.Provenance.ParentRunId,
+            ToolId = tool.Definition.Id,
+            ArgumentsJson = "{}",
+            Context = CreateParentContext(plan, [tool.Definition.Id]).Invocation,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        foreach (var sanitized in new[] { Assert.Single(evidence.Snapshot(plan.Provenance.SessionId)).Content, result.ModelResultContent })
+        {
+            using var document = JsonDocument.Parse(Assert.IsType<string>(sanitized));
+            Assert.Equal("[REDACTED]", document.RootElement.GetProperty(propertyName).GetString());
+            Assert.Equal(42, document.RootElement.GetProperty("safe").GetInt32());
+        }
+    }
+
+    /// <summary>Ordinary text, empty text, and malformed JSON return verbatim without format correction.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("The loop checks cancellation before each item.")]
+    [InlineData("{not valid JSON")]
+    [InlineData("  Notes:\n- First observation.\n- Second observation.\n")]
+    public async Task RunAsync_ArbitraryFinalResponse_ReturnsVerbatimWithoutCorrection(string response)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -139,7 +242,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
             Relevance = 1,
             EstimatedTokens = 4,
         });
-        var provider = new CorrectionThenFindingProvider(evidenceId);
+        var provider = new FindingSequenceProvider(response);
         var registry = new ToolRegistry([]);
         var pipeline = new ToolInvocationPipeline(
             registry,
@@ -167,21 +270,23 @@ public sealed class ModelExplorerAssignmentRunnerTests
 
         // Assert
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Equal(1, outcome.Usage.Corrections);
-        Assert.Equal(2, provider.Requests.Count);
-        Assert.Contains(provider.Requests[1].Messages, message =>
-            message.SectionId == "child-correction"
-            && message.GetModelVisibleContent().Contains(
-                "prior response was rejected",
-                StringComparison.Ordinal));
-        Assert.Equal(
-            [evidenceId],
-            Assert.Single(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings).EvidenceIds);
+        Assert.Equal(response, outcome.Response);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        var request = Assert.Single(provider.Requests);
+        Assert.DoesNotContain(request.Messages, message => message.SectionId == "child-tool-error");
+        Assert.False(request.RequiredCapabilities.StructuredOutput);
+        Assert.Equal([evidenceId], outcome.DeliveredEvidenceIds);
+        Assert.Null(outcome.Findings);
+        Assert.Null(outcome.Review);
+        Assert.Null(outcome.Implementation);
+        Assert.True(DelegationOutcomeClassifier.HasUsableResult(plan, outcome));
+        Assert.DoesNotContain(evidence.Snapshot(plan.Provenance.SessionId), item =>
+            item.Provenance.Source.StartsWith("agent:", StringComparison.Ordinal));
     }
 
-    /// <summary>Verifies an unadmitted citation is corrected before any parent finding is promoted.</summary>
+    /// <summary>Unverified citation text neither triggers format repair nor becomes admitted evidence.</summary>
     [Fact]
-    public async Task RunAsync_UnadmittedCitation_UsesCorrectionBeforeAtomicAdmission()
+    public async Task RunAsync_UnadmittedCitation_RemainsUnverifiedResponseText()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -196,9 +301,9 @@ public sealed class ModelExplorerAssignmentRunnerTests
             admittedId,
             "admitted parent evidence",
             EvidenceSensitivity.None));
-        var provider = new FindingSequenceProvider(
-            CreateFindingJson(EvidenceId.New().Value.ToString("D"), "Unadmitted citation."),
-            CreateFindingJson(admittedId.Value.ToString("D"), "Corrected citation."));
+        var unadmittedId = EvidenceId.New();
+        var response = CreateFindingJson(unadmittedId.Value.ToString("D"), "Unadmitted citation.");
+        var provider = new FindingSequenceProvider(response);
         var registry = new ToolRegistry([]);
         var pipeline = CreatePipeline(registry, events, sanitizer);
         var runner = CreateRunner(
@@ -218,16 +323,22 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.True(await runner.JoinAsync(plan, [outcome], static () => true));
 
         // Assert
-        Assert.Equal(1, outcome.Usage.Corrections);
-        Assert.Equal(2, provider.Requests.Count);
-        Assert.Single(evidence.Snapshot(plan.Provenance.SessionId), item =>
+        Assert.Equal(response, outcome.Response);
+        Assert.Null(outcome.Findings);
+        Assert.Null(outcome.Review);
+        Assert.Null(outcome.Implementation);
+        Assert.Equal([admittedId], outcome.DeliveredEvidenceIds);
+        Assert.DoesNotContain(unadmittedId, outcome.DeliveredEvidenceIds);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        Assert.Single(provider.Requests);
+        Assert.DoesNotContain(evidence.Snapshot(plan.Provenance.SessionId), item =>
             item.RunId == plan.Provenance.ParentRunId
             && item.Provenance.Source.StartsWith("agent:", StringComparison.Ordinal));
     }
 
-    /// <summary>Verifies omitted confidence is schema-invalid instead of silently becoming zero.</summary>
+    /// <summary>A JSON-looking response needs no confidence field and receives no invented confidence.</summary>
     [Fact]
-    public async Task RunAsync_OmittedConfidence_UsesCorrection()
+    public async Task RunAsync_OmittedConfidence_ReturnsTextWithoutInventedFinding()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -242,9 +353,8 @@ public sealed class ModelExplorerAssignmentRunnerTests
             evidenceId,
             "parent evidence",
             EvidenceSensitivity.None));
-        var provider = new FindingSequenceProvider(
-            CreateFindingJsonWithoutConfidence(evidenceId),
-            CreateFindingJson(evidenceId.Value.ToString("D"), "Confidence supplied."));
+        var response = CreateFindingJsonWithoutConfidence(evidenceId);
+        var provider = new FindingSequenceProvider(response);
         var registry = new ToolRegistry([]);
         var runner = CreateRunner(
             provider,
@@ -259,15 +369,15 @@ public sealed class ModelExplorerAssignmentRunnerTests
         var outcome = await runner.RunAsync(plan, assignment);
 
         // Assert
-        Assert.Equal(1, outcome.Usage.Corrections);
-        Assert.Equal(
-            0.9,
-            Assert.Single(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings).Confidence);
+        Assert.Equal(response, outcome.Response);
+        Assert.Null(outcome.Findings);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        Assert.Single(provider.Requests);
     }
 
-    /// <summary>Verifies a schema-valid empty finding set completes without a correction retry.</summary>
+    /// <summary>A legacy empty-finding object remains response text rather than a parsed finding set.</summary>
     [Fact]
-    public async Task RunAsync_EmptyFindingSet_CompletesWithoutCorrection()
+    public async Task RunAsync_EmptyFindingObject_CompletesAsResponseWithoutCorrection()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -292,14 +402,17 @@ public sealed class ModelExplorerAssignmentRunnerTests
 
         // Assert
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Empty(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings);
+        Assert.Equal(CreateEmptyFindingJson(), outcome.Response);
+        Assert.Null(outcome.Findings);
+        Assert.Null(outcome.Review);
+        Assert.Null(outcome.Implementation);
         Assert.Equal(0, outcome.Usage.Corrections);
         Assert.Single(provider.Requests);
     }
 
-    /// <summary>Verifies an unsupported finding category receives one bounded correction.</summary>
+    /// <summary>Answer category text is not constrained by the deprecated finding schema.</summary>
     [Fact]
-    public async Task RunAsync_UnsupportedCategory_UsesCorrection()
+    public async Task RunAsync_UnknownCategory_ReturnsUnparsedResponse()
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -314,9 +427,8 @@ public sealed class ModelExplorerAssignmentRunnerTests
             evidenceId,
             "parent evidence",
             EvidenceSensitivity.None));
-        var provider = new FindingSequenceProvider(
-            CreateFindingJson(evidenceId.Value.ToString("D"), "Unsupported category.", "security"),
-            CreateFindingJson(evidenceId.Value.ToString("D"), "Supported category."));
+        var response = CreateFindingJson(evidenceId.Value.ToString("D"), "Custom category.", "custom-category");
+        var provider = new FindingSequenceProvider(response);
         var registry = new ToolRegistry([]);
         var runner = CreateRunner(
             provider,
@@ -331,11 +443,10 @@ public sealed class ModelExplorerAssignmentRunnerTests
         var outcome = await runner.RunAsync(plan, assignment);
 
         // Assert
-        Assert.Equal(1, outcome.Usage.Corrections);
-        Assert.Equal(2, provider.Requests.Count);
-        Assert.Equal(
-            "behavior",
-            Assert.Single(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings).Category);
+        Assert.Equal(response, outcome.Response);
+        Assert.Null(outcome.Findings);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        Assert.Single(provider.Requests);
     }
 
     /// <summary>Verifies missing provider usage falls back to the complete host wire estimate.</summary>
@@ -376,7 +487,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.True(outcome.Usage.ModelTokens >= estimate.WireInputTokens);
     }
 
-    /// <summary>Verifies parent evidence admission occurs only after the durable join checkpoint.</summary>
+    /// <summary>A failed durable join remains a failure without promoting claims from response text.</summary>
     [Fact]
     public async Task StartAsync_JoinedCheckpointFails_DoesNotAdmitParentEvidence()
     {
@@ -533,9 +644,11 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.DoesNotContain("<evidence-omission", initialEvidence, StringComparison.Ordinal);
     }
 
-    /// <summary>Verifies hidden streamed reasoning consumes child output capacity even without provider usage.</summary>
-    [Fact]
-    public async Task RunAsync_StreamedReasoningExceedsOutputBudget_FailsBoundedly()
+    /// <summary>Missing-usage reasoning is telemetry; only the independent character ceiling rejects its size.</summary>
+    [Theory]
+    [InlineData(5_000, true)]
+    [InlineData((128 * 1024) + 1, false)]
+    public async Task RunAsync_StreamedReasoning_UsesCharacterLimitNotEstimatedTokenLimit(int characters, bool succeeds)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -544,7 +657,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
         var profile = CreateProfile();
         var assignment = CreateAssignment(profile.Id, []);
         var plan = CreatePlan(assignment);
-        var provider = new ExcessiveReasoningProvider(new string('r', 5_000));
+        var provider = new ExcessiveReasoningProvider(new string('r', characters));
         var registry = new ToolRegistry([]);
         var runner = CreateRunner(
             provider,
@@ -556,7 +669,20 @@ public sealed class ModelExplorerAssignmentRunnerTests
             []);
 
         // Act / Assert
-        await Assert.ThrowsAsync<InvalidDataException>(() => runner.RunAsync(plan, assignment));
+        if (succeeds)
+        {
+            var outcome = await runner.RunAsync(plan, assignment);
+            Assert.Equal(string.Empty, outcome.Response);
+            Assert.Null(outcome.Findings);
+            Assert.True(outcome.Usage.ModelTokens >= TokenEstimator.Estimate(new string('r', characters)));
+            Assert.Equal(0, outcome.Usage.Corrections);
+        }
+        else
+        {
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() => runner.RunAsync(plan, assignment));
+            Assert.Contains("output bound", exception.Message, StringComparison.Ordinal);
+        }
+
         Assert.Single(provider.Requests);
     }
 
@@ -602,7 +728,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
             ConversationSensitivity.Sensitive));
     }
 
-    /// <summary>Verifies fallback selection is retained in child, tool, and admitted-finding provenance.</summary>
+    /// <summary>Fallback selection stays in response metadata without inventing parent evidence.</summary>
     [Fact]
     public async Task RunAsync_PreferredProfileIsIncompatible_RecordsEffectiveFallbackProfile()
     {
@@ -655,10 +781,12 @@ public sealed class ModelExplorerAssignmentRunnerTests
             item.RunId == plan.Provenance.ParentRunId
             && item.Provenance.Source.StartsWith("agent:", StringComparison.Ordinal));
         Assert.True(await runner.JoinAsync(plan, [outcome], static () => true));
-        Assert.Single(evidence.Snapshot(plan.Provenance.SessionId), item =>
+        Assert.DoesNotContain(evidence.Snapshot(plan.Provenance.SessionId), item =>
             item.RunId == plan.Provenance.ParentRunId
-            && item.Provenance.Source.StartsWith("agent:", StringComparison.Ordinal)
-            && item.Provenance.ModelProfileId == fallback.Id);
+            && item.Provenance.Source.StartsWith("agent:", StringComparison.Ordinal));
+        Assert.Equal(fallback.Id, outcome.ModelSelection?.EffectiveProfileId);
+        Assert.Null(outcome.Findings);
+        Assert.Equal(CreateFindingJson(evidenceId.Value.ToString("D"), "Fallback-backed finding."), outcome.Response);
         Assert.Equal(fallback.Id, Assert.Single(provider.Requests).ResolvedProfileId);
     }
 
@@ -693,6 +821,316 @@ public sealed class ModelExplorerAssignmentRunnerTests
         Assert.DoesNotContain(context.Evidence, item => item.EvidenceId == sensitiveId);
     }
 
+    /// <summary>Invalid or unavailable tool requests remain rejected even though answer text has no schema.</summary>
+    [Theory]
+    [InlineData("inspect_metadata", "{")]
+    [InlineData("inspect_metadata", "{\"unexpected\":true}")]
+    [InlineData(DelegateAgentsContract.ToolId, "{}")]
+    public async Task RunAsync_InvalidToolRequest_RepairsBeforeAcceptingOrdinaryResponse(string toolId, string argumentsJson)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var tool = new InspectMetadataTool();
+        var registry = new ToolRegistry([tool]);
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var attempt = new ToolRequestModelOutput(toolId, argumentsJson);
+        var provider = new ToolAttemptThenResponseProvider(attempt);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        Assert.Equal("The requested tool could not be used.", outcome.Response);
+        Assert.Equal(1, outcome.Usage.Corrections);
+        Assert.Equal(2, provider.Requests.Count);
+        AssertRejectedToolHistory(provider.Requests[1], toolId == tool.Definition.Id ? [attempt] : []);
+        if (toolId != tool.Definition.Id)
+        {
+            Assert.DoesNotContain(provider.Requests[1].Messages, message => message.ToolCallId is not null);
+        }
+
+        Assert.Null(tool.LastInvocationContext);
+        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
+        Assert.Empty(outcome.DeliveredEvidenceIds);
+        Assert.Null(outcome.Findings);
+    }
+
+    /// <summary>One invalid sibling rejects the full batch while retaining every known attempted call and error.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_InvalidToolBatch_PreservesBothRejectedSiblingsWithoutExecution(bool invalidFirst)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var tool = new InspectMetadataTool();
+        var registry = new ToolRegistry([tool]);
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var valid = new ToolRequestModelOutput(tool.Definition.Id, "{}");
+        var invalid = new ToolRequestModelOutput(tool.Definition.Id, "{\"unexpected\":true}");
+        ToolRequestModelOutput[] attempts = invalidFirst ? [invalid, valid] : [valid, invalid];
+        var provider = new ToolAttemptThenResponseProvider(attempts);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        Assert.Equal("The requested tool could not be used.", outcome.Response);
+        Assert.Equal(1, outcome.Usage.Corrections);
+        Assert.Equal(2, provider.Requests.Count);
+        AssertRejectedToolHistory(provider.Requests[1], attempts);
+        var failedCallNumber = invalidFirst ? 1 : 2;
+        var validCallNumber = invalidFirst ? 2 : 1;
+        foreach (var message in provider.Requests[1].Messages.Where(message => message.Role == ModelMessageRole.Tool))
+        {
+            using var payload = JsonDocument.Parse(message.GetModelVisibleContent());
+            var error = payload.RootElement.GetProperty("error").GetString();
+            Assert.NotNull(error);
+            Assert.Contains($"Call {failedCallNumber} ({invalid.ToolName}) failed validation:", error, StringComparison.Ordinal);
+            Assert.DoesNotContain($"Call {validCallNumber} ({valid.ToolName}) failed validation:", error, StringComparison.Ordinal);
+            Assert.Contains(
+                "Other calls in this batch were not executed; this does not mean their paths or arguments were invalid.",
+                error,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Null(tool.LastInvocationContext);
+        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
+        Assert.Empty(outcome.DeliveredEvidenceIds);
+        Assert.Null(outcome.Findings);
+    }
+
+    /// <summary>Caller cancellation interrupts a waiting provider and retains its effective model metadata.</summary>
+    [Fact]
+    public async Task RunAsync_CancelledProvider_PreservesCancellationAndModelDetails()
+    {
+        await using var events = new DomainEventStream();
+        using var cancellation = new CancellationTokenSource();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, []);
+        var plan = CreatePlan(assignment);
+        var provider = new MixedRoleProvider(new Dictionary<RunId, string>
+        {
+            [assignment.ChildRunId] = "This response must not be returned after cancellation.",
+        });
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(new ToolRegistry([]), events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, []),
+            []);
+        var running = runner.RunAsync(plan, assignment, cancellation.Token);
+        try
+        {
+            await provider.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await cancellation.CancelAsync();
+
+#pragma warning disable VSTHRD003 // The test starts this gated task before requesting cancellation.
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+#pragma warning restore VSTHRD003
+            Assert.True(ChildAgentFailureDetails.TryGet(exception, out var failure));
+            Assert.NotNull(failure);
+            Assert.Equal(profile.Id, failure.ModelProfileId);
+            Assert.Equal(profile.Id, failure.ModelSelection?.EffectiveProfileId);
+            Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
+            Assert.Equal(1, Assert.Single(provider.RequestCounts).Value);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            provider.Release.TrySetResult();
+        }
+    }
+
+    /// <summary>Cancellation after the final chunk but before normal EOF wins without losing recorded usage.</summary>
+    [Fact]
+    public async Task RunAsync_ProviderCancelsBeforeNormalEof_PreservesUsageAndRejectsFinalResponse()
+    {
+        await using var events = new DomainEventStream();
+        using var cancellation = new CancellationTokenSource();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, []);
+        var plan = CreatePlan(assignment);
+        var provider = new FinalChunkCancellationProvider(cancellation);
+        var usage = new SessionUsageProjection();
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(new ToolRegistry([]), events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, []),
+            [],
+            usage);
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            runner.RunAsync(plan, assignment, cancellation.Token));
+
+        Assert.True(provider.ReachedNormalEof);
+        Assert.True(cancellation.IsCancellationRequested);
+        var request = Assert.Single(provider.Requests);
+        var estimate = Assert.IsType<ModelWireEstimate>(request.WireEstimate);
+        Assert.True(ChildAgentFailureDetails.TryGet(exception, out var failure));
+        Assert.NotNull(failure);
+        Assert.Equal(Math.Max(48L, (long)estimate.WireInputTokens + TokenEstimator.Estimate(provider.Response)), failure.Usage.ModelTokens);
+        Assert.Equal(0, failure.Usage.ToolCalls);
+        Assert.Equal(0, failure.Usage.Corrections);
+        Assert.Equal(profile.Id, failure.ModelProfileId);
+        Assert.Equal(profile.Id, failure.ModelSelection?.EffectiveProfileId);
+        Assert.Equal(37, usage.GetSnapshot(plan.Provenance.SessionId).InputTokens);
+        Assert.Equal(11, usage.GetSnapshot(plan.Provenance.SessionId).OutputTokens);
+        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
+    }
+
+    /// <summary>Child-only cancellation overrides a non-cooperative completion while preserving metadata and its sibling.</summary>
+    [Fact]
+    public async Task Scheduler_CancelledChildReturnsCompleted_ClearsResponseAndPreservesMetadata()
+    {
+        using var parentCancellation = new CancellationTokenSource();
+        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
+        {
+            MaximumActiveChildren = 2,
+            MaximumActiveChildrenPerParent = 2,
+            ShutdownTimeout = TimeSpan.FromSeconds(2),
+        });
+        var profile = CreateProfile();
+        var cancelledAssignment = CreateAssignment(profile.Id, []);
+        var siblingAssignment = CreateAssignment(profile.Id, []);
+        var plan = CreatePlan(cancelledAssignment) with
+        {
+            Assignments = [cancelledAssignment, siblingAssignment],
+            ParentBudget = AgentResourceBudget.Aggregate([cancelledAssignment.Budget, siblingAssignment.Budget]),
+        };
+        var completed = new AgentRunOutcome
+        {
+            AssignmentId = cancelledAssignment.AssignmentId,
+            ChildRunId = cancelledAssignment.ChildRunId,
+            Role = cancelledAssignment.Role,
+            Generation = plan.Provenance.Generation,
+            Status = AgentRunStatus.Completed,
+            Response = "This late response must not survive cancellation.",
+            Reason = "The fake ignored cancellation.",
+            Usage = new AgentResourceUsage { ModelTokens = 73, ToolCalls = 2, EvidenceItems = 1, WallTime = TimeSpan.FromMilliseconds(12) },
+            ModelProfileId = profile.Id,
+            ModelSelection = CreateSelector(profile).Select(cancelledAssignment).Provenance,
+            DeliveredEvidenceIds = [EvidenceId.New()],
+            Findings = new AgentFindingSet
+            {
+                AssignmentId = cancelledAssignment.AssignmentId,
+                ChildRunId = cancelledAssignment.ChildRunId,
+                Generation = plan.Provenance.Generation,
+                Summary = "A late legacy payload must also be cleared.",
+            },
+        };
+        var siblingCompleted = completed with
+        {
+            AssignmentId = siblingAssignment.AssignmentId,
+            ChildRunId = siblingAssignment.ChildRunId,
+            Response = "The uncancelled sibling completed normally.",
+            Findings = null,
+        };
+        var runner = new CancellationIgnoringRunner(new Dictionary<AgentAssignmentId, AgentRunOutcome>
+        {
+            [cancelledAssignment.AssignmentId] = completed,
+            [siblingAssignment.AssignmentId] = siblingCompleted,
+        });
+        var running = scheduler.RunAsync(plan, runner, parentCancellation.Token);
+        try
+        {
+            await runner.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(await scheduler.CancelAssignmentAsync(plan.DelegationId, cancelledAssignment.AssignmentId));
+            Assert.True(runner.ObservedTokens[cancelledAssignment.AssignmentId].IsCancellationRequested);
+            Assert.False(runner.ObservedTokens[siblingAssignment.AssignmentId].IsCancellationRequested);
+            Assert.False(parentCancellation.IsCancellationRequested);
+            runner.Release.TrySetResult();
+
+            var outcomes = await running.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var cancelled = Assert.Single(outcomes, outcome => outcome.AssignmentId == cancelledAssignment.AssignmentId);
+            Assert.Equal(AgentRunStatus.Cancelled, cancelled.Status);
+            Assert.Null(cancelled.Response);
+            Assert.Null(cancelled.Findings);
+            Assert.Null(cancelled.Review);
+            Assert.Null(cancelled.Implementation);
+            Assert.Null(cancelled.ChangeSet);
+            Assert.Equal(completed.Usage, cancelled.Usage);
+            Assert.NotNull(cancelled.ModelSelection);
+            Assert.Equal(completed.ModelSelection, cancelled.ModelSelection);
+            Assert.Equal(completed.ModelProfileId, cancelled.ModelProfileId);
+            Assert.Equal(completed.DeliveredEvidenceIds, cancelled.DeliveredEvidenceIds);
+            Assert.Equal(completed.ChildRunId, cancelled.ChildRunId);
+            Assert.Equal(completed.Generation, cancelled.Generation);
+            Assert.Equal(siblingCompleted, Assert.Single(outcomes, outcome => outcome.AssignmentId == siblingAssignment.AssignmentId));
+        }
+        finally
+        {
+            runner.Release.TrySetResult();
+            await parentCancellation.CancelAsync();
+        }
+    }
+
+    private static void AssertRejectedToolHistory(
+        ModelStreamRequest request,
+        IReadOnlyList<ToolRequestModelOutput> attempts)
+    {
+        var correction = Assert.Single(request.Messages, message => message.SectionId == "child-tool-error");
+        Assert.Equal(ModelMessageRole.Developer, correction.Role);
+        Assert.Same(correction, request.Messages[^1]);
+        var history = request.Messages
+            .Where(message => message.SectionId is "child-tool-call" or "child-tool-result")
+            .ToArray();
+        Assert.Equal(attempts.Count * 2, history.Length);
+        var correlations = new HashSet<string>(StringComparer.Ordinal);
+        for (var ordinal = 0; ordinal < attempts.Count; ordinal++)
+        {
+            var call = history[ordinal * 2];
+            var result = history[(ordinal * 2) + 1];
+            Assert.Equal("child-tool-call", call.SectionId);
+            Assert.Equal(ModelMessageRole.Assistant, call.Role);
+            Assert.Equal(attempts[ordinal].ToolName, call.ToolName);
+            Assert.Equal(attempts[ordinal].ArgumentsJson, call.GetModelVisibleContent());
+            Assert.NotNull(call.ToolCallId);
+            Assert.NotEmpty(call.ToolCallId);
+            Assert.True(correlations.Add(call.ToolCallId));
+            Assert.Equal("child-tool-result", result.SectionId);
+            Assert.Equal(ModelMessageRole.Tool, result.Role);
+            Assert.Equal(call.ToolCallId, result.ToolCallId);
+            Assert.Equal(call.ToolName, result.ToolName);
+            using var payload = JsonDocument.Parse(result.GetModelVisibleContent());
+            Assert.False(payload.RootElement.GetProperty("succeeded").GetBoolean());
+            Assert.False(payload.RootElement.GetProperty("executed").GetBoolean());
+            Assert.False(payload.RootElement.TryGetProperty("evidenceId", out _));
+            var error = payload.RootElement.GetProperty("error").GetString();
+            Assert.NotNull(error);
+            Assert.NotEmpty(error);
+            Assert.Contains(error, correction.GetModelVisibleContent(), StringComparison.Ordinal);
+        }
+    }
+
     private static ModelExplorerAssignmentRunner CreateRunner(
         IModelProvider provider,
         IToolInvocationPipeline pipeline,
@@ -701,7 +1139,10 @@ public sealed class ModelExplorerAssignmentRunnerTests
         ModelProfile profile,
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
-        SessionUsageProjection? usage = null)
+        SessionUsageProjection? usage = null,
+        DelegateAgentsOptions? options = null,
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         return CreateRunner(
             provider,
@@ -711,7 +1152,10 @@ public sealed class ModelExplorerAssignmentRunnerTests
             [profile],
             parentContext,
             registrations,
-            usage);
+            usage,
+            options,
+            trustedModels,
+            compactionProfile);
     }
 
     private static ModelExplorerAssignmentRunner CreateRunner(
@@ -722,7 +1166,10 @@ public sealed class ModelExplorerAssignmentRunnerTests
         IReadOnlyList<ModelProfile> profiles,
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
-        SessionUsageProjection? usage = null)
+        SessionUsageProjection? usage = null,
+        DelegateAgentsOptions? options = null,
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         var catalog = new ConfiguredModelCatalog(profiles);
         return new ModelExplorerAssignmentRunner(
@@ -734,11 +1181,13 @@ public sealed class ModelExplorerAssignmentRunnerTests
             evidence,
             new StubInstructionProvider(),
             sanitizer,
-            CreateOptions(),
+            options ?? CreateOptions(),
             parentContext,
             registrations,
             TestPromptLoader.Instance,
-            usage);
+            usage,
+            trustedModels: trustedModels,
+            compactionProfile: compactionProfile);
     }
 
     private static ToolInvocationPipeline CreatePipeline(
@@ -824,7 +1273,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
             {
                 Streaming = true,
                 ToolCalls = true,
-                StructuredOutput = true,
+                StructuredOutput = false,
             },
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             IntendedWorkloadClasses = [WorkloadClass.General],
@@ -843,10 +1292,10 @@ public sealed class ModelExplorerAssignmentRunnerTests
             Role = AgentRole.Explorer,
             Mode = AgentRunMode.ReadOnlyBaseline,
             Objective = "Inspect the assigned behavior.",
-            Tasks = ["Return one cited finding."],
+            Tasks = ["Explain the behavior you inspect."],
             InitialContext = "bounded child context",
-            OutputSchema = DelegateAgentsContract.FindingSchema,
-            StoppingCondition = "Stop after one supported finding.",
+            OutputSchema = AgentAssignment.ResponseSchema,
+            StoppingCondition = "Return when the assigned question is answered.",
             Deadline = DateTimeOffset.UtcNow.AddMinutes(1),
             Scope = new AgentAssignmentScope { IsOwnershipProven = true },
             Policy = new AgentPolicySnapshot
@@ -920,8 +1369,46 @@ public sealed class ModelExplorerAssignmentRunnerTests
 
     private sealed record InspectMetadataInput;
 
+    private sealed class StructuredMetadataTool : Tool<InspectMetadataInput, JsonElement>
+    {
+        public override ToolDefinition Definition { get; } = new InspectMetadataTool().Definition with
+        {
+            OutputSchema = new ToolSchema("Object", 1, "{\"type\":\"object\"}"),
+        };
+
+        public override Task<ToolExecution<JsonElement>> ExecuteAsync(
+            InspectMetadataInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = JsonSerializer.SerializeToElement(new
+            {
+                Path = "src/Test.cs",
+                Lines = new[] { "first", "second" },
+                Source = "Server=example;Database=test;Password=fixture-secret",
+            });
+            return Task.FromResult(new ToolExecution<JsonElement>(content, []));
+        }
+
+        protected override void ValidateInput(InspectMetadataInput input)
+        {
+        }
+    }
+
     private sealed class InspectMetadataTool : Tool<InspectMetadataInput, string>
     {
+        private readonly string _modelResultContent;
+        private readonly IReadOnlyList<ToolProvenanceSource> _sources;
+
+        /// <summary>Initializes a new instance of the <see cref="InspectMetadataTool"/> class.</summary>
+        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null)
+        {
+            _modelResultContent = modelResultContent;
+            _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
+            Definition = Definition with { MaximumOutputBytes = maximumOutputBytes };
+        }
+
         public ToolInvocationContext? LastInvocationContext { get; private set; }
 
         public override ToolDefinition Definition { get; } = new()
@@ -955,8 +1442,8 @@ public sealed class ModelExplorerAssignmentRunnerTests
             LastInvocationContext = context.Invocation;
             return Task.FromResult(new ToolExecution<string>(
                 "metadata",
-                [new ToolProvenanceSource("file", "src/Test.cs")],
-                ModelResultContent: "Compiler-backed metadata."));
+                _sources,
+                ModelResultContent: _modelResultContent));
         }
 
         protected override void ValidateInput(InspectMetadataInput input)
@@ -982,7 +1469,7 @@ public sealed class ModelExplorerAssignmentRunnerTests
         }
     }
 
-    private sealed class ToolThenFindingProvider(string toolId) : IModelProvider
+    private sealed class ToolThenFindingProvider(string toolId, bool retrieveEvidence = false) : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1003,10 +1490,20 @@ public sealed class ModelExplorerAssignmentRunnerTests
                 yield break;
             }
 
-            var toolResult = request.Messages.Single(message => message.Role == ModelMessageRole.Tool);
+            var toolResult = request.Messages.Single(message => message.Role == ModelMessageRole.Tool && message.ToolName == toolId);
             using var document = JsonDocument.Parse(toolResult.GetModelVisibleContent());
             var evidenceId = document.RootElement.GetProperty("evidenceId").GetString()
                 ?? throw new InvalidDataException("The tool result omitted its evidence identity.");
+            if (retrieveEvidence && Requests.Count == 2)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(ChildAgentEvidenceTool.ToolId, JsonSerializer.Serialize(new { evidenceId })),
+                    Usage = new ModelUsage(20, 5),
+                };
+                yield break;
+            }
+
             yield return new ModelChunk
             {
                 Output = new TextModelOutput(CreateFindingJson(evidenceId, "Tool-backed finding.")),
@@ -1015,8 +1512,89 @@ public sealed class ModelExplorerAssignmentRunnerTests
         }
     }
 
-    private sealed class CorrectionThenFindingProvider(EvidenceId evidenceId) : IModelProvider
+    private sealed class FinalChunkCancellationProvider : IModelProvider
     {
+        private readonly CancellationTokenSource _cancellation;
+
+        /// <summary>Initializes a new instance of the <see cref="FinalChunkCancellationProvider"/> class.</summary>
+        public FinalChunkCancellationProvider(CancellationTokenSource cancellation)
+        {
+            _cancellation = cancellation;
+        }
+
+        /// <summary>Gets the final text that must not become a completed outcome.</summary>
+        public string Response { get; } = "The provider emitted this final answer before cancellation.";
+
+        /// <summary>Gets the requests received before cancellation.</summary>
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        /// <summary>Gets whether the provider ended normally after cancelling its caller.</summary>
+        public bool ReachedNormalEof { get; private set; }
+
+        /// <inheritdoc />
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            yield return new ModelChunk
+            {
+                Output = new TextModelOutput(Response),
+                Usage = new ModelUsage(37, 11),
+            };
+            await _cancellation.CancelAsync();
+            ReachedNormalEof = true;
+        }
+    }
+
+    private sealed class CancellationIgnoringRunner : IAgentAssignmentRunner
+    {
+        private readonly IReadOnlyDictionary<AgentAssignmentId, AgentRunOutcome> _outcomes;
+
+        /// <summary>Initializes a new instance of the <see cref="CancellationIgnoringRunner"/> class.</summary>
+        public CancellationIgnoringRunner(IReadOnlyDictionary<AgentAssignmentId, AgentRunOutcome> outcomes)
+        {
+            _outcomes = outcomes;
+        }
+
+        /// <summary>Gets each admitted child's cancellation token.</summary>
+        public ConcurrentDictionary<AgentAssignmentId, CancellationToken> ObservedTokens { get; } = new();
+
+        /// <summary>Gets the gate indicating that every expected child entered.</summary>
+        public TaskCompletionSource AllStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Gets the test-owned gate that releases non-cooperative completions.</summary>
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <inheritdoc />
+        public async Task<AgentRunOutcome> RunAsync(
+            DelegationPlan plan,
+            AgentAssignment assignment,
+            CancellationToken cancellationToken = default)
+        {
+            ObservedTokens[assignment.AssignmentId] = cancellationToken;
+            if (ObservedTokens.Count == _outcomes.Count)
+            {
+                AllStarted.TrySetResult();
+            }
+
+#pragma warning disable VSTHRD003 // The test releases this non-cooperative runner after cancelling only one child.
+            await Release.Task;
+#pragma warning restore VSTHRD003
+            return _outcomes[assignment.AssignmentId];
+        }
+    }
+
+    private sealed class ToolAttemptThenResponseProvider : IModelProvider
+    {
+        private readonly IReadOnlyList<ToolRequestModelOutput> _attempts;
+
+        public ToolAttemptThenResponseProvider(params ToolRequestModelOutput[] attempts)
+        {
+            _attempts = attempts;
+        }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1025,14 +1603,25 @@ public sealed class ModelExplorerAssignmentRunnerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
+            if (Requests.Count > 2)
+            {
+                throw new InvalidOperationException("An ordinary final response must not trigger another request.");
+            }
+
             await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                foreach (var attempt in _attempts)
+                {
+                    yield return new ModelChunk { Output = attempt, Usage = new ModelUsage(20, 10) };
+                }
+
+                yield break;
+            }
+
             yield return new ModelChunk
             {
-                Output = new TextModelOutput(Requests.Count == 1
-                    ? string.Empty
-                    : CreateFindingJson(
-                        evidenceId.Value.ToString("D"),
-                        "Corrected cited finding.")),
+                Output = new TextModelOutput("The requested tool could not be used."),
                 Usage = new ModelUsage(20, 10),
             };
         }

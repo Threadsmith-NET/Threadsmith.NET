@@ -11,15 +11,28 @@ using Threadsmith.Tools;
 internal sealed class ChildAgentPrompt
 {
     private readonly IPromptLoader _prompts;
+    private readonly string _rolePromptFileName;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentPrompt"/> class.</summary>
-    public ChildAgentPrompt(IPromptLoader prompts)
+    public ChildAgentPrompt(
+        IPromptLoader prompts,
+        AgentRole role = AgentRole.Explorer)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         _prompts = prompts;
+        _rolePromptFileName = role switch
+        {
+            AgentRole.Explorer => PromptFileNames.SystemChildAgentExplorer,
+            AgentRole.Implementer => PromptFileNames.SystemChildAgentImplementer,
+            AgentRole.SecurityReviewer => PromptFileNames.SystemChildAgentSecurityReviewer,
+            AgentRole.TestReviewer => PromptFileNames.SystemChildAgentTestReviewer,
+            AgentRole.PerformanceReviewer => PromptFileNames.SystemChildAgentPerformanceReviewer,
+            AgentRole.ArchitectureReviewer => PromptFileNames.SystemChildAgentArchitectureReviewer,
+            _ => throw new ArgumentOutOfRangeException(nameof(role)),
+        };
     }
 
-    /// <summary>Creates the immutable initial message sequence for one child.</summary>
+    /// <summary>Creates the initial instructions, assignment, and inherited evidence for one child.</summary>
     public List<ModelMessage> CreateMessages(
         AgentContextSnapshot context,
         RepositoryInstructionBundle instructions)
@@ -29,7 +42,7 @@ internal sealed class ChildAgentPrompt
         return
         [
             CreateMessage(ModelMessageRole.System, "child-host-policy", _prompts.Get(PromptFileNames.SystemChildAgentHostPolicy)),
-            CreateMessage(ModelMessageRole.System, "child-output-policy", _prompts.Get(PromptFileNames.SystemChildAgentOutputPolicy)),
+            CreateMessage(ModelMessageRole.System, "child-role-amendment", _prompts.Get(_rolePromptFileName)),
             CreateMessage(
                 ModelMessageRole.Developer,
                 "child-repository-instructions",
@@ -89,15 +102,13 @@ internal sealed class ChildAgentPrompt
         };
     }
 
-    /// <summary>Creates one bounded developer correction after malformed child output.</summary>
+    /// <summary>Creates technical tool-error feedback without constraining the child's answer format.</summary>
     public ModelMessage CreateCorrectionMessage(string reason)
     {
         return CreateMessage(
             ModelMessageRole.Developer,
-            "child-correction",
-            _prompts.Render(
-                PromptFileNames.CorrectionChildAgentInvalidOutput,
-                Tokens(("Reason", reason))));
+            "child-tool-error",
+            _prompts.Get(PromptFileNames.CorrectionToolBatchValidationUnavailable) + Environment.NewLine + reason);
     }
 
     /// <summary>Creates host-authored coverage guidance after one child tool batch.</summary>
@@ -108,15 +119,26 @@ internal sealed class ChildAgentPrompt
             : progress.AddedDistinctPayload
                 ? PromptFileNames.ContextChildAgentEvidenceProgressPayloadOnly
                 : PromptFileNames.ContextChildAgentEvidenceProgressNoProgress;
-        var guidance = _prompts.Render(
-            promptFileName,
-            Tokens(
+        var tokens = promptFileName switch
+        {
+            PromptFileNames.ContextChildAgentEvidenceProgressExpanded => Tokens(
                 ("NewFiles", $"{progress.NewFiles}"),
                 ("NewSources", $"{progress.NewSources}"),
                 ("NewContentPayloads", $"{progress.NewContentPayloads}"),
                 ("TotalFiles", $"{progress.TotalFiles}"),
                 ("TotalSources", $"{progress.TotalSources}"),
-                ("TotalEvidenceItems", $"{progress.TotalEvidenceItems}")));
+                ("TotalEvidenceItems", $"{progress.TotalEvidenceItems}")),
+            PromptFileNames.ContextChildAgentEvidenceProgressPayloadOnly => Tokens(
+                ("NewContentPayloads", $"{progress.NewContentPayloads}"),
+                ("TotalFiles", $"{progress.TotalFiles}"),
+                ("TotalSources", $"{progress.TotalSources}"),
+                ("TotalEvidenceItems", $"{progress.TotalEvidenceItems}")),
+            _ => Tokens(
+                ("TotalFiles", $"{progress.TotalFiles}"),
+                ("TotalSources", $"{progress.TotalSources}"),
+                ("TotalEvidenceItems", $"{progress.TotalEvidenceItems}")),
+        };
+        var guidance = _prompts.Render(promptFileName, tokens);
         return CreateMessage(
             ModelMessageRole.Developer,
             "child-evidence-progress",

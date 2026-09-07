@@ -1,1 +1,1 @@
-Fast repository file inventory under a bounded approved root. Use for directory/file discovery before reading files, and batch with other independent read-only inspections when possible.
+Fast repository file inventory under an approved root. Optional path selects a repository-relative directory; omit it or use null, an empty or whitespace-only string, or "." for the repository root. Access restrictions still apply. Use for directory/file discovery before reading files, and batch with other independent read-only inspections when possible.

@@ -859,9 +859,18 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
         var anchors = BuildCodeExploreAnchors(request, queryInterpretation).ToList();
+        var omittedNamedFiles = request.PathAnchors.Count + request.SymbolIds.Count + request.ExactSymbolAnchors.Count == 0
+            ? Math.Max(0, queryInterpretation.PathLikeSpans.Count - anchors.Count)
+            : 0;
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
+        if (omittedNamedFiles > 0)
+        {
+            omissions.Add(ModelVisibleStructuredFact.Exact(
+                $"The maximumAnchors limit omitted {omittedNamedFiles} named C# file requests."));
+        }
+
         var continuations = new List<CodeExploreContinuationTarget>();
         var allocationFiles = new List<CodeExploreAllocationFileSummary>();
         var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
@@ -1355,7 +1364,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        var symbolResolutionComplete = !timeReached
+        var symbolResolutionComplete = !timeReached && omittedNamedFiles == 0
             && resolutions.Count == anchors.Count
             && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved);
         EnsureCurrent(engine, snapshot.Generation);
@@ -1414,7 +1423,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             symbolResolutionComplete,
             snapshot.Confidence == SemanticConfidenceLevel.FullSemantic && !hasUnloadedSource,
             sourceComplete,
-            !timeReached && !outputBoundReached && !alternativesCapped,
+            !timeReached && !outputBoundReached && !alternativesCapped && omittedNamedFiles == 0,
             coverageOmissions);
         var spentSourceCharacters = availableSourceCharacters - remainingSourceCharacters;
         var allocation = new CodeExploreAllocationSummary(
@@ -7029,6 +7038,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return [new CodeExploreAnchor(CodeExploreAnchorKind.Query, request.Query, null, null, false, CodeExplorePathSelectionMode.Auto, null, null, null)];
         }
 
+        if (queryInterpretation.PathLikeSpans.Count > 0)
+        {
+            return queryInterpretation.PathLikeSpans
+                .Take(request.Limits.MaximumAnchors)
+                .Select(path => new CodeExploreAnchor(
+                    CodeExploreAnchorKind.Path,
+                    path,
+                    null,
+                    null,
+                    false,
+                    CodeExplorePathSelectionMode.WholeFile,
+                    null,
+                    null,
+                    null))
+                .ToArray();
+        }
+
         return [];
     }
 
@@ -11075,8 +11101,26 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static IEnumerable<string> ExtractCodeExploreTokens(string query)
     {
         var builder = new StringBuilder(query.Length);
-        foreach (var character in query)
+        for (var index = 0; index < query.Length; index++)
         {
+            var character = query[index];
+            if (character is '"' or '\'' or '`')
+            {
+                var closing = query.IndexOf(character, index + 1);
+                if (closing > index && NormalizeCodeExplorePathSpanToken(query[index..(closing + 1)]) is not null)
+                {
+                    if (builder.Length > 0)
+                    {
+                        yield return TrimCodeExploreToken(builder.ToString());
+                        builder.Clear();
+                    }
+
+                    yield return query[index..(closing + 1)];
+                    index = closing;
+                    continue;
+                }
+            }
+
             if (char.IsLetterOrDigit(character) || character is '_' or '.' or ':' or '/' or '\\' or '-' or '`' or '+')
             {
                 builder.Append(character);
@@ -11279,6 +11323,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static string? NormalizeCodeExplorePathSpanToken(string value)
     {
+        var quoted = value.Length > 2 && value[0] is '"' or '\'' or '`' && value[^1] == value[0];
         var token = TrimCodeExploreToken(value);
         var labelSeparator = token.IndexOf(':');
         if (labelSeparator > 0)
@@ -11312,7 +11357,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        return IsCSharpPathSpan(token) ? token : null;
+        return IsCSharpPathSpan(token) || (quoted && token.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            ? token
+            : null;
     }
 
     private static bool CandidateCoversTerm(CodeExploreDeclarationCatalogEntry entry, string term)
@@ -12007,24 +12054,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(false);
         }
 
-        if (!sourceReader.IsPathAllowed(fullPath))
-        {
-            resolutions.Add(new CodeExploreAnchorResolution(
-                anchor.Value,
-                anchor.Kind,
-                CodeExploreResolutionOutcome.Omitted,
-                null,
-                new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
-                [],
-                ModelVisibleStructuredFact.Exact(
-                    "The confined C# path is outside the invocation path policy.")));
-            return new(false);
-        }
-
         var documents = FindDocumentsByPath(snapshot.Solution, fullPath);
-        if (documents.Count == 0)
+        CodeExploreSourceText? sourceText = null;
+        if (documents.Count == 0 && sourceReader.IsPathAllowed(fullPath))
         {
-            CodeExploreSourceText sourceText;
             try
             {
                 sourceText = await sourceReader.ReadTextAsync(
@@ -12032,18 +12065,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     MaximumCurrentSourceFileBytes,
                     cancellationToken);
             }
-            catch (FileNotFoundException)
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
             {
-                resolutions.Add(new CodeExploreAnchorResolution(
-                    anchor.Value,
-                    anchor.Kind,
-                    CodeExploreResolutionOutcome.NotFound,
-                    null,
-                    new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
-                    [],
-                    ModelVisibleStructuredFact.Exact(
-                        "The confined C# path does not exist.")));
-                return new(false);
+                // A missing root path may still identify a loaded file by name.
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException
                 or IOException
@@ -12059,6 +12083,77 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     [],
                     ModelVisibleStructuredFact.Exact(
                         $"The confined C# path could not be read for code exploration: {exception.GetType().Name}.")));
+                return new(false);
+            }
+        }
+
+        var isBareFileName = !anchor.Value.Contains('/') && !anchor.Value.Contains('\\');
+        if (documents.Count == 0 && sourceText is null && isBareFileName)
+        {
+            var matchingPaths = snapshot.Solution.Projects
+                .SelectMany(project => project.Documents)
+                .Select(document => document.FilePath)
+                .OfType<string>()
+                .Where(path => Path.GetFileName(path).Equals(anchor.Value, PathComparison)
+                    && sourceReader.IsPathAllowed(path))
+                .Select(Path.GetFullPath)
+                .Distinct(PathComparer)
+                .Order(PathComparer)
+                .ToArray();
+            if (matchingPaths.Length == 1)
+            {
+                fullPath = matchingPaths[0];
+                relativePath = ToRepositoryRelativePath(fullPath, snapshot.RepositoryPath);
+                documents = FindDocumentsByPath(snapshot.Solution, fullPath);
+            }
+            else if (matchingPaths.Length > 1)
+            {
+                var fileAlternatives = matchingPaths.Take(maximumAlternatives)
+                    .Select(path => ToRepositoryRelativePath(path, snapshot.RepositoryPath))
+                    .Select(path => new CodeExploreAlternative(
+                        new SemanticSymbolIdentity($"path:{path}", path, "Path"),
+                        new CodeExploreLocation(string.Empty, string.Empty, path, CreateLineRange(1), false, false)))
+                    .ToArray();
+                resolutions.Add(new CodeExploreAnchorResolution(
+                    anchor.Value,
+                    anchor.Kind,
+                    CodeExploreResolutionOutcome.Ambiguous,
+                    null,
+                    null,
+                    fileAlternatives,
+                    ModelVisibleStructuredFact.Exact("Multiple loaded C# files have this name.")));
+                return new(matchingPaths.Length > maximumAlternatives);
+            }
+        }
+
+        if (!sourceReader.IsPathAllowed(fullPath))
+        {
+            resolutions.Add(new CodeExploreAnchorResolution(
+                anchor.Value,
+                anchor.Kind,
+                CodeExploreResolutionOutcome.Omitted,
+                null,
+                new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
+                [],
+                ModelVisibleStructuredFact.Exact(
+                    "The confined C# path is outside the invocation path policy.")));
+            return new(false);
+        }
+
+        if (documents.Count == 0)
+        {
+            if (sourceText is null)
+            {
+                resolutions.Add(new CodeExploreAnchorResolution(
+                    anchor.Value,
+                    anchor.Kind,
+                    CodeExploreResolutionOutcome.NotFound,
+                    null,
+                    new CodeExploreLocation(string.Empty, string.Empty, relativePath, CreateLineRange(anchor.Line ?? 1), false, false),
+                    [],
+                    ModelVisibleStructuredFact.Exact(isBareFileName
+                        ? "The filename was not found at the repository root or in the allowed loaded workspace. Other repository directories were not searched."
+                        : "The confined C# path does not exist.")));
                 return new(false);
             }
 

@@ -168,6 +168,8 @@ public sealed class MutationProposalApplication :
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly ITransactionalWorkspaceResolver _workspaces;
+    private readonly IContextAssembler? _trustedAgentContextAssembler;
+    private readonly IModelProvider? _trustedAgentModelProvider;
 
     /// <summary>Initializes a new instance of the <see cref="MutationProposalApplication"/> class.</summary>
     public MutationProposalApplication(
@@ -185,7 +187,9 @@ public sealed class MutationProposalApplication :
         ISemanticMutationEngine? semanticMutations = null,
         IPreMutationAnalyzer? preMutationAnalyzer = null,
         CorrectiveMessageFactory? correctiveMessages = null,
-        IPromptLoader? prompts = null)
+        IPromptLoader? prompts = null,
+        IContextAssembler? trustedAgentContextAssembler = null,
+        IModelProvider? trustedAgentModelProvider = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(contextAssembler);
@@ -210,11 +214,23 @@ public sealed class MutationProposalApplication :
         _correctiveMessages = correctiveMessages;
         _prompts = prompts;
         _proposeMutationsTool = CreateProposeMutationsTool(RequirePrompts());
+        _trustedAgentContextAssembler = trustedAgentContextAssembler;
+        _trustedAgentModelProvider = trustedAgentModelProvider;
     }
 
     /// <inheritdoc />
     public async Task<StagedMutationSet> HandleAsync(
         ProposeMutationSetCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var prepared = await PrepareAsync(command, null, cancellationToken);
+        return await StagePreparedAsync(prepared, cancellationToken);
+    }
+
+    /// <summary>Runs governed proposal generation and corrections without staging or applying candidate changes.</summary>
+    internal async Task<PreparedMutationProposal> PrepareAsync(
+        ProposeMutationSetCommand command,
+        ApprovedImplementerPreparationContext? child,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -232,7 +248,9 @@ public sealed class MutationProposalApplication :
                 cancellationToken);
             try
             {
-                return await HandleCoreAsync(command, correctiveMessages, cancellationToken);
+                child?.Corrections = correctiveTurns.AttemptsUsed;
+
+                return await HandleCoreAsync(command, correctiveMessages, child, cancellationToken);
             }
             catch (RepairableMutationProposalException exception)
             {
@@ -257,6 +275,17 @@ public sealed class MutationProposalApplication :
                     cancellationToken);
             }
         }
+    }
+
+    /// <summary>Stages an accepted candidate for the existing separate exact-diff approval workflow.</summary>
+    internal async Task<StagedMutationSet> StagePreparedAsync(
+        PreparedMutationProposal prepared,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        cancellationToken.ThrowIfCancellationRequested();
+        var staged = await _workspaces.StageAsync(prepared.MutationSet, cancellationToken);
+        return staged with { PlanStepIds = prepared.PlanStepIds };
     }
 
     private async Task AppendCorrectionMessageOrThrowAsync(
@@ -314,9 +343,10 @@ public sealed class MutationProposalApplication :
             ];
     }
 
-    private async Task<StagedMutationSet> HandleCoreAsync(
+    private async Task<PreparedMutationProposal> HandleCoreAsync(
         ProposeMutationSetCommand command,
         IReadOnlyList<ModelMessage> correctiveMessages,
+        ApprovedImplementerPreparationContext? child,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -352,84 +382,26 @@ public sealed class MutationProposalApplication :
                 "The transactional resolver returned a baseline for a different workspace.");
         }
 
-        var context = await _contextAssembler.AssembleAsync(
-            new ContextAssemblyRequest
-            {
-                SessionId = command.SessionId,
-                RunId = command.RunId,
-                Phase = command.Phase,
-                Task = command.Task,
-                RepositoryPath = baseline.RepositoryPath,
-                WorkingScope = RepositoryWorkingScope.Resolve(
-                    baseline.RepositoryPath,
-                    command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
-                ProhibitedPaths = baseline.ProhibitedPaths ?? [],
-                RequiredCapabilities = new ModelCapabilitySet
-                {
-                    Streaming = true,
-                    StructuredOutput = true,
-                },
-                DefaultModelProfileId = _sessionPreferences?.CurrentProfileId
-                    ?? _defaultModelProfileId,
-                ApprovedPlan = command.ApprovedPlan,
-                MutationBaseline = baseline,
-                ToolSchemas =
-                [
-                    new ContextToolSchema(
-                        _proposeMutationsTool.Name,
-                        _proposeMutationsTool.Description,
-                        _proposeMutationsTool.ArgumentsJsonSchema,
-                        _proposeMutationsTool.PreferStrictArguments),
-                ],
-                AdditionalMessages = additionalMessages,
-            },
-            cancellationToken);
-        var requestMessages = new List<ModelMessage>();
-        if (context.Messages is not null)
-        {
-            requestMessages.AddRange(context.Messages);
-        }
-
-        IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
-        var wireEstimate = EstimateAndValidateCompleteRequest(context, requestMessages, modelTools);
+        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, child, cancellationToken);
+        var model = child?.Selection.UsesTrustedCatalog == true
+            ? _trustedAgentModelProvider
+                ?? throw new InvalidOperationException("Trusted Implementer model dispatch is unavailable.")
+            : _model;
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
         var usageRequestId = new ModelRequestUsageId(
-            command.RunId,
+            child?.ChildRunId ?? command.RunId,
             "mutation",
             0,
             Guid.NewGuid());
         ModelUsage? reportedUsage = null;
         try
         {
-            await foreach (var chunk in _model.StreamAsync(
-            new ModelStreamRequest
+            await foreach (var chunk in model.StreamAsync(modelRequest, cancellationToken))
             {
-                RunId = command.RunId,
-                Input = context.ModelInput,
-
-                // Fixed seed preserves deterministic scripted-provider chunking and reproducible proposal tests.
-                Seed = 42,
-                WorkloadClass = context.WorkloadClass,
-                ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
-                RequiredCapabilities = context.RequiredCapabilities,
-                SelectionConstraints = context.ModelConstraints,
-                ResolvedProfileId = context.ModelResolution?.ProfileId,
-                ReasoningLevel = _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId)
-                    ?? ReasoningLevel.None,
-                Tools = modelTools,
-                AllowMultipleToolCalls = false,
-                Messages = requestMessages,
-                Layout = context.Layout,
-                ToolTransportMode = ToolTransportMode.Native,
-                WireEstimate = wireEstimate,
-                ProviderInstructions = context.ProviderInstructions,
-            },
-            cancellationToken))
-            {
-                if (chunk.Reasoning is not null)
+                if (child is null && chunk.Reasoning is not null)
                 {
                     await _events.PublishAsync(
                         new ModelReasoningObserved(
@@ -465,7 +437,7 @@ public sealed class MutationProposalApplication :
                 {
                     var toolOutputCharacters = (long)toolRequest.ToolName.Length
                         + toolRequest.ArgumentsJson.Length;
-                    if (toolOutputCharacters > _limits.MaxStructuredOutputCharacters)
+                    if (ExceedsStructuredOutputLimit(toolOutputCharacters))
                     {
                         throw new MalformedModelOutputException(
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
@@ -490,6 +462,11 @@ public sealed class MutationProposalApplication :
                     }
 
                     proposalToolObserved = true;
+                    if (child is not null)
+                    {
+                        child.ToolCalls++;
+                    }
+
                     try
                     {
                         envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(
@@ -526,7 +503,7 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Text is not null && structured is null)
                 {
-                    if (textOutput.Length + chunk.Text.Length > _limits.MaxStructuredOutputCharacters)
+                    if (ExceedsStructuredOutputLimit(textOutput.Length + chunk.Text.Length))
                     {
                         throw new MalformedModelOutputException(
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
@@ -537,6 +514,8 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Usage is not null)
                 {
+                    child?.ModelTokens += chunk.Usage.InputTokens + chunk.Usage.OutputTokens;
+
                     reportedUsage = chunk.Usage;
                     _sessionUsage?.Observe(
                         command.SessionId,
@@ -563,6 +542,7 @@ public sealed class MutationProposalApplication :
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (envelope is not null)
         {
             ValidateEnvelope(envelope);
@@ -673,8 +653,95 @@ public sealed class MutationProposalApplication :
             proposed,
             cancellationToken);
 
-        var staged = await _workspaces.StageAsync(proposed, cancellationToken);
-        return staged with { PlanStepIds = planStepIds };
+        cancellationToken.ThrowIfCancellationRequested();
+        return new PreparedMutationProposal(proposed, planStepIds);
+    }
+
+    private async Task<ModelStreamRequest> CreateModelRequestAsync(
+        ProposeMutationSetCommand command,
+        WorkspaceBaseline baseline,
+        IReadOnlyList<ModelMessage> additionalMessages,
+        ApprovedImplementerPreparationContext? child,
+        CancellationToken cancellationToken)
+    {
+        const int maximumSelectionAttempts = 4;
+        for (var attempt = 0; attempt < maximumSelectionAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var assembler = child?.Selection.UsesTrustedCatalog == true
+                ? _trustedAgentContextAssembler
+                    ?? throw new InvalidOperationException("Trusted Implementer context assembly is unavailable.")
+                : _contextAssembler;
+            var context = await assembler.AssembleAsync(
+                new ContextAssemblyRequest
+                {
+                    SessionId = command.SessionId,
+                    RunId = command.RunId,
+                    Phase = command.Phase,
+                    Task = command.Task,
+                    RepositoryPath = baseline.RepositoryPath,
+                    WorkingScope = RepositoryWorkingScope.Resolve(
+                        baseline.RepositoryPath,
+                        command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
+                    ProhibitedPaths = baseline.ProhibitedPaths ?? [],
+                    RequiredCapabilities = new ModelCapabilitySet
+                    {
+                        Streaming = true,
+                        StructuredOutput = child is null,
+                        ToolCalls = child is not null,
+                    },
+                    DefaultModelProfileId = child?.Selection.ProfileId
+                        ?? _sessionPreferences?.CurrentProfileId
+                        ?? _defaultModelProfileId,
+                    DeferAgentModelCapacityValidation = child is not null,
+                    ApprovedPlan = command.ApprovedPlan,
+                    MutationBaseline = baseline,
+                    ToolSchemas =
+                    [
+                        new ContextToolSchema(
+                            _proposeMutationsTool.Name,
+                            _proposeMutationsTool.Description,
+                            _proposeMutationsTool.ArgumentsJsonSchema,
+                            _proposeMutationsTool.PreferStrictArguments),
+                    ],
+                    AdditionalMessages = additionalMessages,
+                },
+                cancellationToken);
+            var messages = context.Messages ?? [];
+            IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
+            var modelRequest = new ModelStreamRequest
+            {
+                RunId = child?.ChildRunId ?? command.RunId,
+                Input = context.ModelInput,
+
+                // Preserve deterministic scripted-provider chunking and reproducible proposal tests.
+                Seed = 42,
+                WorkloadClass = context.WorkloadClass,
+                ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
+                RequiredCapabilities = context.RequiredCapabilities,
+                SelectionConstraints = context.ModelConstraints,
+                ResolvedProfileId = context.ModelResolution?.ProfileId,
+                ReasoningLevel = child?.Selection.ReasoningLevel
+                    ?? _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId)
+                    ?? ReasoningLevel.None,
+                MaximumOutputTokens = child is null ? null : context.ModelResolution?.EffectiveRequestOutputTokenReserve,
+                Tools = modelTools,
+                AllowMultipleToolCalls = false,
+                Messages = messages,
+                Layout = context.Layout,
+                ToolTransportMode = ToolTransportMode.Native,
+                WireEstimate = EstimateAndValidateCompleteRequest(context, messages, modelTools, child is not null),
+                ProviderInstructions = context.ProviderInstructions,
+            };
+            if (child is null || (child.ResolveRequest(modelRequest)
+                && context.ModelResolution?.ProfileId == child.Selection.ProfileId))
+            {
+                child?.RecordDeliveredEvidence(context.Inspection.Evidence.Where(item => item.Included).Select(item => item.EvidenceId));
+                return modelRequest;
+            }
+        }
+
+        throw new InvalidOperationException("The approved Implementer model selection did not stabilize for the complete request.");
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
@@ -817,7 +884,8 @@ public sealed class MutationProposalApplication :
     private static ModelWireEstimate EstimateAndValidateCompleteRequest(
         ContextAssemblyResult context,
         IReadOnlyList<ModelMessage> requestMessages,
-        IReadOnlyList<ModelToolDefinition> modelTools)
+        IReadOnlyList<ModelToolDefinition> modelTools,
+        bool deferAgentModelCapacityValidation = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(requestMessages);
@@ -835,7 +903,7 @@ public sealed class MutationProposalApplication :
             stablePrefixMessageCount,
             outputReserveTokens,
             context.ProviderInstructions);
-        if (wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
+        if (!deferAgentModelCapacityValidation && wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
         {
             throw new InvalidOperationException(
                 $"Structured mutation provider wire input requires {wireEstimate.WireInputTokens} tokens but the budget is "
@@ -843,6 +911,12 @@ public sealed class MutationProposalApplication :
         }
 
         return wireEstimate;
+    }
+
+    private bool ExceedsStructuredOutputLimit(long characters)
+    {
+        return _limits.MaxStructuredOutputCharacters > 0
+            && characters > _limits.MaxStructuredOutputCharacters;
     }
 
     private static RepairableMutationProposalException CreateRepairableMutationFailure(

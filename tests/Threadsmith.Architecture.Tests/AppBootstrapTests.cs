@@ -390,14 +390,21 @@ public static class AppBootstrapTests
     }
 
     /// <summary>A trusted compaction profile resolves independently under the summary workload contract.</summary>
-    [Fact]
-    public static void ModelComposition_CompactionProfile_ResolvesTrustedSummaryProfile()
+    [Theory]
+    [InlineData(null, ReasoningLevel.None)]
+    [InlineData("medium", ReasoningLevel.Medium)]
+    [InlineData("MeDiUm", ReasoningLevel.Medium)]
+    public static void ModelComposition_CompactionProfile_ResolvesTrustedSummaryProfile(string? reasoning, ReasoningLevel expected)
     {
-        var profile = CreateCompactionProfile();
+        var profile = CreateCompactionProfile() with
+        {
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium],
+        };
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["context:activeTurnCompaction:profileId"] = profile.Id.Value.ToString("D"),
+                ["context:activeTurnCompaction:reasoningLevel"] = reasoning,
             })
             .Build();
 
@@ -407,6 +414,35 @@ public static class AppBootstrapTests
 
         Assert.Equal(profile.Id, resolved?.Id);
         Assert.Equal(profile.MaximumOutputTokens, resolved?.MaximumOutputTokens);
+        Assert.Equal(expected, resolved?.DefaultReasoningLevel);
+        Assert.Equal(ReasoningLevel.None, profile.DefaultReasoningLevel);
+    }
+
+    /// <summary>Compaction reasoning must be named, supported, and attached to an explicit profile.</summary>
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("3", true)]
+    [InlineData(" medium ", true)]
+    [InlineData("high", true)]
+    [InlineData("medium", false)]
+    public static void ModelComposition_CompactionProfile_RejectsInvalidReasoning(string reasoning, bool includeProfile)
+    {
+        var profile = CreateCompactionProfile() with
+        {
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium],
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["context:activeTurnCompaction:profileId"] = includeProfile ? profile.Id.Value.ToString("D") : null,
+                ["context:activeTurnCompaction:reasoningLevel"] = reasoning,
+            })
+            .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ModelComposition.ResolveActiveTurnCompactionProfile(configuration, new ConfiguredModelCatalog([profile])));
+
+        Assert.Contains("reasoningLevel", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>An explicit profile absent from the repository-excluding catalog fails startup.</summary>

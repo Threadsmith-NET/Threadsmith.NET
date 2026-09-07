@@ -2674,8 +2674,9 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            const int inputBudget = 1800;
             var registry = new ToolRegistry(
-                [new TestDeterministicOutputTool("oversized-result:" + new string('x', 256))]);
+                [new TestDeterministicOutputTool("oversized-result:" + new string('x', inputBudget * 4))]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2685,7 +2686,7 @@ public static class Milestone4Tests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
             var model = new ToolThenTextModelProvider("{\"sequence\":1}");
-            var assembler = CreateAssembler(events, evidence, maximumTokens: 1800);
+            var assembler = CreateAssembler(events, evidence, maximumTokens: inputBudget);
             var application = new SessionApplication(
                 events,
                 model,
@@ -2943,15 +2944,22 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>Semantic workspace availability redirects C# symbol text searches to semantic tools before execution.</summary>
-    [Fact]
-    public static async Task SessionApplication_SearchForCSharpSymbol_IsRejectedUntilSemanticToolUsed()
+    /// <summary>Discovery searches use semantic tools first, while known-file text inspection can proceed directly.</summary>
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("SectorEntityStandardizer.cs", true)]
+    [InlineData("appsettings.json", true)]
+    [InlineData("README", true)]
+    [InlineData("./.", false)]
+    [InlineData("src/..", false)]
+    [InlineData("absolute-root", false)]
+    public static async Task SessionApplication_SearchForCSharpSymbol_RespectsKnownFileScope(string? filePath, bool fileScoped)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-semantic-first-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
-            await File.WriteAllTextAsync(Path.Combine(root, "SectorEntityStandardizer.cs"), "public class SectorEntityStandardizer { }");
+            await File.WriteAllTextAsync(Path.Combine(root, fileScoped ? filePath ?? "SectorEntityStandardizer.cs" : "SectorEntityStandardizer.cs"), "public class SectorEntityStandardizer { }");
             await using var events = new DomainEventStream();
             var projections = new InMemoryProjectionStore();
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
@@ -2973,7 +2981,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new SearchThenSemanticThenPlanModelProvider(CreatePlan("semantic-first plan", 1));
+            var model = new SearchThenSemanticThenPlanModelProvider(CreatePlan("semantic-first plan", 1), filePath == "absolute-root" ? root : filePath, fileScoped);
             var application = new SessionApplication(
                 events,
                 model,
@@ -3013,16 +3021,25 @@ public static class Milestone4Tests
 
             var snapshot = evidence.Snapshot(sessionId);
             Assert.DoesNotContain(snapshot, item => item.Kind == EvidenceKind.Failure);
-            Assert.Contains(
-                model.Requests[1].Messages,
-                message => message.Role == ModelMessageRole.Tool
-                    && string.Equals(message.ToolName, "search", StringComparison.Ordinal)
-                    && message.Content.Any(part => part.Content.Contains("Call find_symbol", StringComparison.Ordinal)));
-            Assert.Single(snapshot, item => item.Kind == EvidenceKind.ToolResult
-                && item.Provenance.Source == "tool:find_symbol");
-            Assert.DoesNotContain(snapshot, item => item.Provenance.Source == "tool:search");
-            Assert.Equal(3, model.Requests.Count);
-            Assert.True(semanticResolver.FindSymbolsCalled);
+            if (fileScoped)
+            {
+                Assert.Single(snapshot, item => item.Provenance.Source == "tool:search");
+                Assert.DoesNotContain(snapshot, item => item.Provenance.Source == "tool:find_symbol");
+            }
+            else
+            {
+                Assert.Contains(
+                    model.Requests[1].Messages,
+                    message => message.Role == ModelMessageRole.Tool
+                        && string.Equals(message.ToolName, "search", StringComparison.Ordinal)
+                        && message.Content.Any(part => part.Content.Contains("Call find_symbol", StringComparison.Ordinal)));
+                Assert.Single(snapshot, item => item.Kind == EvidenceKind.ToolResult
+                    && item.Provenance.Source == "tool:find_symbol");
+                Assert.DoesNotContain(snapshot, item => item.Provenance.Source == "tool:search");
+            }
+
+            Assert.Equal(fileScoped ? 2 : 3, model.Requests.Count);
+            Assert.Equal(!fileScoped, semanticResolver.FindSymbolsCalled);
             Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete")));
             Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -4061,18 +4078,18 @@ public static class Milestone4Tests
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
-    /// <summary>The stable host policy requires semantic-first tool selection and forbids redundant fallback.</summary>
+    /// <summary>Discovery guidance allows direct known-file inspection without a preliminary semantic call.</summary>
     [Fact]
     public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
     {
         var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt);
 
         Assert.Contains(
-            "MUST use an advertised semantic tool",
+            "For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Text search is allowed only when no applicable semantic tool is advertised",
+            "read_file and file-scoped search can directly answer",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -4768,10 +4785,14 @@ public static class Milestone4Tests
     private sealed class SearchThenSemanticThenPlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
+        private readonly string? _filePath;
+        private readonly bool _fileScoped;
 
-        public SearchThenSemanticThenPlanModelProvider(ImplementationPlan plan)
+        public SearchThenSemanticThenPlanModelProvider(ImplementationPlan plan, string? filePath, bool fileScoped)
         {
             _plan = plan;
+            _filePath = filePath;
+            _fileScoped = fileScoped;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -4791,13 +4812,15 @@ public static class Milestone4Tests
                 {
                     Output = new ToolRequestModelOutput(
                         "search",
-                        "{\"query\":\"SectorEntityStandardizer\"}"),
+                        _filePath is not null
+                            ? JsonSerializer.Serialize(new { query = "SectorEntityStandardizer", path = _filePath })
+                            : "{\"query\":\"SectorEntityStandardizer\"}"),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;
             }
 
-            if (Requests.Count == 2)
+            if (Requests.Count == 2 && !_fileScoped)
             {
                 Assert.Contains(
                     request.Messages,

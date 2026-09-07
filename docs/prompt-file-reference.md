@@ -12,6 +12,14 @@ The files control model-visible wording and formatting only. They cannot change 
 
 Every placeholder name is case-sensitive. Preserve every required marker exactly, including both pairs of braces. A file whose table entry says `None` is exact text and must not contain a `{{...}}` marker. Tokens explicitly labeled optional may be omitted by the caller; Threadsmith then substitutes an empty string. Startup fails before model or tool activity when a required marker is missing or a marker is undeclared, malformed, or otherwise violates the catalog contract. Repeating a declared marker is valid and inserts the same value at each occurrence.
 
+Ordinary delegated children receive a common host-policy message plus a role-specific system amendment. Role amendments guide activity without prescribing answer fields, citation identifiers, or a JSON format. Task context, repository instructions, and evidence keep their separate framing. Technical tool errors may receive feedback, but answers are not sent through role-format correction rounds. The joined child response is unparsed text inside host-owned result metadata; separately approved mutation preparation uses its own protocol. The original Explorer output-policy and format-correction assets remain cataloged but are not sent to ordinary children.
+
+The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
+
+The `read_file`, `search`, and `code_explore` description assets and `System-SystemPrompt.md` allow direct known-file inspection and a choice between relevant ranges and whole-file reads. Semantic tools remain the first choice for repository-wide C# discovery and compiler-backed relationships. This is retrieval guidance, not an expansion of tool permissions.
+
+The `Tool-code_explore-OmissionsSection.md` `Items` value also includes unresolved requested filenames and permitted ambiguity alternatives, so missing file coverage is visible in the default Markdown output.
+
 Common editing rules:
 
 - Back up installed prompt experiments before upgrading; upgrades replace the complete shipped defaults.
@@ -23,14 +31,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 18 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 24 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 188 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 192 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **289** | Complete deployed catalog. |
+| **Total** | **299** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -44,8 +52,14 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-ChildAgent-HostPolicy.md` | Delegated-child system policy for `HostPolicy`. | `None` |
-| `System-ChildAgent-OutputPolicy.md` | Delegated-child system policy for `OutputPolicy`. | `None` |
+| `System-ChildAgent-HostPolicy.md` | Common child system policy for trust, permissions, tools, and free-form responses. | `None` |
+| `System-ChildAgent-Explorer.md` | Explorer role amendment for focused inspection and useful answers. | `None` |
+| `System-ChildAgent-OutputPolicy.md` | Legacy Explorer JSON output policy retained in the catalog; unused for ordinary child responses. | `None` |
+| `System-ChildAgent-Implementer.md` | Implementer role amendment for read-only implementation suggestions. | `None` |
+| `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
+| `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
+| `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
+| `System-ChildAgent-ArchitectureReviewer.md` | ArchitectureReviewer role amendment informed by repository design and applicable documents. | `None` |
 
 #### `GovernedRequestState` family
 
@@ -112,10 +126,10 @@ Active-turn, summary, steering, and delegated-child context framing.
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Context-ActiveTurnCompaction-Initial.md` | Context framing for `ActiveTurnCompaction-Initial`. | `None` |
-| `Context-ActiveTurnCompaction-OutputContract.md` | Context framing for `ActiveTurnCompaction-OutputContract`. | `None` |
+| `Context-ActiveTurnCompaction-Initial.md` | Initial parent/child working notes, retaining useful evidence-ID associations. | `None` |
+| `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
-| `Context-ActiveTurnCompaction-Update.md` | Context framing for `ActiveTurnCompaction-Update`. | `None` |
+| `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
 
 #### `ActiveTurnSummary` family
 
@@ -134,7 +148,7 @@ Active-turn, summary, steering, and delegated-child context framing.
 | `Context-ChildAgent-InitialEvidenceNone.md` | Delegated-child context framing for `InitialEvidenceNone`. | `None` |
 | `Context-ChildAgent-RepositoryInstructionsNone.md` | Delegated-child context framing for `RepositoryInstructionsNone`. | `None` |
 | `Context-ChildAgent-Steering.md` | Delegated-child context framing for `Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
-| `Context-ChildAgent-StructuredFindingsTask.md` | Fixed delegated-child task guidance for structured findings. | `None` |
+| `Context-ChildAgent-StructuredFindingsTask.md` | Ordinary delegated-child task guidance; legacy filename retained. | `None` |
 | `Context-ChildAgent-Task.md` | Delegated-child context framing for `Task`. | [`BaselineIdentity`](#placeholder-baselineidentity), [`Objective`](#placeholder-objective), [`SuppliedContext`](#placeholder-suppliedcontext), [`Tasks`](#placeholder-tasks) |
 
 #### `CurrentTurn` family
@@ -151,7 +165,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-ChildAgent-InvalidOutput.md` | Corrective or retry guidance for `ChildAgent-InvalidOutput`. | [`Reason`](#placeholder-reason) |
+| `Correction-ChildAgent-InvalidOutput.md` | Legacy Explorer-format correction retained in the catalog; unused for ordinary child responses. | [`Reason`](#placeholder-reason) |
 
 #### `csharp_pattern_search` family
 
@@ -324,6 +338,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | `None` |
+| `Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | `None` |
 
 #### `code_explore` family
 
@@ -474,10 +489,13 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-delegate_agents-ChildOmission.md` | Joined delegation result block for `ChildOmission`. | [`AssignmentId`](#placeholder-assignmentid), [`Omission`](#placeholder-omission) |
+| `Tool-delegate_agents-ChildDetails.md` | Joined child model-selection and implementation proposal details. | [`AssignmentId`](#placeholder-assignmentid), [`DetailsJson`](#placeholder-detailsjson) |
+| `Tool-delegate_agents-ReviewDetails.md` | Joined advisory review details including severity, location, and recommendation. | [`AssignmentId`](#placeholder-assignmentid), [`DetailsJson`](#placeholder-detailsjson) |
+| `Tool-delegate_agents-ImplementationOmitted.md` | Joined implementation handoff omission caused by the structured output bound. | `None` |
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
-| `Tool-delegate_agents-ChildSummary.md` | Joined delegation result block for `ChildSummary`. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
+| `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`MaximumAgents`](#placeholder-maximumagents) |
+| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
@@ -730,10 +748,10 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | Placeholder | Meaning and use |
 |---|---|
 | <a id="placeholder-additionalmessages"></a>`AdditionalMessages` | Supplemental model messages inserted into the request outside the current task and retained history. |
-| <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, and omission blocks. |
+| <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, omission, child-detail, and review-detail blocks. |
 | <a id="placeholder-attemptnumber"></a>`AttemptNumber` | Current host-controlled correction or retry attempt number. |
 | <a id="placeholder-availabletools"></a>`AvailableTools` | Rendered inventory of tools available to the current request in the legacy request envelope. |
-| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Stable identity of the repository baseline against which a proposed change is checked. |
+| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Threadsmith workspace fingerprint identifying the captured baseline against which a proposed change is checked. This is not a Git revision or reference. |
 | <a id="placeholder-boundarykind"></a>`BoundaryKind` | Classification of a call-flow boundary, such as unresolved or compiler-known dispatch. |
 | <a id="placeholder-callee"></a>`Callee` | Called symbol at the destination of a call relationship. |
 | <a id="placeholder-caller"></a>`Caller` | Calling symbol at the source of a call relationship. |
@@ -758,6 +776,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-depth"></a>`Depth` | Traversal or hierarchy depth of the displayed item. |
 | <a id="placeholder-description"></a>`Description` | Description of a tool, capability, mode, or catalog item; tool descriptions may come from built-ins or an imported MCP server and are escaped before insertion. |
 | <a id="placeholder-detail"></a>`Detail` | Bounded explanatory detail for the surrounding result or correction. |
+| <a id="placeholder-detailsjson"></a>`DetailsJson` | Host-serialized sanitized child DTO details: model-selection provenance and implementation proposals in ChildDetails, or advisory reviewer fields such as severity, confidence, title, category, path, line, citations, consequence, and recommendation in ReviewDetails. |
 | <a id="placeholder-diagnosticitems"></a>`DiagnosticItems` | Fully rendered collection of bounded pre-mutation diagnostic rows. |
 | <a id="placeholder-direction"></a>`Direction` | Traversal direction, such as caller-to-callee or reverse. |
 | <a id="placeholder-disagreement"></a>`Disagreement` | One structured disagreement reported across delegated child results. |
@@ -793,7 +812,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-location"></a>`Location` | Display-safe source or repository location. |
 | <a id="placeholder-matchcount"></a>`MatchCount` | Number of matches returned by a bounded search. |
 | <a id="placeholder-matchplural"></a>`MatchPlural` | Grammar word or suffix selected from the match count. |
-| <a id="placeholder-maximumagents"></a>`MaximumAgents` | Host-enforced maximum number of delegated children. |
+| <a id="placeholder-agentcountdescription"></a>`AgentCountDescription` | Effective delegated child-count phrase, such as `1-3 children` or `one or more children` when the configured count limit is disabled. |
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |
@@ -862,7 +881,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-suggestedcall"></a>`SuggestedCall` | Host-produced example tool invocation for recovery. |
 | <a id="placeholder-suggestedquery"></a>`SuggestedQuery` | Host-produced replacement query for recovery. |
 | <a id="placeholder-suggestedtool"></a>`SuggestedTool` | Tool identifier recommended by host-owned recovery guidance. |
-| <a id="placeholder-summary"></a>`Summary` | Bounded summary of the surrounding child, result, or operation. |
+| <a id="placeholder-summary"></a>`Summary` | Full, unparsed response text for an ordinary child in `Tool-delegate_agents-ChildSummary.md`, or the legacy child summary for older outcomes; elsewhere, a summary of the surrounding result or operation. |
 | <a id="placeholder-summarycontent"></a>`SummaryContent` | Untrusted compacted summary body wrapped by host-authored framing. |
 | <a id="placeholder-suppliedcontext"></a>`SuppliedContext` | Caller-supplied child context treated as untrusted task data. |
 | <a id="placeholder-symbol"></a>`Symbol` | Display-safe symbol identity or name. |

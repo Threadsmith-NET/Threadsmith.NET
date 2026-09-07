@@ -572,8 +572,35 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemChildAgentHostPolicy prompt asset.</summary>
     public const string SystemChildAgentHostPolicy = "System-ChildAgent-HostPolicy.md";
 
+    /// <summary>System-prompt amendment for the Explorer role.</summary>
+    public const string SystemChildAgentExplorer = "System-ChildAgent-Explorer.md";
+
     /// <summary>Gets the stable filename for the SystemChildAgentOutputPolicy prompt asset.</summary>
     public const string SystemChildAgentOutputPolicy = "System-ChildAgent-OutputPolicy.md";
+
+    /// <summary>System guidance for read-only implementation proposals.</summary>
+    public const string SystemChildAgentImplementer = "System-ChildAgent-Implementer.md";
+
+    /// <summary>System guidance for security review findings.</summary>
+    public const string SystemChildAgentSecurityReviewer = "System-ChildAgent-SecurityReviewer.md";
+
+    /// <summary>System guidance for test coverage and expected assertions.</summary>
+    public const string SystemChildAgentTestReviewer = "System-ChildAgent-TestReviewer.md";
+
+    /// <summary>System guidance for measured performance evidence and plausible risks.</summary>
+    public const string SystemChildAgentPerformanceReviewer = "System-ChildAgent-PerformanceReviewer.md";
+
+    /// <summary>System guidance for architecture review backed by code and document citations.</summary>
+    public const string SystemChildAgentArchitectureReviewer = "System-ChildAgent-ArchitectureReviewer.md";
+
+    /// <summary>Joined child model-selection and implementation proposal details.</summary>
+    public const string ToolDelegateAgentsChildDetails = "Tool-delegate_agents-ChildDetails.md";
+
+    /// <summary>Joined advisory reviewer details.</summary>
+    public const string ToolDelegateAgentsReviewDetails = "Tool-delegate_agents-ReviewDetails.md";
+
+    /// <summary>Joined implementation handoff omission caused by the structured output bound.</summary>
+    public const string ToolDelegateAgentsImplementationOmitted = "Tool-delegate_agents-ImplementationOmitted.md";
 
     /// <summary>Gets the stable filename for the ContextChildAgentRepositoryInstructionsNone prompt asset.</summary>
     public const string ContextChildAgentRepositoryInstructionsNone = "Context-ChildAgent-RepositoryInstructionsNone.md";
@@ -992,6 +1019,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolChildAgentToolInvocationCompleted prompt asset.</summary>
     public const string ToolChildAgentToolInvocationCompleted = "Tool-ChildAgent-ToolInvocation-Completed.md";
 
+    /// <summary>Gets the child evidence retrieval description.</summary>
+    public const string ToolReadAgentEvidenceDescription = "Tool-ReadAgentEvidence-Description.md";
+
     /// <summary>Gets all required filenames in deterministic ordinal order.</summary>
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
@@ -1144,7 +1174,16 @@ public static class PromptFileNames
         SkillWorkflowNextActionInspectFailureThenRevalidate,
         ProviderOpenAiCodexInstructions,
         SystemChildAgentHostPolicy,
+        SystemChildAgentExplorer,
         SystemChildAgentOutputPolicy,
+        SystemChildAgentImplementer,
+        SystemChildAgentSecurityReviewer,
+        SystemChildAgentTestReviewer,
+        SystemChildAgentPerformanceReviewer,
+        SystemChildAgentArchitectureReviewer,
+        ToolDelegateAgentsChildDetails,
+        ToolDelegateAgentsReviewDetails,
+        ToolDelegateAgentsImplementationOmitted,
         ContextChildAgentRepositoryInstructionsNone,
         ContextChildAgentInitialEvidenceNone,
         ContextChildAgentTask,
@@ -1284,6 +1323,7 @@ public static class PromptFileNames
         ToolCodeExploreSourceBudgetRelevanceSuffix,
         ToolToolInvocationCompleted,
         ToolChildAgentToolInvocationCompleted,
+        ToolReadAgentEvidenceDescription,
     ]);
 }
 
@@ -1383,7 +1423,16 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionMutationRenameSymbolOverlap,
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
             PromptFileNames.SystemChildAgentHostPolicy,
+            PromptFileNames.SystemChildAgentExplorer,
             PromptFileNames.SystemChildAgentOutputPolicy,
+            PromptFileNames.SystemChildAgentImplementer,
+            PromptFileNames.SystemChildAgentSecurityReviewer,
+            PromptFileNames.SystemChildAgentTestReviewer,
+            PromptFileNames.SystemChildAgentPerformanceReviewer,
+            PromptFileNames.SystemChildAgentArchitectureReviewer,
+            PromptFileNames.ToolDelegateAgentsChildDetails,
+            PromptFileNames.ToolDelegateAgentsReviewDetails,
+            PromptFileNames.ToolDelegateAgentsImplementationOmitted,
             PromptFileNames.ContextChildAgentRepositoryInstructionsNone,
             PromptFileNames.ContextChildAgentInitialEvidenceNone,
             PromptFileNames.ContextChildAgentTask,
@@ -1407,6 +1456,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
             PromptFileNames.ToolToolInvocationCompleted,
             PromptFileNames.ToolChildAgentToolInvocationCompleted,
+            PromptFileNames.ToolReadAgentEvidenceDescription,
         };
         var dotNetAssets = new HashSet<string>(
             PromptFileNames.All
@@ -1580,7 +1630,7 @@ public static class PromptAssetCatalog
                         "DocumentCount",
                         "DocumentPlural"),
                     [PromptFileNames.ToolGeneratedCodeQueryHiddenDocuments] = Set("HiddenCount", "Plural"),
-                    [PromptFileNames.ToolDelegateAgentsDescription] = Set("MaximumAgents"),
+                    [PromptFileNames.ToolDelegateAgentsDescription] = Set("AgentCountDescription"),
                     [PromptFileNames.AdapterMcpImportedToolFallbackDescription] = Set("ServerName"),
                     [PromptFileNames.CorrectionProviderInvocationInvalid] = Set(
                         "AttemptNumber",
@@ -1700,6 +1750,8 @@ public static class PromptAssetCatalog
                         "TotalEvidenceItems"),
                     [PromptFileNames.ContextChildAgentSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.CorrectionChildAgentInvalidOutput] = Set("Reason"),
+                    [PromptFileNames.ToolDelegateAgentsChildDetails] = Set("AssignmentId", "DetailsJson"),
+                    [PromptFileNames.ToolDelegateAgentsReviewDetails] = Set("AssignmentId", "DetailsJson"),
                     [PromptFileNames.ToolDelegateAgentsResultHeader] = Set("DelegationId", "Status"),
                     [PromptFileNames.ToolDelegateAgentsChildStatus] = Set(
                         "AssignmentId",

@@ -4086,6 +4086,10 @@ public static class Milestone1Tests
     [InlineData("THREAD_TOKEN=secret-env", "secret-env")]
     [InlineData("/?api_key=secret-query&x=1", "secret-query")]
     [InlineData("token: first\napi-key: second", "first")]
+    [InlineData("token:\n\nmultiline-secret", "multiline-secret")]
+    [InlineData("{\"token\":\n\"multiline-json-secret\"}", "multiline-json-secret")]
+    [InlineData("token = >credential", ">credential")]
+    [InlineData("token = \"=>credential\"", "=>credential")]
     [InlineData("password='secret phrase'", "secret phrase")]
     [InlineData("Server=db;User Id=me;Password=connection-secret;", "connection-secret")]
     [InlineData("https://user:url-secret@example.test/path", "url-secret")]
@@ -4165,6 +4169,104 @@ public static class Milestone1Tests
         Assert.DoesNotContain("accessToken=accessToken", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain("Authorization: authorization", sanitized, StringComparison.Ordinal);
         Assert.Equal(9, sanitized.Split("[REDACTED]", StringSplitOptions.None).Length - 1);
+    }
+
+    /// <summary>C# lambda arrows are syntax rather than credential assignment separators.</summary>
+    [Theory]
+    [InlineData("token =>\n {\n     return Fetch(token);\n }")]
+    [InlineData("token =>\r\n {\r\n     return Fetch(token);\r\n }")]
+    [InlineData("Use(token=>Fetch(token));")]
+    [InlineData("access_token => Fetch(access_token)")]
+    [InlineData("cancellation_token => Fetch(cancellation_token)")]
+    [InlineData("password => Fetch(password)")]
+    [InlineData("pwd=>Fetch(pwd)")]
+    public static void SecretOutputSanitizer_PreservesLambdaArrows(string input)
+    {
+        var sanitizer = new SecretOutputSanitizer();
+
+        Assert.Equal(input, sanitizer.Sanitize(input));
+    }
+
+    /// <summary>C# fence headers after prose credential names survive without a source-argument fast-path trigger.</summary>
+    [Theory]
+    [InlineData("csharp", "\n")]
+    [InlineData("cs", "\n")]
+    [InlineData("csharp", "\r\n")]
+    [InlineData("cs", "\r\n")]
+    public static void SecretOutputSanitizer_PreservesCSharpFenceHeaders(string language, string newline)
+    {
+        var sanitizer = new SecretOutputSanitizer();
+        var input = $"caller-provided token:{newline}{newline}```{language}{newline}fetch(cancellationToken){newline}```";
+
+        Assert.Equal(input, sanitizer.Sanitize(input));
+    }
+
+    /// <summary>Only standalone unquoted C# fence headers following a prose colon qualify as syntax.</summary>
+    [Theory]
+    [InlineData("token: ```csharp", "```csharp")]
+    [InlineData("token=\n```csharp\n", "```csharp")]
+    [InlineData("\"token\":\n```csharp\n", "```csharp")]
+    [InlineData("token:\n\"```csharp\"\n", "```csharp")]
+    [InlineData("token:\n```csharp-extra\n", "```csharp-extra")]
+    [InlineData("token:\n```csharp,suffix\n", "```csharp")]
+    [InlineData("token:\n```csharp suffix\n", "```csharp")]
+    [InlineData("token:\n```python\n", "```python")]
+    public static void SecretOutputSanitizer_RedactsFenceLikeCredentialValues(string input, string secret)
+    {
+        var sanitizer = new SecretOutputSanitizer();
+
+        var sanitized = sanitizer.Sanitize(input);
+
+        Assert.DoesNotContain(secret, sanitized, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", sanitized, StringComparison.Ordinal);
+    }
+
+    /// <summary>Fence detection does not enable identifier exemptions in unrelated credential matches.</summary>
+    [Fact]
+    public static void SecretOutputSanitizer_FenceHeaderDoesNotExemptCredentialIdentifiers()
+    {
+        var sanitizer = new SecretOutputSanitizer();
+        const string input = "provided token:\n\n```cs\nfetch(cancellationToken)\n```\nHeader, token: sensitive trailing";
+        var expected = input.Replace("sensitive", "[REDACTED]", StringComparison.Ordinal);
+
+        Assert.Equal(expected, sanitizer.Sanitize(input));
+    }
+
+    /// <summary>Preserving source syntax never exempts neighboring text or fenced code from credential redaction.</summary>
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("cs")]
+    public static void SecretOutputSanitizer_RedactsCredentialsAlongsidePreservedSyntax(string language)
+    {
+        var sanitizer = new SecretOutputSanitizer();
+        var input = $$"""
+            Authorization: Bearer header-secret
+            THREAD_TOKEN=environment-secret
+            caller-provided token:
+
+            ```{{language}}
+            token =>
+            {
+                var apiKey = "source-secret";
+                Use(token: "argument-secret");
+                var value = "sk-abcdefghijklmnopqrstuvwxyz";
+                return Fetch(token);
+            }
+            ```
+            {"token":"json-secret"}
+            token:
+                multiline-secret
+            """;
+        var expected = input
+            .Replace("Bearer header-secret", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("environment-secret", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("\"source-secret\"", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("\"argument-secret\"", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("sk-abcdefghijklmnopqrstuvwxyz", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("\"json-secret\"", "[REDACTED]", StringComparison.Ordinal)
+            .Replace("multiline-secret", "[REDACTED]", StringComparison.Ordinal);
+
+        Assert.Equal(expected, sanitizer.Sanitize(input));
     }
 
     private static IEnumerable<RunPhase[]> GetLegalTransitionPaths()

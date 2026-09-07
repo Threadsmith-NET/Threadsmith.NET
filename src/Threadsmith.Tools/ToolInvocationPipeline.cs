@@ -590,7 +590,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             string? modelResultContent = null;
             if (!string.IsNullOrEmpty(execution.ModelResultContent))
             {
-                modelResultContent = _sanitizer.Sanitize(execution.ModelResultContent);
+                modelResultContent = JsonOutputSanitizer.SanitizeJsonOrText(execution.ModelResultContent, _sanitizer);
                 if (Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
                 {
                     return await CompleteFailureAsync(

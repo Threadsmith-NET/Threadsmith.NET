@@ -1,4 +1,4 @@
-Baseline: {{BaselineIdentity}}
+Threadsmith workspace fingerprint (not a Git revision): {{BaselineIdentity}}
 <objective untrusted="true">
 {{Objective}}
 </objective>

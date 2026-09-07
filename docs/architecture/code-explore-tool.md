@@ -27,6 +27,8 @@ The query can contain:
 
 ## Request pipeline
 
+Named C# files in a query become exact path requests before natural-language declaration ranking. Each requested file has its own resolution outcome; missing files do not cause loosely related declarations to be returned instead. A bare filename first checks that exact repository-root file, then can resolve to a unique, policy-allowed loaded document. Distinct loaded files with the same name return ambiguity and path alternatives; linked copies of the same physical file retain their existing handling. An explicit repository-relative path outside the semantic workspace can still return permitted source, labeled as lacking semantic identity. Unknown filenames require a repository file lookup or an exact path, not another broad semantic query.
+
 ```text
 model query
     |

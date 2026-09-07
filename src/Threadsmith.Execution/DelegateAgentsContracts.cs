@@ -17,10 +17,10 @@ public static class DelegateAgentsContract
     /// <summary>Host response envelope identity; the model's response has no required format.</summary>
     public const string ResponseSchema = AgentAssignment.ResponseSchema;
 
-    /// <summary>Hard tool-result byte ceiling enforced by the invocation pipeline.</summary>
+    /// <summary>Default tool-result byte limit enforced by the invocation pipeline when configured.</summary>
     public const int MaximumOutputBytes = 256 * 1024;
 
-    /// <summary>Reserved structured-result ceiling below the pipeline envelope limit.</summary>
+    /// <summary>Default structured-result limit below the pipeline envelope limit when configured.</summary>
     public const int MaximumStructuredResultBytes = 192 * 1024;
 }
 
@@ -318,7 +318,10 @@ public sealed record DelegateAgentsOptions
         ? ChildBudget : ChildBudget with { WallTime = TimeSpan.Zero };
 
     /// <summary>Returns an operational limit or zero when all operational limits are disabled.</summary>
-    public int EffectiveLimit(int value) => EnforceOperationalLimits ? value : 0;
+    public int EffectiveLimit(int value)
+    {
+        return EnforceOperationalLimits ? value : 0;
+    }
 
     /// <summary>Freezes request validation limits so scheduling does not reintroduce compiled defaults.</summary>
     public AgentAssignmentLimits CreateAssignmentLimits()
@@ -372,6 +375,37 @@ public sealed record DelegateAgentsOptions
         {
             throw new InvalidOperationException("Delegate-agent child budgets are outside supported bounds.");
         }
+    }
+
+    /// <summary>Returns the effective positive tool-pipeline output bound for this delegation tool.</summary>
+    internal int EffectiveToolOutputBytes()
+    {
+        var limit = EffectiveLimit(MaximumOutputBytes);
+        return limit > 0 ? limit : int.MaxValue;
+    }
+
+    /// <summary>Returns the effective structured-result byte limit; zero means disabled.</summary>
+    internal int EffectiveStructuredResultBytes()
+    {
+        return EffectiveLimit(MaximumStructuredResultBytes);
+    }
+
+    /// <summary>Returns the effective parent-model projection character limit; zero means disabled.</summary>
+    internal int EffectiveModelProjectionCharacters()
+    {
+        return EffectiveLimit(MaximumModelProjectionCharacters);
+    }
+
+    /// <summary>Formats the effective child-count range for model-facing guidance.</summary>
+    internal string FormatAgentCountDescription()
+    {
+        var maximum = EffectiveLimit(MaximumAgents);
+        return maximum switch
+        {
+            0 => "one or more children",
+            1 => "one child",
+            _ => $"1-{maximum} children",
+        };
     }
 }
 

@@ -437,7 +437,7 @@ public sealed class MutationProposalApplication :
                 {
                     var toolOutputCharacters = (long)toolRequest.ToolName.Length
                         + toolRequest.ArgumentsJson.Length;
-                    if (toolOutputCharacters > _limits.MaxStructuredOutputCharacters)
+                    if (ExceedsStructuredOutputLimit(toolOutputCharacters))
                     {
                         throw new MalformedModelOutputException(
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
@@ -503,7 +503,7 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Text is not null && structured is null)
                 {
-                    if (textOutput.Length + chunk.Text.Length > _limits.MaxStructuredOutputCharacters)
+                    if (ExceedsStructuredOutputLimit(textOutput.Length + chunk.Text.Length))
                     {
                         throw new MalformedModelOutputException(
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
@@ -687,7 +687,7 @@ public sealed class MutationProposalApplication :
                     RequiredCapabilities = new ModelCapabilitySet
                     {
                         Streaming = true,
-                        StructuredOutput = true,
+                        StructuredOutput = child is null,
                         ToolCalls = child is not null,
                     },
                     DefaultModelProfileId = child?.Selection.ProfileId
@@ -707,7 +707,7 @@ public sealed class MutationProposalApplication :
                     AdditionalMessages = additionalMessages,
                 },
                 cancellationToken);
-            IReadOnlyList<ModelMessage> messages = context.Messages ?? [];
+            var messages = context.Messages ?? [];
             IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
             var modelRequest = new ModelStreamRequest
             {
@@ -911,6 +911,12 @@ public sealed class MutationProposalApplication :
         }
 
         return wireEstimate;
+    }
+
+    private bool ExceedsStructuredOutputLimit(long characters)
+    {
+        return _limits.MaxStructuredOutputCharacters > 0
+            && characters > _limits.MaxStructuredOutputCharacters;
     }
 
     private static RepairableMutationProposalException CreateRepairableMutationFailure(

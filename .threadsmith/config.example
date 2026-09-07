@@ -110,6 +110,11 @@
     "maxActiveImplementers": 2,
     // Bounded host-shutdown join/cleanup backstop.
     "shutdownTimeoutSeconds": 30
+    // Trusted user/machine agents.delegation settings use positive values as
+    // caps and zero as the off switch for that cap. The global
+    // delegation.enforceOperationalLimits switch disables the configurable
+    // delegation caps together; authority, trust, tool, cancellation, and
+    // provider controls still apply.
     // Role routing belongs only in trusted user/machine configuration, never
     // repository config. In ~/.threadsmith/config.json, agents.roleModels may
     // contain, for example, "testReviewer": { "providerId": "primary",
@@ -471,7 +476,7 @@
     // model-authored requests before the host fails closed.
     "maxCorrectiveTurns": 3,
     // Maximum structured (JSON) mutation output characters accumulated from a
-    // streaming model before it is rejected as malformed.
+    // streaming model before it is rejected as malformed. 0 disables this cap.
     "maxStructuredOutputCharacters": 8388608,
     // Maximum characters of a tool result preview retained in session projections.
     "toolResultPreviewCharacters": 4096

@@ -183,7 +183,7 @@ public static class PackagedDocumentationPolicy
         }
 
         string? governingHeading = null;
-        for (int index = lineStart - 1; index >= 0; index--)
+        for (var index = lineStart - 1; index >= 0; index--)
         {
             if (TryGetMarkdownHeading(lines[index], out var candidate))
             {
@@ -194,7 +194,7 @@ public static class PackagedDocumentationPolicy
 
         if (governingHeading is null)
         {
-            for (int index = lineStart - 1; index < lineEnd; index++)
+            for (var index = lineStart - 1; index < lineEnd; index++)
             {
                 if (TryGetMarkdownHeading(lines[index], out var candidate))
                 {

@@ -1630,7 +1630,7 @@ public static class PromptAssetCatalog
                         "DocumentCount",
                         "DocumentPlural"),
                     [PromptFileNames.ToolGeneratedCodeQueryHiddenDocuments] = Set("HiddenCount", "Plural"),
-                    [PromptFileNames.ToolDelegateAgentsDescription] = Set("MaximumAgents"),
+                    [PromptFileNames.ToolDelegateAgentsDescription] = Set("AgentCountDescription"),
                     [PromptFileNames.AdapterMcpImportedToolFallbackDescription] = Set("ServerName"),
                     [PromptFileNames.CorrectionProviderInvocationInvalid] = Set(
                         "AttemptNumber",

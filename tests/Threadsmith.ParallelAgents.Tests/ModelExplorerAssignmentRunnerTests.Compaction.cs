@@ -380,12 +380,15 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Contains("[REDACTED]", stored.Content, StringComparison.Ordinal);
     }
 
-    private static ModelMessage HistoryMessage(string text, ModelMessageRole role) => new()
+    private static ModelMessage HistoryMessage(string text, ModelMessageRole role)
     {
-        Role = role,
-        SectionId = "test-pinned",
-        Content = [new ModelContentPart { Content = text }],
-    };
+        return new()
+        {
+            Role = role,
+            SectionId = "test-pinned",
+            Content = [new ModelContentPart { Content = text }],
+        };
+    }
 
     private sealed class CompactingProvider : IModelProvider
     {
@@ -486,8 +489,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
     private sealed class NoopCompactionObserver : IActiveTurnCompactionAttemptObserver
     {
-        public Task BeforeProviderCallAsync(ActiveTurnCompactionRequest request, int attempt, Guid invocationId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task BeforeProviderCallAsync(ActiveTurnCompactionRequest request, int attempt, Guid invocationId, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task AfterProviderCallAsync(ActiveTurnCompactionRequest request, int attempt, Guid invocationId, ActiveTurnCompactionAttemptOutcome outcome, ModelUsage? usage, TimeSpan duration, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AfterProviderCallAsync(ActiveTurnCompactionRequest request, int attempt, Guid invocationId, ActiveTurnCompactionAttemptOutcome outcome, ModelUsage? usage, TimeSpan duration, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 }

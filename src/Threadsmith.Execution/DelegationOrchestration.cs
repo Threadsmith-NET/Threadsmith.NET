@@ -306,7 +306,10 @@ public static class DelegationPlanValidator
         }
     }
 
-    private static bool Exceeds(int value, int maximum) => maximum > 0 && value > maximum;
+    private static bool Exceeds(int value, int maximum)
+    {
+        return maximum > 0 && value > maximum;
+    }
 }
 
 /// <summary>Conservatively partitions assignment ownership and falls back to serial execution.</summary>
@@ -924,7 +927,10 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         };
     }
 
-    private static SemaphoreSlim? CreateLimiter(int limit) => limit == 0 ? null : new SemaphoreSlim(limit, limit);
+    private static SemaphoreSlim? CreateLimiter(int limit)
+    {
+        return limit == 0 ? null : new SemaphoreSlim(limit, limit);
+    }
 
     private sealed class ParentLimiter : IDisposable
     {

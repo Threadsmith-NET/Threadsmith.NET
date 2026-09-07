@@ -22,11 +22,12 @@ public sealed class DelegateAgentsToolExecutionTests
             DelegateAgentsProjectionLimits.Production.MaximumStructuredResultBytes);
     }
 
-    /// <summary>An invalid structured-result projection bound fails immediately.</summary>
+    /// <summary>Structured-result projection accepts zero as disabled but still rejects malformed negative values.</summary>
     [Fact]
-    public void DelegateAgentsProjectionLimits_NonPositiveValue_FailsFast()
+    public void DelegateAgentsProjectionLimits_ZeroDisablesLimitAndNegativeFailsFast()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new DelegateAgentsProjectionLimits(0));
+        Assert.Equal(0, new DelegateAgentsProjectionLimits(0).MaximumStructuredResultBytes);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DelegateAgentsProjectionLimits(-1));
     }
 
     /// <summary>Verifies the model-facing contract exposes only bounded v1 arguments and exact result shape.</summary>
@@ -49,6 +50,7 @@ public sealed class DelegateAgentsToolExecutionTests
         var agentProperties = inputProperties.GetProperty("agents")
             .GetProperty("items")
             .GetProperty("properties");
+        var agentsSchema = inputProperties.GetProperty("agents");
         var childProperties = outputSchema.RootElement.GetProperty("properties")
             .GetProperty("children")
             .GetProperty("items")
@@ -64,14 +66,18 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.True(definition.ConversationAvailable);
         Assert.True(definition.RequiresWorkspace);
         Assert.True(definition.PreferStrictArguments);
+        Assert.Equal(DelegateAgentsContract.MaximumOutputBytes, definition.MaximumOutputBytes);
         Assert.True(inputSchema.RootElement.GetProperty("additionalProperties").ValueKind
             == JsonValueKind.False);
         Assert.Equal(["agents"], inputProperties.EnumerateObject().Select(item => item.Name));
+        Assert.Equal(3, agentsSchema.GetProperty("maxItems").GetInt32());
         Assert.Equal(
             ["context", "role", "task", "toolAccess"],
             agentProperties.EnumerateObject().Select(item => item.Name).Order(StringComparer.Ordinal));
         Assert.Equal(6, agentProperties.GetProperty("role").GetProperty("enum").GetArrayLength());
         Assert.Equal("explorer", agentProperties.GetProperty("role").GetProperty("default").GetString());
+        Assert.Equal(4_096, agentProperties.GetProperty("task").GetProperty("maxLength").GetInt32());
+        Assert.Equal(8_192, agentProperties.GetProperty("context").GetProperty("maxLength").GetInt32());
         Assert.False(agentProperties.TryGetProperty("model", out _));
         Assert.False(agentProperties.TryGetProperty("budget", out _));
         Assert.False(agentProperties.TryGetProperty("allowedToolIds", out _));
@@ -81,6 +87,90 @@ public sealed class DelegateAgentsToolExecutionTests
             .TryGetProperty("disagreements", out _));
         Assert.True(childProperties.GetProperty("usage")
             .GetProperty("additionalProperties").ValueKind == JsonValueKind.False);
+    }
+
+    /// <summary>Disabled delegation limits are omitted from the schema and do not restore compiled projection caps.</summary>
+    [Fact]
+    public async Task Definition_DisabledOperationalLimits_OmitsConfigurableSchemaAndProjectionBounds()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new CompletedResponseRunner()),
+            new DelegateAgentsOptions { EnforceOperationalLimits = false });
+
+        // Act
+        var definition = fixture.Tool.Definition;
+        using var inputSchema = JsonDocument.Parse(definition.InputSchema.JsonSchema);
+        var agentsSchema = inputSchema.RootElement.GetProperty("properties").GetProperty("agents");
+        var agentProperties = agentsSchema.GetProperty("items").GetProperty("properties");
+
+        // Assert
+        Assert.Equal(int.MaxValue, definition.MaximumOutputBytes);
+        Assert.Contains("one or more children", definition.Description, StringComparison.Ordinal);
+        Assert.False(agentsSchema.TryGetProperty("maxItems", out _));
+        Assert.False(agentProperties.GetProperty("task").TryGetProperty("maxLength", out _));
+        Assert.False(agentProperties.GetProperty("context").TryGetProperty("maxLength", out _));
+    }
+
+    /// <summary>Disabled delegation projection limits retain complete child responses beyond compiled defaults.</summary>
+    [Fact]
+    public async Task ExecuteAsync_DisabledProjectionLimitsReturnCompleteModelContent()
+    {
+        // Arrange
+        var response = new string('r', 60_000);
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new ResponseRunner(response)),
+            new DelegateAgentsOptions { EnforceOperationalLimits = false });
+
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
+
+        // Assert
+        Assert.False(execution.IsTruncated);
+        Assert.Equal(response, Assert.Single(execution.Value.Children).Summary);
+        Assert.Contains(response, execution.ModelResultContent, StringComparison.Ordinal);
+    }
+
+    /// <summary>Configured delegation limits flow into the advertised schema and production tool envelope.</summary>
+    [Fact]
+    public async Task Definition_ConfiguredLimitsDriveSchemaAndOutputBounds()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var options = new DelegateAgentsOptions
+        {
+            MaximumAgents = 5,
+            MaximumTaskCharacters = 12,
+            MaximumContextCharacters = 34,
+            MaximumOutputBytes = 123_456,
+        };
+        var fixture = CreateTool(
+            coordinator,
+            new FixedRunnerFactory(new CompletedResponseRunner()),
+            options);
+
+        // Act
+        var definition = fixture.Tool.Definition;
+        using var inputSchema = JsonDocument.Parse(definition.InputSchema.JsonSchema);
+        var agentsSchema = inputSchema.RootElement.GetProperty("properties").GetProperty("agents");
+        var agentProperties = agentsSchema.GetProperty("items").GetProperty("properties");
+
+        // Assert
+        Assert.Equal(123_456, definition.MaximumOutputBytes);
+        Assert.Contains("1-5 children", definition.Description, StringComparison.Ordinal);
+        Assert.Equal(5, agentsSchema.GetProperty("maxItems").GetInt32());
+        Assert.Equal(12, agentProperties.GetProperty("task").GetProperty("maxLength").GetInt32());
+        Assert.Equal(34, agentProperties.GetProperty("context").GetProperty("maxLength").GetInt32());
     }
 
     /// <summary>Verifies two requested children overlap, checkpoint progress, join, and remain inspectable.</summary>
@@ -174,7 +264,8 @@ public sealed class DelegateAgentsToolExecutionTests
 
         // Act
         var outcome = await runner.RunAsync(plan, Assert.Single(plan.Assignments));
-        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+        var options = new DelegateAgentsOptions();
+        var projection = new DelegateAgentsResultProjector(options, TestPromptLoader.Instance)
             .Project(plan, CreateJoinedCheckpoint(plan, outcome));
         var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
             .Render(projection.Result, out var truncated);
@@ -736,7 +827,6 @@ public sealed class DelegateAgentsToolExecutionTests
     public async Task ExecuteAsync_SmallStructuredLimit_RetainsStatusesAndBoundsStructuredResult()
     {
         // Arrange
-        var projectionLimits = new DelegateAgentsProjectionLimits(maximumStructuredResultBytes: 1_200);
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
@@ -745,19 +835,19 @@ public sealed class DelegateAgentsToolExecutionTests
         {
             MaximumAgents = 2,
             MaximumSummaryCharacters = 128,
+            MaximumStructuredResultBytes = 1_200,
         };
         var fixture = CreateTool(
             coordinator,
             new FixedRunnerFactory(new SmallProjectionRunner()),
-            options,
-            projectionLimits: projectionLimits);
+            options);
 
         // Act
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(2), fixture.Context);
         var structuredJson = JsonSerializer.SerializeToUtf8Bytes(execution.Value);
 
         // Assert
-        Assert.True(structuredJson.Length <= projectionLimits.MaximumStructuredResultBytes);
+        Assert.True(structuredJson.Length <= options.MaximumStructuredResultBytes);
         Assert.Equal(2, execution.Value.Children.Count);
         Assert.All(execution.Value.Children, child =>
         {
@@ -869,7 +959,8 @@ public sealed class DelegateAgentsToolExecutionTests
 
         // Act
         var outcome = await runner.RunAsync(plan, Assert.Single(plan.Assignments));
-        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
+        var options = new DelegateAgentsOptions();
+        var projection = new DelegateAgentsResultProjector(options, TestPromptLoader.Instance)
             .Project(plan, CreateJoinedCheckpoint(plan, outcome));
 
         // Assert
@@ -877,7 +968,7 @@ public sealed class DelegateAgentsToolExecutionTests
         var finding = Assert.Single(child.Findings);
         Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
         Assert.True(projection.IsTruncated);
-        Assert.True(finding.Title.Length <= 1_024);
+        Assert.True(finding.Title.Length <= options.MaximumProjectedDetailCharacters);
         Assert.Contains(child.Omissions, omission => omission.Contains(
             "finding fields were truncated",
             StringComparison.Ordinal));
@@ -1086,17 +1177,23 @@ public sealed class DelegateAgentsToolExecutionTests
             snapshots,
             TestPromptLoader.Instance,
             options);
-        return new ToolFixture(
-            new DelegateAgentsTool(
+        var promptLoader = prompts ?? TestPromptLoader.Instance;
+        var tool = projectionLimits is null
+            ? new DelegateAgentsTool(
                 plans,
                 runners,
                 coordinator,
                 options,
-                prompts ?? TestPromptLoader.Instance,
+                promptLoader)
+            : new DelegateAgentsTool(
+                plans,
+                runners,
+                coordinator,
+                options,
+                promptLoader,
                 steering: null,
-                projectionLimits: projectionLimits ?? DelegateAgentsProjectionLimits.Production),
-            context,
-            plans);
+                projectionLimits: projectionLimits);
+        return new ToolFixture(tool, context, plans);
     }
 
     private static DelegateAgentsInput CreateInput(int count)
@@ -1666,7 +1763,7 @@ public sealed class DelegateAgentsToolExecutionTests
             var findings = Assert.IsType<AgentFindingSet>(completed.Findings);
             var finding = Assert.Single(findings.Findings) with
             {
-                Summary = new string('x', 2_048),
+                Summary = new string('x', 2_049),
             };
             return Task.FromResult(completed with
             {

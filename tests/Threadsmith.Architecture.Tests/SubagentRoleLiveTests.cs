@@ -221,7 +221,8 @@ public sealed partial class SubagentRoleLiveTests
                 ApprovedRoots = ["."],
                 AllowedToolIds = ["read_file", "list_files"],
                 RequestedBy = "model:parent",
-            }) { Phase = RunPhase.EvidenceCollection };
+            })
+        { Phase = RunPhase.EvidenceCollection };
         var runner = new ModelExplorerAssignmentRunner(
             new AgentContextAssembler(evidence),
             new AgentFindingAdmission(evidence),

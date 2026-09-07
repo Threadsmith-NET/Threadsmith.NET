@@ -203,6 +203,22 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
     }
 
+    /// <summary>Approved child proposals require native tool calls without also requiring JSON-mode output.</summary>
+    [Fact]
+    public async Task ConfiguredRole_RequiresToolCallsButNotStructuredOutputForChildProposal()
+    {
+        await using var fixture = await Fixture.CreateAsync(trustedRole: true, structuredOutput: false);
+
+        await fixture.Application.HandleAsync(fixture.Command);
+
+        var request = Assert.Single(fixture.TrustedModel.Requests);
+        Assert.True(request.RequiredCapabilities.ToolCalls);
+        Assert.False(request.RequiredCapabilities.StructuredOutput);
+        Assert.Single(request.Tools, tool => tool.Name == "propose_mutations");
+        Assert.Equal(fixture.Profile.Id, request.ResolvedProfileId);
+        Assert.Equal(1, fixture.Workspaces.StageCalls);
+    }
+
     /// <summary>Real context assembly preserves evidence until a larger trusted role profile can accept the full request.</summary>
     [Fact]
     public async Task RealContext_TooSmallRoleFallsBackWithoutDroppingEvidence()
@@ -261,7 +277,7 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         Assert.Equal(failAfterOutput ? 0 : 1, fixture.Workspaces.StageCalls);
     }
 
-    private static ModelProfile CreateProfile()
+    private static ModelProfile CreateProfile(bool structuredOutput = true)
     {
         return new ModelProfile
         {
@@ -273,7 +289,7 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
             ContextWindow = 32_768,
             MaximumOutputTokens = 4_096,
             RequestOutputTokenReserve = 2_048,
-            Capabilities = new ModelCapabilitySet { Streaming = true, StructuredOutput = true, ToolCalls = true },
+            Capabilities = new ModelCapabilitySet { Streaming = true, StructuredOutput = structuredOutput, ToolCalls = true },
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             IntendedWorkloadClasses = [WorkloadClass.CodeEdit],
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low],
@@ -310,10 +326,16 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         private readonly EvidenceStore _evidence;
         private readonly IAsyncDisposable _subscription;
 
-        private Fixture(string root, bool trustedRole, DelegationCheckpointPhase? rejectedJoin, bool realContext, bool sensitiveFallback)
+        private Fixture(
+            string root,
+            bool trustedRole,
+            DelegationCheckpointPhase? rejectedJoin,
+            bool realContext,
+            bool sensitiveFallback,
+            bool structuredOutput)
         {
             Root = root;
-            Profile = CreateProfile();
+            Profile = CreateProfile(structuredOutput);
             if (realContext)
             {
                 FallbackProfile = CreateProfile() with { Name = "fallback", MaximumOutputTokens = 2_048, RequestOutputTokenReserve = 1_024 };
@@ -417,11 +439,15 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         public ProposeMutationSetCommand Command { get; }
 
         public static async Task<Fixture> CreateAsync(
-            bool trustedRole = false, DelegationCheckpointPhase? rejectedJoin = null, bool realContext = false, bool sensitiveFallback = false)
+            bool trustedRole = false,
+            DelegationCheckpointPhase? rejectedJoin = null,
+            bool realContext = false,
+            bool sensitiveFallback = false,
+            bool structuredOutput = true)
         {
             var root = Path.Combine(Path.GetTempPath(), "ThreadsmithApprovedImplementerTests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            var fixture = new Fixture(root, trustedRole, rejectedJoin, realContext, sensitiveFallback);
+            var fixture = new Fixture(root, trustedRole, rejectedJoin, realContext, sensitiveFallback, structuredOutput);
             try
             {
                 await File.WriteAllTextAsync(fixture.FilePath, OriginalText, new UTF8Encoding(false));
@@ -563,7 +589,10 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
                 ]);
         }
 
-        public ContextInspectionProjection? GetInspection(RunId runId) => null;
+        public ContextInspectionProjection? GetInspection(RunId runId)
+        {
+            return null;
+        }
 
         public void InvalidateInspections()
         {
@@ -581,7 +610,10 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
 
         public int StageCalls { get; private set; }
 
-        public ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId) => _inner.GetWorkspace(workspaceId);
+        public ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId)
+        {
+            return _inner.GetWorkspace(workspaceId);
+        }
 
         public Task<StagedMutationSet> StageAsync(MutationSet mutationSet, CancellationToken cancellationToken = default)
         {
@@ -642,15 +674,22 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         }
 
         public Task<DelegationCheckpoint?> GetAsync(DelegationId delegationId, CancellationToken cancellationToken = default)
-            => _inner.GetAsync(delegationId, cancellationToken);
+        {
+            return _inner.GetAsync(delegationId, cancellationToken);
+        }
 
         public Task<bool> CancelAsync(DelegationId delegationId, CancellationToken cancellationToken = default)
-            => _inner.CancelAsync(delegationId, cancellationToken);
+        {
+            return _inner.CancelAsync(delegationId, cancellationToken);
+        }
     }
 
     private sealed class TestSanitizer : IOutputSanitizer
     {
-        public string Sanitize(string value) => value;
+        public string Sanitize(string value)
+        {
+            return value;
+        }
     }
 
     private sealed record TestProviderConfiguration : ModelProviderConfiguration;
@@ -677,8 +716,14 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
             ArgumentNullException.ThrowIfNull(provider);
         }
 
-        public IReadOnlyList<ModelProfile> CreateProfiles(ModelProviderConfiguration provider) => _profiles;
+        public IReadOnlyList<ModelProfile> CreateProfiles(ModelProviderConfiguration provider)
+        {
+            return _profiles;
+        }
 
-        public IModelProvider CreateProvider(ModelProviderActivationContext context) => new RecordingModel();
+        public IModelProvider CreateProvider(ModelProviderActivationContext context)
+        {
+            return new RecordingModel();
+        }
     }
 }

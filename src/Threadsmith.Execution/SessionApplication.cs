@@ -2033,13 +2033,13 @@ public sealed partial class SessionApplication :
         int maximumCharacters,
         ref int retainedCharacters)
     {
-        if (additionalCharacters > maximumCharacters - retainedCharacters)
+        if (maximumCharacters > 0 && additionalCharacters > maximumCharacters - retainedCharacters)
         {
             throw new MalformedModelOutputException(
                 "The model exceeded the host's maximum retained output size.");
         }
 
-        retainedCharacters += additionalCharacters;
+        retainedCharacters = checked(retainedCharacters + additionalCharacters);
     }
 
     private bool TryGetPendingPlan(

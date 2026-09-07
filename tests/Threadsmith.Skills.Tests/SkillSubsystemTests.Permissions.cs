@@ -199,18 +199,24 @@ public sealed partial class SkillSubsystemTests
             TestPromptLoader.Instance);
     }
 
-    private static ToolInvocationContext PermissionContext() => new()
+    private static ToolInvocationContext PermissionContext()
     {
-        RepositoryPath = AppContext.BaseDirectory,
-        TrustLevel = RepositoryTrustLevel.TrustedRead,
-        RequestedBy = "permission-test",
-    };
+        return new()
+        {
+            RepositoryPath = AppContext.BaseDirectory,
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            RequestedBy = "permission-test",
+        };
+    }
 
-    private static SkillWorkflowStep PermissionStep() => new()
+    private static SkillWorkflowStep PermissionStep()
     {
-        StepId = "inspect",
-        Kind = SkillWorkflowStepKind.CollectEvidence,
-    };
+        return new()
+        {
+            StepId = "inspect",
+            Kind = SkillWorkflowStepKind.CollectEvidence,
+        };
+    }
 
     private static SkillInvocationPlan PermissionPlan()
     {

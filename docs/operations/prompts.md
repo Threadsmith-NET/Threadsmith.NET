@@ -118,7 +118,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-invoke_skill-Description.md` | `Threadsmith.Skills` | `prompts/Tool-invoke_skill-Description.md` | Advertised description for `invoke_skill`. | None |
 | `Tool-propose_plan-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_plan-Description.md` | Advertised description for `propose_plan`. | None |
 | `Tool-propose_mutations-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_mutations-Description.md` | Advertised description for `propose_mutations`. | None |
-| `Tool-delegate_agents-Description.md` | `Threadsmith.Execution` | `prompts/Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | `MaximumAgents` |
+| `Tool-delegate_agents-Description.md` | `Threadsmith.Execution` | `prompts/Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | `AgentCountDescription` |
 | `Adapter-McpExplicitReadPolicy-Description.md` | `Threadsmith.Mcp` | `prompts/Adapter-McpExplicitReadPolicy-Description.md` | Host-owned MCP adapter prose for `McpExplicitReadPolicy-Description`. | None |
 | `Adapter-McpImportedTool-FallbackDescription.md` | `Threadsmith.Mcp` | `prompts/Adapter-McpImportedTool-FallbackDescription.md` | Host-owned MCP adapter prose for `McpImportedTool-FallbackDescription`. | `ServerName` |
 | `Correction-ProviderInvocation-Invalid.md` | `Threadsmith.Execution` | `prompts/Correction-ProviderInvocation-Invalid.md` | Corrective or retry guidance for `ProviderInvocation-Invalid`. | `AttemptNumber`, `MaximumAttempts`, `Reason` |

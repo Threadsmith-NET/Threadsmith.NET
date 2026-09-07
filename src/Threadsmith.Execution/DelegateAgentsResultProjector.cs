@@ -13,11 +13,11 @@ internal sealed record DelegateAgentsProjectionLimits
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsProjectionLimits"/> class.</summary>
     public DelegateAgentsProjectionLimits(int maximumStructuredResultBytes)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumStructuredResultBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumStructuredResultBytes);
         MaximumStructuredResultBytes = maximumStructuredResultBytes;
     }
 
-    /// <summary>Gets the maximum serialized structured-result byte count.</summary>
+    /// <summary>Gets the maximum serialized structured-result byte count; zero means disabled.</summary>
     public int MaximumStructuredResultBytes { get; }
 
     /// <summary>Gets the production structured-result projection limit.</summary>
@@ -28,18 +28,13 @@ internal sealed record DelegateAgentsProjectionLimits
 /// <summary>Projects joined child outcomes into a bounded structured result.</summary>
 internal sealed class DelegateAgentsResultProjector
 {
-    private const int MaximumEvidenceCharacters = 2_048;
-    private const int MaximumFindingTitleCharacters = 1_024;
-    private const int MaximumLocationCharacters = 1_024;
-    private const int MaximumOmissionCharacters = 512;
-    private const int MaximumSymbolCharacters = 1_024;
     private readonly DelegateAgentsProjectionLimits _limits;
     private readonly DelegateAgentsOptions _options;
     private readonly string _implementationOmission;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultProjector"/> class.</summary>
     public DelegateAgentsResultProjector(DelegateAgentsOptions options, IPromptLoader prompts)
-        : this(options, DelegateAgentsProjectionLimits.Production, prompts)
+        : this(options, new DelegateAgentsProjectionLimits(options.EffectiveStructuredResultBytes()), prompts)
     {
     }
 
@@ -56,7 +51,7 @@ internal sealed class DelegateAgentsResultProjector
         _limits = limits;
         _implementationOmission = ProjectText(
             prompts.Get(PromptFileNames.ToolDelegateAgentsImplementationOmitted).Trim(),
-            MaximumOmissionCharacters).Value;
+            options.EffectiveLimit(options.MaximumProjectedOmissionCharacters)).Value;
     }
 
     /// <summary>Creates the complete bounded host result.</summary>
@@ -316,7 +311,7 @@ internal sealed class DelegateAgentsResultProjector
             []);
     }
 
-    private static FindingProjection ProjectFinding(AgentFinding finding, ReviewFinding? review)
+    private FindingProjection ProjectFinding(AgentFinding finding, ReviewFinding? review)
     {
         var confidence = finding.Confidence switch
         {
@@ -324,21 +319,23 @@ internal sealed class DelegateAgentsResultProjector
             >= 0.5 => "Medium",
             _ => "Low",
         };
-        var title = ProjectText(finding.Summary, MaximumFindingTitleCharacters);
+        var detailLimit = _options.EffectiveLimit(_options.MaximumProjectedDetailCharacters);
+        var omissionLimit = _options.EffectiveLimit(_options.MaximumProjectedOmissionCharacters);
+        var title = ProjectText(finding.Summary, detailLimit);
         var location = ProjectOptionalText(
             finding.Locations.FirstOrDefault(),
-            MaximumLocationCharacters);
+            detailLimit);
         var symbol = ProjectOptionalText(
             finding.Symbols.FirstOrDefault(),
-            MaximumSymbolCharacters);
+            detailLimit);
         var evidence = ProjectText(
             string.Join(',', finding.EvidenceIds.Select(id => id.Value.ToString("D"))),
-            MaximumEvidenceCharacters);
+            detailLimit);
         var uncertainty = ProjectOptionalText(
             finding.Uncertainty,
-            MaximumOmissionCharacters);
-        var recommendation = ProjectOptionalText(review?.Recommendation, MaximumOmissionCharacters);
-        var consequence = ProjectOptionalText(review?.Consequence, MaximumOmissionCharacters);
+            omissionLimit);
+        var recommendation = ProjectOptionalText(review?.Recommendation, omissionLimit);
+        var consequence = ProjectOptionalText(review?.Consequence, omissionLimit);
         var isTruncated = title.IsTruncated
             || location.IsTruncated
             || symbol.IsTruncated
@@ -366,14 +363,15 @@ internal sealed class DelegateAgentsResultProjector
             isTruncated);
     }
 
-    private static OmissionProjection ResolveOmissions(AgentRunOutcome outcome)
+    private OmissionProjection ResolveOmissions(AgentRunOutcome outcome)
     {
         string[] values = [.. outcome.Findings is null
             ? outcome.Status == AgentRunStatus.Completed ? [] : [outcome.Reason]
             : outcome.Findings.UnresolvedQuestions.Concat(outcome.Findings.CoverageNotes)];
+        var omissionLimit = _options.EffectiveLimit(_options.MaximumProjectedOmissionCharacters);
         TextProjection[] projected =
         [
-            .. values.Select(value => ProjectText(value, MaximumOmissionCharacters)),
+            .. values.Select(value => ProjectText(value, omissionLimit)),
         ];
         return new OmissionProjection(
             projected.Select(item => item.Value).ToArray(),
@@ -427,11 +425,17 @@ internal sealed class DelegateAgentsResultProjector
         using var writer = new Utf8JsonWriter(buffer);
         JsonSerializer.Serialize(writer, result);
         writer.Flush();
-        return buffer.WrittenCount <= _limits.MaximumStructuredResultBytes;
+        return _limits.MaximumStructuredResultBytes == 0
+            || buffer.WrittenCount <= _limits.MaximumStructuredResultBytes;
     }
 
     private static TextProjection ProjectText(string value, int maximumCharacters)
     {
+        if (maximumCharacters == 0)
+        {
+            return new TextProjection(value, false);
+        }
+
         var projected = BoundedText.Truncate(value, maximumCharacters, out var isTruncated);
         return new TextProjection(projected, isTruncated);
     }
@@ -440,11 +444,19 @@ internal sealed class DelegateAgentsResultProjector
         string? value,
         int maximumCharacters)
     {
-        return value is null
-            ? new OptionalTextProjection(null, false)
-            : new OptionalTextProjection(
-                BoundedText.Truncate(value, maximumCharacters, out var isTruncated),
-                isTruncated);
+        if (value is null)
+        {
+            return new OptionalTextProjection(null, false);
+        }
+
+        if (maximumCharacters == 0)
+        {
+            return new OptionalTextProjection(value, false);
+        }
+
+        return new OptionalTextProjection(
+            BoundedText.Truncate(value, maximumCharacters, out var isTruncated),
+            isTruncated);
     }
 
     private sealed record FindingProjection(DelegateAgentFindingSummary Value, bool IsTruncated);

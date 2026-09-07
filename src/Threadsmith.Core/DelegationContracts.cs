@@ -444,7 +444,10 @@ public sealed record AgentAssignmentLimits
     public int MaximumScopeCharacters { get; init; } = 1_024;
 
     /// <summary>Returns an operational limit or zero when all request limits are disabled.</summary>
-    public int EffectiveLimit(int value) => EnforceLimits ? value : 0;
+    public int EffectiveLimit(int value)
+    {
+        return EnforceLimits ? value : 0;
+    }
 
     /// <summary>Rejects malformed negative configuration even when enforcement is disabled.</summary>
     public void Validate()

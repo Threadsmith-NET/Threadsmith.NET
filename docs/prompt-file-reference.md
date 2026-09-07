@@ -495,7 +495,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`MaximumAgents`](#placeholder-maximumagents) |
+| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
@@ -812,7 +812,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-location"></a>`Location` | Display-safe source or repository location. |
 | <a id="placeholder-matchcount"></a>`MatchCount` | Number of matches returned by a bounded search. |
 | <a id="placeholder-matchplural"></a>`MatchPlural` | Grammar word or suffix selected from the match count. |
-| <a id="placeholder-maximumagents"></a>`MaximumAgents` | Host-enforced maximum number of delegated children. |
+| <a id="placeholder-agentcountdescription"></a>`AgentCountDescription` | Effective delegated child-count phrase, such as `1-3 children` or `one or more children` when the configured count limit is disabled. |
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |

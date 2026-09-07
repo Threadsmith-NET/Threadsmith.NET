@@ -141,55 +141,62 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.DoesNotContain("Initial checkpoint", summary.Content, StringComparison.Ordinal);
     }
 
-    /// <summary>Summary size validation uses the actual checked next version framing.</summary>
-    [Fact]
-    public static void Candidate_size_validation_uses_actual_next_summary_version()
+    /// <summary>Completed summaries may exceed character estimates; truncated output still cannot activate.</summary>
+    [Theory]
+    [InlineData(ModelFinishReason.Stop, ActiveTurnCompactionOutcome.Completed)]
+    [InlineData(ModelFinishReason.Length, ActiveTurnCompactionOutcome.ProviderFailure)]
+    public static async Task Summary_output_budget_is_not_a_character_limit(ModelFinishReason finishReason, ActiveTurnCompactionOutcome expectedOutcome)
     {
-        const int knownVersionBoundarySummaryLength = 2;
-        var group = CreateGroup(1);
-        var boundaryText = new string('x', knownVersionBoundarySummaryLength);
-        var versionNineTokens = ModelWireEstimator.Estimate(
-            [ActiveTurnSummaryFormatter.CreateMessage(9, boundaryText, TestPromptLoader.Instance)],
-            [],
-            ToolTransportMode.Native,
-            0,
-            0).WireInputTokens;
-        var versionTenTokens = ModelWireEstimator.Estimate(
-            [ActiveTurnSummaryFormatter.CreateMessage(10, boundaryText, TestPromptLoader.Instance)],
-            [],
-            ToolTransportMode.Native,
-            0,
-            0).WireInputTokens;
-        Assert.Equal(32, versionNineTokens);
-        Assert.Equal(33, versionTenTokens);
-        var prior = new ActiveTurnCompactionSummary
-        {
-            Version = 9,
-            ThroughGroupSequence = 0,
-            CoveredGroupSequences = [],
-            Content = "prior",
-            FilesRead = [],
-            FilesChanged = [],
-            ContentHash = "sha256:prior",
-        };
-        var candidate = CreateCandidate(
-            priorSummaryVersion: 9,
-            coveredGroups: [1],
-            throughGroupSequence: 1,
-            summaryText: boundaryText,
-            filesRead: [],
-            filesChanged: []);
-        var validator = new ActiveTurnCompactionValidator(
-            new ActiveTurnCompactionPolicy { SummaryBudgetTokens = versionNineTokens },
-            new SecretOutputSanitizer(),
+        var policy = new ActiveTurnCompactionPolicy { SummaryBudgetTokens = 32 };
+        var summaryText = new string('x', (policy.SummaryBudgetTokens * 4) + 1);
+        var usage = new ModelUsage(100, 25);
+        var model = new TextModelProvider(summaryText, usage) { FinishReason = finishReason };
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            policy,
             TestPromptLoader.Instance);
+        var observer = new RecordingAttemptObserver();
 
-        var validation = validator.Validate(
-            CreateRequest([group]) with { PriorSummary = prior },
-            candidate);
+        var result = await compactor.CompactAsync(CreateRequest([CreateGroup(1, filesRead: ["src/A.cs"])]), observer);
 
-        Assert.False(validation.IsValid);
-        Assert.Equal(ActiveTurnCompactionRejectionReason.Size, validation.RejectionReason);
+        Assert.Equal(expectedOutcome, result.Outcome);
+        Assert.Equal(25, Assert.Single(model.Requests).MaximumOutputTokens);
+        Assert.Equal(usage, Assert.Single(observer.Usages));
+        if (expectedOutcome == ActiveTurnCompactionOutcome.Completed)
+        {
+            var summary = Assert.IsType<ActiveTurnCompactionSummary>(result.Summary);
+            Assert.Contains(summaryText, summary.Content, StringComparison.Ordinal);
+            Assert.Equal(["src/A.cs"], summary.FilesRead);
+        }
+        else
+        {
+            Assert.Null(result.Summary);
+        }
+    }
+
+    /// <summary>Complete assignment context counts toward input capacity instead of being silently clipped.</summary>
+    [Fact]
+    public static async Task Assignment_context_is_included_in_candidate_capacity_checks()
+    {
+        var model = new TextModelProvider("Working notes.");
+        var policy = new ActiveTurnCompactionPolicy();
+        var request = CreateRequest([CreateGroup(1)]);
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance);
+        await provider.PrepareCandidate(request).ExecuteAsync();
+        var estimate = Assert.IsType<ModelWireEstimate>(Assert.Single(model.Requests).WireEstimate);
+        var context = new string('c', policy.MaximumTaskObjectiveCharacters + 1);
+        await provider.PrepareCandidate(request with { TaskContext = context }).ExecuteAsync();
+        using var input = JsonDocument.Parse(model.Requests[1].Input);
+        Assert.Equal(context, input.RootElement.GetProperty("taskContext").GetString());
+        Assert.True(model.Requests[1].WireEstimate?.WireInputTokens > estimate.WireInputTokens);
+
+        var constrained = new ModelActiveTurnCompactionCandidateProvider(
+            model,
+            policy with { MaximumInputTokens = estimate.WireInputTokens },
+            TestPromptLoader.Instance);
+        Assert.Throws<ModelProviderException>(() => constrained.PrepareCandidate(request with { TaskContext = context }));
+        Assert.Equal(2, model.Requests.Count);
     }
 
     /// <summary>Host-observed file lists are authoritative and cannot be fabricated by the candidate.</summary>
@@ -483,33 +490,27 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(1, projected.OmittedAcceptanceIntentCount);
     }
 
-    /// <summary>Profile-scaled retention keeps a newest raw window before selecting the cut.</summary>
-    [Fact]
-    public static void Profile_capacity_scales_retention_before_selecting_the_cut()
+    /// <summary>Configured retention keeps complete recent groups before selecting an older prefix.</summary>
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(12_000, 1)]
+    [InlineData(12_001, 0)]
+    public static void Configured_retention_preserves_complete_recent_groups(int retainedTokens, int expectedPrefixCount)
     {
-        var policy = new ActiveTurnCompactionPolicy { SummaryBudgetTokens = 4_096 };
+        var policy = new ActiveTurnCompactionPolicy { RetainedRecentTokens = retainedTokens };
         var groups = new[]
         {
             CreateGroup(1) with { EstimatedTokens = 6_000 },
             CreateGroup(2) with { EstimatedTokens = 6_000 },
+            CreateGroup(3) with { EstimatedTokens = 6_000 },
         };
 
-        var effectiveTarget = policy.ResolveEffectiveRetentionTarget(
-            beforeInputTokens: 14_000,
-            fixedRequestTokens: 2_000,
-            pressureTargetTokens: 9_000);
         var prefix = ActiveTurnCompactionCutSelector.SelectEligiblePrefix(
             groups,
             policy,
-            effectiveTarget);
+            policy.RetainedRecentTokens);
 
-        Assert.Equal(2_904, effectiveTarget);
-        var compacted = Assert.Single(prefix);
-        Assert.Equal(1, compacted.Sequence);
-        Assert.Empty(ActiveTurnCompactionCutSelector.SelectEligiblePrefix(
-            groups,
-            policy,
-            policy.RetainedRecentTokens));
+        Assert.Equal(groups.Take(expectedPrefixCount), prefix);
     }
 
     /// <summary>Compactor telemetry attributes the actual candidate profile rather than the ordinary profile.</summary>
@@ -715,6 +716,8 @@ public static class Plan80ActiveTurnCompactionTests
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
+        public ModelFinishReason FinishReason { get; init; } = ModelFinishReason.Stop;
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -722,12 +725,8 @@ public static class Plan80ActiveTurnCompactionTests
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
             await Task.Yield();
-            yield return new ModelChunk
-            {
-                Text = _text,
-                Usage = _usage,
-                FinishReason = ModelFinishReason.Stop,
-            };
+            yield return new ModelChunk { Text = _text };
+            yield return new ModelChunk { Usage = _usage, FinishReason = FinishReason };
         }
     }
 

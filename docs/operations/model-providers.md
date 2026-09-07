@@ -65,7 +65,11 @@ Each provider contains shared connection/authentication settings and a typed `mo
 
 Repository provider/model arrays merge by stable ID. Matching entries recursively inherit omitted object properties; ordinary arrays replace; new entries append in repository order. `enabled: false` disables an inherited or local entry. Overrides cannot change an inherited `type`, or provider-specific connection/authentication settings (including `baseUri` and `secretKeyReference`) on an inherited provider that has a secret reference. Unknown types, case-insensitive duplicate properties/IDs, invalid defaults, inline credentials, and excessive input fail before activation.
 
+The OpenAI-compatible adapter sends the request output limit as `max_completion_tokens`. It does not derive a character cutoff from that token limit or discard completed responses through a second estimate-based output check. Configured stream-byte limits remain independent. If the server omits usage, fallback token counts are marked as estimates: they support accounting and configured aggregate budgets, but are not used to reject a child response against the model's output-token maximum.
+
 ## Native OpenAI Codex
+
+The Codex endpoint does not support `max_output_tokens`. Threadsmith uses the requested output budget for input-capacity planning and, for summaries, length guidance in the prompt. It does not discard a completed response merely for exceeding that request budget. Reported output usage is still checked against the configured model profile's separate `maximumOutputTokens`, and configured stream-byte and tool-call limits remain in effect. Usage is recorded even when the profile maximum rejects a response. This distinction applies to main conversations and subagents alike; providers that support a request output limit still receive it.
 
 The separately compiled `openai-codex` provider uses native Responses and an independent Threadsmith OAuth grant. Authenticate with `threadsmith --codex-login` for headless device flow, `threadsmith --tui --codex-login` for browser PKCE, or `threadsmith [--tui] /auth openai-codex [login|status|logout]`. Status and logout also have `--codex-status` and `--codex-logout` forms.
 

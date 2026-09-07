@@ -336,8 +336,7 @@ internal sealed class ChildAgentModelLoop
         ModelStreamRequest request,
         CancellationToken cancellationToken)
     {
-        var maximumOutputTokens = request.MaximumOutputTokens
-            ?? throw new InvalidOperationException("The child request has no output limit.");
+        var maximumOutputTokens = model.MaximumOutputTokens;
         var wireEstimate = request.WireEstimate
             ?? throw new InvalidOperationException("The child request has no capacity estimate.");
         var provider = model.UsesTrustedCatalog
@@ -420,8 +419,8 @@ internal sealed class ChildAgentModelLoop
                     throw new InvalidDataException("The child response exceeds its output bound.");
                 }
 
-                // Provider output capacity remains independent of the optional operational size cap.
-                if (usage?.OutputTokens > maximumOutputTokens)
+                // Estimates support accounting but cannot prove the provider exceeded its output capacity.
+                if (usage is { IsEstimate: false } && usage.OutputTokens > maximumOutputTokens)
                 {
                     throw new InvalidDataException("The child response exceeds its output token bound.");
                 }
@@ -587,11 +586,12 @@ internal sealed class ChildAgentModelLoop
         ChildAgentEvidenceProgressTracker evidenceProgress,
         CancellationToken cancellationToken)
     {
-        var content = _sanitizer.Sanitize(
+        var content = JsonOutputSanitizer.SanitizeJsonOrText(
             result.ModelResultContent
                 ?? result.ResultJson
                 ?? result.Error
-                ?? _prompts.Get(PromptFileNames.ToolChildAgentToolInvocationCompleted));
+                ?? _prompts.Get(PromptFileNames.ToolChildAgentToolInvocationCompleted),
+            _sanitizer);
         var bytes = Encoding.UTF8.GetByteCount(content);
         evidenceProgress.Observe(result, content);
         var files = result.Sources

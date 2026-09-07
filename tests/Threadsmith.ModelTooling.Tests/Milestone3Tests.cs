@@ -1846,6 +1846,7 @@ public static class Milestone3Tests
     public static async Task OpenAiAdapter_ResponseBeyondTokenEstimate_RemainsValid()
     {
         string content = new(' ', 20_000);
+        var profile = CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10);
         var stream = string.Concat(
             "data: ",
             JsonSerializer.Serialize(new
@@ -1855,12 +1856,15 @@ public static class Milestone3Tests
             "\n\ndata: [DONE]\n");
         var provider = new OpenAiCompatibleModelProvider(
             new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            profile,
             maximumStreamedCharacters: 24_000);
 
         var chunks = await CollectAsync(provider);
 
         Assert.Equal(content, Assert.Single(chunks, chunk => chunk.Text is not null).Text);
+        var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks, chunk => chunk.Usage is not null).Usage);
+        Assert.True(usage.IsEstimate);
+        Assert.True(usage.OutputTokens > profile.MaximumOutputTokens);
     }
 
     /// <summary>Empty arguments from compatible providers are rejected instead of silently repaired.</summary>

@@ -17,7 +17,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 
 ## Start from ordinary conversation
 
-Ask Threadsmith for parallel inspection in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default:
+Ask Threadsmith for parallel inspection in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default. Independent assignments belong in the same `agents` array to run concurrently, subject to configured concurrency. Separate invocations are session-exclusive and run sequentially, including calls requested together:
 
 ```json
 {

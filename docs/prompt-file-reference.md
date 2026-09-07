@@ -14,6 +14,8 @@ Every placeholder name is case-sensitive. Preserve every required marker exactly
 
 Ordinary delegated children receive a common host-policy message plus a role-specific system amendment. Role amendments guide activity without prescribing answer fields, citation identifiers, or a JSON format. Task context, repository instructions, and evidence keep their separate framing. Technical tool errors may receive feedback, but answers are not sent through role-format correction rounds. The joined child response is unparsed text inside host-owned result metadata; separately approved mutation preparation uses its own protocol. The original Explorer output-policy and format-correction assets remain cataloged but are not sent to ordinary children.
 
+The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
+
 Common editing rules:
 
 - Back up installed prompt experiments before upgrading; upgrades replace the complete shipped defaults.
@@ -745,7 +747,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, omission, child-detail, and review-detail blocks. |
 | <a id="placeholder-attemptnumber"></a>`AttemptNumber` | Current host-controlled correction or retry attempt number. |
 | <a id="placeholder-availabletools"></a>`AvailableTools` | Rendered inventory of tools available to the current request in the legacy request envelope. |
-| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Stable identity of the repository baseline against which a proposed change is checked. |
+| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Threadsmith workspace fingerprint identifying the captured baseline against which a proposed change is checked. This is not a Git revision or reference. |
 | <a id="placeholder-boundarykind"></a>`BoundaryKind` | Classification of a call-flow boundary, such as unresolved or compiler-known dispatch. |
 | <a id="placeholder-callee"></a>`Callee` | Called symbol at the destination of a call relationship. |
 | <a id="placeholder-caller"></a>`Caller` | Calling symbol at the source of a call relationship. |

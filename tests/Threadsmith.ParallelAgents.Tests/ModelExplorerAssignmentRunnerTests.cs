@@ -131,13 +131,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
-        const string content = "{\"Path\":\"src/Test.cs\",\"Lines\":[\"first\",\"second\"]}";
-        var tool = new InspectMetadataTool(content);
+        var tool = new StructuredMetadataTool();
         var registry = new ToolRegistry([tool]);
         var profile = CreateProfile();
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         var plan = CreatePlan(assignment);
-        var provider = new ToolThenFindingProvider(tool.Definition.Id);
+        var provider = new ToolThenFindingProvider(tool.Definition.Id, retrieveEvidence: true);
         var runner = CreateRunner(
             provider,
             CreatePipeline(registry, events, sanitizer),
@@ -152,7 +151,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         // Assert
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        var continuation = Assert.Single(provider.Requests.Skip(1));
+        Assert.Equal(3, provider.Requests.Count);
+        var continuation = provider.Requests[1];
         var toolResult = Assert.Single(
             continuation.Messages,
             message => message.SectionId == "child-tool-result");
@@ -161,9 +161,52 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(JsonValueKind.Object, projectedContent.ValueKind);
         Assert.Equal("src/Test.cs", projectedContent.GetProperty("Path").GetString());
         Assert.Equal(["first", "second"], projectedContent.GetProperty("Lines").EnumerateArray().Select(item => item.GetString()));
+        Assert.DoesNotContain("fixture-secret", projectedContent.GetRawText(), StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", projectedContent.GetProperty("Source").GetString(), StringComparison.Ordinal);
         Assert.DoesNotContain("\\\"Path\\\"", toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
         var storedEvidence = Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
-        Assert.Equal(content, storedEvidence.Content);
+        using var stored = JsonDocument.Parse(storedEvidence.Content);
+        Assert.True(JsonElement.DeepEquals(projectedContent, stored.RootElement));
+        var retrieved = Assert.Single(provider.Requests[2].Messages, message =>
+            message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
+        Assert.Equal(storedEvidence.Content, retrieved.GetModelVisibleContent());
+    }
+
+    /// <summary>JSON-aware evidence and model-content sanitization must retain credential-field redaction.</summary>
+    [Theory]
+    [InlineData("123456", "password")]
+    [InlineData("{\"value\":\"fixture-secret\"}", "password")]
+    [InlineData("[\"fixture-secret\"]", "password")]
+    [InlineData("123456", "database_password")]
+    [InlineData("\"fixture-secret\"", "database_password")]
+    public async Task JsonSanitization_CredentialProperties_AreRedactedAtBothBoundaries(string credentialJson, string propertyName)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var content = "{" + JsonSerializer.Serialize(propertyName) + ":" + credentialJson + ",\"safe\":42}";
+        var tool = new InspectMetadataTool(content);
+        var registry = new ToolRegistry([tool]);
+        var plan = CreatePlan(CreateAssignment(ModelProfileId.New(), [tool.Definition.Id]));
+        var pipeline = CreatePipeline(registry, events, sanitizer);
+
+        await evidence.AddAsync(CreateParentEvidence(plan, EvidenceId.New(), content, EvidenceSensitivity.None));
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = plan.Provenance.SessionId,
+            RunId = plan.Provenance.ParentRunId,
+            ToolId = tool.Definition.Id,
+            ArgumentsJson = "{}",
+            Context = CreateParentContext(plan, [tool.Definition.Id]).Invocation,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        foreach (var sanitized in new[] { Assert.Single(evidence.Snapshot(plan.Provenance.SessionId)).Content, result.ModelResultContent })
+        {
+            using var document = JsonDocument.Parse(Assert.IsType<string>(sanitized));
+            Assert.Equal("[REDACTED]", document.RootElement.GetProperty(propertyName).GetString());
+            Assert.Equal(42, document.RootElement.GetProperty("safe").GetInt32());
+        }
     }
 
     /// <summary>Ordinary text, empty text, and malformed JSON return verbatim without format correction.</summary>
@@ -1318,6 +1361,33 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
     private sealed record InspectMetadataInput;
 
+    private sealed class StructuredMetadataTool : Tool<InspectMetadataInput, JsonElement>
+    {
+        public override ToolDefinition Definition { get; } = new InspectMetadataTool().Definition with
+        {
+            OutputSchema = new ToolSchema("Object", 1, "{\"type\":\"object\"}"),
+        };
+
+        public override Task<ToolExecution<JsonElement>> ExecuteAsync(
+            InspectMetadataInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = JsonSerializer.SerializeToElement(new
+            {
+                Path = "src/Test.cs",
+                Lines = new[] { "first", "second" },
+                Source = "Server=example;Database=test;Password=fixture-secret",
+            });
+            return Task.FromResult(new ToolExecution<JsonElement>(content, []));
+        }
+
+        protected override void ValidateInput(InspectMetadataInput input)
+        {
+        }
+    }
+
     private sealed class InspectMetadataTool : Tool<InspectMetadataInput, string>
     {
         private readonly string _modelResultContent;
@@ -1391,7 +1461,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
     }
 
-    private sealed class ToolThenFindingProvider(string toolId) : IModelProvider
+    private sealed class ToolThenFindingProvider(string toolId, bool retrieveEvidence = false) : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1412,10 +1482,20 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 yield break;
             }
 
-            var toolResult = request.Messages.Single(message => message.Role == ModelMessageRole.Tool);
+            var toolResult = request.Messages.Single(message => message.Role == ModelMessageRole.Tool && message.ToolName == toolId);
             using var document = JsonDocument.Parse(toolResult.GetModelVisibleContent());
             var evidenceId = document.RootElement.GetProperty("evidenceId").GetString()
                 ?? throw new InvalidDataException("The tool result omitted its evidence identity.");
+            if (retrieveEvidence && Requests.Count == 2)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(ChildAgentEvidenceTool.ToolId, JsonSerializer.Serialize(new { evidenceId })),
+                    Usage = new ModelUsage(20, 5),
+                };
+                yield break;
+            }
+
             yield return new ModelChunk
             {
                 Output = new TextModelOutput(CreateFindingJson(evidenceId, "Tool-backed finding.")),

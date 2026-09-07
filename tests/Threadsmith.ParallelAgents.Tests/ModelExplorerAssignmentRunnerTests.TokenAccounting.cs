@@ -11,11 +11,13 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Rejects real reported output overruns, without confusing character estimates with tokens.</summary>
+    /// <summary>Reported output respects the profile maximum, not its smaller request reserve or character estimates.</summary>
     [Theory]
-    [InlineData(10, true)]
-    [InlineData(1_025, false)]
-    public async Task RunAsync_ReportedTokenUsage_ControlsOutputTokenAdmission(int reportedTokens, bool succeeds)
+    [InlineData(10, false, true)]
+    [InlineData(1_025, false, true)]
+    [InlineData(4_097, false, false)]
+    [InlineData(4_097, true, true)]
+    public async Task RunAsync_ReportedTokenUsage_RespectsProfileMaximumNotReserve(int reportedTokens, bool isEstimate, bool succeeds)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -26,7 +28,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var plan = CreatePlan(assignment);
         const string response = "The implementation checks cancellation before each iteration.";
         var registry = new ToolRegistry([]);
-        var provider = new ReportedTokenProvider(response, reportedTokens);
+        var provider = new ReportedTokenProvider(response, reportedTokens, isEstimate);
+        var usage = new SessionUsageProjection();
         var runner = CreateRunner(
             provider,
             CreatePipeline(registry, events, sanitizer),
@@ -34,7 +37,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             sanitizer,
             profile,
             CreateParentContext(plan, []),
-            []);
+            [],
+            usage);
 
         // Act / Assert
         if (succeeds)
@@ -56,17 +60,22 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         Assert.Equal(1, provider.RequestCount);
+        var snapshot = usage.GetSnapshot(plan.Provenance.SessionId);
+        Assert.Equal(reportedTokens, snapshot.OutputTokens);
+        Assert.Equal(isEstimate, snapshot.IsEstimate);
     }
 
     private sealed class ReportedTokenProvider : IModelProvider
     {
         private readonly string _response;
         private readonly int _reportedTokens;
+        private readonly bool _isEstimate;
 
-        public ReportedTokenProvider(string response, int reportedTokens)
+        public ReportedTokenProvider(string response, int reportedTokens, bool isEstimate)
         {
             _response = response;
             _reportedTokens = reportedTokens;
+            _isEstimate = isEstimate;
         }
 
         public int RequestCount { get; private set; }
@@ -82,7 +91,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             {
                 Reasoning = new string('a', 5_000),
                 Output = new TextModelOutput(_response),
-                Usage = new ModelUsage(20, _reportedTokens),
+                Usage = new ModelUsage(20, _reportedTokens, IsEstimate: _isEstimate),
             };
         }
     }

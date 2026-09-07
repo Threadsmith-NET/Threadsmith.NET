@@ -14,8 +14,14 @@ using Threadsmith.Core;
 /// <summary>Input for bounded repository file listing.</summary>
 public sealed record ListFilesInput
 {
-    /// <summary>Repository-relative directory.</summary>
-    public string Path { get; init; } = ".";
+    private string _path = ".";
+
+    /// <summary>Repository-relative directory; omitted, null, or blank paths use the repository root.</summary>
+    public string Path
+    {
+        get => _path;
+        init => _path = string.IsNullOrWhiteSpace(value) ? "." : value;
+    }
 
     /// <summary>
     /// Maximum entries returned. <c>0</c> means "use the host default"
@@ -325,11 +331,17 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 /// <summary>Input for bounded repository text search.</summary>
 public sealed record SearchTextInput
 {
+    private string? _path;
+
     /// <summary>Text or regex pattern.</summary>
     public required string Query { get; init; }
 
-    /// <summary>Repository-relative file or directory to search; defaults to the repository root.</summary>
-    public string? Path { get; init; }
+    /// <summary>Repository-relative file or directory; omitted, null, or blank paths use the repository root.</summary>
+    public string? Path
+    {
+        get => _path;
+        init => _path = string.IsNullOrWhiteSpace(value) ? null : value;
+    }
 
     /// <summary>Simple repository-relative glob.</summary>
     public string Glob { get; init; } = "*";
@@ -532,11 +544,6 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Glob);
-        if (input.Path is not null && string.IsNullOrWhiteSpace(input.Path))
-        {
-            throw new ToolArgumentValidationException("path cannot be empty when supplied.");
-        }
-
         if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(

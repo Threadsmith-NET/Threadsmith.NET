@@ -4,7 +4,7 @@ This document explains the model-visible `delegate_agents` tool, which creates o
 
 ## Mental model
 
-`delegate_agents` is a synchronous tool call backed by asynchronous child work:
+`delegate_agents` is a synchronous tool call backed by asynchronous child work. Children in one `agents` array can run concurrently within configured scheduler concurrency; separate tool invocations are session-exclusive and execute sequentially, even when requested in the same model response:
 
 ```text
 parent model

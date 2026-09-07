@@ -57,8 +57,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
-        var outputLimit = request.MaximumOutputTokens ?? _profile.EffectiveRequestOutputTokenReserve;
-        ValidateCapacity(request, canonicalTools, outputLimit);
+
+        // Codex cannot enforce a per-request token limit. Reserve input capacity here;
+        // completed usage is checked against the separate profile maximum.
+        var outputReserve = request.MaximumOutputTokens ?? _profile.EffectiveRequestOutputTokenReserve;
+        ValidateCapacity(request, canonicalTools, outputReserve);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (_profile.Timeout > TimeSpan.Zero)
@@ -99,7 +102,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     await foreach (var chunk in ReadEventsAsync(
                         reader,
                         toolNameMap,
-                        outputLimit,
+                        profileOutputLimit,
                         _profile.MaximumStreamedBytes,
                         _profile.MaximumToolCalls,
                         timeout.Token).ConfigureAwait(false))
@@ -435,7 +438,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                         yield return new ModelChunk { Usage = usage };
                         if (usage.OutputTokens > maximumOutputTokens)
                         {
-                            throw new ModelProviderException("The Codex response usage exceeded the requested output-token limit.");
+                            throw new ModelProviderException("The Codex response usage exceeded the configured profile output-token maximum.");
                         }
                     }
 

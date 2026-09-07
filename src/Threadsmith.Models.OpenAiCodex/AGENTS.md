@@ -17,7 +17,7 @@ Own the separately compiled native OpenAI Codex Responses provider, reviewed bui
 - Never read or mutate Pi credentials, configuration, or runtime state.
 - Authorization, token, device, resource endpoints, client id, redirect, scopes, and credential headers are compiled policy and cannot be widened by repository configuration.
 - SDK/wire/OAuth token types do not cross the project boundary or enter durable host state.
-- Provider maximum output remains distinct from request output reserve. The native Codex request omits the unsupported `max_output_tokens` field; Threadsmith validates and enforces its host-owned output ceiling independently.
+- Provider maximum output remains distinct from request output reserve. The native Codex request omits the unsupported `max_output_tokens` field. Request output tokens reserve input capacity but do not reject completed output; reported usage is checked against the configured profile maximum, with usage emitted before any rejection. Independent configurable stream-byte and tool-call limits still apply.
 - Errors and diagnostics never include access tokens, refresh tokens, authorization codes, or raw response bodies that may contain them.
 - The provider reasserts the selected profile's sensitive-data policy before constructing or dispatching a request.
 - Native Responses maps the exact request-owned provider instruction to `instructions` once. The adapter neither owns an inline fallback nor rereads the asset; host estimation/admission has already counted the same content before dispatch.

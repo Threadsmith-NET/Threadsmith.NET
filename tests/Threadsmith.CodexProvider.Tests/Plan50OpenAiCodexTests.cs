@@ -441,14 +441,14 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("stream limit of 4 bytes", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Streamed bytes exceeding the token reserve remain valid when reported token usage fits.</summary>
+    /// <summary>Codex completion is not rejected for exceeding a reserve the endpoint cannot enforce.</summary>
     [Fact]
-    public async Task Provider_OutputBytesAreNotTreatedAsTokens()
+    public async Task Provider_OutputReserveDoesNotRejectCompletedResponse()
     {
         const string stream = """
             data: {"type":"response.output_text.delta","delta":"abcdefghij"}
 
-            data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":3}}}
+            data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":5}}}
 
             """;
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -461,19 +461,24 @@ public sealed class Plan50OpenAiCodexTests
             TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("abcdefghij", string.Concat(chunks.Select(chunk => chunk.Text)));
-        Assert.Equal(3, Assert.Single(chunks, chunk => chunk.Usage is not null).Usage?.OutputTokens);
+        Assert.Equal(5, Assert.Single(chunks, chunk => chunk.Usage is not null).Usage?.OutputTokens);
+        Assert.Equal(ModelFinishReason.Stop, chunks[^1].FinishReason);
     }
 
-    /// <summary>Rejected output still reports consumed tokens before enforcing the request limit.</summary>
+    /// <summary>Rejected output still reports consumed tokens before enforcing the configured profile maximum.</summary>
     [Fact]
-    public async Task Provider_ReportedOutputTokensRespectRequestLimit()
+    public async Task Provider_ReportedOutputTokensRespectProfileMaximum()
     {
         const string stream = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":5}}}\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
         });
-        var provider = await CreateProviderAsync(handler, "token");
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            MaximumOutputTokens = 4,
+            RequestOutputTokenReserve = 4,
+        });
         var chunks = new List<ModelChunk>();
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
@@ -485,7 +490,7 @@ public sealed class Plan50OpenAiCodexTests
             }
         });
 
-        Assert.Contains("output-token limit", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("profile output-token maximum", exception.Message, StringComparison.Ordinal);
         var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks).Usage);
         Assert.Equal(3, usage.InputTokens);
         Assert.Equal(5, usage.OutputTokens);

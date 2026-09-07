@@ -30,7 +30,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var registry = new ToolRegistry([tool]);
         var profile = CreateProfile() with { ContextWindow = Math.Max(64_000, contentCharacters * 2), IntendedWorkloadClasses = [workload] };
         var provider = new CompactingProvider(tool.Definition.Id, profile);
-        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]) with { Role = role };
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]) with
+        {
+            Role = role,
+            InitialContext = new string('c', 4_001) + " Inspect omitted path, null, and empty arguments in BuiltInTools.cs.",
+        };
         var plan = CreatePlan(assignment);
         var usage = new SessionUsageProjection();
         var runner = CreateRunner(
@@ -66,6 +70,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(4, requests.Length);
         Assert.Equal(1, requests[2].HistoryRewriteGeneration);
         Assert.Equal(requests[0].Messages.Take(5), requests[2].Messages.Take(5));
+        var candidate = Assert.Single(provider.Requests, request => request.Messages.Any(message => message.SectionId == "active-turn-compaction-policy"));
+        using var candidateInput = JsonDocument.Parse(candidate.Input);
+        var originalAssignment = Assert.Single(requests[0].Messages, message => message.SectionId == "child-assignment").GetModelVisibleContent();
+        Assert.Contains(assignment.InitialContext, originalAssignment, StringComparison.Ordinal);
+        Assert.All(assignment.Tasks, task => Assert.Contains(task, originalAssignment, StringComparison.Ordinal));
+        Assert.Equal(originalAssignment, candidateInput.RootElement.GetProperty("taskContext").GetString());
         Assert.Contains(requests[2].Messages, message => message.SectionId == "child-evidence-index");
         var summary = Assert.Single(requests[2].Messages, message => message.SectionId == "active-turn-summary");
         Assert.DoesNotContain("Files read", summary.GetModelVisibleContent(), StringComparison.Ordinal);
@@ -76,7 +86,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Contains(evidence.Snapshot(plan.Provenance.SessionId), item => item.EvidenceId == provider.FirstEvidenceId);
         if (contentCharacters > 262_144)
         {
-            var candidate = Assert.Single(provider.Requests, request => request.Messages.Any(message => message.SectionId == "active-turn-compaction-policy"));
             Assert.True(candidate.WireEstimate?.WireInputTokens > 65_536);
         }
     }
@@ -197,6 +206,73 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Single(messages, message => message.SectionId == "child-evidence-index");
         Assert.Equal(2, messages.Count(message => message.ToolCallId == "call-3"));
         Assert.DoesNotContain(messages, message => message.ToolCallId is "call-0" or "call-1");
+    }
+
+    /// <summary>A small total target cannot consume recent retention, including the newest-exchange-only option.</summary>
+    [Theory]
+    [InlineData(200, 250, 2)]
+    [InlineData(0, 250, 2)]
+    [InlineData(200, 0, 1)]
+    public async Task History_SmallTotalTarget_PreservesConfiguredRecentExchanges(int targetTokens, int recentTokens, int retainedGroups)
+    {
+        var task = HistoryMessage(new string('t', 800), ModelMessageRole.User);
+        var messages = new List<ModelMessage> { task };
+        var options = new ChildAgentCompactionOptions
+        {
+            TriggerTokens = 1,
+            TriggerPercent = 0,
+            TargetTokens = targetTokens,
+            RecentTokens = recentTokens,
+            MinimumSavingsTokens = 1,
+        };
+        var history = new ChildAgentHistory(messages, options, TestPromptLoader.Instance);
+        for (var round = 0; round < 3; round++)
+        {
+            var start = messages.Count;
+            messages.Add(ChildAgentPrompt.CreateToolCallMessage($"call-{round}", new ToolRequestModelOutput("inspect", "{}")));
+            messages.Add(ChildAgentPrompt.CreateToolResultMessage($"call-{round}", "inspect", new string('x', 800)));
+            history.RecordExchange(start, round, [EvidenceId.New()]);
+            history.MarkDelivered();
+        }
+
+        var retained = messages.TakeLast(retainedGroups * 2).ToArray();
+        var assignment = CreateAssignment(ModelProfileId.New(), []);
+        var model = new AgentModelSelection(assignment.Policy.ModelProfileId, ReasoningLevel.None, [])
+        {
+            ContextWindowTokens = 64_000,
+            MaximumOutputTokens = 4_096,
+            OutputReserveTokens = 1_024,
+        };
+        await history.CompactAsync(
+            assignment,
+            model,
+            ModelWireEstimator.EstimateTools([], ToolTransportMode.Native),
+            3,
+            new SuccessfulCompactor(),
+            new NoopCompactionObserver(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, history.RewriteGeneration);
+        Assert.Same(task, messages[0]);
+        Assert.Equal(retained, messages.Where(message => message.ToolCallId is not null));
+        Assert.Single(messages, message => message.SectionId == "active-turn-summary");
+    }
+
+    /// <summary>Duplicate-property evidence remains accepted as sanitized text instead of aborting collection.</summary>
+    [Theory]
+    [InlineData("{\"duplicate\":\"password=fixture-secret\",\"duplicate\":\"second\"}")]
+    [InlineData("{\"outer\":{\"duplicate\":\"password=fixture-secret\",\"duplicate\":\"second\"}}")]
+    public async Task EvidenceStore_DuplicateJsonProperties_FallBackToSanitizedText(string content)
+    {
+        await using var events = new DomainEventStream();
+        var store = new EvidenceStore(events, new SecretOutputSanitizer());
+        var plan = CreatePlan(CreateAssignment(ModelProfileId.New(), []));
+
+        await store.AddAsync(CreateParentEvidence(plan, EvidenceId.New(), content, EvidenceSensitivity.None));
+
+        var stored = Assert.Single(store.Snapshot(plan.Provenance.SessionId));
+        Assert.DoesNotContain("fixture-secret", stored.Content, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", stored.Content, StringComparison.Ordinal);
     }
 
     private static ModelMessage HistoryMessage(string text, ModelMessageRole role) => new()

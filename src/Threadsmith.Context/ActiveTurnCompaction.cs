@@ -19,7 +19,7 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Fallback output reserve used only when no selected-profile reserve is available.</summary>
     public int OutputReserveTokens { get; init; } = 8_192;
 
-    /// <summary>Maximum estimated tokens in one projected active-turn summary.</summary>
+    /// <summary>Summary allowance used to request model output, not an exact rendered-text limit.</summary>
     public int SummaryBudgetTokens { get; init; } = 16_384;
 
     /// <summary>Percentage of the summary budget available to model-written text.</summary>
@@ -28,7 +28,7 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Minimum positive estimated reduction required before a candidate is activated.</summary>
     public int MinimumSavingsTokens { get; init; } = 1;
 
-    /// <summary>Newest raw continuation target retained after a cut.</summary>
+    /// <summary>Newest raw continuation target retained independently of the request pressure target.</summary>
     public int RetainedRecentTokens { get; init; } = 12_000;
 
     /// <summary>Maximum groups supplied to one candidate operation.</summary>
@@ -89,27 +89,6 @@ public sealed record ActiveTurnCompactionPolicy
             1,
             (int)((long)SummaryBudgetTokens * ModelOutputBudgetPercent / 100));
         return Math.Min(policyLimit, profileOutputReserveTokens);
-    }
-
-    /// <summary>Scales newest-raw retention to the current request's activation capacity.</summary>
-    public int ResolveEffectiveRetentionTarget(
-        int beforeInputTokens,
-        int fixedRequestTokens,
-        int pressureTargetTokens)
-    {
-        Validate();
-        ArgumentOutOfRangeException.ThrowIfNegative(beforeInputTokens);
-        ArgumentOutOfRangeException.ThrowIfNegative(fixedRequestTokens);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pressureTargetTokens);
-        var minimumSavingsTarget = Math.Max(
-            1,
-            beforeInputTokens - MinimumSavingsTokens);
-        var activationTargetTokens = Math.Min(pressureTargetTokens, minimumSavingsTarget);
-        var unboundedRecentTokens = activationTargetTokens
-            - fixedRequestTokens
-            - SummaryBudgetTokens;
-        var availableRecentTokens = Math.Max(1, unboundedRecentTokens);
-        return Math.Min(RetainedRecentTokens, availableRecentTokens);
     }
 
     /// <summary>Validates every reliability bound and cross-bound relationship.</summary>
@@ -302,7 +281,7 @@ public sealed record ActiveTurnContinuationGroup
     public bool WasDeliveredVerbatim { get; init; }
 }
 
-/// <summary>Selects only an oldest eligible prefix while retaining a profile-scaled newest raw window.</summary>
+/// <summary>Selects only an oldest eligible prefix while retaining the configured newest raw window.</summary>
 public static class ActiveTurnCompactionCutSelector
 {
     /// <summary>Returns the bounded complete delivered prefix eligible for replacement.</summary>
@@ -555,6 +534,9 @@ public sealed record ActiveTurnCompactionRequest
     /// <summary>Whether host input bounding shortened the task objective.</summary>
     public bool TaskObjectiveWasTruncated { get; init; }
 
+    /// <summary>Optional complete assignment context, included as task data in the candidate input budget.</summary>
+    public string? TaskContext { get; init; }
+
     /// <summary>Required-first bounded sanitized acceptance intent for evidence preservation.</summary>
     public required IReadOnlyList<ActiveTurnAcceptanceIntent> AcceptanceIntent { get; init; }
 
@@ -729,7 +711,7 @@ public interface IActiveTurnCompactor
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Validates one model-written replacement summary against its selected source prefix and bounds.</summary>
+/// <summary>Validates one model-written replacement summary against its selected source prefix and policy.</summary>
 public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidator
 {
     private static readonly string[] DisallowedSummaryMarkers =
@@ -743,7 +725,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
         "you are now",
     ];
 
-    private readonly ActiveTurnCompactionPolicy _policy;
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
 
@@ -757,7 +738,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompts);
         policy.Validate();
-        _policy = policy;
         _sanitizer = sanitizer;
         _prompts = prompts;
     }
@@ -820,10 +800,9 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
             reason = ActiveTurnCompactionRejectionReason.Source;
         }
 
-        if (string.IsNullOrWhiteSpace(summaryText)
-            || summaryText.Length > checked(_policy.SummaryBudgetTokens * 4))
+        if (string.IsNullOrWhiteSpace(summaryText))
         {
-            errors.Add("Candidate summary text is empty or oversized.");
+            errors.Add("Candidate summary text is empty.");
             reason = ActiveTurnCompactionRejectionReason.Size;
         }
         else
@@ -844,21 +823,6 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
             {
                 errors.Add("Candidate summary contains a policy, permission, or instruction marker.");
                 reason = ActiveTurnCompactionRejectionReason.Authority;
-            }
-            else
-            {
-                var nextVersion = checked((request.PriorSummary?.Version ?? 0) + 1);
-                var estimate = ModelWireEstimator.Estimate(
-                    [ActiveTurnSummaryFormatter.CreateMessage(nextVersion, content, _prompts)],
-                    [],
-                    ToolTransportMode.Native,
-                    0,
-                    0);
-                if (estimate.WireInputTokens > _policy.SummaryBudgetTokens)
-                {
-                    errors.Add("Candidate summary exceeds the configured token budget.");
-                    reason = ActiveTurnCompactionRejectionReason.Size;
-                }
             }
         }
 
@@ -950,8 +914,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 WireEstimate = wireEstimate,
                 ProviderInstructions = profile.ProviderInstructions,
             },
-            input.Envelope,
-            checked(modelOutputTokens * 4));
+            input.Envelope);
     }
 
     private CandidateInputProjection CreateInput(
@@ -1024,6 +987,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             + _prompts.Get(PromptFileNames.ContextActiveTurnCompactionOutputContract).Length
             + summaryPrompt.Length
             + request.TaskObjective.Length
+            + (request.TaskContext?.Length ?? 0)
             + request.AcceptanceIntent.Sum(intent => (long)intent.Description.Length)
             + (request.PriorSummary?.Content.Length ?? 0)
             + (request.PriorSummary?.FilesRead.Sum(path => (long)path.Length) ?? 0)
@@ -1255,6 +1219,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 text = request.TaskObjective,
                 wasTruncated = request.TaskObjectiveWasTruncated,
             },
+            taskContext = request.TaskContext,
             acceptanceIntent = request.AcceptanceIntent.Select(intent => new
             {
                 intent.Description,
@@ -1330,20 +1295,17 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     private sealed class ModelCandidateAttempt : IActiveTurnCompactionCandidateAttempt
     {
         private readonly CandidateEnvelope _envelope;
-        private readonly int _maximumResponseCharacters;
         private readonly IModelProvider _model;
         private readonly ModelStreamRequest _request;
 
         public ModelCandidateAttempt(
             IModelProvider model,
             ModelStreamRequest request,
-            CandidateEnvelope envelope,
-            int maximumResponseCharacters)
+            CandidateEnvelope envelope)
         {
             _model = model;
             _request = request;
             _envelope = envelope;
-            _maximumResponseCharacters = maximumResponseCharacters;
         }
 
         public ModelUsage? ObservedUsage { get; private set; }
@@ -1366,12 +1328,6 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
 
                 if (chunk.Text is not null)
                 {
-                    if (chunk.Text.Length > _maximumResponseCharacters - response.Length)
-                    {
-                        throw new MalformedModelOutputException(
-                            "The active-turn compaction model exceeded the bounded response size.");
-                    }
-
                     response.Append(chunk.Text);
                 }
             }

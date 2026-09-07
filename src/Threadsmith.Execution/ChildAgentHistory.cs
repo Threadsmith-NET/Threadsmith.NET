@@ -88,13 +88,8 @@ internal sealed class ChildAgentHistory
             return;
         }
 
-        var pinned = Messages.Except(_groups.SelectMany(group => group.Messages), ReferenceEqualityComparer.Instance)
-            .Where(message => !ReferenceEquals(message, _summaryMessage) && !ReferenceEquals(message, _indexMessage))
-            .Cast<ModelMessage>().ToArray();
-        var recent = _options.TargetTokens == 0
-            ? _options.RecentTokens
-            : Math.Min(_options.RecentTokens, Math.Max(0, _options.TargetTokens - Estimate(pinned) - _options.Summary.SummaryBudgetTokens));
-        var prefix = ActiveTurnCompactionCutSelector.SelectEligiblePrefix(_groups, _options.Summary, Math.Max(1, recent));
+        var prefix = ActiveTurnCompactionCutSelector.SelectEligiblePrefix(
+            _groups, _options.Summary, Math.Max(1, _options.RecentTokens));
         if (prefix.Count == 0 || prefix.Sum(group => (long)group.EstimatedTokens) <= _options.MinimumSavingsTokens)
         {
             return;
@@ -124,6 +119,7 @@ internal sealed class ChildAgentHistory
                 FrozenContextIdentity = assignment.AssignmentId.Value.ToString("D"),
                 TaskObjective = task.Objective,
                 TaskObjectiveWasTruncated = task.ObjectiveWasTruncated,
+                TaskContext = Messages.FirstOrDefault(message => message.SectionId == "child-assignment")?.GetModelVisibleContent(),
                 AcceptanceIntent = task.AcceptanceIntent,
                 PriorSummary = _summary,
 

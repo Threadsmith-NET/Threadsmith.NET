@@ -14,10 +14,10 @@ public sealed record ChildAgentCompactionOptions
     /// <summary>Percentage of the input capacity that triggers an attempt; zero disables this trigger.</summary>
     public int TriggerPercent { get; init; } = 60;
 
-    /// <summary>Desired total input after replacement; zero uses only the recent-context target.</summary>
+    /// <summary>Advisory total-input target reported in compaction diagnostics; zero leaves it unspecified.</summary>
     public int TargetTokens { get; init; } = 20_000;
 
-    /// <summary>Desired recent raw context, always retaining at least the newest complete exchange.</summary>
+    /// <summary>Recent raw context retained independently of the total target; zero keeps only the newest complete exchange.</summary>
     public int RecentTokens { get; init; } = 12_000;
 
     /// <summary>Minimum rounds between attempts; zero allows an attempt at every boundary.</summary>

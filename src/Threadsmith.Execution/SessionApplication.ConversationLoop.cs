@@ -1589,17 +1589,7 @@ public sealed partial class SessionApplication
             visible.Messages,
             outputReserve);
         var eligibleGroupCount = loopState.GetEligibleGroupCount();
-        var fixedRequestEstimate = EstimateCompleteRequest(
-            context,
-            modelTools,
-            layout,
-            [],
-            outputReserve);
-        var effectiveRetentionTargetTokens =
-            _activeTurnCompactionPolicy.ResolveEffectiveRetentionTarget(
-                beforeEstimate.WireInputTokens,
-                fixedRequestEstimate.WireInputTokens,
-                pressureTargetTokens);
+        var effectiveRetentionTargetTokens = _activeTurnCompactionPolicy.RetainedRecentTokens;
 
         async Task CompleteActivityAsync(
             ActiveTurnCompactionInspectionStatus status,

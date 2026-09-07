@@ -1,12 +1,11 @@
-namespace Threadsmith.Tools;
+namespace Threadsmith.Core;
 
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Threadsmith.Core;
 
 /// <summary>Sanitizes structured JSON values without changing their enclosing syntax.</summary>
-internal static class JsonOutputSanitizer
+public static class JsonOutputSanitizer
 {
     /// <summary>Sanitizes one complete JSON value and returns a valid compact representation.</summary>
     public static string Sanitize(string json, IOutputSanitizer sanitizer)
@@ -15,6 +14,27 @@ internal static class JsonOutputSanitizer
         ArgumentNullException.ThrowIfNull(sanitizer);
         var node = JsonNode.Parse(json);
         return SanitizeNode(node, sanitizer)?.ToJsonString() ?? "null";
+    }
+
+    /// <summary>Sanitizes JSON values without corrupting their syntax, or ordinary text when the input is not JSON.</summary>
+    public static string SanitizeJsonOrText(string content, IOutputSanitizer sanitizer)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(content);
+            MaterializeContainers(node);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            return sanitizer.Sanitize(content);
+        }
+
+        var original = node?.ToJsonString() ?? "null";
+        var sanitized = SanitizeNode(node, sanitizer)?.ToJsonString() ?? "null";
+        return string.Equals(original, sanitized, StringComparison.Ordinal) ? content : sanitized;
     }
 
     /// <summary>
@@ -64,6 +84,25 @@ internal static class JsonOutputSanitizer
         return result.ToString();
     }
 
+    private static void MaterializeContainers(JsonNode? node)
+    {
+        // JsonNode delays duplicate-property errors until object enumeration, before any sanitizer runs.
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj)
+            {
+                MaterializeContainers(property.Value);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                MaterializeContainers(item);
+            }
+        }
+    }
+
     private static string SanitizeRipgrepRecord(string record, IOutputSanitizer sanitizer)
     {
         var node = JsonNode.Parse(record);
@@ -89,11 +128,21 @@ internal static class JsonOutputSanitizer
             return null;
         }
 
-        if (node is JsonValue value)
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
         {
-            return value.TryGetValue<string>(out var text)
-                ? JsonValue.Create(SanitizeStringValue(text, propertyName, sanitizer))
-                : value.DeepClone();
+            return JsonValue.Create(SanitizeStringValue(text, propertyName, sanitizer));
+        }
+
+        // Apply the existing field-name policy without serializing entire containers to inspect their names.
+        if (propertyName is not null
+            && !string.Equals(SanitizeStringValue("0", propertyName, sanitizer), sanitizer.Sanitize("0"), StringComparison.Ordinal))
+        {
+            return JsonValue.Create("[REDACTED]");
+        }
+
+        if (node is JsonValue)
+        {
+            return node.DeepClone();
         }
 
         if (node is JsonArray array)
@@ -129,8 +178,8 @@ internal static class JsonOutputSanitizer
         }
 
         var sanitizedKey = sanitizer.Sanitize(propertyName);
-        var contextual = propertyName + ": " + value;
-        var independentlySanitized = sanitizedKey + ": " + sanitizedValue;
+        var contextual = JsonSerializer.Serialize(propertyName) + ": " + value;
+        var independentlySanitized = JsonSerializer.Serialize(sanitizedKey) + ": " + sanitizedValue;
         return string.Equals(sanitizer.Sanitize(contextual), independentlySanitized, StringComparison.Ordinal)
             ? sanitizedValue
             : "[REDACTED]";

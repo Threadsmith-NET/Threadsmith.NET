@@ -1,6 +1,6 @@
 # Implementation Plan 101: TUIKit Command Palette and Slash Autocomplete
 
-**Status:** Active on `feat/plan-101-tuikit-command-discovery`. F3, fuzzy command discovery, inline autocomplete, shared reversible completion, lifecycle integration, regression tests, and current-behavior documentation are implemented. Automated verification passes; physical-terminal acceptance remains required before marking this plan complete. See section 13.2.
+**Status:** Active on `feat/plan-101-tuikit-command-discovery`. Implementation and automated verification are complete, and the user reported physical-terminal testing passing on 2026-09-07. Final closure awaits the terminal, dimensions, theme, and exit-path details required by section 13. See section 13.3.
 
 **Delivery track:** Product capability - command discovery and completion in the default TUIKit frontend.
 
@@ -611,4 +611,12 @@ Intermediate failures were resolved rather than waived: analyzer findings, incor
 
 Headless cells and input loops verify Unicode labels, selected reverse styling, current theme repainting, 40 x 12 / 80 x 24 / 120 x 40 modal frames, right-edge and flipped autocomplete, exact drafts, bounded queries, invalid Unicode, unmodified versus modified keys, acceptance without submission, buffered keys after acceptance, undo, cancellation, independent purposes, and clean backend shutdown. These are not physical-terminal observations.
 
-Physical acceptance remains unexecuted: run MTP-259 and the inherited terminal-lifecycle cases on Windows Terminal and available Linux/macOS/tmux/SSH environments, recording the requested widths, themes, clipboard/mouse behavior, and exit paths. The current session has no native terminal UI inspection surface; do not infer terminal-emulator correctness or mark the plan complete from automated results alone. No commit or push has been made.
+At this checkpoint, physical acceptance remained unexecuted: run MTP-259 and the inherited terminal-lifecycle cases on Windows Terminal and available Linux/macOS/tmux/SSH environments, recording the requested widths, themes, clipboard/mouse behavior, and exit paths. The session had no native terminal UI inspection surface; these automated results alone did not establish terminal-emulator correctness. No commit or push had been made at this checkpoint. Section 13.3 records subsequent verification and delivery.
+
+### 13.3 User-reported physical-terminal pass (2026-09-07)
+
+The user reported: "The physical terminal testing passes." This is user-provided physical verification, distinct from the agent-run headless evidence above. No terminal/OS names, dimensions, themes, exit paths, or per-case observations accompanied the report; those details have been requested for the required completion record. Do not infer coverage of additional platforms or close Plan 100's separate acceptance gate from this report.
+
+The implementation and the shared `/reasoning` duplicate-output cleanup were committed as `462d38f` and pushed in [PR #28](https://github.com/Threadsmith-NET/Threadsmith.NET/pull/28). After the reasoning cleanup, the CoreRuntime project built with zero warnings/errors and all 399 tests passed. Build-server reuse was disabled and no .NET hosts or test processes remained after validation. The full-solution results in section 13.2 predate that final reasoning-only cleanup; the full solution was not rerun for it.
+
+P101-07's physical testing is reported passing. P101-08 remains open only to complete the physical acceptance record and its final documentation checks; no implementation failure is reported. Acceptance specifications, executable manual procedures, user/operator documentation, historical plans, and DOX contracts are unchanged because this update records verification rather than changing behavior or ownership.

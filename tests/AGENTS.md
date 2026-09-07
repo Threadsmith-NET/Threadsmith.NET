@@ -115,3 +115,5 @@ No child AGENTS.md files yet.
 ## TUIKit frontend checks
 
 `Threadsmith.CoreRuntime.Tests/TuiKitFrontendTests.cs` uses the actual TUIKit adapter and headless backend for exact input ownership, cancellation, stable selections, grapheme edits, bounded retention, and shared Markdown parity. Each new case is bounded to two seconds. `FrontendSelectionTests` covers default TUIKit selection, explicit original selection, invalid/duplicate selectors, and MCP precedence. Long terminal/load diagnostics remain outside unit tests.
+
+Tests that start `TuiApplication`, including retained command-input and coordinator integration cases, share the `TUIKit terminal` xUnit collection: even headless toolkit applications claim a process-wide singleton. Pure widget/buffer tests remain parallel. Use observable output or completed UI-queue mutations to synchronize input tests; acceptance must leave the coordinator read pending until a separate submission.

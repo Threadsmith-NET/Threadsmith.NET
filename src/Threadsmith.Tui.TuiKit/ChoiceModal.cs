@@ -183,18 +183,15 @@ internal sealed class ChoiceModal : Modal
     public override void Render(ISurface surface)
     {
         // Leave the shared status row visible even when the modal needs the full width.
-        _fits = surface.Size.Width >= 40 && surface.Size.Height >= 12;
-        if (!_fits || surface is not BufferSurface buffer)
+        _fits = ModalFrame.Fits(surface.Size);
+        var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default));
+        if (frame is null)
         {
             return;
         }
 
-        var background = ResolveStyle(PresentationTextRole.Default);
-        surface.Fill(
-            new Rect(0, 0, surface.Size.Width, surface.Size.Height - 1),
-            Cell.Blank(background));
         var area = new Rect(1, 1, surface.Size.Width - 2, surface.Size.Height - 3);
-        var view = buffer.CreateView(area);
+        var view = frame.CreateView(area);
         _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
         _hintRun.Draw(view, 0, 1, _details ? "Details: PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
         _height = Math.Max(1, area.Height - 3);

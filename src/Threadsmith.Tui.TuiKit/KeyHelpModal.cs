@@ -12,6 +12,8 @@ internal sealed class KeyHelpModal : Modal
     private readonly CachedTextRun[] _entryRuns;
     private readonly CachedTextRun _titleRun = new();
     private readonly string _title;
+    private int _top;
+    private int _height = 1;
 
     /// <summary>Initializes a new instance of the <see cref="KeyHelpModal"/> class.</summary>
     internal KeyHelpModal(string title, IReadOnlyList<string> entries)
@@ -43,6 +45,19 @@ internal sealed class KeyHelpModal : Modal
         {
             ToggleMouse?.Invoke();
         }
+        else
+        {
+            _top = key.Code switch
+            {
+                KeyCode.Up => Math.Max(0, _top - 1),
+                KeyCode.Down => Math.Min(Math.Max(0, _entries.Length - _height), _top + 1),
+                KeyCode.PageUp => Math.Max(0, _top - _height),
+                KeyCode.PageDown => Math.Min(Math.Max(0, _entries.Length - _height), _top + _height),
+                KeyCode.Home => 0,
+                KeyCode.End => Math.Max(0, _entries.Length - _height),
+                _ => _top,
+            };
+        }
 
         return true;
     }
@@ -50,21 +65,18 @@ internal sealed class KeyHelpModal : Modal
     /// <inheritdoc/>
     public override void Render(ISurface surface)
     {
-        if (surface is not BufferSurface buffer || surface.Size.Width < 40 || surface.Size.Height < 12)
+        var view = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default));
+        if (view is null)
         {
             return;
         }
 
-        // Cover the complete application frame above the persistent status row. Leaving a
-        // margin here exposes characters from the transcript and composer beneath the modal.
-        var area = new Rect(0, 0, surface.Size.Width, surface.Size.Height - 1);
-        var view = buffer.CreateView(area);
-        view.Fill(new Rect(0, 0, area.Width, area.Height), Cell.Blank(ResolveStyle(PresentationTextRole.Default)));
         _titleRun.Draw(view, 1, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
-
-        for (var index = 0; index < _entries.Length && index + 1 < area.Height; index++)
+        _height = view.Size.Height - 1;
+        _top = Math.Min(_top, Math.Max(0, _entries.Length - _height));
+        for (var index = _top; index < _entries.Length && index - _top < _height; index++)
         {
-            _entryRuns[index].Draw(view, 2, index + 1, _entries[index], ResolveStyle(PresentationTextRole.Default));
+            _entryRuns[index].Draw(view, 2, index - _top + 1, _entries[index], ResolveStyle(PresentationTextRole.Default));
         }
     }
 }

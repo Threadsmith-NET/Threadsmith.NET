@@ -54,6 +54,17 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
     /// <summary>Gets or sets the explicit clipboard request callback.</summary>
     internal Action? PasteRequested { get; set; }
 
+    /// <summary>Gets the viewport-relative caret after the most recent render.</summary>
+    internal (int X, int Y) VisibleCaret
+    {
+        get
+        {
+            EnsureLayout(_width);
+            var caret = _positions[Array.BinarySearch(Buffer.Boundaries, Buffer.Caret)];
+            return (caret.Column, caret.Row - _top);
+        }
+    }
+
     /// <inheritdoc />
     public void OnFocusChanged(bool focused)
     {
@@ -337,6 +348,7 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
         }
 
         _width = width;
+        _preferredColumn = null;
         _layoutRevision = Buffer.Revision;
         _glyphs.Clear();
         _positions.Clear();

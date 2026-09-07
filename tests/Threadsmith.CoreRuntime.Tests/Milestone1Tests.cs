@@ -28,6 +28,7 @@ using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies the complete Milestone 1 command, event, shell, and durability contracts.</summary>
+[Collection("TUIKit terminal")]
 public static class Milestone1Tests
 {
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
@@ -1096,6 +1097,36 @@ public static class Milestone1Tests
             segment => segment.Text.Contains("/help", StringComparison.Ordinal));
     }
 
+    /// <summary>Completed names enter shared routing only as submitted input; unknown commands never create model work.</summary>
+    [Theory]
+    [InlineData("/the\t current\r")]
+    [InlineData("\u001b[13~theme\r current\r")]
+    public static async Task InteractionCoordinator_TuiKitCompletionRetainsSharedAuthority(string completionKeys)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
+        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var surface = new TuiKitCommandSurface(terminal, backend, [completionKeys, "/destructive-mystery\r", "/qui\t\r"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            frontendCommands: surface);
+
+        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
+
+        Assert.Equal(["/theme current", "/destructive-mystery", "/quit"], surface.Submitted);
+        var invocation = Assert.Single(surface.Invocations);
+        Assert.Equal("/theme", invocation.Descriptor.Name);
+        Assert.Equal("current", invocation.Argument);
+        Assert.Contains(
+            surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments),
+            segment => segment.Text.Contains("Unknown command", StringComparison.Ordinal));
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
+        Assert.True(backend.IsStopped);
+    }
+
     /// <summary>The delegation index exposes only current-session stable IDs and rejects stale revisions.</summary>
     [Fact]
     public static void DelegationActivityRegistry_ListsCurrentSessionStableIdentities()
@@ -1542,15 +1573,31 @@ public static class Milestone1Tests
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
     }
 
-    /// <summary>The UI dispatcher processes a flood in bounded redraw batches without losing events.</summary>
-    [Fact]
-    public static async Task ConversationalShell_ReasoningNoArg_ShowsModelAndLevels()
+    /// <summary>The command shows one capability summary without repeating selectable levels.</summary>
+    [Theory]
+    [InlineData(ReasoningControllability.Selectable, "selectable (none, low, medium, high)")]
+    [InlineData(ReasoningControllability.AlwaysOn, "always on (not user-controllable)")]
+    [InlineData(ReasoningControllability.Unsupported, "unsupported")]
+    public static async Task ConversationalShell_ReasoningNoArg_ShowsSingleCapabilitySummary(
+        ReasoningControllability controllability,
+        string expectedControl)
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
+        ReasoningLevel[] supportedLevels = controllability == ReasoningControllability.Selectable
+            ? [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High]
+            : [ReasoningLevel.None];
         var profile = CreateReasoningProfile(
             profileId,
             "Qwen3",
-            [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High]);
+            supportedLevels) with
+        {
+            ReasoningCapability = new EffectiveReasoningCapability
+            {
+                SchemaVersion = 1,
+                Controllability = controllability,
+                SupportedLevels = supportedLevels,
+            },
+        };
         var catalog = new ConfiguredModelCatalog([profile], enforceHttps: false);
         var preferences = new SessionModelPreferences();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
@@ -1565,9 +1612,11 @@ public static class Milestone1Tests
 
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("Model: Qwen3", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Reasoning levels: none, low, medium, high", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Current: none", surface.Output, StringComparison.Ordinal);
+        Assert.Contains(
+            $"Model: Qwen3\nReasoning control: {expectedControl}\nCurrent: none\n",
+            surface.Output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Reasoning levels:", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>The command uses the effective profile identity even without a separate startup preference.</summary>
@@ -1621,7 +1670,7 @@ public static class Milestone1Tests
         await shell.RunAsync(modelStatus: "Startup").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains("Model: Runtime", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Reasoning levels: none, low", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Reasoning control: selectable (none, low)", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Current: none", surface.Output, StringComparison.Ordinal);
     }
 
@@ -4837,6 +4886,61 @@ public static class Milestone1Tests
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution
+    {
+        private readonly Threadsmith.Tui.TuiKit.TuiKitSurface _surface;
+        private readonly TUIKit.Terminal.HeadlessBackend _backend;
+        private readonly Queue<string> _keys;
+
+        internal TuiKitCommandSurface(Threadsmith.Tui.TuiKit.TuiKitSurface surface, TUIKit.Terminal.HeadlessBackend backend, IEnumerable<string> keys)
+        {
+            _surface = surface;
+            _backend = backend;
+            _keys = new Queue<string>(keys);
+        }
+
+        public InteractionSurfaceCapabilities Capabilities => _surface.Capabilities;
+
+        internal List<string> Submitted { get; } = [];
+
+        internal List<InteractiveCommandInvocation> Invocations { get; } = [];
+
+        internal List<PresentationBatch> Batches { get; } = [];
+
+        public async Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
+        {
+            var read = _surface.ReadComposerAsync(request, cancellationToken);
+            await _surface.PresentAsync(new PresentationBatch([]), cancellationToken);
+            _backend.FeedInput(_keys.Dequeue());
+            var result = await read;
+            Submitted.Add(result.Text);
+            return result;
+        }
+
+        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
+            => _surface.SelectAsync(request, cancellationToken);
+
+        public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
+        {
+            Batches.Add(batch);
+            return _surface.PresentAsync(batch, cancellationToken);
+        }
+
+        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+            => _surface.PresentSessionStatusAsync(status, cancellationToken);
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned operation to the actual surface without a synchronization context.")]
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+            => _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+
+        public Task<FrontendCommandOutcome> HandleAsync(InteractiveCommandInvocation invocation, IInteractionSurface surface, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Invocations.Add(invocation);
+            return Task.FromResult(FrontendCommandOutcome.Handled);
         }
     }
 

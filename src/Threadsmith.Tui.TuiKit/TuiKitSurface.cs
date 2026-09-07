@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading.Channels;
+using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Runs;
@@ -13,6 +14,7 @@ using TUIKit.Content;
 using TUIKit.Hosting;
 using TUIKit.Input;
 using TUIKit.Layout;
+using TUIKit.Modals;
 using TUIKit.Terminal;
 using TUIKit.Widgets;
 
@@ -26,6 +28,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private static readonly string[] _keyHelpEntries =
     [
+        "F3 - command palette (empty draft or partial slash command)",
+        "Slash prefix - suggestions; arrows choose; Tab/Enter insert only",
+        "Completion - Enter again submits; Esc dismisses suggestions",
         "F7 — switch controls between the message editor and output",
         "Output keys — arrows scroll; Shift+arrows select text",
         "F8 — show output links; Enter copies the selected address",
@@ -56,6 +61,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private readonly Action _drain;
     private readonly Action _interrupt;
     private readonly bool _suppressStyles;
+    private readonly TuiKitCommandDiscovery _discovery;
+    private readonly ComposerCommandCompletion _completion;
+    private readonly ComposerAutocomplete _autocomplete;
+    private CommandPaletteModal? _paletteModal;
+    private ComposerCompletionTarget? _paletteTarget;
     private TuiKitComposer _composer;
     private TuiKitStyles _styles;
     private ConfiguredTheme _theme;
@@ -100,6 +110,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         _suppressStyles = TuiThemeResolver.ShouldSuppressStyles(false, Environment.GetEnvironmentVariable("NO_COLOR"), Environment.GetEnvironmentVariable("TERM"));
         _styles = new TuiKitStyles(theme, _suppressStyles);
         _composer = _ordinary;
+        _discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand);
+        _completion = new ComposerCommandCompletion(_discovery);
+        _autocomplete = new ComposerAutocomplete(_discovery, _completion, CompleteCommand);
         _app = new TuiApplication(_backend)
         {
             CtrlCPolicy = CtrlCPolicy.Custom,
@@ -123,18 +136,32 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         }
 
         _app.Focus("composer");
+        _app.FocusChanged += _ => RefreshDiscovery();
         _app.KeyFilter = HandleKey;
         _app.PasteReceived += Paste;
         _app.RenderOverlay = surface =>
         {
             _app.Post(_drain);
-            if (surface.Size.Width < 40 || surface.Size.Height < 12)
+            RefreshDiscovery();
+            if (!ModalFrame.Fits(surface.Size))
             {
                 surface.Fill(new Rect(0, 0, surface.Size.Width, surface.Size.Height), Cell.Blank(CellStyle.Default));
                 if (surface.Size.Width > 0 && surface.Size.Height > 0)
                 {
                     _terminalTooSmall.Draw(surface, 0, 0, "Terminal too small: need 40 x 12", CellStyle.Default);
                 }
+            }
+            else if (surface is BufferSurface root
+                && _app.Layout.FindById("composer") is { } composerRegion
+                && _app.Layout.FindById("activity") is { } activityRegion)
+            {
+                _autocomplete.Render(
+                    root,
+                    composerRegion.ContentRect(surface.Size),
+                    activityRegion.ContentRect(surface.Size),
+                    _composer.VisibleCaret,
+                    ResolveStyle(PresentationTextRole.Default),
+                    ResolveStyle(PresentationTextRole.SelectionHighlight));
             }
 
             // TUIKit streams a complete first frame through the bottom-right cell and relies on
@@ -155,6 +182,12 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     /// <inheritdoc />
     public InteractionSurfaceCapabilities Capabilities { get; } = new(SupportsActiveRunInput: true, SupportsRetainedStatus: true);
 
+    private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
+        ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
+
+    private bool DiscoveryEnabled => _app.FocusedRegion == "composer" && !_app.Modals.IsActive
+        && ModalFrame.Fits(_backend.Size) && !_stop.IsCancellationRequested;
+
     /// <inheritdoc />
     public async Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
     {
@@ -169,6 +202,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             }
 
             _read = completion;
+            ClosePalette();
             _prompt = request.Prompt;
             _composer.OnFocusChanged(false);
             _composer = request.Purpose switch { ComposerPurpose.Secondary => _secondary, ComposerPurpose.Steering => _steering, _ => _ordinary };
@@ -206,6 +240,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                     }
 
                     _composer.OnFocusChanged(false);
+                    ClosePalette();
                     _composer = _ordinary;
                     _prompt = DefaultPrompt;
                     _composer.OnFocusChanged(true);
@@ -232,9 +267,15 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             ToggleMouse = () => _app.ToggleMouseCapture(),
             CopyRequested = Copy,
         };
-        modal.PasteRequested = () => RequestPaste(modal);
+        modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
         Task<string?>? result = null;
-        await EnqueueAsync(() => result = _app.ShowAsync<string>(modal), cancellationToken);
+        await EnqueueAsync(
+            () =>
+        {
+            ClosePalette();
+            result = _app.ShowAsync<string>(modal);
+        },
+            cancellationToken);
         try
         {
             var selected = await (result ?? throw new InvalidOperationException("Selection did not open.")).WaitAsync(cancellationToken);
@@ -332,6 +373,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         }
         finally
         {
+            _autocomplete.Dispose();
             try
             {
                 await Task.WhenAll(_clipboardRead, _utilityModal).ConfigureAwait(false);
@@ -421,6 +463,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             }
 
             _read?.TrySetCanceled(cancellationToken);
+            ClosePalette();
             _app.Modals.Top?.RequestClose(null);
             _app.Stop();
             _app.Dispose();
@@ -452,6 +495,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             try
             {
                 update.Mutation();
+                RefreshDiscovery();
                 update.Completion.TrySetResult();
             }
             catch (Exception exception)
@@ -465,6 +509,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private bool HandleKey(KeyEvent key)
     {
         key = TuiKitInput.Normalize(key);
+        RefreshDiscovery();
         var lease = Volatile.Read(ref _activeInput);
         if (key.Code != KeyCode.Escape)
         {
@@ -484,7 +529,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             return true;
         }
 
-        if (_backend.Size.Width < 40 || _backend.Size.Height < 12)
+        if (!ModalFrame.Fits(_backend.Size))
         {
             return true;
         }
@@ -494,6 +539,35 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             if (_utilityModal.IsCompleted)
             {
                 _utilityModal = ShowKeyHelpAsync(_stop.Token);
+            }
+
+            return true;
+        }
+
+        if (key.Code == KeyCode.F3 && key.Modifiers == KeyModifiers.None)
+        {
+            if (_utilityModal.IsCompleted && DiscoveryEnabled
+                && _completion.Capture(_composer.Buffer, CurrentPurpose, _inputEpoch, allowEmpty: true) is { } target)
+            {
+                _paletteTarget = target;
+                var modal = new CommandPaletteModal(
+                    _discovery,
+                    string.Empty,
+                    () => _backend.Size,
+                    ResolveStyle,
+                    HandleControlC,
+                    () => _app.ToggleMouseCapture(),
+                    () => Volatile.Read(ref _activeInput)?.DisarmEscape())
+                {
+                    CopyRequested = Copy,
+                };
+                modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
+                _paletteModal = modal;
+                _utilityModal = ShowUtilityModalAsync(modal, _stop.Token);
+            }
+            else if (_utilityModal.IsCompleted && DiscoveryEnabled)
+            {
+                _notice = "F3 requires an empty ordinary draft or partial slash command";
             }
 
             return true;
@@ -518,6 +592,12 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         if (key.Code == KeyCode.F6 || (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == (KeyModifiers.Ctrl | KeyModifiers.Shift)))
         {
             Copy(_app.FocusedRegion == "transcript" ? _transcript.SelectedText() : key.Code == KeyCode.F6 ? _composer.Buffer.Selection : _composer.Text);
+            return true;
+        }
+
+        if (_autocomplete.HandleKey(key))
+        {
+            lease?.DisarmEscape();
             return true;
         }
 
@@ -563,6 +643,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             case SubmitDecision.InsertNewline:
                 _composer.InsertText("\n");
+                RefreshDiscovery();
                 return true;
             case SubmitDecision.Submit:
                 if (_read is null)
@@ -612,22 +693,69 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         _composer.History.Add(text);
         _composer.Text = string.Empty;
         _inputEpoch++;
+        RefreshDiscovery();
     }
 
-    private async Task ShowKeyHelpAsync(CancellationToken cancellationToken)
+    private void RefreshDiscovery()
     {
-        var modal = new KeyHelpModal("Key help — Esc closes", _keyHelpEntries)
+        if (_paletteModal?.IsClosed == true)
+        {
+            _paletteModal = null;
+            _paletteTarget = null;
+        }
+
+        _autocomplete.Refresh(_composer.Buffer, CurrentPurpose, _inputEpoch, DiscoveryEnabled);
+    }
+
+    private void CompleteCommand(string name)
+    {
+        var target = _paletteTarget ?? _autocomplete.Target;
+        if (target is null || _app.FocusedRegion != "composer" || !ModalFrame.Fits(_backend.Size))
+        {
+            return;
+        }
+
+        try
+        {
+            _completion.TryApply(target, _composer.Buffer, CurrentPurpose, _inputEpoch, name);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or EncoderFallbackException or DecoderFallbackException)
+        {
+            _notice = "Completion exceeds the draft limit or contains invalid Unicode; draft preserved";
+        }
+
+        RefreshDiscovery();
+    }
+
+    private void ClosePalette()
+    {
+        _paletteModal?.RequestClose(null);
+        _app.Modals.RemoveClosed();
+        _paletteModal = null;
+        _paletteTarget = null;
+    }
+
+    private Task ShowKeyHelpAsync(CancellationToken cancellationToken)
+    {
+        var modal = new KeyHelpModal("Key help - PgUp/PgDn scroll; Esc closes", _keyHelpEntries)
         {
             ResolveStyle = ResolveStyle,
             ToggleMouse = () => _app.ToggleMouseCapture(),
         };
+        return ShowUtilityModalAsync(modal, cancellationToken);
+    }
+
+    private async Task ShowUtilityModalAsync(Modal modal, CancellationToken cancellationToken)
+    {
         try
         {
-            _ = await _app.ShowAsync<string>(modal).WaitAsync(cancellationToken);
+            var result = _app.ShowAsync<string>(modal);
+            RefreshDiscovery();
+            _ = await result.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Shutdown closes presentation-only help.
+            // Shutdown closes presentation-only discovery and help.
         }
         catch (ChannelClosedException) when (_stop.IsCancellationRequested)
         {
@@ -651,9 +779,12 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             ToggleMouse = () => _app.ToggleMouseCapture(),
             CopyRequested = Copy,
         };
+        modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
         try
         {
-            var selected = await _app.ShowAsync<string>(modal).WaitAsync(cancellationToken);
+            var result = _app.ShowAsync<string>(modal);
+            RefreshDiscovery();
+            var selected = await result.WaitAsync(cancellationToken);
             if (selected is not null)
             {
                 await EnqueueAsync(() => Copy(selected), cancellationToken);
@@ -766,7 +897,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private void Paste(string text)
     {
         Volatile.Read(ref _activeInput)?.DisarmEscape();
-        if (_backend.Size.Width < 40 || _backend.Size.Height < 12)
+        if (!ModalFrame.Fits(_backend.Size))
         {
             return;
         }
@@ -780,24 +911,25 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         try
         {
             _composer.InsertText(text);
+            RefreshDiscovery();
         }
-        catch (Exception exception) when (exception is InvalidOperationException or DecoderFallbackException)
+        catch (Exception exception) when (exception is InvalidOperationException or EncoderFallbackException or DecoderFallbackException)
         {
             _notice = "Paste exceeds the 1 MiB limit or contains invalid Unicode; draft preserved";
         }
     }
 
-    private void RequestPaste(ChoiceModal? modal)
+    private void RequestPaste(Modal? modal, Func<string>? filterText = null)
     {
         if (_clipboardRead.IsCompleted)
         {
-            _clipboardRead = PasteClipboardAsync(modal, _composer, _inputEpoch, _stop.Token);
+            _clipboardRead = PasteClipboardAsync(modal, filterText, _composer, _inputEpoch, _stop.Token);
         }
     }
 
-    private async Task PasteClipboardAsync(ChoiceModal? modal, TuiKitComposer composer, long epoch, CancellationToken cancellationToken)
+    private async Task PasteClipboardAsync(Modal? modal, Func<string>? filterText, TuiKitComposer composer, long epoch, CancellationToken cancellationToken)
     {
-        var filter = modal?.FilterText;
+        var filter = filterText?.Invoke();
         try
         {
             var text = await ClipboardReader.ReadAsync(cancellationToken);
@@ -808,7 +940,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                 {
                     _notice = "Clipboard unavailable; use your terminal's paste shortcut";
                 }
-                else if (modal is not null && ReferenceEquals(_app.Modals.Top, modal) && modal.FilterText == filter)
+                else if (modal is not null && !modal.IsClosed && ReferenceEquals(_app.Modals.Top, modal) && filterText?.Invoke() == filter)
                 {
                     modal.HandlePaste(text);
                 }
@@ -857,7 +989,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
         public bool HandleKey(KeyEvent key)
         {
-            return _owner._composer.HandleKey(key);
+            var handled = _owner._composer.HandleKey(key);
+            _owner.RefreshDiscovery();
+            return handled;
         }
 
         public void OnFocusChanged(bool focused)
@@ -867,7 +1001,14 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
         public bool HandleMouse(MouseEvent mouse)
         {
-            return _owner._composer.HandleMouse(mouse);
+            if (!ModalFrame.Fits(_owner._backend.Size))
+            {
+                return true;
+            }
+
+            var handled = _owner._composer.HandleMouse(mouse);
+            _owner.RefreshDiscovery();
+            return handled;
         }
 
         public void Render(ISurface surface)

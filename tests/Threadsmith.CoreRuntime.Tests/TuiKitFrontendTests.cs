@@ -11,6 +11,7 @@ using TUIKit.Terminal;
 using Xunit;
 
 /// <summary>Fast checks of the TUIKit frontend's input and rendering boundaries.</summary>
+[Collection("TUIKit terminal")]
 public static class TuiKitFrontendTests
 {
     /// <summary>Both frontends project the same Markdown content and semantic roles.</summary>

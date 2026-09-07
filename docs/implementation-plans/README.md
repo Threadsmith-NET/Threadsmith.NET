@@ -137,6 +137,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 98 | `plan-98-frontend-neutral-interaction-coordination.md` | Frontend-neutral interaction coordination and Markdown presentation extraction |
 | 99 | `plan-99-test-fixture-scope-determinism-cleanup.md` | Proportionate deterministic test fixtures and resource hygiene |
 | 100 | `plan-100-tuikit-alternate-interactive-frontend.md` | Selectable TUIKit full-screen frontend with fixed session status |
+| 101 | `plan-101-tuikit-command-palette-autocomplete.md` | TUIKit fuzzy command palette and inline slash-command completion |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 
 ## Update discipline

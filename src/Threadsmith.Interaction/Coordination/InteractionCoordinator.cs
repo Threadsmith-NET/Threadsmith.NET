@@ -4556,7 +4556,6 @@ public sealed class InteractionCoordinator
             await _surface.WriteAsync(
                 $"Model: {activeProfile.Name}\n"
                 + $"Reasoning control: {control}\n"
-                + $"Reasoning levels: {supportedList}\n"
                 + $"Current: {(activeSelection?.ReasoningLevel
                     ?? _sessionPreferences.ResolveFor(activeProfileId)).ToString().ToLowerInvariant()}\n",
                 PresentationTextRole.Status,

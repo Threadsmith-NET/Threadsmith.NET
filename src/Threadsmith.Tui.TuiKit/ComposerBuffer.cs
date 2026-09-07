@@ -64,6 +64,21 @@ internal sealed class ComposerBuffer
         Replace(SelectionStart, SelectionEnd, Normalize(text));
     }
 
+    /// <summary>Replaces a validated grapheme span without resetting draft or undo history.</summary>
+    internal void ReplaceRange(int start, int end, string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentOutOfRangeException.ThrowIfNegative(start);
+        ArgumentOutOfRangeException.ThrowIfLessThan(end, start);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(end, Text.Length);
+        if (Array.BinarySearch(Boundaries, start) < 0 || Array.BinarySearch(Boundaries, end) < 0)
+        {
+            throw new ArgumentException("Replacement offsets must be grapheme boundaries.");
+        }
+
+        Replace(start, end, Normalize(text));
+    }
+
     /// <summary>Deletes the selection or an adjacent grapheme or word.</summary>
     internal void Delete(bool backwards, bool word = false)
     {

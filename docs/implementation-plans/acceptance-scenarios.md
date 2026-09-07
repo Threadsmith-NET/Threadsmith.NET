@@ -796,3 +796,13 @@ With the same scripted model and repository, exercise both frontends through ord
 TUIKit additionally keeps a fixed bottom footer through runs, selectors, output, and resize; moves each committed ordinary entry into retained output exactly once while preserving its exact `current-user` context content; preserves exact drafts across prompt purposes; exposes complete option labels and safe links; bounds retained text/queues; and restores terminal state on all exits. Bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` retains PrettyPrompt/Spectre with native scrollback. MCP/authentication bypass either backend. Package notices and SPDX include the exact TUIKit payload and supplemental font terms for every supported RID.
 
 Record automated and physical-terminal evidence separately; unexecuted operator cases remain pending.
+
+## Scenario AS - TUIKit Command Discovery Without Execution
+
+1. With an empty focused ordinary composer, press F3 and search command names and descriptions. Navigate the fuzzy results and verify the selected command's usage. Accept it and confirm only its canonical name enters the draft; no host action or input submission occurs until a separate Enter.
+2. Type a leading partial slash token. Verify prefix suggestions follow catalog order, navigation stays in the list, and Tab/Enter acceptance is one undoable edit. Escape dismisses only suggestions and neither cancels the read nor arms active-run cancellation.
+3. Repeat with exact names, arguments, prose, multiline text, selections, secondary/steering prompts, other modals, transcript focus, and an undersized terminal. Verify no completion replaces ineligible text and hidden suggestions leave normal editor keys unchanged.
+4. Cancel the palette, cancel its owning read, change prompt purpose, resize, paste, and switch themes. Verify exact draft restoration, stale-destination rejection, visible selection without color, correct Unicode cells, fixed activity/status rows, and clean terminal restoration.
+5. Submit completed names, manually typed equivalents, and an unknown command. Verify identical shared command routing, frontend-local theme ownership, and local unknown-command rejection without model execution. A fixed command added to the shared catalog appears in both discovery views without command-specific frontend logic.
+
+**Verifies:** reversible non-executing discovery, shared command authority, input-lifetime isolation, bounded retained rendering, and intentional TUIKit-only interaction behavior.

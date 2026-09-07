@@ -23,6 +23,8 @@ internal sealed class ChildAgentModelLoop
     private readonly IEvidenceStore _evidence;
     private readonly IModelProvider _models;
     private readonly IModelProvider? _trustedModels;
+    private readonly ActiveTurnCompactionCandidateProfile? _compactionProfile;
+    private readonly IModelProvider? _compactionModels;
     private readonly AgentModelSelector? _selection;
     private readonly IReadOnlyList<ToolRegistration> _parentRegistrations;
     private readonly IOutputSanitizer _sanitizer;
@@ -43,7 +45,8 @@ internal sealed class ChildAgentModelLoop
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null,
         AgentModelSelector? selection = null,
-        IModelProvider? trustedModels = null)
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -62,6 +65,13 @@ internal sealed class ChildAgentModelLoop
         _steering = steering;
         _selection = selection;
         _trustedModels = trustedModels;
+        _compactionProfile = compactionProfile;
+        if (compactionProfile is not null)
+        {
+            ArgumentNullException.ThrowIfNull(trustedModels);
+            _compactionModels = trustedModels;
+        }
+
         _options = options;
     }
 
@@ -95,7 +105,8 @@ internal sealed class ChildAgentModelLoop
             StringComparer.OrdinalIgnoreCase);
         var prompt = new ChildAgentPrompt(_prompts, assignment.Role);
         var messages = prompt.CreateMessages(context, instructions);
-        var history = new ChildAgentHistory(messages, _options.Compaction, _prompts);
+        var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
+        history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var stopwatch = Stopwatch.StartNew();
@@ -123,7 +134,7 @@ internal sealed class ChildAgentModelLoop
                 var summaryPolicy = _options.Compaction.Summary;
                 var provider = model.UsesTrustedCatalog ? _trustedModels ?? _models : _models;
                 var compactor = new ActiveTurnCompactor(
-                    new ModelActiveTurnCompactionCandidateProvider(provider, summaryPolicy, _prompts),
+                    new ModelActiveTurnCompactionCandidateProvider(_compactionModels ?? provider, summaryPolicy, _prompts),
                     new ActiveTurnCompactionValidator(summaryPolicy, _sanitizer, _prompts),
                     summaryPolicy,
                     _prompts);

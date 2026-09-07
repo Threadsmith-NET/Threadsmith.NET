@@ -250,7 +250,7 @@ internal static class ModelComposition
         }
     }
 
-    /// <summary>Resolves the optional trusted active-turn compaction profile and validates its static workload contract.</summary>
+    /// <summary>Resolves the shared trusted compaction model and reasoning for main and child loops.</summary>
     internal static ModelProfile? ResolveActiveTurnCompactionProfile(
         IConfiguration trustedConfiguration,
         ConfiguredModelCatalog catalog)
@@ -258,8 +258,15 @@ internal static class ModelComposition
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
         ArgumentNullException.ThrowIfNull(catalog);
         var configuredProfileId = trustedConfiguration["context:activeTurnCompaction:profileId"];
+        var configuredReasoning = trustedConfiguration["context:activeTurnCompaction:reasoningLevel"];
         if (configuredProfileId is null)
         {
+            if (configuredReasoning is not null)
+            {
+                throw new InvalidOperationException(
+                    "Trusted context:activeTurnCompaction:reasoningLevel requires profileId.");
+            }
+
             return null;
         }
 
@@ -280,6 +287,20 @@ internal static class ModelComposition
             throw new InvalidOperationException(
                 "Trusted active-turn compaction configuration refers to a missing or disabled model profile.",
                 exception);
+        }
+
+        if (configuredReasoning is not null)
+        {
+            if (!Enum.GetNames<ReasoningLevel>().Any(name =>
+                    string.Equals(name, configuredReasoning, StringComparison.OrdinalIgnoreCase))
+                || !Enum.TryParse<ReasoningLevel>(configuredReasoning, ignoreCase: true, out var reasoning)
+                || !profile.SupportsReasoningLevel(reasoning))
+            {
+                throw new InvalidOperationException(
+                    "Trusted context:activeTurnCompaction:reasoningLevel must be supported by the selected profile.");
+            }
+
+            profile = profile with { DefaultReasoningLevel = reasoning };
         }
 
         var negotiation = ModelCapabilityNegotiator.Negotiate(

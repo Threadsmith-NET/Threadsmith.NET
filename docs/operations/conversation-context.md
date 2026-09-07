@@ -110,13 +110,14 @@ Compaction never deletes archived messages. Full bodies have an independent rete
 
 Configure repository overrides under `context:conversation` in `.threadsmith/config.*`. The complete schema is in `.threadsmith/config.example`.
 
-To select an independent active-turn candidate model, set the following only in machine configuration, user configuration (`~/.threadsmith/config.json`), or the trusted `THREADSMITH_` environment layer:
+To select one active-turn compaction model for the main loop and all subagent roles, set the following only in machine configuration, user configuration (`~/.threadsmith/config.json`), or the trusted `THREADSMITH_` environment layer:
 
 ```json
 {
   "context": {
     "activeTurnCompaction": {
       "profileId": "00000000-0000-0000-0000-000000000000",
+      "reasoningLevel": "medium",
       "summaryBudgetTokens": 16384,
       "modelOutputBudgetPercent": 80
     }
@@ -124,7 +125,7 @@ To select an independent active-turn candidate model, set the following only in 
 }
 ```
 
-The GUID must identify one enabled profile in the repository-excluding immutable user/machine/host-owned provider catalog. The profile must support streaming and either declare `summary` in `intendedWorkloadClasses` or leave that list empty. Repository `config.json` values at this key are ignored, and repository provider-catalog additions/overrides are excluded from both candidate resolution and dispatch. Removing or setting the trusted profile value to `null` restores the active-main-profile fallback. Trusted `summaryBudgetTokens` and `modelOutputBudgetPercent` can also be set at this path; repository values cannot widen them. Changing these active-turn settings requires restart because provider catalogs and composition are immutable for the process lifetime.
+The GUID must identify one enabled profile in the repository-excluding immutable user/machine/host-owned provider catalog. The profile must support streaming and either declare `summary` in `intendedWorkloadClasses` or leave that list empty. Optional `reasoningLevel` defaults to the profile setting; an explicit value must be supported. Both main and child summaries use this model and reasoning, without changing their task models or pressure triggers. Repository `config.json` values at this path are ignored, and repository provider-catalog additions/overrides are excluded from candidate resolution, provider instructions, and dispatch. Remove or set both model fields to `null` to restore each loop's own active model and reasoning; a reasoning override without a profile fails startup. Trusted main-loop `summaryBudgetTokens` and `modelOutputBudgetPercent` can also be set at this path; subagent summary budgets remain under `agents:delegation:compaction:summary`. Changing these settings requires restart because provider catalogs and composition are immutable for the process lifetime.
 
 Compiled defaults:
 

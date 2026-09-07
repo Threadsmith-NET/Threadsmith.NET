@@ -1140,7 +1140,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
         SessionUsageProjection? usage = null,
-        DelegateAgentsOptions? options = null)
+        DelegateAgentsOptions? options = null,
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         return CreateRunner(
             provider,
@@ -1151,7 +1153,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             parentContext,
             registrations,
             usage,
-            options);
+            options,
+            trustedModels,
+            compactionProfile);
     }
 
     private static ModelExplorerAssignmentRunner CreateRunner(
@@ -1163,7 +1167,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         ToolExecutionContext parentContext,
         IReadOnlyList<ToolRegistration> registrations,
         SessionUsageProjection? usage = null,
-        DelegateAgentsOptions? options = null)
+        DelegateAgentsOptions? options = null,
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         var catalog = new ConfiguredModelCatalog(profiles);
         return new ModelExplorerAssignmentRunner(
@@ -1179,7 +1185,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             parentContext,
             registrations,
             TestPromptLoader.Instance,
-            usage);
+            usage,
+            trustedModels: trustedModels,
+            compactionProfile: compactionProfile);
     }
 
     private static ToolInvocationPipeline CreatePipeline(

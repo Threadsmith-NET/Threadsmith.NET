@@ -1429,16 +1429,16 @@ public sealed partial class SessionApplication :
 
     private bool TryCreateSemanticFirstSearchCorrection(
         ToolRequestModelOutput tool,
-        bool workspaceAvailable,
+        ToolInvocationContext? invocationContext,
         bool semanticToolAttempted,
         IReadOnlyList<ModelToolDefinition> modelTools,
         [NotNullWhen(true)] out string? content)
     {
         content = null;
-        if (!workspaceAvailable
+        if (invocationContext?.WorkspaceId is null
             || semanticToolAttempted
             || !string.Equals(tool.ToolName, "search", StringComparison.OrdinalIgnoreCase)
-            || !TryGetSearchQuery(tool.ArgumentsJson, out var query)
+            || !TryGetDiscoverySearchQuery(tool.ArgumentsJson, invocationContext.RepositoryPath, out var query)
             || !LooksLikeCSharpSymbolOrFileQuery(query))
         {
             return false;
@@ -1495,7 +1495,7 @@ public sealed partial class SessionApplication :
             || string.Equals(toolName, "generated_code_query", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryGetSearchQuery(string argumentsJson, [NotNullWhen(true)] out string? query)
+    private static bool TryGetDiscoverySearchQuery(string argumentsJson, string repositoryPath, [NotNullWhen(true)] out string? query)
     {
         query = null;
         try
@@ -1508,10 +1508,24 @@ public sealed partial class SessionApplication :
                 return false;
             }
 
+            if (document.RootElement.TryGetProperty("path", out var pathElement)
+                && pathElement.ValueKind == JsonValueKind.String
+                && pathElement.GetString() is { } path
+                && !string.IsNullOrWhiteSpace(path))
+            {
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+                var scope = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path, root));
+                var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                if (!scope.Equals(root, comparison))
+                {
+                    return false;
+                }
+            }
+
             query = queryElement.GetString();
             return !string.IsNullOrWhiteSpace(query);
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
         {
             return false;
         }

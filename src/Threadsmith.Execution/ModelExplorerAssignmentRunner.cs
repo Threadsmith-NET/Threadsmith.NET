@@ -21,6 +21,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly IChildAgentInstructionProvider _instructions;
     private readonly IModelProvider _models;
     private readonly IModelProvider? _trustedModels;
+    private readonly ActiveTurnCompactionCandidateProfile? _compactionProfile;
     private readonly DelegateAgentsOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
@@ -45,7 +46,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null,
-        IModelProvider? trustedModels = null)
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -63,6 +65,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _selection = selection;
         _models = models;
         _trustedModels = trustedModels;
+        _compactionProfile = compactionProfile;
         _tools = tools;
         _evidence = evidence;
         _instructions = instructions;
@@ -100,7 +103,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _prompts,
             _sessionUsage,
             _steering,
-            _trustedModels);
+            _trustedModels,
+            _compactionProfile);
         return new AgentRoleRunnerRegistry(
             Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, execution)),
             execution);
@@ -134,7 +138,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null,
-        IModelProvider? trustedModels = null)
+        IModelProvider? trustedModels = null,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -165,7 +170,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             sessionUsage,
             steering,
             selection,
-            trustedModels);
+            trustedModels,
+            compactionProfile);
     }
 
     /// <inheritdoc />

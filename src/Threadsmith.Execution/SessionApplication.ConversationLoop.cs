@@ -1108,7 +1108,7 @@ public sealed partial class SessionApplication
 
             if (TryCreateSemanticFirstSearchCorrection(
                 new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson),
-                round.InvocationContext?.WorkspaceId is not null,
+                round.InvocationContext,
                 semanticToolAttempted,
                 round.ModelTools,
                 out var semanticFirstContent))

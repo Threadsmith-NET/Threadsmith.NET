@@ -47,6 +47,8 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 
 ## Work Guidance
 
+- Resolve global `context:activeTurnCompaction:profileId` and optional supported `reasoningLevel` once from trusted configuration. Pass the same candidate descriptor to the main loop and ordinary child runner factory. Configured candidates use trusted provider dispatch and provider instructions; role routing cannot override them. With both settings omitted/null, each loop uses its own active model and reasoning. Reject a reasoning override without a profile. Keep task-model selection, pressure triggers, and existing summary budgets independent.
+
 - Preserve startup order: parse → paths/configuration → foundation → models → hook adapters → MCP manager/auto-connect → applications/dispatcher → `--mcp` shell or optional extensions → ordinary shell.
 - Keep provider SDK, MCP SDK, terminal-library, and persistence implementation types within their existing composition boundaries.
 - Do not shorten owned `HttpClient`, event subscription, semantic workspace, mutation coordinator, agent scheduler, skill workflow/tool registration, MCP adapter, or cancellation-source lifetimes during refactoring.

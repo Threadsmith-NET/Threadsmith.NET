@@ -384,13 +384,14 @@ Current host-owned defaults are:
 | Candidate attempts | One initial call plus at most one transient retry; two calls total |
 | Failure backoff | Skip candidate generation for the next two failed pressure assessments |
 
-To select an independent candidate model or tune trusted summary budgets, put settings in repository-excluding machine or user configuration—not repository configuration:
+To select one compaction model and reasoning level for the main loop and every subagent role, put settings in machine or user configuration (`~/.threadsmith/config.json`), not repository configuration:
 
 ```json
 {
   "context": {
     "activeTurnCompaction": {
       "profileId": "00000000-0000-0000-0000-000000000000",
+      "reasoningLevel": "medium",
       "summaryBudgetTokens": 16384,
       "modelOutputBudgetPercent": 80
     }
@@ -398,7 +399,11 @@ To select an independent candidate model or tune trusted summary budgets, put se
 }
 ```
 
-The profile must come from the repository-excluding user/machine/host-owned catalog, be enabled, support streaming, and be intended for the `summary` workload or unrestricted by workload. It can reference another provider. Repository-only profiles and repository overrides of a user profile are not visible to this auxiliary dispatcher. Candidate credentials must come from user-owned-or-higher secret providers; repository secret stores cannot supply or replace them. The request-specific provider generation limit is the lower of the profile's effective output reserve and the configured model-output percentage of the summary budget. With defaults, a 16,384-token summary reserve sends `13,107` as the model-output ceiling. Removing the trusted profile setting or setting it to `null` restores the active-main-profile fallback. These settings are resolved at startup; restart Threadsmith after changing them. Repository configuration at this path is ignored, and candidate dispatch uses a separate repository-excluding catalog/provider snapshot, so repository content cannot add, rewrite, or reroute the model that receives candidate evidence. The main profile still owns the 75% trigger, emergency capacity, and rebuilt ordinary request—a smaller candidate profile does not make a large-context main model compact earlier.
+Replace the example GUID with an enabled profile ID from `/models`. The profile must support streaming and the `summary` workload, or have no workload restriction. It can use another provider. `reasoningLevel` is optional and defaults to the profile's reasoning; an explicit value must be supported by that profile. Invalid values fail startup. The same profile and reasoning apply to main-loop and subagent compaction, independently of `agents:roleModels` and the model doing the task. There is no separate subagent compaction-model setting.
+
+The profile and its provider instructions resolve from the catalog without repository overrides. Candidate credentials must come from user-owned-or-higher secret providers; repository secret stores cannot supply or replace them. The request-specific generation limit is the lower of the profile's effective output reserve and the configured model-output percentage of the summary budget. With main-loop defaults, a 16,384-token summary reserve requests `13,107` output tokens. Subagent summary budgets remain under `agents:delegation:compaction:summary`; choosing a shared model does not change those budgets.
+
+Remove or set both `profileId` and `reasoningLevel` to `null` to let each loop summarize with its own active model and reasoning. A reasoning override without a profile is rejected. These settings are resolved at startup; restart Threadsmith after changing them. Repository configuration at this path is ignored. Each task model still owns its 75% trigger and ordinary-request capacity; a smaller compaction model does not make it compact earlier. If the compaction model fails, the original history remains active; Threadsmith does not silently switch the configured compaction model.
 
 Compaction is deliberately lossy only in the model-visible working set. It does not change current user intent, host or repository instructions, trust, tool eligibility, approvals, mutation authority, output requirements, active main model, or sensitivity policy. Tool-result groups are conservatively classified as repository-sensitive for auxiliary routing; a configured candidate profile that prohibits sensitive input fails preflight with no hook or provider call. An active-turn summary never becomes system/developer/current-user content, durable conversation memory, or repository memory. The original sanitized tool events and evidence remain under the existing audit, artifact, retention, and redaction rules. Ordinary active-turn summary checkpoints are kept in memory for the running turn.
 
@@ -639,11 +644,13 @@ Worker results are frozen structured change sets, not branches to merge. Before 
 
 #### Subagent history and evidence
 
-Each ordinary subagent keeps its own conversation. Its role prompt, task, supplied context, initial evidence, repository instructions, and later steering stay intact. Older completed tool exchanges may be replaced in the active request by ordinary working notes. Calls and results are removed together, and at least the latest complete exchange stays verbatim. This never prescribes the format of the final answer or shares sibling histories.
+Each ordinary subagent keeps its own conversation. Its role prompt, task, supplied context, repository instructions, and later steering stay intact. Inherited evidence is delivered in full initially, then becomes eligible for summarization alongside older completed tool exchanges. The original evidence stays in the evidence store and remains available through `read_agent_evidence` when that tool is permitted. Calls and results are removed together, and at least the latest complete exchange stays verbatim. This never prescribes the format of the final answer or shares sibling histories.
 
 Children with tool access also receive `read_agent_evidence`, a read-only lookup of results already delivered to that child. Working notes associate useful evidence IDs with findings; an `archivedEvidenceIds` index keeps the older IDs available even if a summary omits one. The lookup returns the stored sanitized result, not a fresh repository read. It cannot access another child's results, undisclosed session evidence, missing results, or stale evidence. It cannot run commands, modify files, or enlarge file/network permissions. Retrieved evidence does not create a duplicate stored result.
 
 Structured tool results stay valid JSON when secrets are redacted, both in the child's request and in stored evidence. Redaction operates on JSON values instead of treating the enclosing document as plain text. Plain-text results remain text. Children currently return fresh `code_explore` source rather than replacing it with source back-references.
+
+By default, subagents use the same 75% input-pressure trigger as the main loop, with no absolute token trigger. Existing explicit trigger overrides still apply; remove them or use the values below to adopt the defaults.
 
 Configure this independently of task limits in trusted user/machine `agents:delegation:compaction` settings, then restart. Repository configuration cannot change it:
 
@@ -653,15 +660,15 @@ Configure this independently of task limits in trusted user/machine `agents:dele
     "delegation": {
       "compaction": {
         "enabled": true,
-        "triggerTokens": 40000,
-        "triggerPercent": 60,
+        "triggerTokens": 0,
+        "triggerPercent": 75,
         "targetTokens": 20000,
         "recentTokens": 12000,
         "minimumRoundsBetweenAttempts": 3,
-          "minimumSavingsTokens": 2000,
-          "summary": {
-            "summaryBudgetTokens": 3000
-          }
+        "minimumSavingsTokens": 2000,
+        "summary": {
+          "summaryBudgetTokens": 3000
+        }
       }
     }
   }
@@ -670,7 +677,7 @@ Configure this independently of task limits in trusted user/machine `agents:dele
 
 Either trigger can start an attempt. `triggerPercent` uses the selected model's context window minus its output reserve. Set either trigger to `0` to disable it, or `enabled: false` to disable compaction altogether. `recentTokens` determines the recent raw history retained in complete exchanges; `recentTokens: 0` retains only the newest exchange. Fixed instructions and the summary allowance do not subtract from this setting. `targetTokens` remains an advisory total-size target reported in compaction diagnostics, not a retention limit; `0` leaves that advisory target unspecified. Zero spacing allows attempts at every boundary, and zero minimum savings still requires a smaller request. The default spacing is three rounds, including after failure. These are estimated-token tuning values, not task limits or guaranteed request sizes. For example, 17,000 tokens of fixed context, a 3,000-token summary, and 12,000 tokens of recent history require about 32,000 tokens, plus metadata and whole-exchange rounding, even with a 20,000-token advisory target. The selected model's actual input capacity is still checked before a request is sent.
 
-The same summary generator used for the parent conversation runs on the child's selected model and provider. It receives the complete original assignment message, including supplied context and explicit tasks, alongside the previous summary and selected older exchanges. Assignment context counts toward the summary request's input capacity and is not clipped to the short objective's character allowance. If it cannot fit with the oldest complete exchange, the attempt is skipped and original history remains active.
+The same summary generator used for the parent conversation uses the global `context:activeTurnCompaction:profileId` and optional `reasoningLevel` described above. When no global profile is set, it uses the child's selected model and reasoning. Compaction never changes the model assigned to the child's task. The generator receives the complete original assignment message, including supplied context and explicit tasks, alongside the previous summary and selected older exchanges. Assignment context counts toward the compaction model's input capacity and is not clipped to the short objective's character allowance. If it cannot fit with the oldest complete exchange, the attempt is skipped and original history remains active.
 
 Its configurable `compaction:summary` settings use `ActiveTurnCompactionPolicy`; child defaults set `summaryBudgetTokens` to 3000 and allow one provider call with no extra retry. The allowance requests 2400 output tokens by default, subject to the model's supported controls. It is not a character limit or an exact estimated-token limit on completed summaries. Empty, incomplete, invalid, unsuccessful, or insufficiently smaller candidates leave the original history active. The prefix stays unchanged between replacements. Reported summary usage, including usage received before a later failure, is included in session and child token totals; diagnostic activities record before/after estimates and the outcome. If an attempt ends before the provider sends usage, it is recorded as missing, not zero. Provider stream controls and request-capacity checks still apply even with compaction disabled.
 
@@ -776,6 +783,8 @@ Use the `query` text for:
 - **Focused code terms** — feature words, type/member names, or nearby phrases when the exact symbol is unknown.
 - **Host-issued continuation cursors** — paste the entire `code_explore:continue:...` value from a Markdown follow-up target as the next `query` to replay exact source, artifact, or impact continuation identity.
 
+When a question names C# files, `code_explore` resolves those files individually instead of substituting loosely related declarations. A bare filename can identify a unique file in the loaded workspace; duplicate names return path alternatives. A missing name is a coverage gap, not proof that the file is absent from the repository. Use file listing to locate it, then read it directly or provide its repository-relative path. An exact path outside the loaded project can return permitted source without claiming compiler-backed symbol identity.
+
 The host derives the internal exploration emphasis from the query and resolved anchors. Dependency, caller, affected-project, blast-radius, or test-impact wording derives the internal impact path so single-symbol questions such as “what depends on Foo?” return caller/project/test evidence without a model-visible `mode` field. Call-flow evidence appears when the resolved question supports a bounded compiler-proven path; broad tool-capability and structural-survey questions do not receive unsolicited flow or blast-radius sections.
 
 The default model-visible result is concise Markdown. It includes an exploration heading, relevant symbol/file count, blast-radius or call-flow evidence when relevant, grouped line-numbered current source or precise current-context back-references, associated artifacts when useful, bounded artifact completeness/omission notes, a kind-diverse set of follow-up targets with pasteable retry query cursors when truncation occurs, and bounded omissions. Blast-radius Markdown shows returned/total counts plus representative callers, implementations, projects, and tests. Before terminal model bounding, host totals and omission state remain in the structured result, but progressive bounding may remove individual impact items and follow-up targets. The structured result and rendered Markdown share the selected-model byte ceiling; if the final Markdown still exceeds it, Threadsmith closes any open code fence and replaces the remaining tail with an explicit output note. At the 1 KiB terminal envelope, the structured projection may retain only workspace generation, confidence, conservative incomplete coverage, and, when it fits, a bounded top-level omission. Candidate-ranking tables, allocation summaries, adaptive-budget details, file/range SHA-256 digests, workspace generation values, emitted-range records, and other audit metadata remain available through diagnostic/structured projections only while they fit.
@@ -788,7 +797,7 @@ Source and artifact output have independent host-owned limits and may also be cl
 
 For overlapping follow-ups, unchanged complete C# source ranges may be replaced with compact back-references only when the host proves the exact range is still present verbatim in the current canonical model request for the same repository, workspace, generation, path, and digest, and only when the serialized pointer is smaller than the source it replaces. Edits, compaction, different sessions/repositories, short spans, partial output, pointer-larger-than-source cases, policy denial, or uncertainty cause safe re-emission or omission. Artifact range deduplication is intentionally separate and conservative.
 
-Use the granular tools when they are the better fit: `find_symbol` for exact symbol lists, `find_references` or `find_implementations` for focused follow-up, `call_hierarchy` or `symbol_impact` for a standalone graph query, `generated_code_query` for generated-document inventory, and `search`/`read_file` for exact text or non-C# files not related by `code_explore` evidence.
+Use the granular tools when they are the better fit: `find_symbol` for exact symbol lists, `find_references` or `find_implementations` for focused follow-up, `call_hierarchy` or `symbol_impact` for a standalone graph query, `generated_code_query` for generated-document inventory, and `search`/`read_file` for exact text, known-file inspection, or non-C# files. A direct read or a text search scoped with `path` to a known C# file does not require a preliminary semantic call. Choose relevant ranges when the question is local; a whole-file read remains appropriate when the surrounding implementation matters.
 
 Compiler-backed semantic analysis includes `call_hierarchy`, `symbol_impact`, `csharp_pattern_search`, and `generated_code_query`. All four require an opened `TrustedBuild` semantic workspace, are read-only, run no process/network/build/restore/generator/mutation operation, and execute against one captured workspace generation. If invalidation or reload changes that generation before completion, the late result is discarded rather than projected as current.
 

@@ -40,6 +40,8 @@ Own .NET SDK, MSBuild, Roslyn workspace, confidence-aware semantic discovery, an
 
 ## Work Guidance
 
+- Named C# file spans bypass loose natural-language declaration ranking and resolve individually. Bare filenames use only policy-allowed loaded document paths; distinct same-name paths are ambiguous, while linked copies remain one physical path. Missing names must not be substituted with unrelated declarations. Explicit paths outside the loaded project retain their existing confined, symbol-free source fallback.
+
 - Register MSBuild through `Microsoft.Build.Locator` before creating `MSBuildWorkspace`.
 - Propagate cancellation; wrap non-cooperative APIs with bounded abandon-and-discard behavior.
 - Do not execute repository build targets below `TrustedBuild`.

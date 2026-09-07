@@ -9,10 +9,10 @@ public sealed record ChildAgentCompactionOptions
     public bool Enabled { get; init; } = true;
 
     /// <summary>Estimated input tokens that trigger an attempt; zero disables this trigger.</summary>
-    public int TriggerTokens { get; init; } = 40_000;
+    public int TriggerTokens { get; init; }
 
     /// <summary>Percentage of the input capacity that triggers an attempt; zero disables this trigger.</summary>
-    public int TriggerPercent { get; init; } = 60;
+    public int TriggerPercent { get; init; } = 75;
 
     /// <summary>Advisory total-input target reported in compaction diagnostics; zero leaves it unspecified.</summary>
     public int TargetTokens { get; init; } = 20_000;

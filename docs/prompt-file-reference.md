@@ -16,6 +16,10 @@ Ordinary delegated children receive a common host-policy message plus a role-spe
 
 The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
 
+The `read_file`, `search`, and `code_explore` description assets and `System-SystemPrompt.md` allow direct known-file inspection and a choice between relevant ranges and whole-file reads. Semantic tools remain the first choice for repository-wide C# discovery and compiler-backed relationships. This is retrieval guidance, not an expansion of tool permissions.
+
+The `Tool-code_explore-OmissionsSection.md` `Items` value also includes unresolved requested filenames and permitted ambiguity alternatives, so missing file coverage is visible in the default Markdown output.
+
 Common editing rules:
 
 - Back up installed prompt experiments before upgrading; upgrades replace the complete shipped defaults.

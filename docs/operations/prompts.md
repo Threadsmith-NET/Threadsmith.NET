@@ -16,6 +16,8 @@ Upgrades replace the prompt defaults contained in an installed application paylo
 
 ## Ordinary delegated children
 
+`Tool-read_file-Description.md`, `Tool-search-Description.md`, and `Tool-code_explore-Description.md` distinguish discovery from direct known-file inspection. Relevant ranges, search-located sections, and whole-file reads are all supported; no preliminary semantic call is needed for a known-file read or file-scoped text search. `System-SystemPrompt.md` makes the same distinction for the main conversation. Changing these assets does not bypass tool validation or path policy.
+
 Every ordinary child receives the common child host policy followed by a role-specific system amendment. The amendment steers the activity; the host still selects the model and available tools and enforces permissions and cancellation. Repository instructions, task context, and evidence retain their separate trusted framing. Answers have no required fields, citation identifiers, JSON envelope, or role-format correction rounds. Technical tool-argument errors can still receive corrective feedback.
 
 The joined `Tool-delegate_agents-ChildSummary.md` block uses `Summary` for the full, unparsed ordinary response string, including an empty response, or the legacy summary for an older outcome. The surrounding result envelope remains host-owned metadata. Separately approved mutation preparation retains its own protocol. The original Explorer output-policy and format-correction files remain in the deployed catalog but are not sent on the ordinary child path.
@@ -23,6 +25,8 @@ The joined `Tool-delegate_agents-ChildSummary.md` block uses `Summary` for the f
 `Context-ChildAgent-Task.md` labels `BaselineIdentity` as a Threadsmith workspace fingerprint, not a Git revision. `Tool-delegate_agents-Description.md` explains that children in one `agents` array can run concurrently within configured concurrency, while separate invocations run sequentially. The child host policy excludes process/code-execution tools, not the declared executable dependencies of otherwise permitted inspection tools. These descriptions explain existing behavior; editing them does not change scheduling, tool permissions, or baseline validation.
 
 ## Catalog
+
+The `code_explore` omissions block includes unresolved requested filenames, their resolution outcomes, and any permitted path alternatives. These values come from the tool result; they are not guesses made by the model or permission to read additional paths.
 
 The token column lists required, case-sensitive named tokens unless a token is marked optional. `None` means the file is loaded as exact text and must not contain a template marker. Every source owner path is `src/<owner>/Prompts/<filename>`; every deployed path is the flat `prompts/<filename>` path shown here.
 

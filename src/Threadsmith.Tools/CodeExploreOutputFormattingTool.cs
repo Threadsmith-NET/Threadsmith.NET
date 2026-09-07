@@ -325,8 +325,17 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private static CodeExploreResult CompactSecondaryEvidenceForMarkdown(CodeExploreResult result)
     {
+        var omittedAlternatives = result.ResolvedAnchors.Sum(resolution => resolution.Alternatives.Count);
+        var omissions = result.Omissions.ToList();
+        if (omittedAlternatives > 0)
+        {
+            omissions.Add(ModelVisibleStructuredFact.Exact($"{omittedAlternatives} ambiguity alternatives omitted to fit the result."));
+        }
+
         return result with
         {
+            ResolvedAnchors = result.ResolvedAnchors.Select(resolution => resolution with { Alternatives = [] }).ToArray(),
+            Omissions = omissions,
             BlastRadius = result.BlastRadius is null
                 ? null
                 : result.BlastRadius with { Items = [] },
@@ -1498,20 +1507,38 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private void AppendOmissions(StringBuilder builder, CodeExploreResult result)
     {
+        var unresolvedFiles = result.ResolvedAnchors
+            .Where(resolution => resolution.Outcome != CodeExploreResolutionOutcome.Resolved
+                && (resolution.Kind == CodeExploreAnchorKind.Path
+                    || resolution.Input.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
         var omissions = result.Omissions
             .Concat(result.Coverage.Omissions)
             .Concat(result.BlastRadius?.Omissions ?? [])
             .Concat(result.Flow?.Traversal.Omissions ?? [])
             .Concat(result.ArtifactCoverage?.Omissions ?? [])
             .Where(omission => !string.IsNullOrWhiteSpace(omission))
+            .Where(omission => !unresolvedFiles.Any(resolution => resolution.Reason == omission))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        if (omissions.Length == 0)
+        if (omissions.Length == 0 && unresolvedFiles.Length == 0)
         {
             return;
         }
 
         var items = new StringBuilder();
+        foreach (var resolution in unresolvedFiles)
+        {
+            items.AppendLine($"- {FormatCodeSpan(resolution.Input)}: {resolution.Outcome}. {BoundInline(resolution.Reason, 280)}");
+            foreach (var alternative in resolution.Alternatives)
+            {
+                if (alternative.Location is { } location)
+                {
+                    items.AppendLine($"  - {FormatCodeSpan(location.FilePath)}");
+                }
+            }
+        }
+
         foreach (var omission in omissions.Take(MaximumOmissions))
         {
             items.AppendLine("- " + BoundInline(omission, 280));

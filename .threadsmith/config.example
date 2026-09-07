@@ -125,9 +125,10 @@
     // Legacy agents.roleProfiles is rejected in trusted configuration.
     // See docs/operations/model-providers.md for complete user JSON.
     // Child history tuning also belongs in trusted user/machine configuration:
-    // "delegation": { "compaction": { "enabled": true, "triggerTokens": 40000,
-    //   "triggerPercent": 60, "targetTokens": 20000, "recentTokens": 12000,
+    // "delegation": { "compaction": { "enabled": true, "triggerTokens": 0,
+    //   "triggerPercent": 75, "targetTokens": 20000, "recentTokens": 12000,
     //   "minimumRoundsBetweenAttempts": 3, "minimumSavingsTokens": 2000 } }
+    // Defaults match the main loop's 75% trigger, with no absolute token trigger.
     // Either trigger can start an attempt; zero disables that trigger.
     // These are optimization targets, not task limits. enabled:false preserves
     // full history. See the user guide for summary settings and limitations.
@@ -271,13 +272,16 @@
   "context": {
     // Maximum tokens per request before the governor trims evidence.
     "maxTokensPerRequest": 32000,
-    // Optional active-turn summary model. This setting is honored only from
+    // One optional summary model for both the main loop and all subagents.
+    // These settings are honored only from
     // repository-excluding machine/user/environment configuration; repository
     // configuration and repository provider-catalog overrides cannot choose,
     // rewrite, or reroute the model that receives candidate evidence.
-    // Null preserves the active main profile as the candidate fallback.
+    // Null profile/reasoning lets each loop summarize with its own active model.
+    // With a profile, null reasoning uses that profile's default.
     "activeTurnCompaction": {
-      "profileId": null
+      "profileId": null,
+      "reasoningLevel": null
     },
     // Bounded cross-turn continuity (plans 33-35). Historical content remains
     // untrusted, sanitized, provenance-linked, and subject to these hard bounds.

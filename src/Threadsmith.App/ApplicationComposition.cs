@@ -131,7 +131,7 @@ internal static class ApplicationComposition
                 ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
                 SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
                 Cost = activeTurnCompactionModelProfile.Cost,
-                ProviderInstructions = providerInstructionResolver.Resolve(
+                ProviderInstructions = trustedProviderInstructionResolver.Resolve(
                     activeTurnCompactionModelProfile.Id),
             };
         var activeTurnCandidateProvider = activeTurnCompactionModelProfile is null
@@ -458,7 +458,8 @@ internal static class ApplicationComposition
                         host.PromptLoader,
                         usage,
                         runSteering,
-                        integration.Models.TrustedProvider);
+                        integration.Models.TrustedProvider,
+                        activeTurnCompactionProfile);
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,

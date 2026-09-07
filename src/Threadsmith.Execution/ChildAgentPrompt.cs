@@ -32,7 +32,7 @@ internal sealed class ChildAgentPrompt
         };
     }
 
-    /// <summary>Creates the immutable initial message sequence for one child.</summary>
+    /// <summary>Creates the initial instructions, assignment, and inherited evidence for one child.</summary>
     public List<ModelMessage> CreateMessages(
         AgentContextSnapshot context,
         RepositoryInstructionBundle instructions)

@@ -14,11 +14,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>Compaction uses the real summary service; mixed evidence reads preserve originals and usage.</summary>
     [Theory]
-    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000)]
-    [InlineData(AgentRole.SecurityReviewer, WorkloadClass.Review, 12_000)]
-    [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000)]
-    [InlineData(AgentRole.Explorer, WorkloadClass.General, 300_000)]
-    public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(AgentRole role, WorkloadClass workload, int contentCharacters)
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, false)]
+    [InlineData(AgentRole.SecurityReviewer, WorkloadClass.Review, 12_000, false, false)]
+    [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, false)]
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 300_000, false, false)]
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, true, false)]
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, true)]
+    [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, true)]
+    [InlineData(AgentRole.SecurityReviewer, WorkloadClass.Review, 12_000, false, true)]
+    [InlineData(AgentRole.TestReviewer, WorkloadClass.Review, 12_000, false, true)]
+    [InlineData(AgentRole.PerformanceReviewer, WorkloadClass.Review, 12_000, false, true)]
+    [InlineData(AgentRole.ArchitectureReviewer, WorkloadClass.Review, 12_000, false, true)]
+    public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
+        AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -30,12 +38,36 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var registry = new ToolRegistry([tool]);
         var profile = CreateProfile() with { ContextWindow = Math.Max(64_000, contentCharacters * 2), IntendedWorkloadClasses = [workload] };
         var provider = new CompactingProvider(tool.Definition.Id, profile);
+        var summaryProfile = CreateProfile() with
+        {
+            IntendedWorkloadClasses = [WorkloadClass.Summary],
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium],
+            MaximumOutputTokens = 2_048,
+            RequestOutputTokenReserve = 2_048,
+        };
+        var summaryProvider = useCompactionProfile ? new CompactingProvider(tool.Definition.Id, summaryProfile) : provider;
+        var candidateProfile = useCompactionProfile ? new ActiveTurnCompactionCandidateProfile
+        {
+            ProfileId = summaryProfile.Id,
+            ContextWindowTokens = summaryProfile.ContextWindow,
+            OutputReserveTokens = summaryProfile.EffectiveRequestOutputTokenReserve,
+            ReasoningLevel = ReasoningLevel.Medium,
+            SensitiveDataPolicy = summaryProfile.SensitiveDataPolicy,
+            Cost = summaryProfile.Cost,
+        }
+        : null;
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]) with
         {
             Role = role,
             InitialContext = new string('c', 4_001) + " Inspect omitted path, null, and empty arguments in BuiltInTools.cs.",
         };
         var plan = CreatePlan(assignment);
+        if (inheritEvidence)
+        {
+            provider.FirstEvidenceId = EvidenceId.New();
+            await evidence.AddAsync(CreateParentEvidence(plan, provider.FirstEvidenceId, content, EvidenceSensitivity.None));
+        }
+
         var usage = new SessionUsageProjection();
         var runner = CreateRunner(
             provider,
@@ -56,21 +88,37 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                     RecentTokens = 1,
                     MinimumSavingsTokens = 500,
                 },
-            });
+            },
+            trustedModels: useCompactionProfile ? summaryProvider : null,
+            compactionProfile: candidateProfile);
 
         var outcome = await runner.RunAsync(plan, assignment);
 
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal("An unrestricted final response.", outcome.Response);
-        Assert.Equal(1, provider.Summaries);
+        Assert.Equal(1, summaryProvider.Summaries);
         Assert.Equal(4, outcome.Usage.ToolCalls);
-        Assert.Equal(3, evidence.Snapshot(plan.Provenance.SessionId).Count);
+        Assert.Equal(inheritEvidence ? 4 : 3, evidence.Snapshot(plan.Provenance.SessionId).Count);
         Assert.Equal(50, usage.GetSnapshot(plan.Provenance.SessionId).InputTokens);
         var requests = provider.Requests.Where(request => request.Messages.Any(message => message.SectionId == "child-assignment")).ToArray();
         Assert.Equal(4, requests.Length);
         Assert.Equal(1, requests[2].HistoryRewriteGeneration);
-        Assert.Equal(requests[0].Messages.Take(5), requests[2].Messages.Take(5));
-        var candidate = Assert.Single(provider.Requests, request => request.Messages.Any(message => message.SectionId == "active-turn-compaction-policy"));
+        var pinnedCount = inheritEvidence ? 4 : 5;
+        Assert.Equal(requests[0].Messages.Take(pinnedCount), requests[2].Messages.Take(pinnedCount));
+        var candidate = Assert.Single(summaryProvider.Requests, request => request.Messages.Any(message => message.SectionId == "active-turn-compaction-policy"));
+        Assert.All(requests, request => Assert.Equal(profile.Id, request.ResolvedProfileId));
+        Assert.Equal(useCompactionProfile ? summaryProfile.Id : profile.Id, candidate.ResolvedProfileId);
+        Assert.Equal(useCompactionProfile ? ReasoningLevel.Medium : ReasoningLevel.None, candidate.ReasoningLevel);
+        Assert.Equal(useCompactionProfile ? WorkloadClass.Summary : workload, candidate.WorkloadClass);
+        Assert.Empty(candidate.Tools);
+        if (useCompactionProfile)
+        {
+            Assert.Equal(0, provider.Summaries);
+            Assert.Single(summaryProvider.Requests);
+            Assert.Equal(2_048, candidate.MaximumOutputTokens);
+            Assert.Equal(profile.Id, outcome.ModelSelection?.EffectiveProfileId);
+        }
+
         using var candidateInput = JsonDocument.Parse(candidate.Input);
         var originalAssignment = Assert.Single(requests[0].Messages, message => message.SectionId == "child-assignment").GetModelVisibleContent();
         Assert.Contains(assignment.InitialContext, originalAssignment, StringComparison.Ordinal);
@@ -80,7 +128,18 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var summary = Assert.Single(requests[2].Messages, message => message.SectionId == "active-turn-summary");
         Assert.DoesNotContain("Files read", summary.GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.All(provider.Requests, request => Assert.DoesNotContain("private-provenance-value", string.Join('\n', request.Messages.Select(message => message.GetModelVisibleContent())), StringComparison.Ordinal));
-        Assert.DoesNotContain(requests[2].Messages, message => message.ToolCallId == requests[1].Messages.First(message => message.Role == ModelMessageRole.Tool).ToolCallId);
+        if (inheritEvidence)
+        {
+            Assert.Contains(content, Assert.Single(requests[0].Messages, message => message.SectionId == "child-initial-evidence").GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.DoesNotContain(requests[1].Messages, message => message.SectionId == "child-initial-evidence");
+            Assert.Contains(content, candidate.Input, StringComparison.Ordinal);
+            Assert.Contains(provider.FirstEvidenceId.Value.ToString("D"), Assert.Single(requests[1].Messages, message => message.SectionId == "child-evidence-index").GetModelVisibleContent(), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain(requests[2].Messages, message => message.ToolCallId == requests[1].Messages.First(message => message.Role == ModelMessageRole.Tool).ToolCallId);
+        }
+
         var retrieved = Assert.Single(requests[3].Messages, message => message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
         Assert.Equal(content, retrieved.GetModelVisibleContent());
         Assert.Contains(evidence.Snapshot(plan.Provenance.SessionId), item => item.EvidenceId == provider.FirstEvidenceId);
@@ -88,6 +147,47 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         {
             Assert.True(candidate.WireEstimate?.WireInputTokens > 65_536);
         }
+    }
+
+    /// <summary>Defaults match main-loop pressure and account for output reserve without an absolute trigger.</summary>
+    [Theory]
+    [InlineData(8_000, 0)]
+    [InlineData(16_000, 1)]
+    public async Task History_DefaultTrigger_UsesMainLoopPressure(int outputReserve, int expectedGeneration)
+    {
+        var options = new ChildAgentCompactionOptions();
+        Assert.Equal(0, options.TriggerTokens);
+        Assert.Equal(new ActiveTurnCompactionPolicy().PressureTargetPercent, options.TriggerPercent);
+        var messages = new List<ModelMessage> { HistoryMessage("original task", ModelMessageRole.User) };
+        var history = new ChildAgentHistory(messages, options, TestPromptLoader.Instance);
+        for (var round = 0; round < 3; round++)
+        {
+            var start = messages.Count;
+            messages.Add(ChildAgentPrompt.CreateToolCallMessage($"call-{round}", new ToolRequestModelOutput("inspect", "{}")));
+            messages.Add(ChildAgentPrompt.CreateToolResultMessage($"call-{round}", "inspect", new string('x', 70_000)));
+            history.RecordExchange(start, round, [EvidenceId.New()]);
+            history.MarkDelivered();
+        }
+
+        var assignment = CreateAssignment(ModelProfileId.New(), []);
+        var model = new AgentModelSelection(assignment.Policy.ModelProfileId, ReasoningLevel.None, [])
+        {
+            ContextWindowTokens = 80_000,
+            MaximumOutputTokens = 16_000,
+            OutputReserveTokens = outputReserve,
+        };
+        var tools = ModelWireEstimator.EstimateTools([], ToolTransportMode.Native);
+        Assert.InRange(ModelWireEstimator.Estimate(messages, tools, 0, outputReserve).WireInputTokens, 48_001, 53_999);
+        await history.CompactAsync(
+            assignment,
+            model,
+            tools,
+            3,
+            new SuccessfulCompactor(),
+            new NoopCompactionObserver(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(expectedGeneration, history.RewriteGeneration);
     }
 
     /// <summary>Off switches avoid auxiliary calls; rejected replacements keep exact history and back off.</summary>
@@ -106,8 +206,13 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             RecentTokens = 1,
             MinimumSavingsTokens = 1,
         };
-        var messages = new List<ModelMessage> { HistoryMessage("unchanged task", ModelMessageRole.User) };
+        var messages = new List<ModelMessage>
+        {
+            HistoryMessage("unchanged task", ModelMessageRole.User),
+            HistoryMessage(new string('i', 4_000), ModelMessageRole.User) with { SectionId = "child-initial-evidence" },
+        };
         var history = new ChildAgentHistory(messages, options, TestPromptLoader.Instance);
+        history.RecordInitialEvidence([EvidenceId.New()]);
         for (var round = 0; round < 2; round++)
         {
             var start = messages.Count;
@@ -298,7 +403,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public int Summaries { get; private set; }
 
-        public EvidenceId FirstEvidenceId { get; private set; }
+        public EvidenceId FirstEvidenceId { get; set; }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
@@ -319,7 +424,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }
             else
             {
-                if (_round == 1)
+                if (_round == 1 && FirstEvidenceId == default)
                 {
                     using var content = JsonDocument.Parse(request.Messages.Last(message => message.Role == ModelMessageRole.Tool).GetModelVisibleContent());
                     FirstEvidenceId = new EvidenceId(content.RootElement.GetProperty("evidenceId").GetGuid());

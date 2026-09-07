@@ -14,6 +14,7 @@ internal sealed class ChildAgentHistory
     private readonly List<ActiveTurnSourceReference> _archivedSources = [];
     private readonly ChildAgentCompactionOptions _options;
     private readonly IPromptLoader _prompts;
+    private readonly ActiveTurnCompactionCandidateProfile? _compactionProfile;
     private ActiveTurnCompactionSummary? _summary;
     private ModelMessage? _summaryMessage;
     private ModelMessage? _indexMessage;
@@ -21,11 +22,16 @@ internal sealed class ChildAgentHistory
     private int? _lastAttemptRound;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentHistory"/> class.</summary>
-    public ChildAgentHistory(List<ModelMessage> messages, ChildAgentCompactionOptions options, IPromptLoader prompts)
+    public ChildAgentHistory(
+        List<ModelMessage> messages,
+        ChildAgentCompactionOptions options,
+        IPromptLoader prompts,
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
     {
         Messages = messages;
         _options = options;
         _prompts = prompts;
+        _compactionProfile = compactionProfile;
     }
 
     /// <summary>The active request messages, including the unchanged initial instructions.</summary>
@@ -38,19 +44,17 @@ internal sealed class ChildAgentHistory
     public void RecordExchange(int start, int round, IReadOnlyList<EvidenceId> evidenceIds)
     {
         var messages = Messages.Skip(start).ToArray();
-        var sequence = ++_sequence;
-        _groups.Add(new ActiveTurnContinuationGroup
+        RecordGroup(messages, round, evidenceIds);
+    }
+
+    /// <summary>Includes inherited evidence in history without making it eligible before delivery.</summary>
+    public void RecordInitialEvidence(IReadOnlyList<EvidenceId> evidenceIds)
+    {
+        if (evidenceIds.Count > 0)
         {
-            Sequence = sequence,
-            CompletedModelRound = round,
-            Messages = messages,
-            Sources = evidenceIds.Select(id => new ActiveTurnSourceReference(
-                ActiveTurnSourceKind.Evidence, id.Value.ToString("D"), sequence)).ToArray(),
-            FilesRead = [],
-            FilesChanged = [],
-            EstimatedTokens = ModelWireEstimator.Estimate(messages, [], ToolTransportMode.Native, 0, 0).WireInputTokens,
-            Sensitivity = ConversationSensitivity.Sensitive,
-        });
+            var message = Messages.Single(message => message.SectionId == "child-initial-evidence");
+            RecordGroup([message], 0, evidenceIds);
+        }
     }
 
     /// <summary>Marks complete exchanges as seen by the child model.</summary>
@@ -107,6 +111,7 @@ internal sealed class ChildAgentHistory
                 RunId = assignment.ChildRunId,
                 IncludeFileLists = false,
                 ProfileId = model.ProfileId,
+                CandidateProfile = _compactionProfile,
                 WorkloadClass = assignment.Role switch
                 {
                     AgentRole.Explorer => WorkloadClass.General,
@@ -219,5 +224,22 @@ internal sealed class ChildAgentHistory
             // Compaction is an optimization. Failed attempts leave every original message active.
             activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
         }
+    }
+
+    private void RecordGroup(IReadOnlyList<ModelMessage> messages, int round, IReadOnlyList<EvidenceId> evidenceIds)
+    {
+        var sequence = ++_sequence;
+        _groups.Add(new ActiveTurnContinuationGroup
+        {
+            Sequence = sequence,
+            CompletedModelRound = round,
+            Messages = messages,
+            Sources = evidenceIds.Select(id => new ActiveTurnSourceReference(
+                ActiveTurnSourceKind.Evidence, id.Value.ToString("D"), sequence)).ToArray(),
+            FilesRead = [],
+            FilesChanged = [],
+            EstimatedTokens = ModelWireEstimator.Estimate(messages, [], ToolTransportMode.Native, 0, 0).WireInputTokens,
+            Sensitivity = ConversationSensitivity.Sensitive,
+        });
     }
 }

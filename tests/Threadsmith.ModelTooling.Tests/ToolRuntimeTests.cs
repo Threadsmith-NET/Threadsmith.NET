@@ -287,7 +287,7 @@ public static class ToolRuntimeTests
             "query",
             Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
         Assert.True(tool.Definition.PreferStrictArguments);
-        Assert.Contains("host owns all traversal", tool.Definition.Description, StringComparison.Ordinal);
+        Assert.Contains("traversal and result budgets are managed by the tool", tool.Definition.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("limits", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
@@ -636,6 +636,44 @@ public static class ToolRuntimeTests
         Assert.Equal(1, CountOccurrences(markdown, ModelBudgetPromptLoader.Omission));
         Assert.Equal(0, CountFenceLines(markdown) % 2);
         Assert.True(execution.IsTruncated);
+    }
+
+    /// <summary>Verbose ambiguity alternatives are reduced before otherwise-fitting source sections.</summary>
+    [Fact]
+    public static async Task CodeExploreOutputFormattingTool_AmbiguityDetail_DoesNotDisplaceSource()
+    {
+        var original = CreateModelBudgetOverflowCodeExploreResult();
+        var source = original.FileSections[0];
+        var alternativePath = "src/" + new string('p', 1_500) + "/Duplicate.cs";
+        var result = original with
+        {
+            FileSections = [source with { Source = source.Source with { Completeness = CodeExploreSourceCompleteness.Complete, OmittedRanges = [] } }],
+            ContinuationTargets = [],
+            ResolvedAnchors =
+            [
+                new CodeExploreAnchorResolution(
+                    "Duplicate.cs",
+                    CodeExploreAnchorKind.Path,
+                    CodeExploreResolutionOutcome.Ambiguous,
+                    null,
+                    null,
+                    [new CodeExploreAlternative(new SemanticSymbolIdentity("path:duplicate", "Duplicate.cs", "Path"), new CodeExploreLocation(string.Empty, string.Empty, alternativePath, new SourceRange(1, 1, 1, 1), false, false))],
+                    "Use an exact path."),
+            ],
+        };
+        var tool = new CodeExploreOutputFormattingTool(
+            new StaticCodeExploreResultTool(result),
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance);
+        var execution = await tool.ExecuteAsync(
+            new CodeExploreInput { Query = "Inspect Worker.cs and Duplicate.cs" },
+            CreateCodeExploreExecutionContext(AppContext.BaseDirectory, modelEffectiveInputBudgetTokens: 1_000));
+        var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
+
+        Assert.Contains(source.Source.NumberedLines[^1], markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain(alternativePath, markdown, StringComparison.Ordinal);
+        Assert.Contains("1 ambiguity alternatives omitted", markdown, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(markdown) <= 3_000);
     }
 
     /// <summary>The production pipeline reapplies code-explore bounds after output sanitization expands content.</summary>
@@ -1890,7 +1928,7 @@ public static class ToolRuntimeTests
             new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
         Assert.Contains(
-            "MUST NOT replace an advertised semantic tool",
+            "Use this directly to locate relevant text within a known file",
             new SearchTextTool(TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
     }

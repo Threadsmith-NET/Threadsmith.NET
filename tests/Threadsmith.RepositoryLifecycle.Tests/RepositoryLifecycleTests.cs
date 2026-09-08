@@ -854,7 +854,11 @@ public static class RepositoryLifecycleTests
         Assert.Contains("Trust: TrustedRead", surface.Output, StringComparison.Ordinal);
         Assert.Contains($"Solution: {repository.SolutionPath}", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Target frameworks: net10.0", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Semantic confidence: Loading...", surface.TransientStatuses);
+        Assert.Collection(
+            surface.TransientStatuses,
+            text => Assert.StartsWith("Opening repository...", text, StringComparison.Ordinal),
+            text => Assert.StartsWith("Loading solution...", text, StringComparison.Ordinal),
+            text => Assert.StartsWith("Semantic confidence: Loading...", text, StringComparison.Ordinal));
         Assert.DoesNotContain("Semantic confidence: Loading...", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Semantic confidence: TextOnly", surface.Output, StringComparison.Ordinal);
     }
@@ -919,6 +923,44 @@ public static class RepositoryLifecycleTests
         {
             Directory.Delete(repositoryPath, recursive: true);
         }
+    }
+
+    /// <summary>Automation trust requires an explicit valid command or selector choice.</summary>
+    [Theory]
+    [InlineData("/trust automation", -1, true)]
+    [InlineData("/trust FullyTrustedAutomation", -1, true)]
+    [InlineData("/trust", 4, true)]
+    [InlineData("/trust", 5, false)]
+    [InlineData("/trust automations", -1, false)]
+    public static async Task ConversationalShell_AutomationTrust_RequiresExplicitChoice(
+        string command,
+        int selection,
+        bool expectedAutomation)
+    {
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
+        var surface = new RepositoryConsoleSurface([command, "/quit"], selection < 0 ? [] : [selection]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(dispatcher, harness.Projections),
+            harness.Events,
+            surface);
+        await shell.RunAsync(
+            repository.RootPath,
+            RepositoryTrustLevel.TrustedRead,
+            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(3));
+        const string granted = "Repository trust is now FullyTrustedAutomation.";
+        if (expectedAutomation)
+        {
+            Assert.Contains(granted, surface.Output, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain(granted, surface.Output, StringComparison.Ordinal);
+            Assert.Contains("Trust change cancelled or invalid.", surface.Output, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain(harness.ObservedEvents, item => item is TaskIntentRecorded);
     }
 
     /// <summary>Cancelling the startup trust menu exits before the composer is read.</summary>

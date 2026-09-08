@@ -2800,6 +2800,8 @@ public static class ToolRuntimeTests
             await state.EnableAsync("csharp_script");
             var registeredScript = registry.Get("csharp_script");
             Assert.Equal("csharp_script", registeredScript.Definition.Id);
+            Assert.True(registeredScript.Definition.ConversationAvailable);
+            Assert.Equal(ToolSideEffect.ExecutesCode, registeredScript.Definition.SideEffect);
             var execution = await registeredScript.ExecuteAsync(
                 registeredScript.DeserializeInput("{\"code\":\"6 * 7\",\"kind\":\"expression\"}"),
                 new ToolExecutionContext(

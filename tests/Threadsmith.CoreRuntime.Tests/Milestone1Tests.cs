@@ -1619,7 +1619,7 @@ public static class Milestone1Tests
 
         await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("/trust [inspect|read|build|mutation]", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("/trust [inspect|read|build|mutation|automation]", surface.Output, StringComparison.Ordinal);
         Assert.Contains("No repository is open", surface.Output, StringComparison.Ordinal);
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
     }
@@ -1903,7 +1903,7 @@ public static class Milestone1Tests
             "/theme [id|current]",
             "/thinking [on|off]",
             "/tools",
-            "/trust [inspect|read|build|mutation]",
+            "/trust [inspect|read|build|mutation|automation]",
             "/validation retry",
         ];
         var commandLines = surface.Output

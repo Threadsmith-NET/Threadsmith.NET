@@ -1,6 +1,7 @@
 namespace Threadsmith.Architecture.Tests;
 
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Threadsmith.App;
@@ -12,6 +13,32 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>
+    [Fact]
+    public static void ApplicationProject_PublishesScriptingWorkerDependencyManifest()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var projectPath = Path.Combine(
+            repositoryRoot,
+            "src",
+            "Threadsmith.App",
+            "Threadsmith.App.csproj");
+        var project = XDocument.Load(projectPath, LoadOptions.None);
+        var manifest = Assert.Single(
+            project.Descendants(),
+            element => element.Name.LocalName == "None"
+                && string.Equals(
+                    element.Attribute("Link")?.Value,
+                    "Threadsmith.Scripting.Worker.deps.json",
+                    StringComparison.Ordinal));
+
+        Assert.EndsWith(
+            @"Threadsmith.Scripting.Worker\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\Threadsmith.Scripting.Worker.deps.json",
+            manifest.Attribute("Include")?.Value,
+            StringComparison.Ordinal);
+        Assert.Equal("PreserveNewest", manifest.Attribute("CopyToPublishDirectory")?.Value);
+    }
+
     /// <summary>Host switches are parsed while conversational arguments remain ordered and configuration stays separate.</summary>
     [Fact]
     public static void CommandLineParser_ValidArguments_ProducesHostOptionsAndRequest()

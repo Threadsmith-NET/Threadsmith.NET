@@ -7,6 +7,7 @@ public class InteractionController
 {
     private readonly Lock _gate = new();
     private readonly InteractionPresenter _presenter;
+    private readonly Func<string, Task, CancellationToken, Task>? _presentProgressAsync;
     private RunId? _activeRunId;
     private RunId? _backgroundValidationRunId;
     private WorkspaceBaseline? _baseline;
@@ -16,9 +17,18 @@ public class InteractionController
 
     /// <summary>Initializes a new instance of the <see cref="InteractionController"/> class.</summary>
     public InteractionController(InteractionPresenter presenter)
+        : this(presenter, null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="InteractionController"/> class with repository progress presentation.</summary>
+    public InteractionController(
+        InteractionPresenter presenter,
+        Func<string, Task, CancellationToken, Task>? presentProgressAsync)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         _presenter = presenter;
+        _presentProgressAsync = presentProgressAsync;
     }
 
     /// <summary>Gets the current session when the shell is open.</summary>
@@ -494,10 +504,16 @@ public class InteractionController
             return new InteractionRepositoryOpenWorkflowResult(null, null);
         }
 
-        var opened = await OpenRepositoryAsync(
+        var openOperation = OpenRepositoryAsync(
             repositoryPath,
             effectiveRequest.Value,
             cancellationToken);
+        if (_presentProgressAsync is not null)
+        {
+            await _presentProgressAsync("Opening repository...", openOperation, cancellationToken);
+        }
+
+        var opened = await openOperation;
         if (opened.Trust.Level < RepositoryTrustLevel.TrustedRead
             || opened.SolutionCandidates.Count == 0)
         {
@@ -516,10 +532,19 @@ public class InteractionController
             return new InteractionRepositoryOpenWorkflowResult(opened, null);
         }
 
-        var solution = await SelectSolutionAsync(
+        var solutionOperation = SelectSolutionAsync(
             opened.WorkspaceId,
             solutionPath,
             cancellationToken);
+        if (_presentProgressAsync is not null)
+        {
+            var label = opened.Trust.Level >= RepositoryTrustLevel.TrustedBuild
+                ? "Loading solution and restoring packages..."
+                : "Loading solution...";
+            await _presentProgressAsync(label, solutionOperation, cancellationToken);
+        }
+
+        var solution = await solutionOperation;
         return new InteractionRepositoryOpenWorkflowResult(opened, solution, useRememberedSolution);
     }
 

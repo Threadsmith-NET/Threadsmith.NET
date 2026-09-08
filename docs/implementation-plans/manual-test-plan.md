@@ -547,7 +547,7 @@ Expected:
 
 - Composer redraw is responsive without corrupting prior output.
 - Prior output remains ordinary terminal scrollback.
-- Startup with a selected solution immediately shows an animated `Semantic confidence: Loading...` status while semantic loading runs. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
+- Startup shows an animated `Opening repository...` activity before waiting for repository opening, followed by `Loading solution and restoring packages...` at compiler-capable trust (or `Loading solution...` at read trust), then `Semantic confidence: Loading...` while semantic loading runs. Hold restore pending and confirm the existing spinner remains animated with elapsed time before any semantic-completion event. Trust and solution selectors retain input ownership; cancellation or failure clears the activity. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
 - The status contains no credentials, endpoint secrets, or stale repository values.
 - Help lists `/help`, `/open`, `/quit`, `/reasoning`, `/semantic_refresh`, `/thinking [on|off]`, and `/trust` in alphabetical command order, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
 
@@ -611,7 +611,7 @@ Expected:
 1. Launch, open `/tools`, and confirm `Date/Time` is enabled while `C# Script` is disabled.
 2. Ask for the current UTC time and local timezone; inspect the `datetime` result.
 3. Enable `csharp_script`, restart, and confirm it remains enabled.
-4. In a `FullyTrustedAutomation` repository, invoke expressions `6 * 7` and `Enumerable.Range(1, 4).Sum()`.
+4. Use `/trust automation` or select **Fully Trusted Automation** from `/trust`. With C# Script enabled, ask the model to invoke `csharp_script` with `kind: expression` for `6 * 7` and `Enumerable.Range(1, 4).Sum()`. Confirm the activity names `csharp_script` and the actual result fields report outputs `42` and `10`. A skill lookup or shell command does not exercise the scripting worker.
 5. Set `tools:config:csharp_script:max_output_bytes` to `256` and return a 1,000-character string.
 6. Set `timeout_ms` to `500` and execute `while (true) { }`.
 7. Attempt `System.IO.File.Exists("anything")`, `System.Net.Http.HttpClient`, process launch, reflection, and an assembly/namespace absent from `allowed_assemblies`.

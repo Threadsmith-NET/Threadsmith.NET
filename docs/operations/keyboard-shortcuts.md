@@ -45,7 +45,7 @@ Discovery is absent for exact command names, arguments, prose, multiline input, 
 - `/theme`: choose a built-in or configured theme with the numbered Up/Down/Enter selector.
 - `/theme <id>`: switch directly and save the user-level default; `/theme current` reports the effective theme.
 - `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Already printed reasoning remains in native scrollback.
-- `/trust [inspect|read|build|mutation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
+- `/trust [inspect|read|build|mutation|automation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
 
 Repository trust, multi-solution, and theme choices show numbered labels and support Up/Down plus Enter. Plan and mutation approvals appear as numbered, fail-closed review prompts. Invalid choices do not authorize an action. State-changing choices submit application commands; PrettyPrompt and Spectre.Console remain terminal adapters and do not call execution services directly.
 

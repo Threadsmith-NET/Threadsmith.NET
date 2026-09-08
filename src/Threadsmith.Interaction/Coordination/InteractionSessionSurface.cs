@@ -107,7 +107,7 @@ internal sealed class InteractionSessionSurface
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
 #pragma warning disable VSTHRD003 // The coordinator owns and separately observes the operation controlling activity.
         return _surface.PresentActivityUntilAsync(
-            new InteractionActivity(text, 0, ShowDuration: false, TimeProvider.System),
+            new InteractionActivity(text, TimeProvider.System.GetTimestamp(), ShowDuration: true, TimeProvider.System),
             operation,
             cancellationToken);
 #pragma warning restore VSTHRD003

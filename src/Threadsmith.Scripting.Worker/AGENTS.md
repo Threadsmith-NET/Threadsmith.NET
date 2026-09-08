@@ -7,7 +7,7 @@ Own the disposable Roslyn process used by the optional `csharp_script` built-in 
 ## Ownership
 
 - `Program.cs` — bounded standard-input protocol, reference/import restrictions, normalized syntax and semantic prohibited-capability checks, fresh script evaluation, UTF-8 output bounding, and JSON response.
-- `Threadsmith.Scripting.Worker.csproj` — isolated Roslyn scripting dependency and executable deployment boundary; it declares the complete supported release RID matrix so split restore/publish workflows resolve the worker target, while `eng/release/` publishes and requires its apphost explicitly for the application's RID.
+- `Threadsmith.Scripting.Worker.csproj` — isolated Roslyn scripting dependency and executable deployment boundary; it declares the complete supported release RID matrix so split restore/publish workflows resolve the worker target. `Threadsmith.App.csproj` copies the worker dependency manifest for direct application publishes, while `eng/release/` independently publishes and requires the complete worker apphost payload for the application's RID.
 
 ## Local Contracts
 
@@ -21,6 +21,7 @@ Own the disposable Roslyn process used by the optional `csharp_script` built-in 
 
 - Keep Roslyn types private to this executable.
 - Preserve deterministic bounded output and fresh `ScriptOptions` per request.
+- Keep `Threadsmith.Scripting.Worker.deps.json` beside the worker apphost in every published application layout. A project reference alone does not copy this manifest, and the self-contained host fails before worker `Main` when it is absent.
 - Do not add NuGet restore, repository assembly loading, globals, or stateful continuations.
 
 ## Verification

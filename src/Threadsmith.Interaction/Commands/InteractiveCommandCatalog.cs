@@ -46,7 +46,7 @@ public static class InteractiveCommandCatalog
         new("/theme", "/theme [id|current]", "Select, change, or report the active theme", IsFrontendLocal: true),
         new("/thinking", "/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
         new("/tools", "/tools", "Browse and toggle repository tool availability (Up/Down, Enter)"),
-        new("/trust", "/trust [inspect|read|build|mutation]", "Set or upgrade repository trust"),
+        new("/trust", "/trust [inspect|read|build|mutation|automation]", "Set or upgrade repository trust"),
         new("/validation", "/validation retry", "Resume interrupted post-apply validation"),
     ];
 

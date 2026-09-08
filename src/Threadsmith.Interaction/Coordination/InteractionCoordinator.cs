@@ -198,7 +198,7 @@ public sealed class InteractionCoordinator
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelStatus);
-        var controller = new InteractionController(_presenter);
+        var controller = new InteractionController(_presenter, _surface.ShowStatusUntilAsync);
         var sessionId = _sessionLifecycleAvailable
             ? (await controller.CreateNewSessionAsync(cancellationToken)).ActiveSession.SessionId
             : await controller.OpenAsync("Interactive", cancellationToken);
@@ -4110,6 +4110,7 @@ public sealed class InteractionCoordinator
             "Trusted Build (repository code may execute)",
             "Trusted Mutation (explicitly approved file changes)",
             "Inspect Only",
+            "Fully Trusted Automation (highest trust; optional code execution)",
             "Cancel",
         ];
         var selected = await _surface.SelectAsync(
@@ -4122,6 +4123,7 @@ public sealed class InteractionCoordinator
             1 => RepositoryTrustLevel.TrustedBuild,
             2 => RepositoryTrustLevel.TrustedMutation,
             3 => RepositoryTrustLevel.UntrustedInspection,
+            4 => RepositoryTrustLevel.FullyTrustedAutomation,
             _ => null,
         };
     }
@@ -4368,6 +4370,7 @@ public sealed class InteractionCoordinator
             "read" or "trustedread" => RepositoryTrustLevel.TrustedRead,
             "build" or "trustedbuild" => RepositoryTrustLevel.TrustedBuild,
             "mutation" or "trustedmutation" => RepositoryTrustLevel.TrustedMutation,
+            "automation" or "fullytrustedautomation" => RepositoryTrustLevel.FullyTrustedAutomation,
             _ => null,
         };
     }

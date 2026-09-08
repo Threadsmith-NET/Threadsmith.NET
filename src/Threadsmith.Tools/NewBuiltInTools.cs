@@ -283,6 +283,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         {
             DisplayName = "C# Script",
             EnabledByDefault = false,
+            ConversationAvailable = true,
             Idempotency = ToolIdempotency.NonIdempotent,
         };
         _engine = engine;

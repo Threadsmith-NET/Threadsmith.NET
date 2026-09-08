@@ -89,6 +89,7 @@ Provide automated verification of project-level contracts: dependency direction,
 - `dotnet test --project tests/Threadsmith.CoreRuntime.Tests/Threadsmith.CoreRuntime.Tests.csproj` — command, event, persistence, terminal, and interaction tests pass.
 - `dotnet test --project tests/Threadsmith.RepositoryLifecycle.Tests/Threadsmith.RepositoryLifecycle.Tests.csproj` — repository-lifecycle tests pass.
 - `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj` — semantic, model catalog/provider/migration, tool policy/persistence/UI, process cancellation, date/time, tool configuration, and isolated scripting tests pass.
+- Set `THREADSMITH_SCRIPT_INTEGRATION=1` and run the built `Threadsmith.ModelTooling.Tests` executable with `--filter-method '*CSharpScript*'` for real-worker conversation advertisement, central policy, execution, and tool-result continuation coverage. These source-prompt/installed-runtime checks are opt-in integration tests.
 - `dotnet test --project tests/Threadsmith.Planning.Tests/Threadsmith.Planning.Tests.csproj` — governed context and planning tests pass.
 - `dotnet test --project tests/Threadsmith.Mutations.Tests/Threadsmith.Mutations.Tests.csproj` — transactional and semantic mutation tests pass.
 - `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj` — build, diagnostics, test-selection, execution, cancellation, projection, and combined-gate tests pass.
@@ -113,6 +114,8 @@ Provide automated verification of project-level contracts: dependency direction,
 No child AGENTS.md files yet.
 
 ## TUIKit frontend checks
+
+`RepositoryProgressTests` holds repository opening and solution/restore commands behind deterministic gates, verifies activity before completion, and verifies activity release on success, failure, and cancellation. Keep this coverage hermetic; the repository startup integration separately checks the opening, solution, and semantic phase order.
 
 `Threadsmith.CoreRuntime.Tests/TuiKitFrontendTests.cs` uses the actual TUIKit adapter and headless backend for exact input ownership, cancellation, stable selections, grapheme edits, bounded retention, and shared Markdown parity. Each new case is bounded to two seconds. `FrontendSelectionTests` covers default TUIKit selection, explicit original selection, invalid/duplicate selectors, and MCP precedence. Long terminal/load diagnostics remain outside unit tests.
 

@@ -139,6 +139,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 100 | `plan-100-tuikit-alternate-interactive-frontend.md` | Selectable TUIKit full-screen frontend with fixed session status |
 | 101 | `plan-101-tuikit-command-palette-autocomplete.md` | TUIKit fuzzy command palette and inline slash-command completion |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
+| Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
+| Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |
 
 ## Update discipline
 

@@ -208,7 +208,7 @@ Trust controls what the host may inspect or execute. It is separate from model c
 | `TrustedMutation` | Adds explicitly approved repository file mutations under configured roots. |
 | `FullyTrustedAutomation` | Enables the highest-trust automation capabilities, including explicitly enabled C# scripting, while hard host guardrails remain active. |
 
-Use `/trust` for the selector or `/trust inspect`, `/trust read`, `/trust build`, or `/trust mutation` in the interactive terminal.
+Use `/trust` for the selector or `/trust inspect`, `/trust read`, `/trust build`, `/trust mutation`, or `/trust automation` in the interactive terminal. `/trust FullyTrustedAutomation` is also accepted. Automation is the highest repository trust; it does not enable optional tools or bypass invocation policy.
 
 Persisted higher trust can be reused from the per-user repository-facts database. Trust is monotonic during repository use: requesting a lower level does not silently erase a persisted higher grant.
 
@@ -253,7 +253,7 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/theme current` | Report the active theme. |
 | `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
 | `/tools` | Browse and toggle non-essential repository tools. |
-| `/trust [inspect|read|build|mutation]` | Show or change repository trust. |
+| `/trust [inspect|read|build|mutation|automation]` | Show or change repository trust. |
 
 
 ### Durable session lifecycle
@@ -817,7 +817,9 @@ All graph and search results carry semantic confidence, workspace generation, pr
 
 `datetime` is enabled by default and returns round-trip UTC/local timestamps, local timezone ID, and effective offset.
 
-`csharp_script` is disabled by default and requires `FullyTrustedAutomation`. It executes each request in a fresh tracked worker process with bounded standard input, output, and time. It rejects directives and file, network, process, environment, reflection, native, dynamic, unsafe, and non-allowlisted namespace access.
+`csharp_script` is disabled by default and requires `FullyTrustedAutomation`. Use `/trust automation`, enable **C# Script** through `/tools`, then ask the model to invoke `csharp_script` with `kind: expression` and `code: 6 * 7`. Confirm the activity names `csharp_script` and inspect the actual `Success`, `Output`, `Error`, `ExecutionMs`, and `IsTruncated` fields; successful output is `42`. The same running build picks up trust and availability changes without restart. Invocation still requires `dotnet` in `tools:allowedExecutables`; allow/deny and approval policy remain enforced.
+
+It executes each request in a fresh tracked worker process with bounded standard input, output, and time. It rejects directives and file, network, process, environment, reflection, native, dynamic, unsafe, and non-allowlisted namespace access.
 
 These restrictions are defense in depth, not an operating-system sandbox. Enable scripting only for repositories you trust.
 

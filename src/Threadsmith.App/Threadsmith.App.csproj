@@ -39,6 +39,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      ProjectReference copies the worker apphost, assembly, and runtimeconfig but omits its
+      dependency manifest. The self-contained worker requires that manifest when launched
+      from the application directory.
+    -->
+    <None Include="..\Threadsmith.Scripting.Worker\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\Threadsmith.Scripting.Worker.deps.json"
+          Link="Threadsmith.Scripting.Worker.deps.json"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ship the documented key catalog so the launch bootstrap can scaffold ~/.threadsmith/config.json from it. -->
     <None Include="..\..\.threadsmith\config.example" CopyToOutputDirectory="PreserveNewest" Link="config.example" />
     <None Include="..\..\.threadsmith\providers.example.json" CopyToOutputDirectory="PreserveNewest" Link="providers.example.json" />

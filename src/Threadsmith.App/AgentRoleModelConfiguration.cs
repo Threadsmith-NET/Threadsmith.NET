@@ -64,8 +64,7 @@ internal static class AgentRoleModelConfiguration
             if (entry.GetChildren().Any(field => field.Key == "reasoningLevel"))
             {
                 var configured = entry["reasoningLevel"];
-                if (!Enum.GetNames<ReasoningLevel>().Any(name => string.Equals(name, configured, StringComparison.OrdinalIgnoreCase))
-                    || !Enum.TryParse(configured, ignoreCase: true, out reasoning))
+                if (!ReasoningLevel.TryParse(configured, out reasoning))
                 {
                     throw new InvalidOperationException("Trusted agents:roleModels reasoningLevel must be a supported level name.");
                 }

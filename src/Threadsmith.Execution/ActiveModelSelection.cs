@@ -323,11 +323,7 @@ public sealed class ActiveModelSelectionService :
                 return "The session provider/profile binding is no longer compatible. Run /models before the next model-backed turn.";
             }
 
-            var parsed = Enum.TryParse(
-                selection.ReasoningLevel,
-                ignoreCase: true,
-                out ReasoningLevel persistedReasoning)
-                && Enum.IsDefined(persistedReasoning);
+            var parsed = ReasoningLevel.TryParse(selection.ReasoningLevel, out var persistedReasoning);
             var reasoning = parsed
                 && definition.Profile.SupportedReasoningLevels.Contains(persistedReasoning)
                     ? persistedReasoning
@@ -464,8 +460,7 @@ public sealed class ActiveModelSelectionService :
         var reasoning = ReasoningLevel.None;
         var reasoningText = GetString(model, "reasoningLevel");
         if (reasoningText is not null
-            && (!Enum.TryParse(reasoningText, true, out reasoning)
-                || !Enum.IsDefined(reasoning)
+            && (!ReasoningLevel.TryParse(reasoningText, out reasoning)
                 || !definition.Profile.SupportedReasoningLevels.Contains(reasoning)))
         {
             reasoning = ReasoningLevel.None;
@@ -499,7 +494,7 @@ public sealed class ActiveModelSelectionService :
                     (var modelName, var model) = GetOrCreateObject(root, "model");
                     SetScalar(model, "providerId", definition.ProviderId);
                     SetScalar(model, "profileId", definition.Profile.Id.Value.ToString("D"));
-                    SetScalar(model, "reasoningLevel", reasoning.ToString().ToLowerInvariant());
+                    SetScalar(model, "reasoningLevel", reasoning.Value);
                     root[modelName] = model;
 
                     var temporaryPath = Path.Combine(

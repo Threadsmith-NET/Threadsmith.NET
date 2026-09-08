@@ -124,7 +124,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 86 | `plan-86-pi-style-active-turn-summary.md` | Pi-style active-turn summary compaction |
 | 88 | `plan-88-unified-model-correction-loop-substrate.md` | Conversation-native corrective messages |
 | 88.1 | `plan-88.1-complete-conversation-native-correction-migration.md` | Conversation-native correction migration follow-up |
-| 89 | `plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md` | Code explore agent-sufficient presentation, ranking, adaptive output, and availability |
+| 89 | `plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md` | Code explore configuration and source allocation |
 | 90 | `plan-90-deployable-prompt-assets.md` | Deployable Markdown prompt assets and cached injectable prompt loading |
 | 91 | `plan-91-create-sub-agent-delegation-tool.md` | Model-callable sub-agent delegation tool, steering, and double-Esc cancellation |
 | 92 | `plan-92-advanced-semantic-tool-schema-maintenance.md` | Advanced semantic model-facing schema simplification and projection hardening |

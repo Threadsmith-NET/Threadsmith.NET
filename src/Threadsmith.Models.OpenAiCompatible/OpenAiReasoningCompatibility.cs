@@ -51,6 +51,9 @@ public enum OpenAiChatTemplateKind
 
     /// <summary>Emits the generic thinking boolean and mapped template effort.</summary>
     ThinkingWithEffort,
+
+    /// <summary>Emits enable/preserve thinking booleans together with explicitly mapped template effort.</summary>
+    EnableThinkingWithPreservationAndEffort,
 }
 
 /// <summary>Compiled fixed request additions needed by supported endpoints.</summary>
@@ -76,7 +79,7 @@ public sealed record OpenAiReasoningCompatibilityConfiguration
     public OpenAiReasoningResponseMode ResponseMode { get; init; }
         = OpenAiReasoningResponseMode.ReasoningContent;
 
-    /// <summary>Explicit provider values keyed by supported host level.</summary>
+    /// <summary>Explicit provider values keyed by configured model reasoning name.</summary>
     public IReadOnlyDictionary<ReasoningLevel, string> LevelMap { get; init; }
         = new Dictionary<ReasoningLevel, string>();
 

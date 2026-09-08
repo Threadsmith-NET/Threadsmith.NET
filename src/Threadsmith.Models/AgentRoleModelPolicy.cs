@@ -43,7 +43,7 @@ public sealed class AgentRoleModelPolicy
                 throw new InvalidOperationException("Trusted agents:roleModels providerId and profileId do not match.");
             }
 
-            if (!Enum.IsDefined(route.ReasoningLevel) || !definition.Profile.SupportsReasoningLevel(route.ReasoningLevel))
+            if (!definition.Profile.SupportsReasoningLevel(route.ReasoningLevel))
             {
                 throw new InvalidOperationException("Trusted agents:roleModels reasoningLevel is unsupported by the profile.");
             }

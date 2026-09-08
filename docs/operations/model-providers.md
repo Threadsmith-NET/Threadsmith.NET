@@ -141,7 +141,7 @@ Use your configured provider ID and profile GUID. One profile may serve several 
 | `profileId` | Required; a non-empty GUID in hyphenated form for an enabled trusted profile. |
 | `reasoningLevel` | Optional; a supported named level, ignoring case. Omission uses the profile default. |
 
-Role keys and field names are case-sensitive and must use the exact spelling shown here. Reasoning values are case-insensitive names: `none`, `minimal`, `low`, `medium`, or `high`, and the selected profile must support the level. For example, `high` and `hIgH` mean the same level. Explicit null or empty values, numbers, comma-separated levels, and surrounding whitespace are invalid; omit the field to use the profile default.
+Role keys and field names are case-sensitive and must use the exact spelling shown here. Reasoning names come from the selected model's `supportedReasoningLevels`, with case-insensitive matching. There is no shared allowlist: values such as `xhigh` or `adaptive` are accepted when configured for that model. Custom names retain their spelling in provider requests and saved selections. Null or empty values are invalid; omit the field to use the profile default.
 
 Unknown roles or fields, malformed entries, missing or disabled profiles, mismatched provider/profile pairs, and unsupported reasoning stop startup with a sanitized error. Invalid configuration does not fall back as though the mapping were absent. Legacy `agents:roleProfiles` is rejected in trusted configuration; replace it with `agents:roleModels` and actual provider/profile identities. Omitted roles retain inherited or compatible default selection. Restart Threadsmith after changes. `/models` and `/reasoning` do not edit role mappings, and there is no TUI editor for them.
 
@@ -168,17 +168,17 @@ Trusted `context:activeTurnCompaction:profileId` and optional `reasoningLevel` s
 
 The adapter requests streamed usage from the endpoint. When usage is absent, it estimates tokens from bounded input/output text and marks `ModelUsage.IsEstimate`. Cost uses the greater of reported and local token estimates so under-reporting cannot bypass `budget:cost`; exceeding the ceiling produces a controlled pause/failure. Ordinary conversation is not charged to an execution-token budget; cancellation, tool-call accounting, per-tool timeouts, output accounting, and user-controlled budgets remain authoritative safeguards. Mutation-proposal operations receive fresh configured execution-budget scopes. Completed turns contribute to session usage telemetry but never consume a conversation quota.
 
-Caller cancellation interrupts the HTTP request, retry delay, or active response read and remains a cancellation outcome. Expiration of the profile's `timeoutSeconds` limit is reported as a provider timeout failure instead, so it cannot be mistaken for a user cancellation. HTTP 429, 503, and 529 responses and explicitly transient DNS, connection, protocol, or prematurely-ended HTTP transport failures are retried only within the profile's bounded retry and request-timeout policy. TLS, authentication, and configuration failures are not transient. Response content and credentials are never logged.
+Caller cancellation interrupts the HTTP request, retry delay, or active response read and remains a cancellation outcome. Expiration of the profile's `timeoutSeconds` limit is reported as a provider timeout failure instead, so it cannot be mistaken for a user cancellation. This is the total model-request deadline, including retries, waiting for response headers, and streaming; slow inference does not have a separate first-token or inactivity deadline. The HTTP handler's `model:http:connectTimeoutSeconds` bounds connection establishment only. An independent transport cancellation before response headers uses the existing retry budget under the same model deadline and reports that transport phase if exhausted. An interruption after response headers reports the stream phase without replaying partial output. The interactive terminal renders a failed run's diagnostic once. HTTP 429, 503, and 529 responses and explicitly transient DNS, connection, protocol, or prematurely-ended HTTP transport failures are retried only within the profile's bounded retry and request-timeout policy. TLS, authentication, and configuration failures are not transient. Response content and credentials are never logged.
 
 ## Reasoning models
 
 Reasoning models stream thinking separately from visible answer content. Compatibility accepts only the configured compiled response mode (`reasoningContent`, `reasoning`, `reasoningText`, `knownFields`, or `none`) and normalizes accepted text to `ModelChunk.Reasoning`. `knownFields` mirrors Pi-compatible OpenAI-completions extraction by accepting the first non-empty `reasoning_content`, `reasoning`, or `reasoning_text` delta. Display reasoning is sanitized, bounded, transient process state. It is excluded from conversation, memory, evidence, hooks, telemetry, diagnostics, and SQLite; migration 7 removes historical `modelReasoningObserved` rows. The terminal shows only transient `THINKING` activity by default, removes it before completed output, and streams future reasoning chunks with the `Reasoning` semantic style only when `/thinking on` or the equivalent toggle enables streaming for the live session.
 
-Catalogs without `reasoningCompatibility` retain the legacy request behavior exactly: reasoning-capable profiles emit lowercase `reasoning_effort`, unsupported requested levels clamp to `none`, and `[none]`-only profiles omit the property. Explicit compatibility opts into strict validation and rejects unsupported levels before network I/O.
+Catalogs without `reasoningCompatibility` retain the legacy request behavior exactly: reasoning-capable profiles emit `reasoning_effort` using the model-defined name (conventional names retain their lowercase wire spelling), unsupported requested levels clamp to `none`, and `[none]`-only profiles omit the property. Explicit compatibility opts into strict validation and rejects unsupported levels before network I/O.
 
 ### Model configuration
 
-Declare host levels with `supportedReasoningLevels` (`none|minimal|low|medium|high`) and a supported `defaultReasoningLevel`. Add the version-1 `reasoningCompatibility` object to select a closed mode: `standardEffort`, `mappedEffort`, `chatTemplate`, `fixed`, `alwaysOn`, or `unsupported`. Response modes are `reasoningContent`, `reasoning`, `reasoningText`, `knownFields`, and `none`. Mapped effort requires a complete bounded `levelMap`. Chat-template mode requires `chatTemplateKind` (`enableThinkingWithPreservation` or `thinkingWithEffort`). Fixed mode requires `fixedRequestKind` (`thinkingEnvironmentBudget4096`); the typed `disableThinkingWithPreservation` shape is also available for an unsupported no-think profile. Arbitrary JSON additions and property names are not accepted.
+Declare the model's own names in `supportedReasoningLevels` and choose a `defaultReasoningLevel` from that list. Threadsmith does not reject names because they are absent from a built-in enumeration; for example, `["none", "low", "medium", "xhigh"]` is valid. The `none` entry retains Threadsmith's existing disabled/reset behavior. Add the version-1 `reasoningCompatibility` object to select a closed mode: `standardEffort`, `mappedEffort`, `chatTemplate`, `fixed`, `alwaysOn`, or `unsupported`. Response modes are `reasoningContent`, `reasoning`, `reasoningText`, `knownFields`, and `none`. Mapped effort requires a complete bounded `levelMap`. Chat-template mode requires `chatTemplateKind` (`enableThinkingWithPreservation`, `thinkingWithEffort`, or `enableThinkingWithPreservationAndEffort`). Fixed mode requires `fixedRequestKind` (`thinkingEnvironmentBudget4096`); the typed `disableThinkingWithPreservation` shape is also available for an unsupported no-think profile. Arbitrary JSON additions and property names are not accepted.
 
 Always-on and fixed models advertise only host level `none` because effort is not selectable; their effective capability reports `always on`. Unsupported models likewise advertise only `none` and use response mode `none`. Repository overrides cannot change an inherited compatibility mode/version under the same model identity.
 
@@ -201,6 +201,29 @@ Always-on and fixed models advertise only host level `none` because effort is no
 }
 ```
 
+### Qwen3.8 thinking and effort
+
+For Qwen3.8 deployments that accept `enable_thinking`, `preserve_thinking`, and `reasoning_effort` in `chat_template_kwargs`, select `enableThinkingWithPreservationAndEffort` on that model. This is an explicit per-model option; Threadsmith does not infer it from a model name or change other profiles. The existing `enableThinkingWithPreservation` shape sends only its two booleans, and `thinkingWithEffort` continues to send `thinking` plus mapped effort.
+
+Set the model's `supportedReasoningLevels` to `["none", "low", "medium", "xhigh"]` and choose a default from that list. For a Qwen3.8 profile using response mode `reasoning`, its compatibility block is:
+
+```json
+"reasoningCompatibility": {
+  "schemaVersion": 1,
+  "mode": "chatTemplate",
+  "responseMode": "reasoning",
+  "chatTemplateKind": "enableThinkingWithPreservationAndEffort",
+  "levelMap": {
+    "none": "none",
+    "low": "low",
+    "medium": "medium",
+    "xhigh": "xhigh"
+  }
+}
+```
+
+Keep the response mode appropriate to your endpoint. Both effort-bearing template shapes require a bounded mapping for every supported level, including `none`; mapped values are sent verbatim. With this example, `low` sends `{"enable_thinking":true,"preserve_thinking":true,"reasoning_effort":"low"}` inside `chat_template_kwargs`. Selecting `none` disables thinking and sends the mapped `"none"` effort. No top-level `reasoning_effort` is added. Install or build a version supporting this selector before updating the configuration, then restart Threadsmith. The server's existing template must support these fields; this option does not replace its template.
+
 ### Interactive `/reasoning` command
 
-In the interactive terminal, `/reasoning` reports the resolved model and whether control is selectable, always on, or unsupported. `/reasoning <level>` is accepted only for selectable models and only for an advertised host level. Always-on and unsupported models return an actionable non-selectable message. Switching profiles revalidates the shared preference and resets it to `none`; switching back does not restore the former value.
+In the interactive terminal, `/reasoning` reports the resolved model and whether control is selectable, always on, or unsupported. `/reasoning <level>` is accepted only for selectable models and only for a level advertised by that model's configuration. Always-on and unsupported models return an actionable non-selectable message. Switching profiles revalidates the shared preference and resets it to `none`; switching back does not restore the former value.

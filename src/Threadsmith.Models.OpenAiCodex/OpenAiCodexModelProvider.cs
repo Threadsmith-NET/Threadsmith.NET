@@ -628,15 +628,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static string ToProviderReasoning(ReasoningLevel level)
     {
-        return level switch
-        {
-            ReasoningLevel.None => "none",
-            ReasoningLevel.Minimal => "minimal",
-            ReasoningLevel.Low => "low",
-            ReasoningLevel.Medium => "medium",
-            ReasoningLevel.High => "high",
-            _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown reasoning level."),
-        };
+        return level.Value;
     }
 
     private static string? GetString(JsonElement element, string propertyName)

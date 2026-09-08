@@ -437,8 +437,7 @@ public sealed class AgentModelSelector
     {
         var reasoning = string.IsNullOrWhiteSpace(configured)
             ? profile.DefaultReasoningLevel
-            : Enum.GetNames<ReasoningLevel>().Any(name => string.Equals(name, configured, StringComparison.OrdinalIgnoreCase))
-                && Enum.TryParse(configured, ignoreCase: true, out ReasoningLevel parsed)
+            : ReasoningLevel.TryParse(configured, out var parsed)
                 ? parsed
                 : throw new InvalidDataException("Child reasoning level is invalid.");
         if (!profile.SupportsReasoningLevel(reasoning))

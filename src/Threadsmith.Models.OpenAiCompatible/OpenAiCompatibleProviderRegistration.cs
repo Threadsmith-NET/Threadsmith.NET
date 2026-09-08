@@ -159,11 +159,9 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 || openAiModel.RetryMaxAttempts <= 0
                 || openAiModel.RetryDelayMilliseconds < 0
                 || openAiModel.SupportedReasoningLevels.Count == 0
-                || openAiModel.SupportedReasoningLevels.Any(level => !Enum.IsDefined(level))
                 || openAiModel.SupportedReasoningLevels.Distinct().Count()
                     != openAiModel.SupportedReasoningLevels.Count
                 || !openAiModel.SupportedReasoningLevels.Contains(ReasoningLevel.None)
-                || !Enum.IsDefined(openAiModel.DefaultReasoningLevel)
                 || !openAiModel.SupportedReasoningLevels.Contains(openAiModel.DefaultReasoningLevel))
             {
                 throw new InvalidOperationException(
@@ -204,7 +202,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 IntendedWorkloadClasses = model.IntendedWorkloadClasses,
                 ReasoningEffort = model.DefaultReasoningLevel == ReasoningLevel.None
                     ? null
-                    : model.DefaultReasoningLevel.ToString().ToLowerInvariant(),
+                    : model.DefaultReasoningLevel.Value,
                 DefaultReasoningLevel = model.DefaultReasoningLevel,
                 SupportedReasoningLevels = model.SupportedReasoningLevels,
                 ReasoningCapability = CreateEffectiveReasoningCapability(configured.Id, model),
@@ -379,9 +377,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             throw new InvalidOperationException($"{identity} has an unsupported reasoning compatibility mode or version.");
         }
 
-        if (compatibility.LevelMap.Count > 5
-            || compatibility.LevelMap.Any(item => !Enum.IsDefined(item.Key)
-                || string.IsNullOrWhiteSpace(item.Value)
+        if (compatibility.LevelMap.Count > 128
+            || compatibility.LevelMap.Any(item => string.IsNullOrWhiteSpace(item.Value)
                 || item.Value.Length > 32
                 || item.Value.Any(char.IsControl)))
         {
@@ -405,7 +402,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         if (compatibility.Mode == OpenAiReasoningControlMode.ChatTemplate
             && (compatibility.ChatTemplateKind is null
                 || !Enum.IsDefined(compatibility.ChatTemplateKind.Value)
-                || (compatibility.ChatTemplateKind == OpenAiChatTemplateKind.ThinkingWithEffort
+                || (compatibility.ChatTemplateKind is OpenAiChatTemplateKind.ThinkingWithEffort
+                        or OpenAiChatTemplateKind.EnableThinkingWithPreservationAndEffort
                     && model.SupportedReasoningLevels.Any(level => !compatibility.LevelMap.ContainsKey(level)))))
         {
             throw new InvalidOperationException(

@@ -910,12 +910,14 @@ Expected:
 3. Run `/thinking on`, stream another reasoning answer, then run `/thinking off` and stream a third reasoning answer.
 4. Repeat the same on/off transitions with `Ctrl+T` on an empty composer and with `/thinking` without arguments.
 5. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
+6. In the default TUIKit frontend, enable `/thinking on` and use a controlled provider that pauses after its last reasoning chunk, then pauses again after sending buffered answer text. Confirm the `THINKING` row stays visible throughout both pauses and clears before the completed answer appears. Repeat after a tool call completes, and cancel a paused turn to confirm the row clears.
 
 Expected:
 
 - Reasoning content is hidden by default, transient `THINKING` disappears before final output, and the completed transcript contains no host-generated `THINKING` marker or redundant assistant label.
 - `/thinking on` streams future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` suppresses future reasoning chunks, and `/thinking` plus `Ctrl+T` toggle the same in-session state without enabling mouse capture.
 - Turning streaming off does not remove reasoning already present in the visible transcript.
+- The default TUIKit activity row remains active alongside visible reasoning until the answer is displayed or a completion, cancellation, review, or steering boundary ends the activity. The original frontend continues to release its transient spinner before streaming reasoning into native scrollback.
 - Reasoning-only completion emits no empty `Threadsmith:` label.
 - Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
 

@@ -23,7 +23,7 @@ internal static class TerminalSessionStatusFormatter<TMetrics>
             return string.Empty;
         }
 
-        var reasoningName = status.Reasoning.ToString().ToLowerInvariant();
+        var reasoningName = Bound(status.Reasoning.Value);
         var model = $"model {Bound(status.Model)} ({reasoningName})";
         var context = status.ContextTokens is { } used && status.ContextLimit is { } limit && limit > 0
             ? $"ctx ~{FormatCount(used)}/{FormatCount(limit)} {Math.Min(999, (used * 100m) / limit):0}%"

@@ -2532,13 +2532,15 @@ public static class ToolRuntimeTests
     }
 
     /// <summary>The datetime built-in returns consistent UTC, local, timezone, and offset values.</summary>
-    [Fact]
-    public static async Task DateTimeTool_ReturnsCurrentHostClockInformation()
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"maximumLines\":10,\"path\":\"README.md\"}")]
+    public static async Task DateTimeTool_ReturnsCurrentHostClockInformation(string argumentsJson)
     {
         var before = DateTimeOffset.UtcNow;
         var tool = new DateTimeTool(TestPromptLoader.Instance);
         var result = await tool.ExecuteAsync(
-            new DateTimeInput(),
+            Assert.IsType<DateTimeInput>(tool.DeserializeInput(argumentsJson)),
             new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory)),
             CancellationToken.None);
         var utc = DateTimeOffset.Parse(result.Value.UtcNow, System.Globalization.CultureInfo.InvariantCulture);
@@ -2548,6 +2550,63 @@ public static class ToolRuntimeTests
         Assert.Equal(utc.UtcDateTime, local.UtcDateTime);
         Assert.Equal(local.Offset.ToString("c"), result.Value.OffsetFromUtc);
         Assert.Equal("Date/Time", tool.Definition.DisplayName);
+    }
+
+    /// <summary>Datetime's extra fields pass batch preflight and cannot replace host clock values.</summary>
+    [Fact]
+    public static async Task DateTimeTool_ExtraFields_PassBatchPreflightAndExecute()
+    {
+        await using var events = new DomainEventStream();
+        var pipeline = CreatePipeline(events, [new DateTimeTool(TestPromptLoader.Instance)]);
+        var request = CreateBatchRequest(
+            0,
+            "datetime-extra-fields",
+            "datetime",
+            CreateContext(Environment.CurrentDirectory),
+            """{"maximumLines":10,"path":"missing.txt","timeoutSeconds":"10","UtcNow":"yesterday"}""");
+        var before = DateTimeOffset.UtcNow;
+
+        var preflight = pipeline.PreflightBatch([request]);
+
+        Assert.True(preflight.Succeeded, preflight.SafeReason);
+        var preparation = Assert.IsType<ToolBatchPreparation>(preflight.Preparation);
+        var results = await pipeline.InvokePreparedBatchAsync(preparation);
+        var result = Assert.Single(results).Result;
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotNull(result.ResultJson);
+        using var output = JsonDocument.Parse(result.ResultJson);
+        var utcText = output.RootElement.GetProperty("UtcNow").GetString();
+        Assert.NotNull(utcText);
+        var utc = DateTimeOffset.Parse(utcText, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(utc, before, DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>Ignoring datetime's extra fields does not repair malformed JSON or accept non-object input.</summary>
+    [Theory]
+    [InlineData("{maximumLines:10}")]
+    [InlineData("{\"path\":")]
+    [InlineData("{\"extra\":{broken}}")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("10")]
+    [InlineData("\"text\"")]
+    public static void DateTimeTool_InvalidJsonOrNonObjectArguments_RemainRejected(string argumentsJson)
+    {
+        var tool = new DateTimeTool(TestPromptLoader.Instance);
+
+        Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(argumentsJson));
+    }
+
+    /// <summary>Input-bearing tools retain unknown-field, required-field, and value-type validation.</summary>
+    [Theory]
+    [InlineData("{\"path\":\"README.md\",\"unexpected\":true}")]
+    [InlineData("{\"path\":\"README.md\",\"maximumLines\":\"ten\"}")]
+    [InlineData("{\"maximumLines\":10}")]
+    public static void ReadFileTool_InvalidArguments_RemainRejected(string argumentsJson)
+    {
+        var tool = new ReadFileTool(TestPromptLoader.Instance);
+
+        Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(argumentsJson));
     }
 
     /// <summary>Tool-level configuration binds typed scalar values and exposes one tool's scalar map.</summary>

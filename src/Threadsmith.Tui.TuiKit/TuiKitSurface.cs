@@ -180,7 +180,10 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     }
 
     /// <inheritdoc />
-    public InteractionSurfaceCapabilities Capabilities { get; } = new(SupportsActiveRunInput: true, SupportsRetainedStatus: true);
+    public InteractionSurfaceCapabilities Capabilities { get; } = new(
+        SupportsActiveRunInput: true,
+        SupportsRetainedStatus: true,
+        SupportsRetainedActivity: true);
 
     private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
         ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;

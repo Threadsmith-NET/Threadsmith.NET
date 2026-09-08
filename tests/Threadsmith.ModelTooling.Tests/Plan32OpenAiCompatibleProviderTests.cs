@@ -18,6 +18,83 @@ public static class Plan32OpenAiCompatibleProviderTests
     private static readonly ModelProfileId SecondModelId = new(
         Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
 
+    private static readonly IReadOnlyList<ReasoningLevel> ConventionalReasoningLevels =
+        [ReasoningLevel.None, ReasoningLevel.Minimal, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High];
+
+    /// <summary>Custom names survive catalog serialization and reach effort-based providers verbatim.</summary>
+    [Theory]
+    [InlineData("xhigh")]
+    [InlineData("provider-Custom")]
+    public static async Task ReasoningCompatibility_CustomEffort_PreservesProviderValue(string reasoning)
+    {
+        string? requestJson = null;
+        using var client = new HttpClient(new RecordingHandler(request =>
+        {
+            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
+            };
+        }));
+        var level = new ReasoningLevel(reasoning);
+        var model = CreateModel(FirstModelId, "custom-model") with
+        {
+            DefaultReasoningLevel = level,
+            SupportedReasoningLevels = [ReasoningLevel.None, level],
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.StandardEffort,
+            },
+        };
+        var registry = new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]);
+        var options = registry.CreateSerializerOptions();
+        var json = JsonSerializer.Serialize<ModelConfiguration>(model, options);
+        var reloaded = Assert.IsType<OpenAiCompatibleModelConfiguration>(
+            JsonSerializer.Deserialize<ModelConfiguration>(json, options));
+        Assert.Equal(reasoning, reloaded.DefaultReasoningLevel.Value);
+        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null));
+
+        await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            ReasoningLevel = reloaded.DefaultReasoningLevel,
+        }))
+        {
+            Assert.Null(chunk.Output);
+        }
+
+        Assert.NotNull(requestJson);
+        using var request = JsonDocument.Parse(requestJson);
+        Assert.Equal(reasoning, request.RootElement.GetProperty("reasoning_effort").GetString());
+    }
+
+    /// <summary>Reasoning maps may contain more than the former five host enum values.</summary>
+    [Fact]
+    public static void ReasoningCompatibility_CustomMap_AcceptsAdditionalModelLevels()
+    {
+        var extra = new ReasoningLevel("xhigh");
+        ReasoningLevel[] levels = [.. ConventionalReasoningLevels, extra];
+        var model = CreateModel(FirstModelId, "mapped-custom") with
+        {
+            DefaultReasoningLevel = extra,
+            SupportedReasoningLevels = levels,
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.MappedEffort,
+                LevelMap = levels.ToDictionary(level => level, level => level.Value),
+            },
+        };
+        var options = new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]).CreateSerializerOptions();
+        var reloaded = Assert.IsType<OpenAiCompatibleModelConfiguration>(
+            JsonSerializer.Deserialize<ModelConfiguration>(JsonSerializer.Serialize<ModelConfiguration>(model, options), options));
+
+        var catalog = CreateEffectiveCatalog(reloaded);
+
+        Assert.Equal(extra, catalog.ModelCatalog.Get(FirstModelId).DefaultReasoningLevel);
+        Assert.Equal(6, catalog.ModelCatalog.Get(FirstModelId).SupportedReasoningLevels.Count);
+    }
+
     /// <summary>Multiple compiled providers and nested models retain distinct host policy metadata.</summary>
     [Fact]
     public static void EffectiveCatalog_MultipleProvidersAndModels_ProjectsDistinctProfiles()
@@ -592,7 +669,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.ToolCalls);
             }
 
-            var unsupported = Enum.GetValues<ReasoningLevel>()
+            var unsupported = ConventionalReasoningLevels
                 .FirstOrDefault(level => !parityCase.Levels.Contains(level));
             if (!parityCase.Levels.Contains(unsupported))
             {
@@ -680,9 +757,20 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.Equal(ReasoningControllability.Selectable, catalog.ModelCatalog.Get(FirstModelId).ReasoningCapability.Controllability);
     }
 
-    /// <summary>Compiled Qwen chat-template compatibility controls thinking without overriding host fields.</summary>
-    [Fact]
-    public static async Task ReasoningCompatibility_QwenChatTemplate_EmitsBoundedNestedShape()
+    /// <summary>The existing boolean-only template shape stays unchanged for every model name and level.</summary>
+    [Theory]
+    [InlineData("qwen", "none", false)]
+    [InlineData("qwen", "low", true)]
+    [InlineData("qwen", "medium", true)]
+    [InlineData("qwen", "xhigh", true)]
+    [InlineData("other-vendor/model", "none", false)]
+    [InlineData("other-vendor/model", "low", true)]
+    [InlineData("other-vendor/model", "medium", true)]
+    [InlineData("other-vendor/model", "xhigh", true)]
+    public static async Task ReasoningCompatibility_QwenChatTemplate_EmitsBoundedNestedShape(
+        string modelId,
+        string reasoning,
+        bool enabled)
     {
         string? requestJson = null;
         var handler = new RecordingHandler(request =>
@@ -694,9 +782,9 @@ public static class Plan32OpenAiCompatibleProviderTests
                 Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
             };
         });
-        var model = CreateModel(FirstModelId, "qwen") with
+        var model = CreateModel(FirstModelId, modelId) with
         {
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, new ReasoningLevel("xhigh")],
             ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
             {
                 Mode = OpenAiReasoningControlMode.ChatTemplate,
@@ -715,7 +803,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         {
             RunId = RunId.New(),
             Input = "hello",
-            ReasoningLevel = ReasoningLevel.None,
+            ReasoningLevel = new ReasoningLevel(reasoning),
         }))
         {
             chunks.Add(chunk);
@@ -723,10 +811,108 @@ public static class Plan32OpenAiCompatibleProviderTests
 
         Assert.Contains(chunks, chunk => chunk.Reasoning == "thinking");
         Assert.NotNull(requestJson);
-        Assert.Contains("\"chat_template_kwargs\":{\"enable_thinking\":false,\"preserve_thinking\":true}", requestJson, StringComparison.Ordinal);
+        using var request = JsonDocument.Parse(requestJson);
+        Assert.Equal(enabled, request.RootElement.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+        Assert.True(request.RootElement.GetProperty("chat_template_kwargs").GetProperty("preserve_thinking").GetBoolean());
         Assert.DoesNotContain("reasoning_effort", requestJson, StringComparison.Ordinal);
-        Assert.Contains("\"model\":\"qwen\"", requestJson, StringComparison.Ordinal);
+        Assert.Equal(2, request.RootElement.GetProperty("chat_template_kwargs").EnumerateObject().Count());
+        Assert.Equal(modelId, request.RootElement.GetProperty("model").GetString());
         Assert.Contains("\"max_completion_tokens\":4000", requestJson, StringComparison.Ordinal);
+    }
+
+    /// <summary>The opt-in shape survives configuration binding and carries mapped effort with both thinking flags.</summary>
+    [Theory]
+    [InlineData("none", "none", false)]
+    [InlineData("low", "low", true)]
+    [InlineData("medium", "medium", true)]
+    [InlineData("xhigh", "xhigh", true)]
+    [InlineData("custom", "Provider-Custom", true)]
+    public static async Task ReasoningCompatibility_PreservedThinkingEffort_RoundTripsAndEmitsExactShape(
+        string reasoning,
+        string expectedEffort,
+        bool enabled)
+    {
+        // Arrange: the explicit shape, rather than the model name, selects this protocol.
+        string? requestJson = null;
+        using var client = new HttpClient(new RecordingHandler(request =>
+        {
+            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
+            };
+        }));
+        ReasoningLevel[] levels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, new("xhigh"), new("custom")];
+        var map = levels.ToDictionary(level => level, level => level.Value);
+        map[new ReasoningLevel("custom")] = "Provider-Custom";
+        var model = CreateModel(FirstModelId, "template-model") with
+        {
+            SupportedReasoningLevels = levels,
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.ChatTemplate,
+                ChatTemplateKind = OpenAiChatTemplateKind.EnableThinkingWithPreservationAndEffort,
+                LevelMap = map,
+            },
+        };
+        var options = new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]).CreateSerializerOptions();
+        var configurationJson = JsonSerializer.Serialize<ModelConfiguration>(model, options);
+        Assert.Contains("enableThinkingWithPreservationAndEffort", configurationJson, StringComparison.Ordinal);
+        var reloaded = Assert.IsType<OpenAiCompatibleModelConfiguration>(
+            JsonSerializer.Deserialize<ModelConfiguration>(configurationJson, options));
+        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null));
+
+        // Act.
+        await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            ReasoningLevel = new ReasoningLevel(reasoning),
+        }))
+        {
+            Assert.Null(chunk.Output);
+        }
+
+        // Assert the entire nested shape; no competing top-level or generic thinking controls may leak.
+        Assert.NotNull(requestJson);
+        using var request = JsonDocument.Parse(requestJson);
+        var body = request.RootElement;
+        var template = body.GetProperty("chat_template_kwargs");
+        Assert.Equal(3, template.EnumerateObject().Count());
+        Assert.Equal(enabled, template.GetProperty("enable_thinking").GetBoolean());
+        Assert.True(template.GetProperty("preserve_thinking").GetBoolean());
+        Assert.Equal(expectedEffort, template.GetProperty("reasoning_effort").GetString());
+        Assert.False(body.TryGetProperty("reasoning_effort", out _));
+        Assert.False(body.TryGetProperty("thinking", out _));
+        Assert.Equal("template-model", body.GetProperty("model").GetString());
+        Assert.Equal(4000, body.GetProperty("max_completion_tokens").GetInt32());
+    }
+
+    /// <summary>Both mapped template shapes reject missing entries before a provider can be activated.</summary>
+    [Theory]
+    [InlineData(OpenAiChatTemplateKind.ThinkingWithEffort, "none")]
+    [InlineData(OpenAiChatTemplateKind.ThinkingWithEffort, "xhigh")]
+    [InlineData(OpenAiChatTemplateKind.EnableThinkingWithPreservationAndEffort, "none")]
+    [InlineData(OpenAiChatTemplateKind.EnableThinkingWithPreservationAndEffort, "xhigh")]
+    public static void ReasoningCompatibility_MappedTemplate_MissingLevelFailsCatalogValidation(
+        OpenAiChatTemplateKind kind,
+        string missingLevel)
+    {
+        ReasoningLevel[] levels = [ReasoningLevel.None, new("xhigh")];
+        var model = CreateModel(FirstModelId, "template-model") with
+        {
+            SupportedReasoningLevels = levels,
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.ChatTemplate,
+                ChatTemplateKind = kind,
+                LevelMap = levels.Where(level => level.Value != missingLevel).ToDictionary(level => level, level => level.Value),
+            },
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CreateEffectiveCatalog(model));
+
+        Assert.Contains("completely map its required levels", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Structured requests coalesce adjacent user projections after the stable system message.</summary>
@@ -1012,7 +1198,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         return CreateParityCase(
             fixtureId,
             modelId,
-            Enum.GetValues<ReasoningLevel>(),
+            ConventionalReasoningLevels,
             OpenAiReasoningControlMode.StandardEffort,
             responseMode);
     }

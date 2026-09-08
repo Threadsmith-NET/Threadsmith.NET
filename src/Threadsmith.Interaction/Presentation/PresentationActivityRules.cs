@@ -15,6 +15,6 @@ internal static class PresentationActivityRules
             or MutationSetProposed
             or RunSteeringPaused
             or RunCompleted
-            || (domainEvent is ModelOutputObserved && emittedModelOutput);
+            || emittedModelOutput;
     }
 }

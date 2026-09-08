@@ -222,7 +222,15 @@ public sealed class InteractionCoordinator
             _displayOptions.ShowOperationDurations,
             () => _codeExploreOutputOptions.GetInspectCodeExploreOutput(sessionId));
         var delegations = new DelegationActivityRegistry();
-        await using var subscription = _events.Subscribe(dispatcher.QueueAsync);
+        var runCompletionQueued = false;
+        await using var subscription = _events.Subscribe(async (domainEvent, token) =>
+        {
+            await dispatcher.QueueAsync(domainEvent, token);
+            if (domainEvent is RunCompleted && domainEvent.SessionId == sessionId)
+            {
+                runCompletionQueued = true;
+            }
+        });
         var semanticCompletion = new TaskCompletionSource<SemanticLoadCompleted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await using var semanticCompletionSubscription = _events.Subscribe((domainEvent, _) =>
@@ -363,7 +371,8 @@ public sealed class InteractionCoordinator
 
         var startupCompletedAt = DateTimeOffset.UtcNow;
         TaskCompletionSource? activityCompletion = null;
-        TaskCompletionSource? renderedRunCompletion = null;
+        TaskCompletionSource<string?>? renderedRunCompletion = null;
+        string? latestRunDiagnostic = null;
         Task? activityDisplayTask = null;
         InteractionActivity? currentActivity = null;
         SemanticActivityKey? currentSemanticActivityKey = null;
@@ -371,6 +380,7 @@ public sealed class InteractionCoordinator
         var semanticActivityOrder = new List<SemanticActivityKey>();
         long? turnStartedTimestamp = null;
         var streamThinking = false;
+        var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
         ContextInspectionProjection? latestContextInspection = null;
         var modelAnswerCollector = new ModelAnswerCollector(_displayOptions.RenderMarkdown);
         var streamingThinkingActive = false;
@@ -383,6 +393,7 @@ public sealed class InteractionCoordinator
                 var pendingDecisions = new List<InteractiveDecision>();
                 var readySteeringPauses = new List<RunSteeringPaused>();
                 var runCompletedInBatch = false;
+                string? completedRunDiagnostic = null;
                 var nextActivity = currentActivity;
                 var nextSemanticActivityKey = currentSemanticActivityKey;
                 foreach (var domainEvent in batch.Where(item => item.SessionId == sessionId))
@@ -400,6 +411,12 @@ public sealed class InteractionCoordinator
                     if (domainEvent is TaskIntentRecorded)
                     {
                         turnStartedTimestamp = _timeProvider.GetTimestamp();
+                        latestRunDiagnostic = null;
+                    }
+
+                    if (domainEvent is DiagnosticObserved diagnostic)
+                    {
+                        latestRunDiagnostic = diagnostic.Message;
                     }
 
                     var directFetchApprovalRequested = domainEvent is DirectFetchApprovalPromptStarted;
@@ -441,7 +458,8 @@ public sealed class InteractionCoordinator
                                     turnStart,
                                     _displayOptions.ShowOperationDurations,
                                     _timeProvider),
-                            ModelReasoningObserved when !streamThinking && turnStartedTimestamp is { } turnStart =>
+                            ModelReasoningObserved when (!streamThinking || retainActivityDuringOutput)
+                                && turnStartedTimestamp is { } turnStart =>
                                 new InteractionActivity(
                                     "THINKING",
                                     turnStart,
@@ -527,6 +545,7 @@ public sealed class InteractionCoordinator
                         if (pendingAnswer is not null)
                         {
                             output.Add(pendingAnswer);
+                            emittedModelOutput = true;
                         }
 
                         var eventSegments = new List<PresentationTextSegment>();
@@ -562,7 +581,7 @@ public sealed class InteractionCoordinator
                     var activityEnded = PresentationActivityRules.EndsTransientActivity(
                             domainEvent,
                             emittedModelOutput)
-                        || (domainEvent is ModelReasoningObserved && streamThinking)
+                        || (domainEvent is ModelReasoningObserved && streamThinking && !retainActivityDuringOutput)
                         || directFetchApprovalRequested
                         || directFetchApprovalDenied
                         || domainEvent is ActiveTurnCompactionCompleted;
@@ -641,6 +660,7 @@ public sealed class InteractionCoordinator
                             break;
                         case RunCompleted:
                             runCompletedInBatch = true;
+                            completedRunDiagnostic = latestRunDiagnostic;
                             break;
                     }
                 }
@@ -648,7 +668,7 @@ public sealed class InteractionCoordinator
                 try
                 {
                     if (activityCompletion is not null
-                        && (output.Count > 0 || currentActivity != nextActivity))
+                        && ((output.Count > 0 && !retainActivityDuringOutput) || currentActivity != nextActivity))
                     {
                         activityCompletion.TrySetResult();
                         var completedActivityDisplayTask = activityDisplayTask;
@@ -692,7 +712,7 @@ public sealed class InteractionCoordinator
 
                 if (runCompletedInBatch)
                 {
-                    renderedRunCompletion?.TrySetResult();
+                    renderedRunCompletion?.TrySetResult(completedRunDiagnostic);
                 }
 
                 foreach (var decision in pendingDecisions)
@@ -1349,13 +1369,15 @@ public sealed class InteractionCoordinator
                 using var operation = CancellationTokenSource.CreateLinkedTokenSource(
                     lifetime.Token,
                     input.OperationCancellationToken);
+                Task<bool>? waitTask = null;
                 try
                 {
                     await EnsureCurrentUserUrlConsentAsync(submittedText, operation.Token);
-                    renderedRunCompletion = new TaskCompletionSource(
+                    renderedRunCompletion = new TaskCompletionSource<string?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
+                    runCompletionQueued = false;
                     _ = await controller.SubmitAsync(submittedText, operation.Token);
-                    var waitTask = controller.WaitForActiveRunAsync(operation.Token);
+                    waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
                     var activeInput = _surface.BeginActiveRunInput(_timeProvider);
                     var activeInputTask = activeInput?.ReadAsync(operation.Token);
@@ -1621,10 +1643,31 @@ public sealed class InteractionCoordinator
                 }
                 catch (Exception exception) when (!drainTask.IsFaulted)
                 {
-                    await _surface.WriteAsync(
-                        FormatStatusError(exception) + Environment.NewLine,
-                        PresentationTextRole.Error,
-                        lifetime.Token);
+                    string? renderedDiagnostic = null;
+                    if (waitTask?.IsFaulted == true
+                        && runCompletionQueued
+                        && renderedRunCompletion is not null)
+                    {
+                        // Normal engine failures queue their terminal events before faulting the waiter.
+                        // Join rendering before deciding whether the exception needs a fallback message.
+                        var renderingTask = renderedRunCompletion.Task.WaitAsync(lifetime.Token);
+                        var completedTask = await Task.WhenAny(renderingTask, drainTask);
+                        if (completedTask == drainTask)
+                        {
+                            await drainTask;
+                        }
+
+                        renderedDiagnostic = await renderingTask;
+                        renderedRunCompletion = null;
+                    }
+
+                    if (!string.Equals(renderedDiagnostic, exception.Message, StringComparison.Ordinal))
+                    {
+                        await _surface.WriteAsync(
+                            FormatStatusError(exception) + Environment.NewLine,
+                            PresentationTextRole.Error,
+                            lifetime.Token);
+                    }
                 }
             }
         }
@@ -1636,7 +1679,7 @@ public sealed class InteractionCoordinator
             }
 
             activityCompletion?.TrySetResult();
-            renderedRunCompletion?.TrySetResult();
+            renderedRunCompletion?.TrySetResult(null);
             var finalActivityDisplayTask = activityDisplayTask ?? Task.CompletedTask;
             dispatcher.Complete();
             decisions.Writer.TryComplete();
@@ -2074,7 +2117,7 @@ public sealed class InteractionCoordinator
             {
                 ReasoningControllability.Selectable => string.Join(
                     '/',
-                    entry.Profile.SupportedReasoningLevels.Select(level => level.ToString().ToLowerInvariant())),
+                    entry.Profile.SupportedReasoningLevels.Select(level => level.Value)),
                 ReasoningControllability.AlwaysOn => "always-on",
                 _ => "unsupported",
             };
@@ -2098,7 +2141,7 @@ public sealed class InteractionCoordinator
         await _surface.WriteAsync(
             $"Model set to {selection.Profile.Name} ({selection.ProviderId}); "
             + $"context {selection.Profile.ContextWindow:N0}; reasoning "
-            + $"{selection.ReasoningLevel.ToString().ToLowerInvariant()}.\n",
+            + $"{selection.ReasoningLevel.Value}.\n",
             result.Persisted ? PresentationTextRole.Status : PresentationTextRole.Error,
             cancellationToken);
         if (!result.ReasoningPreserved)
@@ -2106,7 +2149,7 @@ public sealed class InteractionCoordinator
             var choicesText = string.Join(
                 ", ",
                 selection.Profile.SupportedReasoningLevels
-                    .Select(level => level.ToString().ToLowerInvariant()));
+                    .Select(level => level.Value));
             await _surface.WriteAsync(
                 "The selected model does not support an equivalent reasoning level. Reasoning was set to none.\n"
                 + $"Use /reasoning <level> to select one of: {choicesText}.\n",
@@ -4541,7 +4584,7 @@ public sealed class InteractionCoordinator
         }
 
         var levels = activeProfile.SupportedReasoningLevels
-            .Select(level => level.ToString().ToLowerInvariant());
+            .Select(level => level.Value);
         var supportedList = string.Join(", ", levels);
         var capability = activeProfile.ReasoningCapability;
 
@@ -4557,7 +4600,7 @@ public sealed class InteractionCoordinator
                 $"Model: {activeProfile.Name}\n"
                 + $"Reasoning control: {control}\n"
                 + $"Current: {(activeSelection?.ReasoningLevel
-                    ?? _sessionPreferences.ResolveFor(activeProfileId)).ToString().ToLowerInvariant()}\n",
+                    ?? _sessionPreferences.ResolveFor(activeProfileId)).Value}\n",
                 PresentationTextRole.Status,
                 cancellationToken);
             return;
@@ -4575,7 +4618,7 @@ public sealed class InteractionCoordinator
         }
 
         var arg = commandText[10..].Trim();
-        if (!Enum.TryParse<ReasoningLevel>(arg, ignoreCase: true, out var level))
+        if (!ReasoningLevel.TryParse(arg, out var level))
         {
             await _surface.WriteAsync(
                 $"Unknown reasoning level '{arg}'. Supported: {supportedList}.\n",
@@ -4606,7 +4649,7 @@ public sealed class InteractionCoordinator
             ? " The session changed, but restart persistence failed."
             : string.Empty;
         await _surface.WriteAsync(
-            $"Reasoning set to {level.ToString().ToLowerInvariant()} for {activeProfile.Name}.{persistence}\n",
+            $"Reasoning set to {level.Value} for {activeProfile.Name}.{persistence}\n",
             result is { Persisted: false } ? PresentationTextRole.Error : PresentationTextRole.Status,
             cancellationToken);
     }

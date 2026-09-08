@@ -391,14 +391,15 @@ public static class AppBootstrapTests
 
     /// <summary>A trusted compaction profile resolves independently under the summary workload contract.</summary>
     [Theory]
-    [InlineData(null, ReasoningLevel.None)]
-    [InlineData("medium", ReasoningLevel.Medium)]
-    [InlineData("MeDiUm", ReasoningLevel.Medium)]
-    public static void ModelComposition_CompactionProfile_ResolvesTrustedSummaryProfile(string? reasoning, ReasoningLevel expected)
+    [InlineData(null, "none")]
+    [InlineData("medium", "medium")]
+    [InlineData("MeDiUm", "medium")]
+    [InlineData("xhigh", "xhigh")]
+    public static void ModelComposition_CompactionProfile_ResolvesTrustedSummaryProfile(string? reasoning, string expected)
     {
         var profile = CreateCompactionProfile() with
         {
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium],
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium, new ReasoningLevel("xhigh")],
         };
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -414,7 +415,7 @@ public static class AppBootstrapTests
 
         Assert.Equal(profile.Id, resolved?.Id);
         Assert.Equal(profile.MaximumOutputTokens, resolved?.MaximumOutputTokens);
-        Assert.Equal(expected, resolved?.DefaultReasoningLevel);
+        Assert.Equal(new ReasoningLevel(expected), resolved?.DefaultReasoningLevel);
         Assert.Equal(ReasoningLevel.None, profile.DefaultReasoningLevel);
     }
 

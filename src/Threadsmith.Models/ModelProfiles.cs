@@ -288,11 +288,9 @@ public sealed class ConfiguredModelCatalog
                 || profile.RetryPolicy.MaxAttempts <= 0
                 || profile.RetryPolicy.Delay < TimeSpan.Zero
                 || profile.SupportedReasoningLevels.Count == 0
-                || profile.SupportedReasoningLevels.Any(level => !Enum.IsDefined(level))
                 || profile.SupportedReasoningLevels.Distinct().Count()
                     != profile.SupportedReasoningLevels.Count
                 || !profile.SupportedReasoningLevels.Contains(ReasoningLevel.None)
-                || !Enum.IsDefined(profile.DefaultReasoningLevel)
                 || !profile.SupportedReasoningLevels.Contains(profile.DefaultReasoningLevel))
             {
                 throw new ArgumentException(
@@ -497,8 +495,7 @@ public static class ModelProfileConfigurationLoader
             var reasoningEffort = section["reasoningEffort"];
             var defaultReasoningLevel = ReasoningLevel.None;
             if (!string.IsNullOrWhiteSpace(reasoningEffort)
-                && (!Enum.TryParse(reasoningEffort, true, out defaultReasoningLevel)
-                    || !Enum.IsDefined(defaultReasoningLevel)))
+                && !ReasoningLevel.TryParse(reasoningEffort, out defaultReasoningLevel))
             {
                 throw new InvalidOperationException(
                     $"Unknown reasoning effort '{reasoningEffort}' in profile '{idText}'.");
@@ -597,8 +594,7 @@ public static class ModelProfileConfigurationLoader
         {
             foreach (var item in levelsSection.GetChildren())
             {
-                if (!Enum.TryParse<ReasoningLevel>(item.Value, true, out var level)
-                    || !Enum.IsDefined(level))
+                if (!ReasoningLevel.TryParse(item.Value, out var level))
                 {
                     throw new InvalidOperationException(
                         $"Unknown reasoning level '{item.Value}' in profile '{profileIdText}'.");

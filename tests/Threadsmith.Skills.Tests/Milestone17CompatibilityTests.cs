@@ -552,6 +552,42 @@ public sealed class Milestone17CompatibilityTests
         Assert.Equal(secondId, current.Profile.Id);
     }
 
+    /// <summary>Model-defined names survive repository persistence and session restoration.</summary>
+    [Theory]
+    [InlineData("xhigh")]
+    [InlineData("provider-Custom")]
+    public async Task ActiveModels_CustomReasoning_PersistsAndRestores(string name)
+    {
+        using var directory = new TemporaryDirectory();
+        var profileId = new ModelProfileId(Guid.NewGuid());
+        var level = new ReasoningLevel(name);
+        var catalog = new EffectiveModelProviderCatalog(
+            new ModelProviderCatalogConfiguration
+            {
+                DefaultProviderId = "custom",
+                DefaultModelId = profileId,
+                Providers = [CreateProvider("custom", "Custom", profileId, [ReasoningLevel.None, level])],
+            },
+            new ModelProviderRegistry([new TestProviderRegistration()]));
+        var path = Path.Combine(directory.Path, ".threadsmith", "config.json");
+        var service = new ActiveModelSelectionService(catalog, new SessionModelPreferences(profileId, level), path);
+
+        var result = await service.SetReasoningAsync(level);
+        var reloaded = new ActiveModelSelectionService(catalog, new SessionModelPreferences(profileId, ReasoningLevel.None), path);
+
+        Assert.True(result.Persisted);
+        Assert.Equal(name, reloaded.Current.ReasoningLevel.Value);
+        await reloaded.SetReasoningAsync(ReasoningLevel.None);
+        var warning = await reloaded.RestoreSessionSelectionAsync(new SessionModelSelectionRecord
+        {
+            ProviderId = "custom",
+            ProfileId = profileId,
+            ReasoningLevel = name,
+        });
+        Assert.Null(warning);
+        Assert.Equal(name, reloaded.Current.ReasoningLevel.Value);
+    }
+
     private static ClaudeSkillCompatibilityCatalog CreateClaudeCatalog(string root)
     {
         return new ClaudeSkillCompatibilityCatalog(

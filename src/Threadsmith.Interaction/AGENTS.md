@@ -27,6 +27,8 @@ Own frontend-neutral interactive coordination over existing host commands and pr
 
 - Put semantic decisions here and key/cell/glyph/layout decisions in the frontend.
 - Retained status is opt-in. The shared coordinator refreshes a fixed session/repository context at one-second intervals, invalidates it before transitions, joins the refresh at each interaction boundary, and propagates refresh failures. PrettyPrompt keeps prompt-boundary status emission.
+- Retained activity is a separate opt-in capability. Preserve its indicator while reasoning is streamed and answers are buffered; only a semantic activity transition ends it. Frontends without this capability still release transient display ownership before output, and streamed reasoning suppresses their spinner until a later activity starts.
+- Failed run waiters join the existing terminal rendering boundary when the engine queued a terminal event before faulting. Suppress the fallback only when the current turn already rendered the same diagnostic; failures without a terminal event must remain visible without waiting for one. Reset diagnostic state at each new turn and propagate rendering/cancellation failures.
 - Keep contracts immutable and free of third-party types.
 - Prefer focused existing fixtures and terminal-free recording surfaces; do not create repository-scale fixtures for local interaction behavior.
 

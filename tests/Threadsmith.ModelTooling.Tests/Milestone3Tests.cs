@@ -1867,6 +1867,66 @@ public static class Milestone3Tests
         Assert.True(usage.OutputTokens > profile.MaximumOutputTokens);
     }
 
+    /// <summary>Datetime ignores extra object fields without changing the provider's original argument payload.</summary>
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{ }")]
+    [InlineData("{\"maximumLines\":10,\"path\":\"README.md\"}")]
+    [InlineData("{\"timeoutSeconds\":\"10\",\"extra\":{\"items\":[1,null,true]}}")]
+    public static async Task OpenAiAdapter_DateTimeArguments_TolerateExtraFields(string argumentsJson)
+    {
+        var stream = "data: " + JsonSerializer.Serialize(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "call-1",
+                                function = new { name = "datetime", arguments = argumentsJson },
+                            },
+                        },
+                    },
+                    finish_reason = "tool_calls",
+                },
+            },
+        }) + "\n\ndata: [DONE]\n";
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+        var tool = new DateTimeTool(TestPromptLoader.Instance);
+        var request = new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "What is today's date?",
+            Tools =
+            [
+                new ModelToolDefinition
+                {
+                    Name = tool.Definition.Id,
+                    Description = tool.Definition.Description,
+                    ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema,
+                },
+            ],
+        };
+
+        var chunks = await CollectAsync(provider, request);
+        var invocation = Assert.IsType<ToolRequestModelOutput>(
+            Assert.Single(chunks, chunk => chunk.Output is not null).Output);
+        Assert.Equal("datetime", invocation.ToolName);
+        Assert.Equal(argumentsJson, invocation.ArgumentsJson);
+        Assert.IsType<DateTimeInput>(tool.DeserializeInput(invocation.ArgumentsJson));
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        Assert.Empty(schema.RootElement.GetProperty("properties").EnumerateObject());
+        Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
+    }
+
     /// <summary>Empty arguments from compatible providers are rejected instead of silently repaired.</summary>
     [Fact]
     public static async Task OpenAiAdapter_EmptyToolArguments_AreRejected()
@@ -2475,9 +2535,9 @@ public static class Milestone3Tests
         Assert.Null(profile.ReasoningCapability.DefaultLevel);
     }
 
-    /// <summary>An unknown reasoning level in <c>reasoning:supportedLevels</c> throws <see cref="InvalidOperationException"/>.</summary>
+    /// <summary>Legacy configuration accepts model-defined reasoning names.</summary>
     [Fact]
-    public static void ModelProfileConfiguration_UnknownReasoningLevel_Throws()
+    public static void ModelProfileConfiguration_CustomReasoningLevel_Loads()
     {
         var values = new Dictionary<string, string?>
         {
@@ -2500,7 +2560,8 @@ public static class Milestone3Tests
             .AddInMemoryCollection(values)
             .Build();
 
-        Assert.Throws<InvalidOperationException>(() => ModelProfileConfigurationLoader.Load(configuration));
+        var catalog = ModelProfileConfigurationLoader.Load(configuration);
+        Assert.Contains(new ReasoningLevel("Bogus"), Assert.Single(catalog.Profiles).SupportedReasoningLevels);
     }
 
     /// <summary>An invalid configured reasoning default fails closed even with explicit supported levels.</summary>
@@ -2527,19 +2588,19 @@ public static class Milestone3Tests
         Assert.Throws<InvalidOperationException>(() => ModelProfileConfigurationLoader.Load(configuration));
     }
 
-    /// <summary>The catalog rejects duplicate and undefined reasoning levels from direct callers.</summary>
+    /// <summary>The catalog checks duplicate entries without rejecting model-defined names.</summary>
     [Fact]
-    public static void ModelCatalog_RejectsDuplicateAndUndefinedSupportedReasoningLevels()
+    public static void ModelCatalog_RejectsDuplicatesAndAcceptsCustomReasoningLevels()
     {
         var duplicate = CreateProfile(_capableProfileId, "duplicate", toolCalls: true, combinedCost: 1)
             with
         { SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.None] };
-        var undefined = CreateProfile(_capableProfileId, "undefined", toolCalls: true, combinedCost: 1)
+        var custom = CreateProfile(_capableProfileId, "custom", toolCalls: true, combinedCost: 1)
             with
-        { SupportedReasoningLevels = [ReasoningLevel.None, (ReasoningLevel)999] };
+        { SupportedReasoningLevels = [ReasoningLevel.None, new ReasoningLevel("adaptive")] };
 
         Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([duplicate]));
-        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([undefined]));
+        Assert.Single(new ConfiguredModelCatalog([custom]).Profiles);
     }
 
     /// <summary>The catalog rejects a typed default outside the supported reasoning set.</summary>

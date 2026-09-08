@@ -1449,6 +1449,57 @@ public static class Milestone1Tests
         Assert.Null(branch);
     }
 
+    /// <summary>A failed model turn renders its engine diagnostic once before accepting the next prompt.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ConversationalShell_ProviderFailure_RendersOncePerTurn(bool retainsActivity)
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        {
+            Turns = [new ScriptedTurn { Failure = ScriptFailureKind.TransientProvider }],
+        });
+        var surface = new FakeConsoleSurface(["first", "second", "/quit"], retainsActivity: retainsActivity);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+        const string message = "Scripted transient provider failure.";
+        Assert.Equal(2, surface.Output.Split(message, StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, surface.Output.Split("[TransientProvider]", StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, harness.Events.OfType<RunCompleted>().Count(item => !item.Succeeded));
+        Assert.Equal(2, harness.Events.OfType<DiagnosticObserved>().Count(item => item.Message == message));
+        Assert.Empty(surface.ActiveStatuses);
+    }
+
+    /// <summary>A failed waiter without terminal events remains visible and does not block the next prompt.</summary>
+    [Fact]
+    public static async Task ConversationalShell_UnreportedWaitFailure_RemainsVisible()
+    {
+        var sessionId = SessionId.New();
+        var projections = new InMemoryProjectionStore();
+        projections.ReplaceSession(new SessionProjection
+        {
+            Key = new ProjectionKey("session", sessionId.Value.ToString("D")),
+            SessionId = sessionId,
+            Name = "unreported failure",
+            Phase = RunPhase.Intake,
+        });
+        const string message = "Unreported waiter failure.";
+        var surface = new FakeConsoleSurface(["request", "/quit"]);
+        var shell = new ConversationalShell(
+            new TuiPresenter(new FixedRunDispatcher(sessionId, RunId.New(), message), projections),
+            new DomainEventStream(),
+            surface);
+
+        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(1, surface.Output.Split(message, StringSplitOptions.None).Length - 1);
+    }
+
     /// <summary>Submitted prompts retain raw state while one semantic answer is emitted into terminal scrollback.</summary>
     [Fact]
     public static async Task ConversationalShell_Submission_RendersOneCopyableSemanticAnswer()
@@ -1675,18 +1726,21 @@ public static class Milestone1Tests
     }
 
     /// <summary>The /reasoning command with a valid level sets the session preference.</summary>
-    [Fact]
-    public static async Task ConversationalShell_ReasoningWithLevel_SetsSessionPreference()
+    [Theory]
+    [InlineData("medium")]
+    [InlineData("xhigh")]
+    [InlineData("provider-Custom")]
+    public static async Task ConversationalShell_ReasoningWithLevel_SetsSessionPreference(string reasoning)
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
         var profile = CreateReasoningProfile(
             profileId,
             "Qwen3",
-            [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High]);
+            [ReasoningLevel.None, new ReasoningLevel(reasoning)]);
         var catalog = new ConfiguredModelCatalog([profile], enforceHttps: false);
         var preferences = new SessionModelPreferences();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/reasoning medium", "/quit"]);
+        var surface = new FakeConsoleSurface([$"/reasoning {reasoning}", "/quit"]);
         var shell = new ConversationalShell(
             new TuiPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
@@ -1695,10 +1749,10 @@ public static class Milestone1Tests
             profileId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(3));
 
-        Assert.Contains("Reasoning set to medium for Qwen3.", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(ReasoningLevel.Medium, preferences.Reasoning);
+        Assert.Contains($"Reasoning set to {reasoning} for Qwen3.", surface.Output, StringComparison.Ordinal);
+        Assert.Equal(new ReasoningLevel(reasoning), preferences.Reasoning);
         Assert.Equal(profileId, preferences.CurrentProfileId);
     }
 
@@ -1725,7 +1779,7 @@ public static class Milestone1Tests
 
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("Unknown reasoning level 'bogus'", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("does not support reasoning level 'bogus'", surface.Output, StringComparison.Ordinal);
         Assert.Equal(ReasoningLevel.None, preferences.Reasoning);
     }
 
@@ -1868,7 +1922,7 @@ public static class Milestone1Tests
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
-            "/reasoning [level]                        Set reasoning effort for the active model",
+            "/reasoning [level]                        Set reasoning effort using the active model's configured levels",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3074,6 +3128,58 @@ public static class Milestone1Tests
         Assert.False(streamedReasoning.StartsWith(
             Environment.NewLine + Environment.NewLine,
             StringComparison.Ordinal));
+    }
+
+    /// <summary>Retained thinking survives streamed reasoning and buffered answer chunks until completion.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public static async Task ConversationalShell_ThinkingStreaming_RetainsActivityWhenSupported(bool retainsActivity)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var provider = new PausedReasoningModelProvider();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
+        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"], retainsActivity: retainsActivity);
+        var shell = new ConversationalShell(
+            new TuiPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await surface.ReasoningPresented.WaitAsync(timeout.Token);
+            if (retainsActivity)
+            {
+                await surface.StatusStarted.WaitAsync(timeout.Token);
+            }
+
+            Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
+            Assert.False(shellTask.IsCompleted);
+            Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
+
+            provider.ReleaseAnswer();
+            await provider.AnswerEmitted.WaitAsync(timeout.Token);
+            Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
+            Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+            provider.ReleaseCompletion();
+            await shellTask.WaitAsync(timeout.Token);
+        }
+
+        Assert.Empty(surface.ActiveStatuses);
+        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(surface.Output, "Inspect the repository."));
+        Assert.DoesNotContain("THINKING", surface.Output, StringComparison.Ordinal);
+        if (retainsActivity)
+        {
+            Assert.Equal(1, surface.Lifecycle.Count(entry => entry == "activity-start:THINKING"));
+            var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
+            var answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
+            Assert.True(thinkingEnded >= 0 && thinkingEnded < answerWritten, string.Join(" | ", surface.Lifecycle));
+        }
     }
 
     /// <summary><c>/thinking</c> without arguments toggles future reasoning streaming.</summary>
@@ -4409,6 +4515,36 @@ public static class Milestone1Tests
         };
     }
 
+    private sealed class PausedReasoningModelProvider : IModelProvider
+    {
+        private readonly TaskCompletionSource _releaseAnswer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _answerEmitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task AnswerEmitted => _answerEmitted.Task;
+
+        public void ReleaseAnswer() => _releaseAnswer.TrySetResult();
+
+        public void ReleaseCompletion() => _releaseCompletion.TrySetResult();
+
+        public IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            return Stream2Async();
+
+            async IAsyncEnumerable<ModelChunk> Stream2Async()
+            {
+                yield return new ModelChunk { Reasoning = "Inspect the repository." };
+                await _releaseAnswer.Task.WaitAsync(cancellationToken);
+                yield return new ModelChunk { Text = "answer" };
+                _answerEmitted.TrySetResult();
+                await _releaseCompletion.Task.WaitAsync(cancellationToken);
+            }
+        }
+    }
+
     private sealed class LeadingWhitespaceModelProvider : IModelProvider
     {
         private readonly int _trailingChunkCount;
@@ -4545,6 +4681,9 @@ public static class Milestone1Tests
         private readonly TaskCompletionSource _statusStarted = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private readonly TaskCompletionSource _reasoningPresented = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         private int _activeStatusCount;
 
         public FakeConsoleSurface(
@@ -4553,8 +4692,10 @@ public static class Milestone1Tests
             int statusWidth = 120,
             bool suppressSessionStatus = false,
             Exception? statusFailure = null,
-            InteractionInput? initialInput = null)
+            InteractionInput? initialInput = null,
+            bool retainsActivity = false)
         {
+            Capabilities = new InteractionSurfaceCapabilities(SupportsRetainedActivity: retainsActivity);
             _statusWidth = statusWidth;
             _suppressSessionStatus = suppressSessionStatus;
             _statusFailure = statusFailure;
@@ -4683,6 +4824,10 @@ public static class Milestone1Tests
         }
 
         public Task StatusStarted => _statusStarted.Task;
+
+        public Task ReasoningPresented => _reasoningPresented.Task;
+
+        public InteractionSurfaceCapabilities Capabilities { get; }
 
         public IReadOnlyList<string> Writes
         {
@@ -4868,6 +5013,11 @@ public static class Milestone1Tests
                 {
                     await WriteAsync(segment.Text, segment.Role, CancellationToken.None);
                 }
+            }
+
+            if (items.OfType<PresentationTextItem>().Any(item => item.Segments.Any(segment => segment.Role == PresentationTextRole.Reasoning)))
+            {
+                _reasoningPresented.TrySetResult();
             }
         }
 
@@ -5702,11 +5852,13 @@ public static class Milestone1Tests
     {
         private readonly RunId _runId;
         private readonly SessionId _sessionId;
+        private readonly string? _waitFailure;
 
-        public FixedRunDispatcher(SessionId sessionId, RunId runId)
+        public FixedRunDispatcher(SessionId sessionId, RunId runId, string? waitFailure = null)
         {
             _sessionId = sessionId;
             _runId = runId;
+            _waitFailure = waitFailure;
         }
 
         public Task<TResponse> DispatchAsync<TResponse>(
@@ -5718,6 +5870,7 @@ public static class Milestone1Tests
             {
                 CreateSessionCommand => _sessionId,
                 SubmitRequestCommand => _runId,
+                WaitForRunCommand when _waitFailure is not null => throw new InvalidOperationException(_waitFailure),
                 WaitForRunCommand => true,
                 _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
             };

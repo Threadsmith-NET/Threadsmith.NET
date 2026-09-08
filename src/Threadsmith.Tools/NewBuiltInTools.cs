@@ -2,9 +2,11 @@ namespace Threadsmith.Tools;
 
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Threadsmith.Core;
 
 /// <summary>Empty input for the current date/time tool.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
 public sealed record DateTimeInput;
 
 /// <summary>Current UTC and local clock values with timezone metadata.</summary>

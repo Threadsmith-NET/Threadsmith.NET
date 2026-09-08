@@ -5,25 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Threadsmith.Core;
 
-/// <summary>Reasoning effort levels selectable for a model request.</summary>
-public enum ReasoningLevel
-{
-    /// <summary>No reasoning effort; disables thinking when supported.</summary>
-    None,
-
-    /// <summary>Minimal reasoning effort.</summary>
-    Minimal,
-
-    /// <summary>Low reasoning effort.</summary>
-    Low,
-
-    /// <summary>Medium reasoning effort.</summary>
-    Medium,
-
-    /// <summary>High reasoning effort.</summary>
-    High,
-}
-
 /// <summary>Provider-neutral model-visible tool definition.</summary>
 public sealed record ModelToolDefinition
 {

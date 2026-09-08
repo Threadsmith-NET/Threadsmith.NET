@@ -171,20 +171,12 @@ public sealed class OpenAiCodexCatalogClient
             levels.UnionWith([ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High]);
         }
 
-        return [.. levels.OrderBy(level => level)];
+        return [.. levels];
     }
 
     private static ReasoningLevel ResolveReasoningLevel(string? value)
     {
-        return value?.ToLowerInvariant() switch
-        {
-            "none" => ReasoningLevel.None,
-            "minimal" => ReasoningLevel.Minimal,
-            "low" => ReasoningLevel.Low,
-            "medium" => ReasoningLevel.Medium,
-            "high" or "xhigh" or "max" => ReasoningLevel.High,
-            _ => ReasoningLevel.Medium,
-        };
+        return ReasoningLevel.TryParse(value, out var level) ? level : ReasoningLevel.Medium;
     }
 
     private static ModelProfileId StableProfileId(string slug)

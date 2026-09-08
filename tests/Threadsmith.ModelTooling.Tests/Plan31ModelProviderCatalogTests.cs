@@ -11,6 +11,23 @@ public static class Plan31ModelProviderCatalogTests
     private const string FirstModelId = "11111111-1111-1111-1111-111111111111";
     private const string SecondModelId = "22222222-2222-2222-2222-222222222222";
 
+    /// <summary>Catalog loading accepts model-defined reasoning names without a shared allowlist.</summary>
+    [Theory]
+    [InlineData("xhigh")]
+    [InlineData("adaptive")]
+    [InlineData("provider-Custom")]
+    public static void Load_CustomReasoningName_PreservesModelChoicesAndDefault(string reasoning)
+    {
+        using var fixture = new CatalogFixture();
+        fixture.WriteUser(BaseCatalog().Replace("medium", reasoning, StringComparison.Ordinal));
+
+        var catalog = fixture.Load();
+        var profile = Assert.Single(catalog.ModelCatalog.Profiles);
+
+        Assert.Equal(reasoning, profile.DefaultReasoningLevel.Value);
+        Assert.Contains(new ReasoningLevel(reasoning), profile.SupportedReasoningLevels);
+    }
+
     /// <summary>Registered provider and model types deserialize and project provider-specific properties.</summary>
     [Fact]
     public static void Load_UserCatalog_DeserializesAllowlistedTypesAndDefaults()

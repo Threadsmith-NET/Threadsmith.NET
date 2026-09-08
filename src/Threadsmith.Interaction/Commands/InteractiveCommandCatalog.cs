@@ -39,7 +39,7 @@ public static class InteractiveCommandCatalog
         new("/plan-policy", "/plan-policy [name|current|reset|revoke]", "Select or report plan approval policy"),
         new("/policy", "/policy [name|current]", "Select or report mutation approval policy"),
         new("/quit", "/quit", "End the interactive session"),
-        new("/reasoning", "/reasoning [level]", "Set reasoning effort for the active model (none|minimal|low|medium|high)"),
+        new("/reasoning", "/reasoning [level]", "Set reasoning effort using the active model's configured levels"),
         new("/resume", "/resume [id]", "Resume a durable repository session"),
         new("/semantic_refresh", "/semantic_refresh", "Force and await a complete semantic refresh"),
         new("/skills", "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Govern skills"),

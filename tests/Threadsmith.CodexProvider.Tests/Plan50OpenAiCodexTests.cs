@@ -21,7 +21,7 @@ public sealed class Plan50OpenAiCodexTests
         const string response = """
             {"models":[
               {"slug":"codex-a","display_name":"Codex A","context_window":128000,"default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]},
-              {"slug":"future-model","display_name":"Future Model","max_context_window":272000,"default_reasoning_level":"high","supported_reasoning_levels":[{"effort":"high"}]}
+              {"slug":"future-model","display_name":"Future Model","max_context_window":272000,"default_reasoning_level":"xhigh","supported_reasoning_levels":[{"effort":"xhigh"},{"effort":"max"}]}
             ]}
             """;
         var handler = new RecordingHandler(_ => JsonResponse(response));
@@ -33,6 +33,9 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal(2, catalog.Models.Count);
         Assert.Contains(catalog.Models, model => model.Name == "Future Model");
+        var future = Assert.Single(catalog.Models, model => model.Name == "Future Model");
+        Assert.Equal(new ReasoningLevel("xhigh"), future.DefaultReasoningLevel);
+        Assert.Contains(new ReasoningLevel("max"), future.SupportedReasoningLevels);
         Assert.Contains("client_version=0.144.0", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
         Assert.Equal("account-1", handler.Request?.Headers.GetValues("ChatGPT-Account-Id").Single());
     }
@@ -247,8 +250,11 @@ public sealed class Plan50OpenAiCodexTests
     }
 
     /// <summary>Native Responses requests and SSE events remain provider-neutral at the project boundary.</summary>
-    [Fact]
-    public async Task Provider_UsesResponsesAndNormalizesTextReasoningToolAndUsage()
+    [Theory]
+    [InlineData("high")]
+    [InlineData("xhigh")]
+    [InlineData("provider-Custom")]
+    public async Task Provider_UsesResponsesAndNormalizesTextReasoningToolAndUsage(string reasoning)
     {
         const string stream = """
             data: {"type":"response.reasoning_summary_text.delta","delta":"think"}
@@ -268,7 +274,7 @@ public sealed class Plan50OpenAiCodexTests
         });
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
-                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}"))))
+                $$"""{"models":[{"slug":"dynamic","display_name":"Dynamic","context_window":128000,"default_reasoning_level":"{{reasoning}}","supported_reasoning_levels":["{{reasoning}}"]}]}"""))))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
         var registration = new OpenAiCodexProviderRegistration();
         var profile = Assert.Single(registration.CreateProfiles(configuration));
@@ -285,7 +291,7 @@ public sealed class Plan50OpenAiCodexTests
         {
             RunId = RunId.New(),
             Input = "hello",
-            ReasoningLevel = ReasoningLevel.High,
+            ReasoningLevel = new ReasoningLevel(reasoning),
             MaximumOutputTokens = 4096,
             AllowMultipleToolCalls = true,
             Tools =
@@ -315,7 +321,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(OpenAiCodexProviderRegistration.ResponsesEndpoint, handler.Request?.RequestUri);
         var requestBody = handler.RequestBody ?? string.Empty;
         Assert.Contains("\"model\":\"dynamic\"", requestBody, StringComparison.Ordinal);
-        Assert.Contains("\"effort\":\"high\"", requestBody, StringComparison.Ordinal);
+        Assert.Contains($"\"effort\":\"{reasoning}\"", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"strict\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"parallel_tool_calls\":true", requestBody, StringComparison.Ordinal);
         Assert.Contains("\"additionalProperties\":false", requestBody, StringComparison.Ordinal);

@@ -291,9 +291,7 @@ internal static class ModelComposition
 
         if (configuredReasoning is not null)
         {
-            if (!Enum.GetNames<ReasoningLevel>().Any(name =>
-                    string.Equals(name, configuredReasoning, StringComparison.OrdinalIgnoreCase))
-                || !Enum.TryParse<ReasoningLevel>(configuredReasoning, ignoreCase: true, out var reasoning)
+            if (!ReasoningLevel.TryParse(configuredReasoning, out var reasoning)
                 || !profile.SupportsReasoningLevel(reasoning))
             {
                 throw new InvalidOperationException(

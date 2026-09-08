@@ -28,14 +28,6 @@ public sealed class SessionModelPreferences
             throw new ArgumentException("The model profile id cannot be default.", nameof(profileId));
         }
 
-        if (!Enum.IsDefined(defaultReasoningLevel))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(defaultReasoningLevel),
-                defaultReasoningLevel,
-                "The reasoning level must be defined.");
-        }
-
         _currentProfileId = profileId;
         _reasoning = defaultReasoningLevel;
     }
@@ -113,14 +105,6 @@ public sealed class SessionModelPreferences
         if (profileId == default)
         {
             throw new ArgumentException("The model profile id cannot be default.", nameof(profileId));
-        }
-
-        if (!Enum.IsDefined(reasoningLevel))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(reasoningLevel),
-                reasoningLevel,
-                "The reasoning level must be defined.");
         }
 
         lock (_sync)

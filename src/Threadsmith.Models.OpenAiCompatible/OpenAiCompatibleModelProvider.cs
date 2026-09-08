@@ -203,7 +203,22 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
-                throw CreateTimeoutException(exception);
+                if (requestCancellation.IsCancellationRequested)
+                {
+                    throw CreateTimeoutException(exception);
+                }
+
+                // The handler can cancel connection establishment independently of the model deadline.
+                if (attempt == _profile.RetryPolicy.MaxAttempts)
+                {
+                    throw new TransientModelException(
+                        $"Model endpoint transport was cancelled before response headers after {attempt} attempts; "
+                        + "the model request deadline did not expire.",
+                        exception);
+                }
+
+                await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
+                continue;
             }
             catch (HttpRequestException exception) when (IsTransientTransportFailure(exception))
             {
@@ -258,7 +273,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
             response.Dispose();
-            throw CreateTimeoutException(exception);
+            throw requestCancellation.IsCancellationRequested
+                ? CreateTimeoutException(exception)
+                : new TransientModelException("Model endpoint transport was cancelled while opening the response stream.", exception);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
         }
 
         using (response)
@@ -279,7 +301,10 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
                 catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
                 {
-                    throw CreateTimeoutException(exception);
+                    // Never replay a response after headers or partial output have been consumed.
+                    throw requestCancellation.IsCancellationRequested
+                        ? CreateTimeoutException(exception)
+                        : new TransientModelException("Model endpoint transport was cancelled while reading the response stream.", exception);
                 }
 
                 if (line is null)
@@ -567,7 +592,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     /// or the requested level is not supported by the profile.
     /// </summary>
     /// <param name="request">The stream request carrying the reasoning level.</param>
-    /// <returns>The lowercase reasoning effort string, or <see langword="null"/> to omit.</returns>
+    /// <returns>The model-defined reasoning effort string, or <see langword="null"/> to omit.</returns>
     private string? ResolveReasoningEffort(ModelStreamRequest request)
     {
         var requested = request.ReasoningLevel;
@@ -584,7 +609,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             requested = ReasoningLevel.None;
         }
 
-        return requested.ToString().ToLowerInvariant();
+        return requested.Value;
     }
 
     private void ApplyReasoningCompatibility(JsonObject body, ModelStreamRequest request)
@@ -608,7 +633,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             case OpenAiReasoningControlMode.StandardEffort:
                 if (request.ReasoningLevel != ReasoningLevel.None)
                 {
-                    body["reasoning_effort"] = request.ReasoningLevel.ToString().ToLowerInvariant();
+                    body["reasoning_effort"] = request.ReasoningLevel.Value;
                 }
 
                 break;
@@ -627,6 +652,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     OpenAiChatTemplateKind.ThinkingWithEffort => new JsonObject
                     {
                         ["thinking"] = enabled,
+                        ["reasoning_effort"] = compatibility.LevelMap[request.ReasoningLevel],
+                    },
+                    OpenAiChatTemplateKind.EnableThinkingWithPreservationAndEffort => new JsonObject
+                    {
+                        ["enable_thinking"] = enabled,
+                        ["preserve_thinking"] = true,
                         ["reasoning_effort"] = compatibility.LevelMap[request.ReasoningLevel],
                     },
                     _ => throw new InvalidOperationException("The configured chat-template kind is invalid."),

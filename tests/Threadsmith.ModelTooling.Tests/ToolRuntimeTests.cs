@@ -314,7 +314,7 @@ public static class ToolRuntimeTests
             var tool = new CodeExploreTool(service, TestPromptLoader.Instance);
             var defaultInput = Assert.IsType<CodeExploreInput>(tool.DeserializeInput(
                 "{\"query\":\"inspect source\",\"maxFiles\":null}"));
-            Assert.Equal(8, defaultInput.MaxFiles);
+            Assert.Equal(0, defaultInput.MaxFiles);
             var pipeline = CreatePipeline(events, [tool]);
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -331,7 +331,7 @@ public static class ToolRuntimeTests
             });
 
             Assert.True(result.Succeeded, result.Error);
-            Assert.Equal(16, service.Request?.Limits.MaximumFiles);
+            Assert.Equal(8, service.Request?.Limits.MaximumFiles);
             Assert.Equal(CodeExploreMode.Auto, service.Request?.Mode);
         }
         finally
@@ -677,14 +677,25 @@ public static class ToolRuntimeTests
     }
 
     /// <summary>The production pipeline reapplies code-explore bounds after output sanitization expands content.</summary>
-    [Fact]
-    public static async Task CodeExplorePipeline_ModelBudget_BoundsSanitizedStructuredAndMarkdownOutput()
+    [Theory]
+    [InlineData(0, 0, 1_400)]
+    [InlineData(4_200, 4_200, 0)]
+    [InlineData(4_200, 12_000, 0)]
+    [InlineData(4_200, 0, 0)]
+    public static async Task CodeExplorePipeline_ModelBudget_BoundsSanitizedStructuredAndMarkdownOutput(int structuredCap, int markdownCap, int inputTokens)
     {
         var repository = CreateTemporaryDirectory();
         try
         {
-            const int effectiveInputTokens = 1_400;
-            const int maximumResultBytes = effectiveInputTokens * 3;
+            int? effectiveInputTokens = inputTokens == 0 ? null : inputTokens;
+            var maximumResultBytes = structuredCap == 0 ? inputTokens * 3 : structuredCap;
+            var maximumMarkdownBytes = markdownCap == 0 ? inputTokens == 0 ? int.MaxValue : inputTokens * 3 : markdownCap;
+            var options = new CodeExploreOptions
+            {
+                AdaptiveSizingEnabled = false,
+                MaximumResultBytes = structuredCap,
+                MaximumMarkdownBytes = markdownCap,
+            };
             await using var events = new DomainEventStream();
             var observed = new List<IDomainEvent>();
             await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -695,7 +706,8 @@ public static class ToolRuntimeTests
             var tool = new CodeExploreOutputFormattingTool(
                 new StaticCodeExploreResultTool(CreateSanitizerExpansionCodeExploreResult()),
                 new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
-                TestPromptLoader.Instance);
+                TestPromptLoader.Instance,
+                options);
             var input = new CodeExploreInput { Query = "inspect source" };
             var directExecution = await tool.ExecuteAsync(
                 input,
@@ -706,7 +718,7 @@ public static class ToolRuntimeTests
                 ?? throw new InvalidOperationException("Expected direct Markdown code_explore content.");
             Assert.False(directExecution.IsTruncated);
             Assert.True(JsonSerializer.SerializeToUtf8Bytes(directExecution.Value).Length <= maximumResultBytes);
-            Assert.True(Encoding.UTF8.GetByteCount(directMarkdown) <= maximumResultBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(directMarkdown) <= maximumMarkdownBytes);
 
             var pipeline = CreatePipeline(
                 events,
@@ -731,7 +743,7 @@ public static class ToolRuntimeTests
             Assert.NotNull(result.ResultJson);
             Assert.NotNull(result.ModelResultContent);
             Assert.True(Encoding.UTF8.GetByteCount(result.ResultJson) <= maximumResultBytes);
-            Assert.True(Encoding.UTF8.GetByteCount(result.ModelResultContent) <= maximumResultBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(result.ModelResultContent) <= maximumMarkdownBytes);
             _ = JsonSerializer.Deserialize<CodeExploreResult>(result.ResultJson)
                 ?? throw new InvalidOperationException("Expected bounded structured code_explore output.");
             var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
@@ -745,35 +757,23 @@ public static class ToolRuntimeTests
         }
     }
 
-    /// <summary>The production adapter returns a guaranteed bounded DTO and Markdown envelope at the model-budget floor.</summary>
+    /// <summary>An impossibly small model capacity fails without inventing a larger minimum output allowance.</summary>
     [Fact]
-    public static async Task CodeExploreOutputFormattingTool_FloorModelBudget_BoundsLongQueryResult()
+    public static async Task CodeExploreOutputFormattingTool_InsufficientModelBudget_RejectsWithoutInventingCapacity()
     {
         var repository = CreateTemporaryDirectory();
         try
         {
-            const int maximumResultBytes = 1024;
             var tool = new CodeExploreOutputFormattingTool(
                 new CodeExploreTool(
                     new LongQueryResultCodeExploreService(),
                     TestPromptLoader.Instance),
                 new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
                 TestPromptLoader.Instance);
-            var execution = await tool.ExecuteAsync(
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(
                 new CodeExploreInput { Query = new string('q', 1024) },
-                CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: 1));
-            var result = Assert.IsType<CodeExploreResult>(execution.Value);
-            var markdown = execution.ModelResultContent
-                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
-
-            Assert.True(
-                JsonSerializer.SerializeToUtf8Bytes(result).Length <= maximumResultBytes,
-                "The terminal structured result exceeded the model-budget floor.");
-            Assert.True(
-                Encoding.UTF8.GetByteCount(markdown) <= maximumResultBytes,
-                "The terminal Markdown result exceeded the model-budget floor.");
-            Assert.False(result.Coverage.OutputComplete);
-            Assert.True(execution.IsTruncated);
+                CreateCodeExploreExecutionContext(repository, modelEffectiveInputBudgetTokens: 1)));
+            Assert.Contains("effective output budget", error.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -924,6 +924,39 @@ public static class ToolRuntimeTests
             Assert.Equal(5, artifactAnchor.Line);
             Assert.Equal(10, artifactAnchor.EndLine);
             Assert.Equal(new string('a', 64), artifactAnchor.ExpectedFileSha256);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
+    /// <summary>Continuation display never advertises a cursor that exceeds configured replay constraints.</summary>
+    [Theory]
+    [InlineData(32, 960, 1024)]
+    [InlineData(4096, 64, 1024)]
+    [InlineData(4096, 960, 64)]
+    public static async Task CodeExploreOutputFormattingTool_SmallCursorBounds_OmitUnreplayableCursors(int payloadBytes, int cursorCharacters, int queryCharacters)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var options = new CodeExploreOptions
+            {
+                MaximumCursorPayloadBytes = payloadBytes,
+                MaximumCursorCharacters = cursorCharacters,
+                MaximumQueryCharacters = queryCharacters,
+            };
+            var formattingTool = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance, options: options),
+                new CodeExploreOutputOptions(),
+                TestPromptLoader.Instance,
+                options);
+            var execution = await formattingTool.ExecuteAsync(
+                new CodeExploreInput { Query = "Worker" },
+                CreateCodeExploreExecutionContext(repository));
+            Assert.DoesNotContain("code_explore:continue:", execution.ModelResultContent ?? string.Empty, StringComparison.Ordinal);
+            Assert.NotEmpty(Assert.IsType<CodeExploreResult>(execution.Value).ContinuationTargets);
         }
         finally
         {
@@ -2264,8 +2297,10 @@ public static class ToolRuntimeTests
     }
 
     /// <summary>Cancelling a process request terminates its child process tree.</summary>
-    [Fact]
-    public static async Task ProcessManager_Cancellation_KillsChildTree()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout)
     {
         var repository = CreateTemporaryDirectory();
         var processIdPath = Path.Combine(repository, "child.pid");
@@ -2277,6 +2312,11 @@ public static class ToolRuntimeTests
                 new TestSanitizer(),
                 NullLogger<ProcessManager>.Instance);
             var request = CreateTreeProcessRequest(repository, processIdPath);
+            if (infiniteTimeout)
+            {
+                request = request with { Timeout = Timeout.InfiniteTimeSpan };
+            }
+
             var running = manager.RunAsync(request, cancellation.Token);
             await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(10));
             var processIdText = await File.ReadAllTextAsync(processIdPath);
@@ -2313,8 +2353,10 @@ public static class ToolRuntimeTests
     }
 
     /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>
-    [Fact]
-    public static async Task ProcessManager_NullDelimitedJsonArray_PreservesRecordBoundariesThroughSanitization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ProcessManager_NullDelimitedJsonArray_PreservesRecordBoundariesThroughSanitization(bool infiniteTimeout)
     {
         var shell = OperatingSystem.IsWindows()
             ? IsExecutableAvailable("pwsh") ? "pwsh" : "powershell.exe"
@@ -2347,7 +2389,7 @@ public static class ToolRuntimeTests
                 FileName = shell,
                 Arguments = arguments,
                 WorkingDirectory = repository,
-                Timeout = TimeSpan.FromSeconds(10),
+                Timeout = infiniteTimeout ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(10),
                 MaximumOutputCharacters = 1024,
                 StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
                 Origin = ProcessRequestOrigin.Host,

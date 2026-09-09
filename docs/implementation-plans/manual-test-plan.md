@@ -116,6 +116,9 @@ Expected: multi-anchor exploration composes existing Roslyn relationships into o
 5. Confirm a normal successful result supplies enough source to answer without immediately invoking `find_symbol` or `read_file`; exact granular tools remain available when the user asks for them or the result reports an incomplete dimension.
 6. Repeat with partial compilation, unloaded/generated/linked documents, changed-on-disk source, prohibited/reparse paths, oversized declarations/files, timeout, cancellation, malformed input, and interactive/headless execution.
 
+7. In the disposable repository, configure `tools:codeExplore:limits:maximumSourceCharacters` and `maximumPerFileSourceCharacters` first below and then above their defaults. Repeat a fixed multiple-file question with one small file and one larger declaration. Compare complete relevant lines, unused capacity and exact continuations; a small/unavailable/visible section must not strand its reservation or source-bearing slot.
+8. Repeat after setting those caps, `maximumCurrentSourceFileBytes`, `maximumResultBytes`, `maximumMarkdownBytes`, `outerTimeoutMilliseconds` and `limits:timeoutMilliseconds` to zero. Restart between settings. Toggle `adaptiveSizingEnabled`; confirm disabled caps stay disabled, narrower positive file hints still apply, and caller cancellation plus actual model capacity remain authoritative. Check both structured and Markdown output after sanitization, then restore the disposable configuration.
+
 Expected: exact symbol/path exploration is a read-only, repository-confined, generation-fenced Roslyn query that returns current usable source and honest ambiguity in one tool round. It performs no restore, build, generator execution, mutation, process, network, approval, or implicit text fallback.
 
 ## MTP-242 — Plan approval policy and sanity checks

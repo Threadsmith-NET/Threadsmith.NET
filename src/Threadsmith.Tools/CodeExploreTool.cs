@@ -13,13 +13,14 @@ public sealed record CodeExploreInput
     public required string Query { get; init; }
 
     /// <summary>Optional result-file hint; omission uses the host's adaptive default.</summary>
-    public int MaxFiles { get; init; } = 8;
+    public int MaxFiles { get; init; }
 }
 
 /// <summary>Resolves C# queries and returns bounded current source from one semantic generation.</summary>
 public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 {
-    private const string ResultBoundOmission = "Code exploration metadata was bounded to fit the selected model request budget.";
+    private const string ResultBoundOmission = "Code exploration metadata was bounded to fit the effective output budget.";
+    private readonly CodeExploreOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly ICodeExploreService _service;
     private readonly IProcessManager? _processManager;
@@ -28,10 +29,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
     public CodeExploreTool(
         ICodeExploreService service,
         IPromptLoader promptLoader,
-        IProcessManager? processManager = null)
+        IProcessManager? processManager = null,
+        CodeExploreOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(promptLoader);
+        _options = (options ?? new CodeExploreOptions()).Resolve();
         Definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
             "code_explore",
             promptLoader.Get(PromptFileNames.ToolCodeExploreDescription),
@@ -39,8 +42,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             RepositoryTrustLevel.TrustedBuild,
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
-            TimeSpan.FromSeconds(60),
-            1024 * 1024)
+            _options.OuterTimeoutMilliseconds == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(_options.OuterTimeoutMilliseconds),
+            _options.MaximumResultBytes)
         with
         {
             RequiresWorkspace = false,
@@ -70,6 +73,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        request = _options.ResolveRequest(request);
         ValidateRequest(request);
         _ = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
         var effectiveInput = ApplyModelBudget(request, context.Invocation, out var budgetSource);
@@ -81,7 +85,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             return new(unavailable, [new ToolProvenanceSource("repository", context.Invocation.RepositoryPath)], IsTruncated(unavailable));
         }
 
-        var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager);
+        var sourceReader = new PolicyCodeExploreSourceReader(context, _processManager, _options);
         var result = await _service.QueryCodeExploreAsync(
             workspaceId,
             effectiveInput,
@@ -122,9 +126,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
     protected override void ValidateInput(CodeExploreInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
-        if (input.Query.Length > 1024)
+        if (input.Query.Length > _options.MaximumQueryCharacters)
         {
-            throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
+            throw new ToolArgumentValidationException("query exceeds the configured character limit.");
         }
     }
 
@@ -151,22 +155,23 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         return context.WorkspaceId is null ? null : GetExecutable(input);
     }
 
-    private static CodeExploreRequest CreateRequest(CodeExploreInput input)
+    private CodeExploreRequest CreateRequest(CodeExploreInput input)
     {
-        var limits = new CodeExploreLimits();
+        var limits = _options.Limits;
         var maximumFiles = input.MaxFiles <= 0
             ? limits.MaximumFiles
-            : Math.Clamp(input.MaxFiles, 1, 16);
-        if (CodeExploreContinuationCursor.TryCreateRequest(input.Query, limits, maximumFiles, out var continuationRequest)
+            : Math.Min(input.MaxFiles, limits.MaximumFiles);
+        if (CodeExploreContinuationCursor.TryCreateRequest(input.Query, limits, maximumFiles, out var continuationRequest, _options)
             && continuationRequest is not null)
         {
-            return continuationRequest;
+            return continuationRequest with { UseAdaptiveDefaults = true };
         }
 
         return new CodeExploreRequest
         {
             Query = input.Query,
             Mode = DeriveMode(input.Query),
+            UseAdaptiveDefaults = true,
             Limits = limits with { MaximumFiles = maximumFiles },
         };
     }
@@ -181,13 +186,13 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         };
     }
 
-    private static void ValidateRequest(CodeExploreRequest request)
+    private void ValidateRequest(CodeExploreRequest request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Query);
         ArgumentNullException.ThrowIfNull(request.Limits);
-        if (request.Query.Length > 1024)
+        if (request.Query.Length > _options.MaximumQueryCharacters)
         {
-            throw new ToolArgumentValidationException("query exceeds 1,024 characters.");
+            throw new ToolArgumentValidationException("query exceeds the configured character limit.");
         }
 
         if (!Enum.IsDefined(request.Mode))
@@ -210,9 +215,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         foreach (var anchor in request.ExactSymbolAnchors.Concat(request.SymbolIds))
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor);
-            if (anchor.Length > 2048)
+            if (anchor.Length > _options.MaximumAnchorCharacters)
             {
-                throw new ToolArgumentValidationException("symbol anchors exceed 2,048 characters.");
+                throw new ToolArgumentValidationException("symbol anchors exceed the configured character limit.");
             }
         }
 
@@ -223,7 +228,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             var invalidSelectionMode = !Enum.IsDefined(anchor.SelectionMode);
             var missingRequiredLine = RequiresLine(anchor.SelectionMode) && anchor.Line is null;
             var missingRequiredEndLine = anchor.SelectionMode == CodeExplorePathSelectionMode.ExactLineRange && anchor.EndLine is null;
-            if (anchor.Path.Length > 4096
+            if (anchor.Path.Length > _options.MaximumPathCharacters
                 || anchor.Line is <= 0
                 || anchor.EndLine is <= 0
                 || anchor.EndLine < anchor.Line
@@ -254,7 +259,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
-            if (anchor.Path.Length > 4096
+            if (anchor.Path.Length > _options.MaximumPathCharacters
                 || anchor.Line is <= 0
                 || anchor.EndLine is <= 0
                 || anchor.EndLine < anchor.Line
@@ -311,7 +316,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             input.Limits.MaximumFiles,
             input.Limits.MaximumSourceCharacters,
             input.Limits.MaximumPerFileSourceCharacters,
-            Math.Clamp(input.Limits.MaximumSourceCharacters / 512, 1, 64),
+            Math.Clamp(input.Limits.MaximumSourceCharacters / 512, 1, _options.MaximumNaturalLanguageCandidateSummaries),
             1,
             CodeExplorePresentationVerbosity.Compact,
             "no workspace; request source limits retained");
@@ -348,27 +353,27 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static void ValidateLimits(CodeExploreLimits limits)
     {
-        if (limits.MaximumAnchors is < 1 or > 16
-            || limits.MaximumAlternatives is < 1 or > 25
-            || limits.MaximumFiles is < 1 or > 16
-            || limits.MaximumSourceCharacters is < 1 or > 100_000
-            || limits.MaximumPerFileSourceCharacters is < 1 or > 65_536
-            || limits.MaximumFlowPaths is < 1 or > 32
-            || limits.MaximumFlowBridgeSymbols is < 0 or > 128
-            || limits.MaximumFlowDepth is < 1 or > 8
-            || limits.MaximumFlowNodes is < 1 or > 1000
-            || limits.MaximumFlowEdges is < 1 or > 5000
-            || limits.MaximumDispatchBranches is < 0 or > 200
-            || limits.MaximumBlastRadiusItems is < 0 or > 200
-            || limits.MaximumAssociatedArtifacts is < 0 or > 16
-            || limits.MaximumAssociatedArtifactCandidates is < 0 or > 128
-            || limits.MaximumAssociatedArtifactCharacters is < 0 or > 100_000
-            || limits.MaximumPerAssociatedArtifactCharacters is < 0 or > 65_536
-            || limits.MaximumAssociatedArtifactBytes is < 1 or > 1024 * 1024
-            || limits.MaximumAssociatedArtifactNameMatches is < 0 or > 64
-            || limits.TimeoutMilliseconds is < 1 or > 60_000)
+        if (limits.MaximumAnchors < 0
+            || limits.MaximumAlternatives < 0
+            || limits.MaximumFiles < 0
+            || limits.MaximumSourceCharacters < 0
+            || limits.MaximumPerFileSourceCharacters < 0
+            || limits.MaximumFlowPaths < 0
+            || limits.MaximumFlowBridgeSymbols < 0
+            || limits.MaximumFlowDepth < 0
+            || limits.MaximumFlowNodes < 0
+            || limits.MaximumFlowEdges < 0
+            || limits.MaximumDispatchBranches < 0
+            || limits.MaximumBlastRadiusItems < 0
+            || limits.MaximumAssociatedArtifacts < 0
+            || limits.MaximumAssociatedArtifactCandidates < 0
+            || limits.MaximumAssociatedArtifactCharacters < 0
+            || limits.MaximumPerAssociatedArtifactCharacters < 0
+            || limits.MaximumAssociatedArtifactBytes < 0
+            || limits.MaximumAssociatedArtifactNameMatches < 0
+            || limits.TimeoutMilliseconds < 0)
         {
-            throw new ToolArgumentValidationException("code exploration bounds are outside host limits.");
+            throw new ToolArgumentValidationException("code exploration caps must be non-negative.");
         }
     }
 
@@ -386,7 +391,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         var modelSourceCharacters = (int)Math.Clamp(
             (long)effectiveInputTokens * 3,
             1,
-            100_000);
+            int.MaxValue);
         var maximumSourceCharacters = Math.Min(
             input.Limits.MaximumSourceCharacters,
             modelSourceCharacters);
@@ -404,6 +409,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             + $"{context.ModelRequestOutputReserveTokens ?? 0} tokens; 3 source characters per token ceiling).";
         return input with
         {
+            UseAdaptiveDefaults = input.UseAdaptiveDefaults,
             Limits = input.Limits with
             {
                 MaximumSourceCharacters = maximumSourceCharacters,
@@ -436,7 +442,23 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         CodeExploreResult result,
         ToolInvocationContext context)
     {
-        if (CodeExploreModelBudget.GetMaximumResultBytes(context) is not { } maximumSerializedBytes)
+        var markdownMaximumBytes = _options.MaximumMarkdownBytes;
+        if (_options.AdaptiveSizingEnabled && markdownMaximumBytes != int.MaxValue
+            && result.AdaptiveBudget?.AdaptiveDefaultsApplied == true
+            && _options.GetTier(result.AdaptiveBudget.RepositoryScale.Tier) is { } tier)
+        {
+            markdownMaximumBytes = Math.Min(markdownMaximumBytes, tier.MaximumMarkdownBytes);
+        }
+
+        result = result with
+        {
+            EffectiveMaximumMarkdownBytes = markdownMaximumBytes,
+            Presentation = result.Presentation is not { } presentation ? null : presentation with
+            {
+                ModelSummary = presentation.ModelSummary[..Math.Min(presentation.ModelSummary.Length, _options.MaximumPresentationSummaryCharacters)],
+            },
+        };
+        if (CodeExploreModelBudget.GetMaximumResultBytes(context, _options.MaximumResultBytes) is not { } maximumSerializedBytes)
         {
             return result;
         }
@@ -662,6 +684,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             [ResultBoundOmission],
             [])
         {
+            EffectiveMaximumMarkdownBytes = result.EffectiveMaximumMarkdownBytes,
             OmittedSourceContinuationCount = result.OmittedSourceContinuationCount
                 + CountSourceContinuationTargets(result.ContinuationTargets),
         };
@@ -677,7 +700,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         }
 
         throw new InvalidOperationException(
-            "The minimum code exploration result exceeds the selected model request budget.");
+            "The minimum code exploration result exceeds the effective output budget.");
     }
 
     private static CodeExploreResult TrimPresentation(
@@ -2113,9 +2136,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private sealed class PolicyCodeExploreSourceReader : ICodeExploreSourceReader, ICodeExploreArtifactReader
     {
-        private const int MaximumReadableFileBytes = 1024 * 1024;
-        private const int MaximumArtifactEnumerationEntries = 5000;
-        private const int MaximumGitInventoryOutputCharacters = 512 * 1024;
+        private readonly CodeExploreOptions _options;
 
         private static readonly HashSet<string> ArtifactExcludedDirectories = new(
             [".codegraph", ".git", ".hg", ".svn", ".vs", ".idea", "bin", "obj", "node_modules", "packages", ".nuget", "TestResults", "artifacts", "dist", "out", "coverage"],
@@ -2132,9 +2153,11 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
         internal PolicyCodeExploreSourceReader(
             ToolExecutionContext context,
-            IProcessManager? processManager)
+            IProcessManager? processManager,
+            CodeExploreOptions options)
         {
             ArgumentNullException.ThrowIfNull(context);
+            _options = options;
             _executionContext = context;
             _context = context.Invocation;
             _processManager = processManager;
@@ -2209,7 +2232,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             CancellationToken cancellationToken = default)
         {
             var normalized = ToolPathRules.NormalizeAndValidate(path, _context);
-            var effectiveMaximumBytes = Math.Min(maximumBytes, MaximumReadableFileBytes);
+            var effectiveMaximumBytes = Math.Min(maximumBytes, _options.MaximumCurrentSourceFileBytes);
             ValidateReadableSourceFile(normalized, effectiveMaximumBytes);
             await using var stream = new FileStream(
                 normalized,
@@ -2239,7 +2262,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             CancellationToken cancellationToken = default)
         {
             var normalized = ToolPathRules.NormalizeAndValidate(path, _context);
-            var effectiveMaximumBytes = Math.Min(maximumBytes, MaximumReadableFileBytes);
+            var effectiveMaximumBytes = Math.Min(maximumBytes, _options.MaximumCurrentSourceFileBytes);
             var mediaKind = ValidateReadableArtifactFile(normalized, effectiveMaximumBytes);
             var before = new FileInfo(normalized);
             var beforeLength = before.Length;
@@ -2513,8 +2536,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
                             relativeDirectory,
                         ],
                         WorkingDirectory = _context.RepositoryPath,
-                        Timeout = TimeSpan.FromSeconds(10),
-                        MaximumOutputCharacters = MaximumGitInventoryOutputCharacters,
+                        Timeout = _options.GitInventoryTimeoutMilliseconds == 0
+                            ? Timeout.InfiniteTimeSpan
+                            : TimeSpan.FromMilliseconds(_options.GitInventoryTimeoutMilliseconds),
+                        MaximumOutputCharacters = _options.MaximumGitInventoryOutputCharacters,
                         StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
                         EnvironmentVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                         {
@@ -2561,7 +2586,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
                 }
 
                 inspected++;
-                if (inspected > MaximumArtifactEnumerationEntries)
+                if (inspected > _options.MaximumArtifactEnumerationEntries)
                 {
                     var cappedFiles = files
                         .OrderBy(match => match.Path, HostPathComparer)
@@ -2812,37 +2837,66 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 /// <summary>Derives the shared selected-model ceiling for structured and Markdown code-explore results.</summary>
 internal static class CodeExploreModelBudget
 {
-    private const int BytesPerEffectiveInputToken = 3;
-    private const int MinimumResultBytes = 1024;
-    private const int MaximumResultBytes = 1024 * 1024;
-
-    /// <summary>Returns the selected-model result ceiling when model resolution supplied an effective input budget.</summary>
-    internal static int? GetMaximumResultBytes(ToolInvocationContext context)
+    /// <summary>Combines actual model capacity with an optional application result cap.</summary>
+    internal static int? GetMaximumResultBytes(ToolInvocationContext context, int configuredMaximumBytes = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(context);
+        var configured = configuredMaximumBytes > 0 ? configuredMaximumBytes : int.MaxValue;
         return context.ModelEffectiveInputBudgetTokens is { } effectiveInputTokens && effectiveInputTokens > 0
-            ? (int)Math.Clamp(
-                (long)effectiveInputTokens * BytesPerEffectiveInputToken,
-                MinimumResultBytes,
-                MaximumResultBytes)
-            : null;
+            ? (int)Math.Min(configured, Math.Min(int.MaxValue, (long)effectiveInputTokens * 3))
+            : configured == int.MaxValue ? null : configured;
     }
 }
 
 /// <summary>Creates and parses host-owned code_explore continuation cursors carried through the minimal query schema.</summary>
-internal static class CodeExploreContinuationCursor
+internal sealed class CodeExploreContinuationCursor
 {
     /// <summary>Prefix that marks a pasteable code_explore continuation query cursor.</summary>
     internal const string Prefix = "code_explore:continue:";
 
-    private const int MaximumCursorCharacters = 960;
-    private const int MaximumPayloadBytes = 4096;
-    private const int MaximumEmbeddedQueryCharacters = 240;
-
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly CodeExploreOptions _options;
+
+    private CodeExploreContinuationCursor(CodeExploreOptions? options)
+    {
+        _options = (options ?? new CodeExploreOptions()).Resolve();
+    }
+
     /// <summary>Creates a replay cursor for an omitted or partial C# source continuation.</summary>
-    internal static string? CreateSource(CodeExploreContinuationTarget target)
+    internal static string? CreateSource(CodeExploreContinuationTarget target, CodeExploreOptions? options = null)
+    {
+        return new CodeExploreContinuationCursor(options).CreateSourceCore(target);
+    }
+
+    /// <summary>Creates a replay cursor for a compact blast-radius continuation.</summary>
+    internal static string? CreateImpact(CodeExploreContinuationTarget target, CodeExploreOptions? options = null)
+    {
+        return new CodeExploreContinuationCursor(options).CreateImpactCore(target);
+    }
+
+    /// <summary>Creates a replay cursor for an omitted or partial associated-artifact continuation.</summary>
+    internal static string? CreateArtifact(
+        CodeExploreArtifactContinuationTarget target,
+        CodeExploreAssociatedArtifact? artifact,
+        string? query,
+        CodeExploreOptions? options = null)
+    {
+        return new CodeExploreContinuationCursor(options).CreateArtifactCore(target, artifact, query);
+    }
+
+    /// <summary>Attempts to convert a query-carried continuation cursor back into a host-owned code_explore request.</summary>
+    internal static bool TryCreateRequest(
+        string query,
+        CodeExploreLimits limits,
+        int maximumFiles,
+        out CodeExploreRequest? request,
+        CodeExploreOptions? options = null)
+    {
+        return new CodeExploreContinuationCursor(options).TryCreateRequestCore(query, limits, maximumFiles, out request);
+    }
+
+    private string? CreateSourceCore(CodeExploreContinuationTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
         return Create(new CursorPayload
@@ -2862,8 +2916,7 @@ internal static class CodeExploreContinuationCursor
         });
     }
 
-    /// <summary>Creates a replay cursor for a compact blast-radius continuation.</summary>
-    internal static string? CreateImpact(CodeExploreContinuationTarget target)
+    private string? CreateImpactCore(CodeExploreContinuationTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
         return Create(new CursorPayload
@@ -2883,11 +2936,7 @@ internal static class CodeExploreContinuationCursor
         });
     }
 
-    /// <summary>Creates a replay cursor for an omitted or partial associated-artifact continuation.</summary>
-    internal static string? CreateArtifact(
-        CodeExploreArtifactContinuationTarget target,
-        CodeExploreAssociatedArtifact? artifact,
-        string? query)
+    private string? CreateArtifactCore(CodeExploreArtifactContinuationTarget target, CodeExploreAssociatedArtifact? artifact, string? query)
     {
         ArgumentNullException.ThrowIfNull(target);
         var payload = new CursorPayload
@@ -2909,12 +2958,7 @@ internal static class CodeExploreContinuationCursor
         return Create(payload) ?? Create(payload with { Query = null });
     }
 
-    /// <summary>Attempts to convert a query-carried continuation cursor back into a host-owned code_explore request.</summary>
-    internal static bool TryCreateRequest(
-        string query,
-        CodeExploreLimits limits,
-        int maximumFiles,
-        out CodeExploreRequest? request)
+    private bool TryCreateRequestCore(string query, CodeExploreLimits limits, int maximumFiles, out CodeExploreRequest? request)
     {
         ArgumentNullException.ThrowIfNull(limits);
         request = null;
@@ -3082,21 +3126,29 @@ internal static class CodeExploreContinuationCursor
         return true;
     }
 
-    private static string? Create(CursorPayload payload)
+    private string? Create(CursorPayload payload)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, SerializerOptions);
+        if (bytes.Length > _options.MaximumCursorPayloadBytes)
+        {
+            return null;
+        }
+
         var cursor = Prefix + Convert.ToBase64String(bytes)
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
-        return cursor.Length <= MaximumCursorCharacters ? cursor : null;
+        return cursor.Length <= Math.Min(_options.MaximumCursorCharacters, _options.MaximumQueryCharacters) ? cursor : null;
     }
 
-    private static bool TryReadPayload(string query, out CursorPayload payload)
+    private bool TryReadPayload(string query, out CursorPayload payload)
     {
         payload = new CursorPayload();
         var token = FindCursorToken(query);
-        if (token is null || !TryDecodeBase64Url(token, out var bytes))
+        if (token is null
+            || (long)token.Length + Prefix.Length > _options.MaximumCursorCharacters
+            || query.Length > _options.MaximumQueryCharacters
+            || !TryDecodeBase64Url(token, out var bytes))
         {
             return false;
         }
@@ -3140,7 +3192,7 @@ internal static class CodeExploreContinuationCursor
         return tokenEnd == tokenStart ? null : query[tokenStart..tokenEnd];
     }
 
-    private static bool TryDecodeBase64Url(string token, out byte[] bytes)
+    private bool TryDecodeBase64Url(string token, out byte[] bytes)
     {
         bytes = [];
         var base64 = token.Replace('-', '+').Replace('_', '/');
@@ -3159,7 +3211,7 @@ internal static class CodeExploreContinuationCursor
         try
         {
             bytes = Convert.FromBase64String(base64);
-            return bytes.Length <= MaximumPayloadBytes;
+            return bytes.Length <= _options.MaximumCursorPayloadBytes;
         }
         catch (FormatException)
         {
@@ -3178,19 +3230,19 @@ internal static class CodeExploreContinuationCursor
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
     }
 
-    private static string? BoundEmbeddedQuery(string? query)
+    private string? BoundEmbeddedQuery(string? query)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
             return null;
         }
 
-        if (query.Length <= MaximumEmbeddedQueryCharacters)
+        if (query.Length <= _options.MaximumEmbeddedQueryCharacters)
         {
             return query;
         }
 
-        var length = MaximumEmbeddedQueryCharacters;
+        var length = _options.MaximumEmbeddedQueryCharacters;
         if (char.IsHighSurrogate(query[length - 1])
             && length < query.Length
             && char.IsLowSurrogate(query[length]))

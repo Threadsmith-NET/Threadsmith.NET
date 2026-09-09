@@ -48,6 +48,9 @@ Configure how Threadsmith.NET behaves when operating on this repository. Config 
 - `invoke_skill` is a centrally governed default-enabled tool but can invoke only an explicit verified/enabled/compatible package during its phase boundary; package text cannot widen tool policy.
 - Verified by `RepoConfigTests.cs` — all required keys must be present and the per-tool/execution/repository limit keys must bind to their documented values.
 
+- `tools:codeExplore` owns restart-scoped operational source/discovery/output/continuation/timer caps and per-tier adaptive defaults. Positive values cap, zero disables, negative values fail startup. `adaptiveSizingEnabled=false` removes tier reductions; `enforceOperationalLimits=false` disables these operational caps without changing capacity, trust, paths, source identity, sanitization or cancellation. The reference example lists every option.
+
+
 ### Provider catalogs (`providers.json` / `providers.example.json`)
 
 - `~/.threadsmith/providers.json` is the optional user base; `<repo>/.threadsmith/providers.json` is the optional repository override.

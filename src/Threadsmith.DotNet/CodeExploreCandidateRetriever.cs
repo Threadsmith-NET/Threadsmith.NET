@@ -12,8 +12,6 @@ internal static class CodeExploreCandidateRetriever
     /// <summary>Gets the shortest normalized name eligible for fuzzy retrieval.</summary>
     internal const int MinimumFuzzyNameLength = 5;
 
-    private const int MaximumPrefixKeysPerTerm = 32;
-    private const int MaximumFuzzyNames = 8;
     private const int MaximumFuzzyDistance = 2;
 
     /// <summary>Merges independent index channels into deterministic retrieval candidates.</summary>
@@ -21,6 +19,7 @@ internal static class CodeExploreCandidateRetriever
         CodeExploreCandidateIndex index,
         IReadOnlyList<CodeExploreDeclarationCatalogEntry> allowedEntries,
         CodeExploreCandidateRetrievalRequest request,
+        CodeExploreOptions options,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -92,7 +91,7 @@ internal static class CodeExploreCandidateRetriever
             CodeExploreCandidateTier.Peripheral,
             CodeExploreSelectionReason.None,
             cancellationToken);
-        AddPrefixCandidates(candidates, allowed, index, request.Terms, cancellationToken);
+        AddPrefixCandidates(candidates, allowed, index, request.Terms, options.MaximumPrefixKeysPerTerm, cancellationToken);
         AddIndexedCandidates(
             candidates,
             allowed,
@@ -131,6 +130,7 @@ internal static class CodeExploreCandidateRetriever
             allowed,
             index,
             request.FuzzyNames,
+            options.MaximumFuzzyNames,
             cancellationToken);
         return
         [
@@ -174,6 +174,7 @@ internal static class CodeExploreCandidateRetriever
         IReadOnlySet<CodeExploreDeclarationCatalogEntry> allowed,
         CodeExploreCandidateIndex index,
         IEnumerable<string> terms,
+        int maximumKeys,
         CancellationToken cancellationToken)
     {
         var variants = terms
@@ -200,7 +201,7 @@ internal static class CodeExploreCandidateRetriever
                     break;
                 }
 
-                AddBoundedPrefixKey(matchingKeys, key);
+                AddBoundedPrefixKey(matchingKeys, key, maximumKeys);
             }
 
             AddIndexedCandidates(
@@ -217,9 +218,9 @@ internal static class CodeExploreCandidateRetriever
         }
     }
 
-    private static void AddBoundedPrefixKey(List<string> matchingKeys, string key)
+    private static void AddBoundedPrefixKey(List<string> matchingKeys, string key, int maximumKeys)
     {
-        if (matchingKeys.Count < MaximumPrefixKeysPerTerm)
+        if (matchingKeys.Count < maximumKeys)
         {
             matchingKeys.Add(key);
             return;
@@ -273,6 +274,7 @@ internal static class CodeExploreCandidateRetriever
         IReadOnlySet<CodeExploreDeclarationCatalogEntry> allowed,
         CodeExploreCandidateIndex index,
         IReadOnlyList<string> queryNames,
+        int maximumNames,
         CancellationToken cancellationToken)
     {
         foreach (var queryName in queryNames
@@ -299,7 +301,7 @@ internal static class CodeExploreCandidateRetriever
             foreach (var match in matchingNames
                 .OrderBy(item => item.Distance)
                 .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-                .Take(MaximumFuzzyNames))
+                .Take(maximumNames))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!index.ExactNames.TryGetValue(match.Name, out var entries))

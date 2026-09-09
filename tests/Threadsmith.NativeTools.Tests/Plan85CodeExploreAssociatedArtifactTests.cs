@@ -261,6 +261,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Query = "BuildWelcomeResponse prompt configuration project resource artifact",
                 ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
                 AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
+                Limits = new CodeExploreLimits(),
+                UseAdaptiveDefaults = true,
             },
             fixture.CreateArtifactReader(),
             TestContext.Current.CancellationToken);
@@ -322,8 +324,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
                 AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Enabled,
                 Limits = CreateWideArtifactLimits(
-                    maximumAssociatedArtifactCharacters: 0,
-                    maximumPerAssociatedArtifactCharacters: 0) with
+                    maximumAssociatedArtifactCharacters: 1,
+                    maximumPerAssociatedArtifactCharacters: 1) with
                 {
                     MaximumAssociatedArtifactCandidates = 2,
                 },
@@ -334,7 +336,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         var coverage = RequireArtifactCoverage(result);
         Assert.Equal(2, coverage.CandidateCount);
         Assert.True(coverage.CandidateLimitReached);
-        Assert.True(reader.ProbeCalls <= coverage.CandidateCount, $"Expected path probes to stay within the candidate bound, got {reader.ProbeCalls} probes for {coverage.CandidateCount} candidates.");
+        Assert.True(reader.ProbeCalls - reader.ArtifactReadCalls <= coverage.CandidateCount, $"Expected discovery probes to stay within the candidate bound, got {reader.ProbeCalls - reader.ArtifactReadCalls} discovery probes for {coverage.CandidateCount} candidates.");
         Assert.Contains(coverage.Omissions, omission => omission.Contains("candidate limit", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(result.AssociatedArtifacts ?? [], artifact => artifact.FilePath == "src/App/App.csproj");
     }
@@ -689,7 +691,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
 
         var artifact = Assert.Single(RequireArtifacts(execution.Value));
         Assert.Null(artifact.Content);
-        Assert.Contains(artifact.Omissions, omission => omission.Contains("model request budget", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(artifact.Omissions, omission => omission.Contains("effective output budget", StringComparison.OrdinalIgnoreCase));
         var coverage = RequireArtifactCoverage(execution.Value);
         Assert.Equal(1, coverage.ReturnedCount);
         Assert.Equal(0, coverage.SpentCharacters);
@@ -830,7 +832,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateWideArtifactLimits() });
         }
 
         public string RepositoryPath { get; }
@@ -1073,6 +1075,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
 
         public int ProbeCalls { get; private set; }
 
+        public int ArtifactReadCalls { get; private set; }
+
         public CodeExploreArtifactPathProbe ProbeArtifactPath(string path)
         {
             ProbeCalls++;
@@ -1121,6 +1125,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             int maximumBytes,
             CancellationToken cancellationToken = default)
         {
+            ArtifactReadCalls++;
             var probe = ProbeArtifactPath(path);
             if (!probe.IsSupported || probe.MediaKind is null)
             {

@@ -12,12 +12,14 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
     private readonly CodeExploreOutputOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly CodeExploreMarkdownRenderer _renderer;
+    private readonly CodeExploreOptions _operationalOptions;
 
     /// <summary>Initializes a new instance of the <see cref="CodeExploreOutputFormattingTool" /> class.</summary>
     public CodeExploreOutputFormattingTool(
         ITool inner,
         CodeExploreOutputOptions options,
-        IPromptLoader prompts)
+        IPromptLoader prompts,
+        CodeExploreOptions? operationalOptions = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(options);
@@ -25,11 +27,15 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
         _inner = inner;
         _options = options;
         _prompts = prompts;
-        _renderer = new CodeExploreMarkdownRenderer(prompts);
+        _operationalOptions = (operationalOptions ?? new CodeExploreOptions()).Resolve();
+        _renderer = new CodeExploreMarkdownRenderer(prompts, _operationalOptions);
     }
 
     /// <inheritdoc />
-    public ToolDefinition Definition => _inner.Definition;
+    public ToolDefinition Definition => _inner.Definition with
+    {
+        MaximumOutputBytes = Math.Max(_operationalOptions.MaximumResultBytes, _operationalOptions.MaximumMarkdownBytes),
+    };
 
     /// <inheritdoc />
     public object DeserializeInput(string argumentsJson)
@@ -105,7 +111,7 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
         var markdown = _renderer.Render(
             result,
             query,
-            CodeExploreModelBudget.GetMaximumResultBytes(context.Invocation),
+            CodeExploreModelBudget.GetMaximumResultBytes(context.Invocation, _operationalOptions.MaximumMarkdownBytes),
             out var markdownTruncated);
         return execution with
         {
@@ -120,18 +126,17 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
         string? modelResultContent,
         ToolInvocationContext context)
     {
-        if (CodeExploreModelBudget.GetMaximumResultBytes(context) is not { } maximumBytes)
-        {
-            return new PostSanitizationToolOutput(resultJson, modelResultContent, false);
-        }
-
+        var maximumBytes = CodeExploreModelBudget.GetMaximumResultBytes(context, _operationalOptions.MaximumResultBytes) ?? int.MaxValue;
+        var sanitizedResult = JsonSerializer.Deserialize<CodeExploreResult>(resultJson)
+            ?? throw new InvalidOperationException("The sanitized code exploration result could not be deserialized.");
+        var markdownMaximumBytes = _renderer.ResolveRenderedMarkdownMaximumBytes(
+            sanitizedResult,
+            CodeExploreModelBudget.GetMaximumResultBytes(context));
         var resultWasTruncated = Encoding.UTF8.GetByteCount(resultJson) > maximumBytes;
         var markdownWasTruncated = modelResultContent is not null
-            && Encoding.UTF8.GetByteCount(modelResultContent) > maximumBytes;
+            && Encoding.UTF8.GetByteCount(modelResultContent) > markdownMaximumBytes;
         if (resultWasTruncated || markdownWasTruncated)
         {
-            var sanitizedResult = JsonSerializer.Deserialize<CodeExploreResult>(resultJson)
-                ?? throw new InvalidOperationException("The sanitized code exploration result could not be deserialized.");
             if (resultWasTruncated)
             {
                 resultJson = JsonSerializer.Serialize(
@@ -143,7 +148,7 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
                 modelResultContent = _renderer.RenderAfterSanitization(
                     sanitizedResult,
                     modelResultContent,
-                    maximumBytes);
+                    markdownMaximumBytes);
             }
         }
 
@@ -157,31 +162,17 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
 /// <summary>Renders a compact source-first model projection from authoritative code-explore DTOs.</summary>
 internal sealed class CodeExploreMarkdownRenderer
 {
-    private const int MaximumImpactItems = 10;
-    private const int MaximumImpactItemsPerKind = 2;
-    private const int MaximumFlowEdges = 24;
-    private const int MaximumFlowBoundaries = 12;
-    private const int MaximumAssociatedArtifacts = 4;
-    private const int MaximumArtifactOmissions = 4;
-    private const int MaximumBackReferences = 16;
-    private const int MaximumOptionalContinuations = 6;
-    private const int MaximumOptionalContinuationsPerKind = 2;
-    private const int MaximumContinuationCursors = 3;
-    private const int MaximumNextActions = 8;
-    private const int MaximumOmissions = 12;
-    private const int MaximumSelectedEvidenceItems = 8;
-    private const int MaximumSemanticIdentities = 8;
-    private const int MaximumRenderedMarkdownBytes = 25_000;
-    private const double AdaptiveRenderedMarkdownMultiplier = 1.5;
+    private readonly CodeExploreOptions _operationalOptions;
     private readonly string _explorationPrefix;
     private readonly string _explorationSuffix;
     private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="CodeExploreMarkdownRenderer"/> class.</summary>
-    internal CodeExploreMarkdownRenderer(IPromptLoader prompts)
+    internal CodeExploreMarkdownRenderer(IPromptLoader prompts, CodeExploreOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         _prompts = prompts;
+        _operationalOptions = (options ?? new CodeExploreOptions()).Resolve();
         (_explorationPrefix, _explorationSuffix) = GetExplorationFrame(prompts);
     }
 
@@ -260,6 +251,24 @@ internal sealed class CodeExploreMarkdownRenderer
     internal string BoundMarkdownToUtf8Bytes(string markdown, int maximumBytes)
     {
         return BoundMarkdownToUtf8BytesCore(markdown, maximumBytes);
+    }
+
+    /// <summary>Combines configured, adaptive, and actual model display allowances.</summary>
+    internal int ResolveRenderedMarkdownMaximumBytes(
+        CodeExploreResult result,
+        int? modelMaximumBytes)
+    {
+        var maximumBytes = Math.Min(_operationalOptions.MaximumMarkdownBytes, result.EffectiveMaximumMarkdownBytes ?? int.MaxValue);
+        var tier = _operationalOptions.AdaptiveSizingEnabled
+            && result.AdaptiveBudget?.AdaptiveDefaultsApplied == true
+            ? _operationalOptions.GetTier(result.AdaptiveBudget.RepositoryScale.Tier)
+            : null;
+        if (tier is not null && maximumBytes != int.MaxValue)
+        {
+            maximumBytes = Math.Min(maximumBytes, tier.MaximumMarkdownBytes);
+        }
+
+        return modelMaximumBytes is > 0 ? Math.Min(maximumBytes, modelMaximumBytes.Value) : maximumBytes;
     }
 
     private CodeExploreResult FitSourceSections(
@@ -629,20 +638,6 @@ internal sealed class CodeExploreMarkdownRenderer
         return builder.ToString().TrimEnd() + Environment.NewLine;
     }
 
-    private static int ResolveRenderedMarkdownMaximumBytes(
-        CodeExploreResult result,
-        int? modelMaximumBytes)
-    {
-        var nominalSourceCharacters = result.AdaptiveBudget?.EffectiveMaximumSourceCharacters
-            ?? MaximumRenderedMarkdownBytes;
-        var adaptiveMaximum = Math.Min(
-            MaximumRenderedMarkdownBytes,
-            Math.Max(1, (int)Math.Ceiling(nominalSourceCharacters * AdaptiveRenderedMarkdownMultiplier)));
-        return modelMaximumBytes is > 0
-            ? Math.Min(adaptiveMaximum, modelMaximumBytes.Value)
-            : adaptiveMaximum;
-    }
-
     private string AppendModelBudgetOmission(string markdown, int maximumBytes)
     {
         var newline = Environment.NewLine;
@@ -751,7 +746,7 @@ internal sealed class CodeExploreMarkdownRenderer
             Tokens(
                 ("DisplayQuery", FormatCodeSpan(string.IsNullOrWhiteSpace(query)
                     ? "C# code"
-                    : BoundInline(query, 240))),
+                    : BoundInline(query, _operationalOptions.MarkdownMaximumQueryCharacters))),
                 ("SymbolCount", symbols.Count.ToString(CultureInfo.InvariantCulture)),
                 ("SymbolPluralSuffix", PluralSuffix(symbols.Count)),
                 ("FileCount", fileCount.ToString(CultureInfo.InvariantCulture)),
@@ -771,7 +766,7 @@ internal sealed class CodeExploreMarkdownRenderer
             PromptFileNames.ToolCodeExploreAvailabilitySection,
             Tokens(
                 ("Status", availability.Status.ToString()),
-                ("Reason", BoundInline(availability.Reason, 320))));
+                ("Reason", BoundInline(availability.Reason, _operationalOptions.MarkdownMaximumAvailabilityReasonCharacters))));
     }
 
     private void AppendBlastRadius(StringBuilder builder, CodeExploreBlastRadius? blastRadius)
@@ -792,7 +787,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 ? string.Empty
                 : $" — {FormatCodeSpan(item.Location.FilePath)}:{FormatRange(item.Location.Range)}";
             impactItems.AppendLine(
-                $"- **{item.Kind}:** {FormatCodeSpan(identity)}{location} — {BoundInline(item.Reason, 280)}");
+                $"- **{item.Kind}:** {FormatCodeSpan(identity)}{location} — {BoundInline(item.Reason, _operationalOptions.MarkdownMaximumDetailCharacters)}");
         }
 
         AppendHiddenCount(
@@ -819,7 +814,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 ("ImpactItems", impactItems.ToString().TrimEnd())));
     }
 
-    private static IReadOnlyList<CodeExploreBlastRadiusItem> SelectRepresentativeImpactItems(
+    private IReadOnlyList<CodeExploreBlastRadiusItem> SelectRepresentativeImpactItems(
         IReadOnlyList<CodeExploreBlastRadiusItem> items)
     {
         return items
@@ -828,8 +823,8 @@ internal sealed class CodeExploreMarkdownRenderer
             .OrderBy(group => GetImpactKindPriority(group.Key))
             .SelectMany(group => group
                 .OrderBy(entry => entry.Index)
-                .Take(MaximumImpactItemsPerKind))
-            .Take(MaximumImpactItems)
+                .Take(_operationalOptions.MarkdownMaximumImpactItemsPerKind))
+            .Take(_operationalOptions.MarkdownMaximumImpactItems)
             .Select(entry => entry.Item)
             .ToArray();
     }
@@ -862,7 +857,7 @@ internal sealed class CodeExploreMarkdownRenderer
         foreach (var section in sections)
         {
             var symbols = section.SemanticIdentities
-                .Take(MaximumSemanticIdentities)
+                .Take(_operationalOptions.MarkdownMaximumSemanticIdentities)
                 .Select(symbol => FormatCodeSpan(symbol.DisplayName))
                 .ToArray();
             var symbolSummary = symbols.Length == 0
@@ -931,19 +926,19 @@ internal sealed class CodeExploreMarkdownRenderer
         }
 
         var renderedItems = new StringBuilder();
-        foreach (var item in items.Take(MaximumSelectedEvidenceItems))
+        foreach (var item in items.Take(_operationalOptions.MarkdownMaximumSelectedEvidenceItems))
         {
             var location = string.IsNullOrWhiteSpace(item.FilePath)
                 ? string.Empty
                 : $" — {FormatCodeSpan(item.FilePath)}{FormatNullableRange(item.Range)}";
             renderedItems.AppendLine(
-                $"- {FormatCodeSpan(item.Label)}{location} — {BoundInline(item.Reason, 280)}");
+                $"- {FormatCodeSpan(item.Label)}{location} — {BoundInline(item.Reason, _operationalOptions.MarkdownMaximumDetailCharacters)}");
         }
 
         AppendHiddenCount(
             renderedItems,
             items.Count,
-            MaximumSelectedEvidenceItems,
+            _operationalOptions.MarkdownMaximumSelectedEvidenceItems,
             PromptFileNames.ToolCodeExploreHiddenSelectedEvidenceItems);
         AppendPromptBlock(
             builder,
@@ -1007,7 +1002,7 @@ internal sealed class CodeExploreMarkdownRenderer
         }
 
         var items = new StringBuilder();
-        foreach (var edge in flow.Edges.Take(MaximumFlowEdges))
+        foreach (var edge in flow.Edges.Take(_operationalOptions.MarkdownMaximumFlowEdges))
         {
             var promptFileName = edge.CallSite is null
                 ? PromptFileNames.ToolCodeExploreFlowEdge
@@ -1017,7 +1012,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 ("Caller", FormatCodeSpan(edge.CallerSymbolId)),
                 ("Callee", FormatCodeSpan(edge.CalleeSymbolId)),
                 ("DispatchKind", edge.DispatchKind.ToString()),
-                ("Proof", BoundInline(edge.Proof, 280)),
+                ("Proof", BoundInline(edge.Proof, _operationalOptions.MarkdownMaximumDetailCharacters)),
             };
             if (edge.CallSite is { } callSite)
             {
@@ -1031,22 +1026,22 @@ internal sealed class CodeExploreMarkdownRenderer
         AppendHiddenCount(
             items,
             flow.Edges.Count,
-            MaximumFlowEdges,
+            _operationalOptions.MarkdownMaximumFlowEdges,
             PromptFileNames.ToolCodeExploreHiddenFlowEdges);
-        foreach (var boundary in flow.Boundaries.Take(MaximumFlowBoundaries))
+        foreach (var boundary in flow.Boundaries.Take(_operationalOptions.MarkdownMaximumFlowBoundaries))
         {
             items.AppendLine(RenderPrompt(
                 PromptFileNames.ToolCodeExploreFlowBoundary,
                 Tokens(
                     ("BoundaryKind", boundary.Kind.ToString()),
                     ("Symbol", FormatCodeSpan(boundary.SymbolId)),
-                    ("Reason", BoundInline(boundary.Reason, 280)))));
+                    ("Reason", BoundInline(boundary.Reason, _operationalOptions.MarkdownMaximumDetailCharacters)))));
         }
 
         AppendHiddenCount(
             items,
             flow.Boundaries.Count,
-            MaximumFlowBoundaries,
+            _operationalOptions.MarkdownMaximumFlowBoundaries,
             PromptFileNames.ToolCodeExploreHiddenFlowBoundaries);
         AppendPromptBlock(
             builder,
@@ -1073,7 +1068,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 .First())
             .ToArray();
         var items = new StringBuilder();
-        foreach (var artifact in distinctArtifacts.Take(MaximumAssociatedArtifacts))
+        foreach (var artifact in distinctArtifacts.Take(_operationalOptions.MarkdownMaximumAssociatedArtifacts))
         {
             var identity = artifact.FilePath
                 ?? artifact.LogicalName
@@ -1103,7 +1098,7 @@ internal sealed class CodeExploreMarkdownRenderer
         AppendHiddenCount(
             items,
             distinctArtifacts.Length,
-            MaximumAssociatedArtifacts,
+            _operationalOptions.MarkdownMaximumAssociatedArtifacts,
             PromptFileNames.ToolCodeExploreHiddenAssociatedArtifacts);
         AppendPromptBlock(
             builder,
@@ -1121,17 +1116,17 @@ internal sealed class CodeExploreMarkdownRenderer
             return;
         }
 
-        foreach (var detail in details.Take(MaximumArtifactOmissions))
+        foreach (var detail in details.Take(_operationalOptions.MarkdownMaximumArtifactOmissions))
         {
             builder.AppendLine(RenderPrompt(
                 PromptFileNames.ToolCodeExploreArtifactNote,
-                Tokens(("Detail", BoundInline(detail, 280)))));
+                Tokens(("Detail", BoundInline(detail, _operationalOptions.MarkdownMaximumDetailCharacters)))));
         }
 
         AppendHiddenCount(
             builder,
             details.Count,
-            MaximumArtifactOmissions,
+            _operationalOptions.MarkdownMaximumArtifactOmissions,
             PromptFileNames.ToolCodeExploreHiddenArtifactNotes);
     }
 
@@ -1212,7 +1207,7 @@ internal sealed class CodeExploreMarkdownRenderer
         }
 
         var items = new StringBuilder();
-        foreach (var reference in backReferences.Take(MaximumBackReferences))
+        foreach (var reference in backReferences.Take(_operationalOptions.MarkdownMaximumBackReferences))
         {
             items.AppendLine(RenderPrompt(
                 PromptFileNames.ToolCodeExploreBackReference,
@@ -1220,13 +1215,13 @@ internal sealed class CodeExploreMarkdownRenderer
                     ("FilePath", FormatCodeSpan(reference.FilePath)),
                     ("SourceRange", FormatRange(reference.Range)),
                     ("ToolCallId", FormatCodeSpan(reference.ToolCallId)),
-                    ("Reason", BoundInline(reference.Reason, 280)))));
+                    ("Reason", BoundInline(reference.Reason, _operationalOptions.MarkdownMaximumDetailCharacters)))));
         }
 
         AppendHiddenCount(
             items,
             backReferences.Count,
-            MaximumBackReferences,
+            _operationalOptions.MarkdownMaximumBackReferences,
             PromptFileNames.ToolCodeExploreHiddenBackReferences);
         AppendPromptBlock(
             builder,
@@ -1314,7 +1309,7 @@ internal sealed class CodeExploreMarkdownRenderer
             Tokens(("Items", items.ToString().TrimEnd())));
     }
 
-    private static void AppendContinuationPointer(
+    private void AppendContinuationPointer(
         StringBuilder builder,
         MarkdownContinuationTarget continuation,
         bool compact)
@@ -1332,7 +1327,7 @@ internal sealed class CodeExploreMarkdownRenderer
             if (!compact && !string.IsNullOrWhiteSpace(continuation.Reason))
             {
                 builder.Append(" — ");
-                builder.Append(BoundInline(continuation.Reason, 160));
+                builder.Append(BoundInline(continuation.Reason, _operationalOptions.MarkdownMaximumRequiredContinuationReasonCharacters));
             }
 
             builder.AppendLine();
@@ -1350,13 +1345,13 @@ internal sealed class CodeExploreMarkdownRenderer
         if (!compact && !string.IsNullOrWhiteSpace(continuation.Reason))
         {
             builder.Append(" — ");
-            builder.Append(BoundInline(continuation.Reason, 280));
+            builder.Append(BoundInline(continuation.Reason, _operationalOptions.MarkdownMaximumDetailCharacters));
         }
 
         builder.AppendLine();
     }
 
-    private static IReadOnlyList<MarkdownContinuationTarget> SelectVisibleContinuations(
+    private IReadOnlyList<MarkdownContinuationTarget> SelectVisibleContinuations(
         IReadOnlyList<MarkdownContinuationTarget> continuations)
     {
         var sourceContinuations = continuations
@@ -1369,7 +1364,7 @@ internal sealed class CodeExploreMarkdownRenderer
         {
             var replayable = group
                 .Where(continuation => continuation.Cursor is not null)
-                .Take(MaximumOptionalContinuationsPerKind)
+                .Take(_operationalOptions.MarkdownMaximumOptionalContinuationsPerKind)
                 .ToArray();
             if (replayable.Length > 0)
             {
@@ -1384,11 +1379,11 @@ internal sealed class CodeExploreMarkdownRenderer
         return
         [
             .. sourceContinuations,
-            .. optionalContinuations.Take(MaximumOptionalContinuations),
+            .. optionalContinuations.Take(_operationalOptions.MarkdownMaximumOptionalContinuations),
         ];
     }
 
-    private static HashSet<int> SelectContinuationCursorSlots(
+    private HashSet<int> SelectContinuationCursorSlots(
         IReadOnlyList<MarkdownContinuationTarget> continuations)
     {
         var slots = new HashSet<int>();
@@ -1398,7 +1393,7 @@ internal sealed class CodeExploreMarkdownRenderer
             .ToArray();
         foreach (var group in cursorCandidates.GroupBy(item => item.Continuation.Kind))
         {
-            if (slots.Count >= MaximumContinuationCursors)
+            if (slots.Count >= _operationalOptions.MarkdownMaximumContinuationCursors)
             {
                 return slots;
             }
@@ -1408,7 +1403,7 @@ internal sealed class CodeExploreMarkdownRenderer
 
         foreach (var item in cursorCandidates)
         {
-            if (slots.Count >= MaximumContinuationCursors)
+            if (slots.Count >= _operationalOptions.MarkdownMaximumContinuationCursors)
             {
                 break;
             }
@@ -1424,7 +1419,7 @@ internal sealed class CodeExploreMarkdownRenderer
         return continuation.Kind == MarkdownContinuationKind.Source;
     }
 
-    private static IReadOnlyList<MarkdownContinuationTarget> CreateMarkdownContinuations(
+    private IReadOnlyList<MarkdownContinuationTarget> CreateMarkdownContinuations(
         CodeExploreResult result,
         string? query)
     {
@@ -1438,7 +1433,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 continuation.StartLine,
                 continuation.EndLine,
                 continuation.Reason,
-                CodeExploreContinuationCursor.CreateSource(continuation)));
+                CodeExploreContinuationCursor.CreateSource(continuation, _operationalOptions)));
         }
 
         foreach (var continuation in result.BlastRadius?.ContinuationTargets ?? [])
@@ -1450,7 +1445,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 continuation.StartLine,
                 continuation.EndLine,
                 continuation.Reason,
-                CodeExploreContinuationCursor.CreateImpact(continuation)));
+                CodeExploreContinuationCursor.CreateImpact(continuation, _operationalOptions)));
         }
 
         foreach (var continuation in result.ArtifactCoverage?.ContinuationTargets ?? [])
@@ -1463,7 +1458,7 @@ internal sealed class CodeExploreMarkdownRenderer
                 continuation.StartLine,
                 continuation.EndLine,
                 continuation.Reason,
-                CodeExploreContinuationCursor.CreateArtifact(continuation, artifact, query)));
+                CodeExploreContinuationCursor.CreateArtifact(continuation, artifact, query, _operationalOptions)));
         }
 
         return continuations
@@ -1489,15 +1484,15 @@ internal sealed class CodeExploreMarkdownRenderer
         }
 
         var items = new StringBuilder();
-        foreach (var action in actions.Take(MaximumNextActions))
+        foreach (var action in actions.Take(_operationalOptions.MarkdownMaximumNextActions))
         {
-            items.AppendLine($"- {BoundInline(action.Message, 280)}");
+            items.AppendLine($"- {BoundInline(action.Message, _operationalOptions.MarkdownMaximumDetailCharacters)}");
         }
 
         AppendHiddenCount(
             items,
             actions.Count,
-            MaximumNextActions,
+            _operationalOptions.MarkdownMaximumNextActions,
             PromptFileNames.ToolCodeExploreHiddenNextActions);
         AppendPromptBlock(
             builder,
@@ -1529,7 +1524,7 @@ internal sealed class CodeExploreMarkdownRenderer
         var items = new StringBuilder();
         foreach (var resolution in unresolvedFiles)
         {
-            items.AppendLine($"- {FormatCodeSpan(resolution.Input)}: {resolution.Outcome}. {BoundInline(resolution.Reason, 280)}");
+            items.AppendLine($"- {FormatCodeSpan(resolution.Input)}: {resolution.Outcome}. {BoundInline(resolution.Reason, _operationalOptions.MarkdownMaximumDetailCharacters)}");
             foreach (var alternative in resolution.Alternatives)
             {
                 if (alternative.Location is { } location)
@@ -1539,15 +1534,15 @@ internal sealed class CodeExploreMarkdownRenderer
             }
         }
 
-        foreach (var omission in omissions.Take(MaximumOmissions))
+        foreach (var omission in omissions.Take(_operationalOptions.MarkdownMaximumOmissions))
         {
-            items.AppendLine("- " + BoundInline(omission, 280));
+            items.AppendLine("- " + BoundInline(omission, _operationalOptions.MarkdownMaximumDetailCharacters));
         }
 
         AppendHiddenCount(
             items,
             omissions.Length,
-            MaximumOmissions,
+            _operationalOptions.MarkdownMaximumOmissions,
             PromptFileNames.ToolCodeExploreHiddenOmissions);
         AppendPromptBlock(
             builder,

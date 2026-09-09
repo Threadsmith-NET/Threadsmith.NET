@@ -571,7 +571,7 @@ public sealed class Plan81CodeExploreToolTests
 
             var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(execution.Value);
             Assert.InRange(jsonBytes.Length, 0, 600 * 3);
-            Assert.Contains(execution.Value.Omissions, omission => omission.Contains("selected model request budget", StringComparison.Ordinal));
+            Assert.Contains(execution.Value.Omissions, omission => omission.Contains("effective output budget", StringComparison.Ordinal));
             var retainedSectionCount = execution.Value.FileSections.Count;
             Assert.All(execution.Value.Flow?.Nodes ?? [], node =>
                 Assert.True(node.SourceSectionIndex is null || node.SourceSectionIndex < retainedSectionCount));

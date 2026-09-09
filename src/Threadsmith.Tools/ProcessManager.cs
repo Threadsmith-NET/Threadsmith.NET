@@ -138,9 +138,10 @@ public sealed class ProcessManager : IProcessManager
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.FileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkingDirectory);
-        if (request.Timeout <= TimeSpan.Zero || request.MaximumOutputCharacters <= 0)
+        if ((request.Timeout <= TimeSpan.Zero && request.Timeout != Timeout.InfiniteTimeSpan)
+            || request.MaximumOutputCharacters <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(request), "Process bounds must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(request), "Process bounds must be positive, or the timeout must be infinite.");
         }
 
         if (request.EnvironmentVariables.Count > 16

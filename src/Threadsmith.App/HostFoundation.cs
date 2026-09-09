@@ -277,6 +277,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         };
         var toolLimits = CreateToolLimits(configuration);
         var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
+        var codeExploreOptions = CodeExploreConfiguration.FromConfiguration(configuration);
         var events = new DomainEventStream();
         var projections = new InMemoryProjectionStore(executionLimits);
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
@@ -410,7 +411,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             // Tool registration precedes extension capability composition so extensions share one governed catalog.
             var gitQueries = new GitQueryService();
             var dotNetInventory = new DotNetInventoryService(semanticEngines, gitQueries);
-            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines, promptLoader);
+            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines, promptLoader, codeExploreOptions);
             var advisorySources = LoadNuGetAdvisorySources(trustedConfiguration);
             var nativeValidation = new NativeValidationToolService(
                 processManager,
@@ -430,7 +431,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 secretResolver,
                 toolLimits,
                 codeExploreOutputOptions,
-                promptLoader);
+                promptLoader,
+                codeExploreOptions);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -856,7 +858,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         ISecretResolver secretResolver,
         ToolLimits limits,
         CodeExploreOutputOptions codeExploreOutputOptions,
-        IPromptLoader promptLoader)
+        IPromptLoader promptLoader,
+        CodeExploreOptions codeExploreOptions)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -923,9 +926,10 @@ internal sealed class HostFoundation : IAsyncDisposable
             new TestDiscoveryTool(nativeValidation, promptLoader),
             new TargetedTestTool(nativeValidation, promptLoader),
             new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(codeExplore, promptLoader, processManager),
+                new CodeExploreTool(codeExplore, promptLoader, processManager, codeExploreOptions),
                 codeExploreOutputOptions,
-                promptLoader),
+                promptLoader,
+                codeExploreOptions),
             new CallHierarchyTool(advancedSemanticQueries, promptLoader),
             new SymbolImpactTool(advancedSemanticQueries, promptLoader),
             new CSharpPatternSearchTool(advancedSemanticQueries, promptLoader),

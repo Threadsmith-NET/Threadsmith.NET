@@ -569,6 +569,10 @@ public sealed record CodeExploreArtifactPathAnchor
 /// <summary>Exact source-bearing code exploration request.</summary>
 public sealed record CodeExploreRequest
 {
+    private CodeExploreLimits _limits = new();
+    private bool _explicitLimits;
+    private bool? _useAdaptiveDefaults;
+
     /// <summary>Bounded user/model query text; exact-looking values may be treated as anchors.</summary>
     public required string Query { get; init; }
 
@@ -591,7 +595,25 @@ public sealed record CodeExploreRequest
     public IReadOnlyList<CodeExploreArtifactPathAnchor> AssociatedArtifactPathAnchors { get; init; } = [];
 
     /// <summary>Explicit result, source, ambiguity, and time limits.</summary>
-    public CodeExploreLimits Limits { get; init; } = new();
+    public CodeExploreLimits Limits
+    {
+        get => _limits;
+        init
+        {
+            _limits = value;
+            _explicitLimits = true;
+        }
+    }
+
+    /// <summary>Whether source settings originated as adaptive defaults; explicit host limits remain explicit.</summary>
+    public bool UseAdaptiveDefaults
+    {
+        get => _useAdaptiveDefaults ?? !_explicitLimits;
+        init => _useAdaptiveDefaults = value;
+    }
+
+    /// <summary>Whether a host explicitly supplied request limits.</summary>
+    internal bool HasExplicitLimits => _explicitLimits;
 }
 
 /// <summary>Bounded deterministic interpretation of a natural-language code-exploration query.</summary>
@@ -763,7 +785,8 @@ public sealed record CodeExploreAdaptiveBudget(
     int EffectiveMaximumCandidateSummaries,
     int RecommendedFollowUpCount,
     CodeExplorePresentationVerbosity PresentationVerbosity,
-    string BudgetSource);
+    string BudgetSource,
+    bool AdaptiveDefaultsApplied = false);
 
 /// <summary>Inspectable file-level relevance and source-allocation outcome without source text.</summary>
 public sealed record CodeExploreFileRelevanceSummary(
@@ -1021,6 +1044,9 @@ public sealed record CodeExploreResult(
     CodeExploreAdaptiveBudget? AdaptiveBudget = null,
     IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null)
 {
+    /// <summary>Resolved display allowance retained when verbose adaptive metadata is trimmed.</summary>
+    public int? EffectiveMaximumMarkdownBytes { get; init; }
+
     /// <summary>Gets source follow-up targets omitted by a downstream result envelope.</summary>
     public int OmittedSourceContinuationCount { get; init; }
 }

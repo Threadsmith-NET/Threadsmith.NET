@@ -3,13 +3,11 @@ namespace Threadsmith.DotNet;
 /// <summary>Ranks source candidates and reserves output before any source section is rendered.</summary>
 internal static class CodeExploreSourceAllocationPlanner
 {
-    /// <summary>Minimum source reservation that can carry useful declaration evidence.</summary>
+    /// <summary>Initial fairness reservation, reduced to actual demand; never an admission threshold.</summary>
     internal const int MinimumAdmittedSourceCharacters = 700;
 
     private const double SourceCliffRatio = 0.15;
     private const double MaximumSourceCliffWeight = 10;
-    private const double MaximumSingleCandidateBudgetRatio = 0.70;
-    private const int EstimatedFileOutputOverheadCharacters = 200;
 
     /// <summary>Creates deterministic source reservations for one projection phase.</summary>
     public static CodeExploreSourceAllocationPlan Create(
@@ -35,53 +33,24 @@ internal static class CodeExploreSourceAllocationPlanner
         var strongestWeight = ranked.Max(candidate => AllocationWeight(candidate, strongestRawWeight));
         var cliff = Math.Min(strongestWeight * SourceCliffRatio, MaximumSourceCliffWeight);
         var admitted = ranked
-            .Where((candidate, index) => index == 0
+            .Where((candidate, index) => candidate.RequiredCharacters > 0 && (index == 0
                 || candidate.IsPinned
                 || candidate.IsSpine
-                || AllocationWeight(candidate, strongestRawWeight) >= cliff)
+                || AllocationWeight(candidate, strongestRawWeight) >= cliff))
             .Take(maximumCandidates)
             .ToList();
         if (admitted.Count == 0)
         {
-            admitted = [ranked[0]];
+            return CodeExploreSourceAllocationPlan.Empty;
         }
 
-        while (admitted.Count > 1
-            && !CanAffordUsefulReservations(totalCharacters, admitted.Count))
-        {
-            var removableIndex = admitted
-                .Select((candidate, index) => new { Candidate = candidate, Index = index })
-                .Where(item => !item.Candidate.IsPinned && !item.Candidate.IsSpine)
-                .OrderBy(item => AllocationWeight(item.Candidate, strongestRawWeight))
-                .ThenByDescending(item => item.Candidate.AllocationRank)
-                .Select(item => item.Index)
-                .FirstOrDefault(-1);
-            if (removableIndex < 0)
-            {
-                break;
-            }
-
-            admitted.RemoveAt(removableIndex);
-        }
-
-        var canFundNormalFloor = CanAffordUsefulReservations(totalCharacters, admitted.Count);
-        var sourcePool = canFundNormalFloor
-            ? Math.Max(1, totalCharacters - (EstimatedFileOutputOverheadCharacters * admitted.Count))
-            : totalCharacters;
-        var fairShareCeiling = admitted.Count == 1
-            ? sourcePool
-            : Math.Max(
-                MinimumAdmittedSourceCharacters,
-                (int)Math.Floor(sourcePool * MaximumSingleCandidateBudgetRatio));
-        var maximumShare = Math.Min(maximumPerCandidateCharacters, fairShareCeiling);
-        var usefulFloor = Math.Max(
-            1,
-            Math.Min(MinimumAdmittedSourceCharacters, sourcePool / admitted.Count));
+        var sourcePool = totalCharacters;
+        var usefulFloor = Math.Min(MinimumAdmittedSourceCharacters, sourcePool / admitted.Count);
         var reservations = admitted.ToDictionary(
             candidate => candidate.StableKey,
-            _ => usefulFloor,
+            candidate => Math.Min(usefulFloor, Math.Min(maximumPerCandidateCharacters, candidate.RequiredCharacters)),
             StringComparer.Ordinal);
-        var remaining = Math.Max(0, sourcePool - (usefulFloor * admitted.Count));
+        var remaining = sourcePool - reservations.Values.Sum();
         var active = admitted.ToList();
         while (remaining > 0 && active.Count > 0)
         {
@@ -92,6 +61,7 @@ internal static class CodeExploreSourceAllocationPlanner
             foreach (var candidate in active.ToArray())
             {
                 var current = reservations[candidate.StableKey];
+                var maximumShare = Math.Min(maximumPerCandidateCharacters, candidate.RequiredCharacters);
                 var capacity = maximumShare - current;
                 if (capacity <= 0)
                 {
@@ -141,12 +111,6 @@ internal static class CodeExploreSourceAllocationPlanner
                 .ToHashSet(StringComparer.Ordinal));
     }
 
-    private static bool CanAffordUsefulReservations(int totalCharacters, int candidateCount)
-    {
-        var perCandidateCost = MinimumAdmittedSourceCharacters + EstimatedFileOutputOverheadCharacters;
-        return totalCharacters >= perCandidateCost * candidateCount;
-    }
-
     private static double EffectiveWeight(CodeExploreSourceAllocationCandidate candidate)
     {
         return Math.Max(0, candidate.Weight) * Math.Clamp(candidate.SourceWorth, 0, 1);
@@ -170,7 +134,8 @@ internal sealed record CodeExploreSourceAllocationCandidate(
     double SourceWorth,
     bool IsPinned,
     bool IsSpine,
-    int AllocationRank);
+    int AllocationRank,
+    int RequiredCharacters = int.MaxValue);
 
 /// <summary>Immutable reservations and relevance-cliff outcomes for one source projection phase.</summary>
 internal sealed record CodeExploreSourceAllocationPlan(

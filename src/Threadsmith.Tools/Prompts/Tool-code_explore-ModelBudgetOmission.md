@@ -1,1 +1,1 @@
-_Output note: additional Markdown was omitted to fit the selected model input budget._
+_Output note: additional Markdown was omitted to fit the effective code-explore output budget._

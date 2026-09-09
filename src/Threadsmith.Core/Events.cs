@@ -270,7 +270,8 @@ public sealed record ToolInvocationStarted(
     RunId RunId = default,
     string RequestedBy = "host",
     ToolActivitySource? Source = null,
-    string? ActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
+    string? ActivityDetail = null,
+    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(
@@ -284,7 +285,8 @@ public sealed record ToolInvocationCompleted(
     ToolActivitySource? Source = null,
     long? ElapsedMilliseconds = null,
     OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown,
-    string? ModelResultContent = null) : DomainEvent(SessionId, OccurredAt);
+    string? ModelResultContent = null,
+    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A semantic check started.</summary>
 public sealed record SemanticCheckStarted(

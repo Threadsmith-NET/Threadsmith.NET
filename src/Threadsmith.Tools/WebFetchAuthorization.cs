@@ -73,6 +73,12 @@ public enum DirectFetchApprovalOutcome
 
     /// <summary>No interactive prompt is available, including headless execution.</summary>
     Unavailable,
+
+    /// <summary>The exact hostname was approved for the current live session.</summary>
+    ApprovedForSession,
+
+    /// <summary>The exact hostname should be added to the ordinary user allowed list.</summary>
+    ApprovedForUser,
 }
 
 /// <summary>Sanitized model-proposed destination shown at the host approval boundary.</summary>
@@ -408,12 +414,16 @@ public static class CurrentUserUrlRecognizer
     internal sealed record RecognizedUserUrl(Uri Url, string Digest, int Ordinal);
 }
 
-/// <summary>Transient repository-bound references and exact one-shot direct URL grants.</summary>
+/// <summary>Transient repository-bound references, current-run search-host grants, and exact direct URL grants.</summary>
 public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationPolicy
 {
     private const int MaximumReferences = 100;
     private readonly Lock _gate = new();
     private readonly WebFetchOptionsState _options;
+    private readonly TimeProvider _timeProvider;
+    private readonly UserAllowedNetworkHostStore? _userAllowedHosts;
+    private readonly Dictionary<(string RepositoryIdentity, SessionId SessionId, string Host), DateTimeOffset> _sessionHostGrants = [];
+    private readonly Dictionary<(string RepositoryIdentity, SessionId SessionId, RunId RunId, string Host), DateTimeOffset> _searchHostGrants = [];
     private readonly Dictionary<(SessionId SessionId, RunId RunId), DateTimeOffset> _activeRuns = [];
     private readonly Dictionary<string, SearchReference> _searchReferences = new(StringComparer.Ordinal);
     private readonly Dictionary<string, UserMessageReference> _userReferences = new(StringComparer.Ordinal);
@@ -431,9 +441,21 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
     /// <summary>Initializes a new instance of the <see cref="WebFetchAuthorizationAuthority"/> class with rebindable effective limits.</summary>
     public WebFetchAuthorizationAuthority(WebFetchOptionsState options)
+        : this(options, TimeProvider.System)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="WebFetchAuthorizationAuthority"/> class with an explicit clock for transient reference lifetimes.</summary>
+    public WebFetchAuthorizationAuthority(
+        WebFetchOptionsState options,
+        TimeProvider timeProvider,
+        UserAllowedNetworkHostStore? userAllowedHosts = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         _options = options;
+        _timeProvider = timeProvider;
+        _userAllowedHosts = userAllowedHosts;
     }
 
     /// <summary>Gets the maximum number of URLs accepted in one direct authorization chain.</summary>
@@ -455,7 +477,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         RevokeAll();
     }
 
-    /// <summary>Issues one opaque repository-bound reference for a normalized search result.</summary>
+    /// <summary>Issues an exact opaque result reference and authorizes its hostname for the producing run.</summary>
     public string IssueSearchResult(
         string repositoryRoot,
         Uri exactUrl,
@@ -479,9 +501,18 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         {
             PruneCore();
             MakeReferenceCapacityCore();
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
+            var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
+            var hostScope = (repositoryIdentity, sessionId, producingRunId, normalizedUrl.IdnHost.ToLowerInvariant());
+            if (!_searchHostGrants.ContainsKey(hostScope) && _searchHostGrants.Count >= MaximumReferences)
+            {
+                var oldest = _searchHostGrants.OrderBy(item => item.Value).First().Key;
+                _searchHostGrants.Remove(oldest);
+            }
+
+            _searchHostGrants[hostScope] = now;
             _searchReferences[id] = new SearchReference(
-                OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot),
+                repositoryIdentity,
                 normalizedUrl,
                 sessionId,
                 producingRunId,
@@ -523,6 +554,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             PruneCore();
             var removed = _userReferences.RemoveWhere(item => item.Value.SessionId == sessionId);
             removed += _invocationGrants.RemoveWhere(item => item.Value.SessionId == sessionId);
+            removed += _searchHostGrants.RemoveWhere(item => item.Key.SessionId == sessionId && item.Key.RunId != runId);
             foreach ((var activeSessionId, var activeRunId) in _activeRuns.Keys
                 .Where(item => item.SessionId == sessionId && item.RunId != runId)
                 .ToArray())
@@ -543,7 +575,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
             var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
             var policyFingerprint = CreatePolicyFingerprint(policyContext);
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             var expiresAt = now + options.ReferenceLifetime;
             var issued = new List<UserUrlReference>(candidates.Count);
             foreach (var candidate in candidates)
@@ -614,7 +646,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 throw new WebFetchException(WebFetchFailureKind.InvalidRequest, "An exact direct URL already has current authorization.");
             }
 
-            var expiresAt = DateTimeOffset.UtcNow + options.ReferenceLifetime;
+            var expiresAt = _timeProvider.GetUtcNow() + options.ReferenceLifetime;
             for (var index = 0; index < normalizedUrls.Length; index++)
             {
                 _directGrants[digests[index]] = new DirectGrant(
@@ -670,7 +702,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         return GetDirectRouteHosts(reference);
     }
 
-    /// <summary>Resolves and consumes one current route.</summary>
+    /// <summary>Resolves one current route, consuming exact grants while retaining current-run search-host authority.</summary>
     public WebFetchAuthorization Resolve(ToolExecutionContext context, WebFetchRequest request)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -748,6 +780,14 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 || !grant.IsInitialUrl
                 || grant.ScopeGeneration != _scopeGeneration)
             {
+                if (GetHostGrantSourceCore(context, uri) is WebFetchSourceKind hostSource)
+                {
+                    return new WebFetchAuthorization(
+                        uri,
+                        hostSource,
+                        new HashSet<string>(StringComparer.Ordinal));
+                }
+
                 throw new WebFetchException(
                     WebFetchFailureKind.DirectAuthorizationRequired,
                     "DirectAuthorizationRequired: the exact model-proposed public URL requires inline approval or explicit pre-authorization.");
@@ -768,6 +808,98 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 WebFetchSourceKind.ExplicitDirectGroup,
                 new HashSet<string>([digest, .. redirectGrantDigests], StringComparer.Ordinal));
         }
+    }
+
+    /// <summary>Returns whether search results authorized the exact hostname for this repository, session, and run.</summary>
+    public bool HasSearchHostGrant(ToolExecutionContext context, string url)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var normalized = WebFetchUrlPolicy.Normalize(url, _options.Current.MaximumUrlCharacters);
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        lock (_gate)
+        {
+            PruneCore();
+            return _searchHostGrants.ContainsKey((repositoryIdentity, context.SessionId, context.RunId, normalized.IdnHost.ToLowerInvariant()));
+        }
+    }
+
+    /// <summary>Returns whether search, session, or user authority covers this exact hostname.</summary>
+    public bool HasHostGrant(ToolExecutionContext context, string url)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var normalized = WebFetchUrlPolicy.Normalize(url, _options.Current.MaximumUrlCharacters);
+        lock (_gate)
+        {
+            PruneCore();
+            return GetHostGrantSourceCore(context, normalized) is not null;
+        }
+    }
+
+    /// <summary>Opens an approval boundary tied to the current run and lifecycle generation.</summary>
+    public long BeginModelProposedApproval(ToolExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        lock (_gate)
+        {
+            if (!IsRunProgressivelyActive(context.SessionId, context.RunId)
+                || !HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
+            {
+                throw StaleReference("direct approval");
+            }
+
+            _activeRuns[(context.SessionId, context.RunId)] = _timeProvider.GetUtcNow() + _options.Current.ReferenceLifetime;
+            return _scopeGeneration;
+        }
+    }
+
+    /// <summary>Applies a user-selected duration after revalidating the pending run and lifecycle boundary.</summary>
+    public async Task ApplyModelProposedApprovalAsync(
+        ToolExecutionContext context,
+        Uri exactUrl,
+        DirectFetchApprovalOutcome outcome,
+        long expectedScopeGeneration,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(exactUrl);
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = WebFetchUrlPolicy.Normalize(exactUrl.AbsoluteUri, _options.Current.MaximumUrlCharacters);
+        lock (_gate)
+        {
+            PruneCore();
+            if (expectedScopeGeneration != _scopeGeneration
+                || !_activeRuns.ContainsKey((context.SessionId, context.RunId))
+                || !HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
+            {
+                throw StaleReference("direct approval");
+            }
+
+            if (outcome == DirectFetchApprovalOutcome.Approved)
+            {
+                GrantModelProposedInvocation(context, normalized);
+                return;
+            }
+
+            if (outcome == DirectFetchApprovalOutcome.ApprovedForSession)
+            {
+                var key = (OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath), context.SessionId, normalized.IdnHost.ToLowerInvariant());
+                if (!_sessionHostGrants.ContainsKey(key) && _sessionHostGrants.Count >= MaximumReferences)
+                {
+                    _sessionHostGrants.Remove(_sessionHostGrants.OrderBy(item => item.Value).First().Key);
+                }
+
+                _sessionHostGrants[key] = _timeProvider.GetUtcNow();
+                IncrementGenerationCore();
+                return;
+            }
+
+            if (outcome != DirectFetchApprovalOutcome.ApprovedForUser || _userAllowedHosts is null)
+            {
+                throw new WebFetchException(WebFetchFailureKind.DirectAuthorizationRequired, "The requested approval duration is unavailable.");
+            }
+        }
+
+        await _userAllowedHosts.AddAsync(normalized.IdnHost, cancellationToken);
     }
 
     /// <summary>Returns whether an exact URL already has an executable direct grant.</summary>
@@ -798,7 +930,9 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            return _activeRuns.ContainsKey((sessionId, runId));
+            return _activeRuns.ContainsKey((sessionId, runId))
+                || _sessionHostGrants.Keys.Any(scope => scope.SessionId == sessionId)
+                || _userAllowedHosts?.ReadHosts().Count > 0;
         }
     }
 
@@ -826,7 +960,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 context.RunId,
                 normalized,
                 digest,
-                DateTimeOffset.UtcNow + _options.Current.ReferenceLifetime,
+                _timeProvider.GetUtcNow() + _options.Current.ReferenceLifetime,
                 _scopeGeneration);
             IncrementGenerationCore();
         }
@@ -837,7 +971,9 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     {
         lock (_gate)
         {
-            var removed = _searchReferences.RemoveWhere(item =>
+            var removed = _searchHostGrants.RemoveWhere(item =>
+                    item.Key.SessionId == sessionId && item.Key.RunId == runId)
+                + _searchReferences.RemoveWhere(item =>
                     item.Value.SessionId == sessionId && item.Value.ProducingRunId == runId)
                 + _userReferences.RemoveWhere(item =>
                     item.Value.SessionId == sessionId && item.Value.RunId == runId)
@@ -861,6 +997,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             _searchReferences.Clear();
+            _searchHostGrants.Clear();
+            _sessionHostGrants.Clear();
             _userReferences.Clear();
             _directGrants.Clear();
             _invocationGrants.Clear();
@@ -880,13 +1018,18 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            var active = _activeRuns.Count > 0 || _directGrants.Count > 0;
+            var savedHostAvailable = _userAllowedHosts?.ReadHosts().Count > 0;
+            var active = _activeRuns.Count > 0 || _directGrants.Count > 0 || _sessionHostGrants.Count > 0 || savedHostAvailable;
             return new WebFetchActivationStatus
             {
                 Active = active,
-                Reason = _userReferences.Count > 0
+                Reason = savedHostAvailable
+                    ? "user allowed hostnames"
+                    : _sessionHostGrants.Count > 0
+                        ? "hostnames approved for the current session"
+                        : _userReferences.Count > 0
                     ? "eligible exact URLs in the current user message"
-                    : _searchReferences.Count > 0
+                    : _searchReferences.Count > 0 || _searchHostGrants.Count > 0
                         ? "eligible current web_search results"
                         : _directGrants.Count > 0
                             ? "exact one-shot direct URL authorization"
@@ -914,11 +1057,13 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         {
             PruneCore();
             return _activeRuns.ContainsKey((sessionId, runId))
-                || _directGrants.Values.Any(grant => grant.SessionId == sessionId);
+                || _directGrants.Values.Any(grant => grant.SessionId == sessionId)
+                || _sessionHostGrants.Keys.Any(scope => scope.SessionId == sessionId)
+                || _userAllowedHosts?.ReadHosts().Count > 0;
         }
     }
 
-    /// <summary>Returns every policy-visible host in an exact explicit direct grant's closed redirect scope.</summary>
+    /// <summary>Returns policy-visible hosts from an explicit redirect group or a current search-host grant.</summary>
     public IReadOnlyList<string> GetDirectRouteHosts(string url)
     {
         var normalized = WebFetchUrlPolicy.Normalize(url, _options.Current.MaximumUrlCharacters);
@@ -928,7 +1073,11 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             PruneCore();
             if (!_directGrants.TryGetValue(digest, out var initialGrant) || !initialGrant.IsInitialUrl)
             {
-                return [];
+                return _searchHostGrants.Keys.Any(scope => string.Equals(scope.Host, normalized.IdnHost, StringComparison.OrdinalIgnoreCase))
+                    || _sessionHostGrants.Keys.Any(scope => string.Equals(scope.Host, normalized.IdnHost, StringComparison.OrdinalIgnoreCase))
+                    || _userAllowedHosts?.ReadHosts().Contains(normalized.IdnHost) == true
+                    ? [normalized.IdnHost]
+                    : [];
             }
 
             return _directGrants.Values
@@ -976,6 +1125,19 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 return false;
             }
 
+            if (string.Equals(normalized.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase)
+                && (_searchHostGrants.Keys.Any(scope =>
+                        string.Equals(scope.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                        && string.Equals(scope.Host, networkHost, StringComparison.OrdinalIgnoreCase))
+                    || _sessionHostGrants.Keys.Any(scope =>
+                        string.Equals(scope.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
+                        && string.Equals(scope.Host, networkHost, StringComparison.OrdinalIgnoreCase))
+                    || _userAllowedHosts?.ReadHosts().Contains(networkHost) == true))
+            {
+                // Invocation policy checks the host claim; Resolve checks the exact session and run before transport.
+                return true;
+            }
+
             var digest = WebFetchUrlPolicy.Digest(normalized);
             return _directGrants.TryGetValue(digest, out var initialGrant)
                 && initialGrant.IsInitialUrl
@@ -1012,11 +1174,63 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             && reference.All(Uri.IsHexDigit);
     }
 
+    /// <summary>Returns a scoped full URL for live presentation without consuming a reference or granting access.</summary>
+    internal string? GetActivityUrl(ToolExecutionContext context, WebFetchRequest request)
+    {
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        lock (_gate)
+        {
+            PruneCore();
+            if (_searchReferences.TryGetValue(request.Reference, out var search)
+                && search.RepositoryIdentity == repositoryIdentity
+                && search.SessionId == context.SessionId
+                && search.ProducingRunId == context.RunId
+                && search.ScopeGeneration == _scopeGeneration)
+            {
+                return search.Url.AbsoluteUri;
+            }
+
+            if (_userReferences.TryGetValue(request.Reference, out var user)
+                && user.RepositoryIdentity == repositoryIdentity
+                && user.SessionId == context.SessionId
+                && user.RunId == context.RunId
+                && user.ScopeGeneration == _scopeGeneration
+                && HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath)
+                && user.PolicyFingerprint == CreatePolicyFingerprint(context.Invocation))
+            {
+                return user.Url.AbsoluteUri;
+            }
+        }
+
+        return IsOpaqueReference(request.Reference)
+            ? null
+            : WebFetchUrlPolicy.Normalize(request.Reference, _options.Current.MaximumUrlCharacters).AbsoluteUri;
+    }
+
     /// <summary>Configures live schema-3 consent validation for ergonomic routes.</summary>
     internal void SetCurrentMessageConsentEvaluator(Func<string, bool> evaluator)
     {
         ArgumentNullException.ThrowIfNull(evaluator);
         Volatile.Write(ref _currentMessageConsentEvaluator, evaluator);
+    }
+
+    private WebFetchSourceKind? GetHostGrantSourceCore(ToolExecutionContext context, Uri normalized)
+    {
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        var host = normalized.IdnHost.ToLowerInvariant();
+        if (_sessionHostGrants.ContainsKey((repositoryIdentity, context.SessionId, host)))
+        {
+            return WebFetchSourceKind.SessionApprovedHost;
+        }
+
+        if (_searchHostGrants.ContainsKey((repositoryIdentity, context.SessionId, context.RunId, host)))
+        {
+            return WebFetchSourceKind.SearchResult;
+        }
+
+        return _userAllowedHosts?.ReadHosts().Contains(host) == true
+            ? WebFetchSourceKind.UserAllowedHost
+            : null;
     }
 
     private static string CreateRedactedPathProjection(Uri normalized)
@@ -1115,12 +1329,13 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
     private void PruneCore()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var removed = _searchReferences.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _userReferences.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _directGrants.RemoveWhere(item => item.Value.ExpiresAt <= now)
             + _invocationGrants.RemoveWhere(item => item.Value.ExpiresAt <= now);
-        removed += _activeRuns.RemoveWhere(item => item.Value <= now);
+        removed += _activeRuns.RemoveWhere(item => item.Value <= now
+            && !_searchHostGrants.Keys.Any(scope => scope.SessionId == item.Key.SessionId && scope.RunId == item.Key.RunId));
 
         if (removed > 0)
         {
@@ -1188,7 +1403,7 @@ public sealed record WebFetchAuthorization(
     IReadOnlySet<string> AuthorizedDirectUrlDigests);
 
 /// <summary>Progressively disclosed governed readable web-fetch tool.</summary>
-public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHostAuthorizedNetworkClaims
+public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHostAuthorizedNetworkClaims, ITransientToolActivityDetail
 {
     private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly WebFetchAuthorizationAuthority _authorization;
@@ -1244,7 +1459,8 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
         CancellationToken cancellationToken = default)
     {
         if (!WebFetchAuthorizationAuthority.IsOpaqueReference(input.Reference)
-            && !_authorization.HasDirectGrant(context, input.Reference))
+            && !_authorization.HasDirectGrant(context, input.Reference)
+            && !_authorization.HasHostGrant(context, input.Reference))
         {
             if (!_authorization.IsRunProgressivelyActive(context.SessionId, context.RunId)
                 || !_authorization.HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
@@ -1256,6 +1472,7 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
 
             var normalized = WebFetchUrlPolicy.Normalize(input.Reference, int.MaxValue);
             var approvalRequest = _authorization.CreateApprovalRequest(context, normalized);
+            var approvalGeneration = _authorization.BeginModelProposedApproval(context);
             var outcome = await _approvalPrompt.RequestApprovalAsync(
                 approvalRequest,
                 cancellationToken);
@@ -1278,7 +1495,9 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                     transientError: transientError);
             }
 
-            if (outcome != DirectFetchApprovalOutcome.Approved)
+            if (outcome is not (DirectFetchApprovalOutcome.Approved
+                or DirectFetchApprovalOutcome.ApprovedForSession
+                or DirectFetchApprovalOutcome.ApprovedForUser))
             {
                 throw new ToolExecutionException(
                     "The exact model-proposed web destination was denied or cancelled.",
@@ -1287,7 +1506,12 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
 
             try
             {
-                _authorization.GrantModelProposedInvocation(context, normalized);
+                await _authorization.ApplyModelProposedApprovalAsync(
+                    context,
+                    normalized,
+                    outcome,
+                    approvalGeneration,
+                    cancellationToken);
             }
             catch (WebFetchException)
             {
@@ -1295,8 +1519,17 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                     "DirectAuthorizationRequired: the progressive fetch authority expired or changed before approval completed.",
                     ToolErrorClassification.DirectAuthorizationRequired);
             }
+            catch (Exception exception) when (outcome == DirectFetchApprovalOutcome.ApprovedForUser
+                && exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+            {
+                throw new ToolExecutionException(
+                    "The hostname could not be saved to the user allowed list. No fetch was performed.",
+                    ToolErrorClassification.ExecutionFailure,
+                    innerException: exception);
+            }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var authorization = _authorization.Resolve(context, input);
         var response = await _fetcher.FetchAsync(
             authorization.Url,
@@ -1319,7 +1552,8 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
                 response.Provenance.FinalUrl,
                 $"mediaType={response.MediaType};source={response.Provenance.SourceKind};sourceDigest={response.SourceDigest};extractor={response.ExtractionMethod};retrieved={response.Provenance.RetrievedAt:O}")],
             response.Truncation.Stage != WebFetchTruncationStage.None,
-            ModelResultContent: JsonSerializer.Serialize(modelResult, ModelJsonOptions));
+            ModelResultContent: JsonSerializer.Serialize(modelResult, ModelJsonOptions),
+            TransientActivityDetail: response.ActivityUrl ?? authorization.Url.AbsoluteUri);
     }
 
     /// <inheritdoc />
@@ -1335,6 +1569,12 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
 
         var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.RepositoryPath);
         return _authorization.IsHostAuthorized(request, repositoryIdentity, networkHost);
+    }
+
+    /// <inheritdoc />
+    string? ITransientToolActivityDetail.GetTransientActivityDetail(object input, ToolExecutionContext context)
+    {
+        return _authorization.GetActivityUrl(context, (WebFetchRequest)input);
     }
 
     /// <inheritdoc />

@@ -48,6 +48,7 @@ public interface IToolInvocationPipeline
 public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 {
     private const int MaximumActivityDetailCharacters = 240;
+    private const int MaximumTransientActivityDetailCharacters = 8192;
     private const int MaximumPreflightReasonCharacters = 512;
     private static readonly ActivitySource _activitySource = new("Threadsmith.Tools");
     private static readonly Meter _meter = new("Threadsmith.Tools");
@@ -353,8 +354,13 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
+        var executionContext = new ToolExecutionContext(invocationId, request.SessionId, request.RunId, request.Context)
+        {
+            Phase = request.Phase,
+        };
         var activityDetail = CreateActivityDetail(tool, input);
-        await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail);
+        var transientActivityDetail = CreateTransientActivityDetail(tool, input, executionContext);
+        await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail, transientActivityDetail);
 
         ToolPolicyDecision policyDecision;
         try
@@ -540,14 +546,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 timeoutCancellation.Token);
             var execution = await tool.ExecuteAsync(
                 input,
-                new ToolExecutionContext(
-                    invocationId,
-                    request.SessionId,
-                    request.RunId,
-                    request.Context)
-                {
-                    Phase = request.Phase,
-                },
+                executionContext,
                 timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
@@ -652,7 +651,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     Source: source,
                     ElapsedMilliseconds: authoritativeElapsedMilliseconds,
                     Outcome: OperationActivityOutcome.Completed,
-                    ModelResultContent: modelResultContent),
+                    ModelResultContent: modelResultContent,
+                    TransientActivityDetail: NormalizeActivityDetail(
+                        execution.TransientActivityDetail,
+                        MaximumTransientActivityDetailCharacters)),
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -798,13 +800,38 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             return null;
         }
 
+        return NormalizeActivityDetail(detail, MaximumActivityDetailCharacters);
+    }
+
+    private string? CreateTransientActivityDetail(ITool tool, object input, ToolExecutionContext context)
+    {
+        if (tool is not ITransientToolActivityDetail transientTool)
+        {
+            return null;
+        }
+
+        try
+        {
+            return NormalizeActivityDetail(
+                transientTool.GetTransientActivityDetail(input, context),
+                MaximumTransientActivityDetailCharacters);
+        }
+        catch (Exception)
+        {
+            _logger.LogWarning("Tool {ToolId} could not create live activity detail.", tool.Definition.Id);
+            return null;
+        }
+    }
+
+    private string? NormalizeActivityDetail(string? detail, int maximumCharacters)
+    {
         if (string.IsNullOrWhiteSpace(detail))
         {
             return null;
         }
 
         var sanitized = _sanitizer.Sanitize(detail);
-        var normalized = new StringBuilder(Math.Min(sanitized.Length, MaximumActivityDetailCharacters + 2));
+        var normalized = new StringBuilder(Math.Min(sanitized.Length, maximumCharacters + 2));
         var previousWasWhitespace = false;
         foreach (var rune in sanitized.EnumerateRunes())
         {
@@ -824,16 +851,16 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 previousWasWhitespace = false;
             }
 
-            if (normalized.Length > MaximumActivityDetailCharacters)
+            if (normalized.Length > maximumCharacters)
             {
                 break;
             }
         }
 
         var result = normalized.ToString().Trim();
-        if (result.Length > MaximumActivityDetailCharacters)
+        if (result.Length > maximumCharacters)
         {
-            const int maximumContentCharacters = MaximumActivityDetailCharacters - 3;
+            var maximumContentCharacters = maximumCharacters - 3;
             normalized.Clear();
             foreach (var rune in result.EnumerateRunes())
             {
@@ -856,7 +883,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ToolInvocationId invocationId,
         DateTimeOffset startedAt,
         ToolActivitySource source,
-        string? activityDetail)
+        string? activityDetail,
+        string? transientActivityDetail = null)
     {
         return _events.PublishAsync(
             new ToolInvocationStarted(
@@ -867,7 +895,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 request.RunId,
                 request.Context.RequestedBy,
                 source,
-                activityDetail),
+                activityDetail,
+                transientActivityDetail),
             CancellationToken.None);
     }
 

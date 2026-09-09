@@ -879,7 +879,10 @@ internal sealed class HostFoundation : IAsyncDisposable
             workerPath);
         var webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
         var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration);
-        var webFetchAuthorization = new WebFetchAuthorizationAuthority(webFetchOptions);
+        var webFetchAuthorization = new WebFetchAuthorizationAuthority(
+            webFetchOptions,
+            TimeProvider.System,
+            new UserAllowedNetworkHostStore(paths.UserConfiguration));
         var directFetchApprovalPrompt = new DirectFetchApprovalPromptRouter();
         var webContentFetcher = new WebContentFetcher(
             new PublicHttpsWebContentTransport(),

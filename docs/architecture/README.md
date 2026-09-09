@@ -11,3 +11,7 @@ Subsystem summaries:
 - [Test selection](test-selection.md) and [validation pipeline](validation-pipeline.md)
 
 Key governing decisions include [central tool policy](adr-11-central-tool-policy-pipeline.md), [typed transactional mutations](adr-13-typed-transactional-mutations.md), [governed declarative skills](adr-34-governed-declarative-skills.md), and [canonical release payloads](adr-37-canonical-release-payload-and-installers.md).
+
+[ADR-54](adr-54-direct-fetch-approval-durations.md) defines one-attempt, live-session, and saved user hostname approval choices.
+
+[ADR-53](adr-53-search-result-host-authorization.md) defines current-run hostname authorization from eligible search results and its relationship to exact URL grants.

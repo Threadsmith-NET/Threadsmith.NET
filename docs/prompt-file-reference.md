@@ -20,6 +20,8 @@ The `read_file`, `search`, and `code_explore` description assets and `System-Sys
 
 The `Tool-code_explore-OmissionsSection.md` `Items` value also includes unresolved requested filenames and permitted ambiguity alternatives, so missing file coverage is visible in the default Markdown output.
 
+`Tool-web_search-Description.md` and `Tool-web_fetch-Description.md` explain that search-result hostnames are pre-authorized for public HTTPS fetches during the producing run, whether the model supplies an opaque reference or a raw URL. The fetch description also identifies session-approved and saved user hostnames as pre-authorized. Other direct URLs still need an existing grant or approval. The search description also lists the four canonical arguments, their limits/defaults, locale and freshness semantics, and a valid JSON invocation example. These assets describe code-enforced validation and authority; editing their wording cannot change argument bounds or grant hostname access.
+
 Common editing rules:
 
 - Back up installed prompt experiments before upgrading; upgrades replace the complete shipped defaults.

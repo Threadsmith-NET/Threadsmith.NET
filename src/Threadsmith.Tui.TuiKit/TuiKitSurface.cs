@@ -810,7 +810,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             _formattedActivity = null;
             _activityFrame = -1;
-            return AppendUnseenOutput(_notice);
+            return PrependUnseenOutput(_notice);
         }
 
         var frame = (int)((Environment.TickCount64 / 250) % frames.Length);
@@ -824,14 +824,18 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             _activityText = queued ? $"{activity} | message queued" : activity;
         }
 
-        return AppendUnseenOutput(_activityText);
+        return PrependUnseenOutput(_activityText);
     }
 
-    private string AppendUnseenOutput(string text)
+    private string PrependUnseenOutput(string text)
     {
-        return _transcript.NewCount == 0
-            ? text
-            : $"{text}{(text.Length == 0 ? string.Empty : " | ")}{_transcript.NewCount} new output update(s) — End to follow";
+        if (_transcript.NewCount == 0)
+        {
+            return text;
+        }
+
+        var followKeys = _app.FocusedRegion == "transcript" ? "End" : "F7, End";
+        return $"{_transcript.NewCount} new output — {followKeys} to follow{(text.Length == 0 ? string.Empty : " | " + text)}";
     }
 
     private string StatusText()

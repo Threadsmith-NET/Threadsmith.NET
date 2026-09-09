@@ -869,9 +869,6 @@ internal static class ApplicationComposition
             RequireApprovalToolIds = host.Configuration
                 .GetSection("tools:requireApproval")
                 .Get<string[]>() ?? [],
-            AllowedSecretReferences = host.TrustedConfiguration
-                .GetSection("tools:allowedSecretReferences")
-                .Get<string[]>() ?? [],
             RequestedBy = "model",
         };
     }

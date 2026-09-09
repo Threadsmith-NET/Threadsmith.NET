@@ -52,7 +52,7 @@ Provider precedence applies only among sources eligible for the consumer's minim
 
 Native Codex and MCP OAuth access/refresh tokens remain in their specialized user-owned lifecycle caches and do not use this static store. Executable hooks reject secret bindings. `web_fetch`, local Git/semantic/build/test tools, `run_process`, `datetime`, and `csharp_script` do not receive resolver-supplied secrets.
 
-At invocation time, secret-aware tools declare exact logical references through host-only policy claims. The host compares those claims with trusted `tools.allowedSecretReferences` before resolution. Exact names are not added to model-facing schemas. `/tools` currently shows availability and outbound consent, not secret readiness; a tool can therefore be enabled yet fail policy or resolution with a sanitized actionable error when its reference is not allowlisted or available.
+Enabled tools may use their configured, declared credentials without a separate secret allowlist. Invocation policy validates logical reference syntax; the resolver still enforces source trust and store safety at the final privileged boundary. Exact names are not added to model-facing schemas. `/tools` currently shows availability and outbound consent, not secret readiness; a tool can therefore be enabled yet fail resolution with a sanitized actionable error when its credential is missing or its source is ineligible. Disable the tool to prevent its use, or remove the stored credential to make it unavailable.
 
 ## Repository store safety
 

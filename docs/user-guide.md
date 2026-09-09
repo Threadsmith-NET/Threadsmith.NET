@@ -270,7 +270,7 @@ TUIKit keeps a one-row status footer and activity row below a scrolling transcri
 
 Enter submits unless a command suggestion is visible, in which case it only inserts the selected command name. TUIKit moves each committed ordinary entry into the retained transcript before clearing the composer. During initial semantic loading, it accepts one submitted message, retains it in the transcript, marks it queued, and sends it automatically when the coordinator opens conversation input. Model execution still waits for the current semantic generation so repository tools cannot start against incomplete state; text entered after the queued message remains as the next draft. Ctrl+Enter inserts a newline; Shift+Enter and Alt+Enter do so where the terminal distinguishes them. Ctrl+Alt+Enter submits. Editing supports grapheme/word movement, selection, multiline paste, bounded undo/redo, indentation, and submission history. Ordinary, secondary, and steering prompts keep separate drafts. During a run, Enter requests steering at a safe boundary when no suggestion is visible; double Escape cancels the run. Ctrl+C copies selected text and otherwise exits through process cancellation.
 
-F1 opens a non-selectable key-help list; arrows or PageUp/PageDown scroll it when needed. F7 switches keyboard focus between the composer and transcript. In the transcript, arrows/PageUp/PageDown/Home/End scroll; shifted movement selects. Incoming output preserves detached scroll position and shows an unseen-output count. Ctrl+L clears the visible viewport while bounded earlier content remains reachable with Home. Ctrl+C and F6 copy visible selected text; Ctrl+C cancels the process only when nothing is selected. Ctrl+Shift+C copies the focused selection or complete draft. F8 lists validated links from retained output so Enter can copy one. F12 releases or recaptures the mouse, allowing terminal-native selection while released. Explicit application copy is limited to 64 KiB and depends on OSC 52 terminal support. Ctrl+V/Shift+Insert request an OS clipboard read bounded to one MiB and two seconds; terminal bracketed paste is also supported.
+F1 opens a non-selectable key-help list; arrows or PageUp/PageDown scroll it when needed. F7 switches keyboard focus between the composer and transcript. In the transcript, arrows/PageUp/PageDown/Home/End scroll; shifted movement selects. Incoming output preserves detached scroll position. The activity row starts with an unseen-output count and follow keys, even after a run returns to the ready prompt. Press F7 then End from the composer, or End while the transcript has focus, to reveal the latest output. Ctrl+L clears the visible viewport while bounded earlier content remains reachable with Home. Ctrl+C and F6 copy visible selected text; Ctrl+C cancels the process only when nothing is selected. Ctrl+Shift+C copies the focused selection or complete draft. F8 lists validated links from retained output so Enter can copy one. F12 releases or recaptures the mouse, allowing terminal-native selection while released. Explicit application copy is limited to 64 KiB and depends on OSC 52 terminal support. Ctrl+V/Shift+Insert request an OS clipboard read bounded to one MiB and two seconds; terminal bracketed paste is also supported.
 
 F3 opens the command palette when the ordinary composer is focused and contains only whitespace or a partial leading slash command. Search names and descriptions with a fuzzy query, navigate with arrows/PageUp/PageDown/Home/End, and press Enter to insert the selected canonical name. Usage and description appear below the results, with F6 to copy them. Escape or F3 closes without changing the draft; paste stays within a single-line, 256-character query.
 
@@ -751,7 +751,7 @@ All typed Git tools require `TrustedRead`, use the central availability/invocati
 
 The .NET health and validation catalog includes `nuget_health`, `dotnet_build`, `dotnet_analyzers`, `dotnet_format_check`, `diagnostic_query`, `test_discover`, and `test_run_targeted`. These are distinct typed operations rather than argument routers. They accept only host-defined target, configuration, framework, limit, query, and identity fields; no arbitrary MSBuild property, logger, response file, adapter, runsettings, environment, command, or filter expression is accepted.
 
-`nuget_health` reads bounded existing `obj/project.assets.json` data to distinguish direct and transitive resolved dependencies without restoring. Offline results report asset freshness, completeness, and omissions. Configured-source mode runs separate bounded vulnerable, deprecated, and outdated queries against HTTPS sources supplied only by trusted machine/user configuration; source hosts must also pass invocation network policy. Optional private sources pair a bounded source name and username with a logical `secrets:` reference. The exact reference must also be present in trusted `tools.allowedSecretReferences`; private-source credentials require `UserOwned` source trust, so repository values are ineligible. The value is resolved only at the final process boundary into the NuGet child environment; the generated temporary NuGet configuration contains source names/URIs but no credential and is deleted after use. Credentials never enter arguments, normalized results, or provenance. The tool never adds, removes, updates, restores, or writes package state.
+`nuget_health` reads bounded existing `obj/project.assets.json` data to distinguish direct and transitive resolved dependencies without restoring. Offline results report asset freshness, completeness, and omissions. Configured-source mode runs separate bounded vulnerable, deprecated, and outdated queries against HTTPS sources supplied only by trusted machine/user configuration; source hosts must also pass invocation network policy. Optional private sources pair a bounded source name and username with a logical `secrets:` reference. Private-source credentials require `UserOwned` source trust, so repository values are ineligible. The value is resolved only at the final process boundary into the NuGet child environment; the generated temporary NuGet configuration contains source names/URIs but no credential and is deleted after use. Credentials never enter arguments, normalized results, or provenance. The tool never adds, removes, updates, restores, or writes package state.
 
 `dotnet_build` and `dotnet_analyzers` require `TrustedBuild`, execute through the tracked process manager, use closed Debug/Release and validated TFM scopes, always pass `--no-restore`, and normalize diagnostics. `dotnet_format_check` uses `dotnet format --verify-no-changes --no-restore`; it reports drift but never applies formatting. Applying formatting remains a normal approved transactional mutation with exact-diff review.
 
@@ -868,19 +868,36 @@ Selecting **Web Search** again in `/tools` disables it and immediately revokes c
 
 #### Request and result bounds
 
-The model supplies a plain-text query of at most 500 characters, a result count from 1 through 20 (default 5), an optional BCP-47 language/region hint such as `en` or `en-US`, and an optional freshness window from 1 through 365 days. Empty queries, control characters, invalid bounds, and queries detected as containing credentials or other sensitive data are rejected before network access. Rejected raw queries are not retained.
+The live `web_search` tools block displays the search query. The live `web_fetch` block displays the resolved destination URL, including ordinary query parameters and the final destination after a redirect. Long details use the normal 240-character display limit and an ellipsis; detected credential values remain redacted. This display metadata is not saved in event history, so restored older blocks retain their stored summaries.
+
+The tool accepts one search per invocation using these exact argument names:
+
+| Argument | Accepted value |
+|---|---|
+| `query` | Required non-empty plain-text string, at most 500 characters and 75 whitespace-delimited words. |
+| `maximumResults` | Optional integer from 1 through 20; default 5. |
+| `locale` | Optional supported search language, optionally with a two-letter region; examples include `en`, `en-US`, `en-GB`, `fr-CA`, `pt-BR`, `ja-JP`, `zh-Hans`, and `zh-Hant`. |
+| `freshnessDays` | Optional integer from 1 through 365; omit for no freshness filter. |
+
+```json
+{"query":".NET release notes","maximumResults":5,"locale":"en-US","freshnessDays":7}
+```
+
+Omit unused optional fields. Do not use provider parameter names such as `q`, `count`, `search_lang`, or `freshness`, arrays of queries, or a freshness string such as `"7d"`. The advertised schema includes numeric and text bounds, and the deployed description includes this argument contract and example. Empty queries, control characters, unsupported search languages, invalid bounds, and queries detected as containing credentials or other sensitive data are rejected before network access. Rejected raw queries are not retained.
+
+Threadsmith translates locale hints into Brave's supported search-language codes; for example, `en-US` sends language `en` and country `US`. A region that Brave does not support as a country hint leaves the language hint in effect. Chinese region hints select simplified (`zh-CN`) or traditional (`zh-TW`/`zh-HK`) search, while bare `pt`, `zh`, and `no` map to `pt-pt`, `zh-hans`, and `nb`. Freshness windows of 1, 7, 31, and 365 days use Brave's presets; other windows use an invariant UTC date range. The host retains its 500-character bound and enforces the provider's 75-word limit. See the [Brave Web Search API contract](https://api-dashboard.search.brave.com/api-reference/web/search/get).
 
 Threadsmith does not fetch result pages, crawl sites, submit forms, manage cookies, or provide authenticated browsing. It accepts only normalized HTTPS result URLs and returns bounded titles, snippets, rank, provider ID, retrieval time, and query provenance. Markup and control characters are removed. Titles and snippets enter model context as **untrusted external evidence**: they cannot override host policy, grant approval, invoke another tool, or authorize a repository change.
 
 #### Configuration locations
 
-Credential-bearing web-search provider settings and the network/secret allowlists come only from the repository-excluding trusted view:
+Credential-bearing web-search provider settings and the network-host allowlist come only from the repository-excluding trusted view:
 
 - machine-wide: `%ProgramData%/Threadsmith/config.json`;
 - user-wide: `~/.threadsmith/config.json`;
 - exact `THREADSMITH_` environment variables for ordinary configuration keys.
 
-Repository and session configuration may narrow tool availability and policy, but cannot replace the Brave endpoint/reference, grant its network or secret allowlists, or create outbound consent. `--set:` participates in ordinary effective configuration but is intentionally excluded from this credential-bearing trusted view. Never put the Brave API key in any ordinary configuration file or command argument; provide it through the separate static-secret resolver described below.
+Repository and session configuration may narrow tool availability and policy, but cannot replace the Brave endpoint/reference, grant its network-host allowlist, or create outbound consent. `--set:` participates in ordinary effective configuration but is intentionally excluded from this credential-bearing trusted view. Never put the Brave API key in any ordinary configuration file or command argument; provide it through the separate static-secret resolver described below.
 
 A complete provider and tool-policy example is:
 
@@ -889,8 +906,7 @@ A complete provider and tool-policy example is:
   "tools": {
     "enabled": [ "web_search" ],
     "allow": [ "web_search" ],
-    "allowedNetworkHosts": [ "api.search.brave.com" ],
-    "allowedSecretReferences": [ "secrets:BRAVE_SEARCH_API_KEY" ]
+    "allowedNetworkHosts": [ "api.search.brave.com" ]
   },
   "webSearch": {
     "provider": {
@@ -907,7 +923,7 @@ A complete provider and tool-policy example is:
 }
 ```
 
-If `tools.enabled` is present, it is an allowlist for non-essential tools, so include every other non-essential tool that should remain available. `tools.disabled` wins over `tools.enabled`. The configured endpoint host must also appear in `tools.allowedNetworkHosts`, the logical credential name must appear in `tools.allowedSecretReferences`, and `tools.allow` must permit `web_search`; these policy settings still do not replace explicit consent.
+If `tools.enabled` is present, it is an allowlist for non-essential tools, so include every other non-essential tool that should remain available. `tools.disabled` wins over `tools.enabled`. The configured endpoint host must also appear in `tools.allowedNetworkHosts`, and `tools.allow` must permit `web_search`; these policy settings still do not replace explicit consent. An enabled tool can use its configured credential without a separate secret allowlist, provided the credential is available from an eligible source.
 
 Provider settings and accepted bounds are:
 
@@ -924,13 +940,28 @@ Provider settings and accepted bounds are:
 
 ### Governed web fetch
 
-`web_fetch` is a separate, default-disabled public-HTTPS textual retrieval capability. It remains absent from unrelated model requests and becomes visible only for an eligible search reference, explicit exact grant, or exact URL recognized from the fresh current user request. Repository configuration cannot grant consent or URL authority.
+`web_fetch` is a separate, default-disabled public-HTTPS textual retrieval capability. It remains absent from unrelated model requests and becomes visible for an eligible search reference, explicit exact grant, fresh current-user URL, live session approval, or saved user hostname. Repository configuration cannot grant consent or URL authority.
+
+Search results pre-authorize their exact hostnames for the current run. The model can fetch a result URL, revisit it, or retrieve another public HTTPS page on that hostname without another approval. This also works when it passes a raw URL instead of the opaque result ID. The hostname permission survives consumption or expiry of result IDs but ends with the run; it does not extend to subdomains, other sessions, or other repositories. Up to 100 distinct scoped hostname grants are retained, with the least recently issued evicted at capacity. No permanent hostname whitelist is needed.
 
 Consent schema 3 explains that Threadsmith may send search terms, retrieve selected results, contact an exact public HTTPS URL in the current request only when the model invokes fetch, and supply untrusted fetched content to the model. Schema 2 remains valid for existing search-result and `/fetch-authorize` behavior but does not enable fresh-message URL inference; the first eligible turn offers visible re-consent and denial continues without network traffic.
 
 After consent, `Read https://example.com/docs` can produce a one-shot opaque `userUrlId` without a separate command. Only the newly submitted raw top-level message is scanned, with bounded deterministic recognition and no DNS/network activity. Candidates must begin the message or follow a supported opening/token delimiter; embedded substrings such as `prefixhttps://...` are not URLs for this authority route. A URL span reaching the 32-KiB scan boundary is rejected unless the raw message ends there; Threadsmith never authorizes its truncated prefix. Authority is exact, message/repository/session/run/generation/expiry-bound, non-restorable, and revoked at the next turn or lifecycle/policy boundary. Prior conversation, memory, repository text, prompts, model/tool output, fetched pages, extensions, MCP, and hooks cannot mint these references.
 
-If the model proposes a different `url` while fetch is already active, interactive mode shows a host-owned `Deny`/`Approve one attempt` prompt containing model provenance, sanitized origin, a conservatively redacted path shape, query presence, and a digest—never path tokens or query values. Prompt details and URL-free lifecycle notifications remain process-local and are not written to session history, projections, telemetry, hooks, or restoration. Approval applies only to that pending invocation and never to a redirect, retry, sibling, origin, session, or later run. Headless mode never prompts and reports `DirectAuthorizationRequired` with the sanitized origin, redacted path shape, and exact digest needed to identify the destination; automation can create an exact grant and retry. When a headless session is reused, only tool activity from the current run is printed.
+If the model supplies a URL in `reference` without an existing exact, search-host, session-host, or user-host grant while fetch is active, interactive mode shows a host-owned approval-duration prompt containing model provenance, sanitized origin, a conservatively redacted path shape, query presence, and a digest—never path tokens or query values. Prompt details and URL-free lifecycle notifications remain process-local and are not written to session history, projections, telemetry, hooks, or restoration. The one-attempt choice applies only to that pending invocation and never to a redirect, retry, sibling, origin, session, or later run. Headless mode never prompts and reports `DirectAuthorizationRequired` with the sanitized origin, redacted path shape, and exact digest needed to identify the destination; automation can create an exact grant and retry. When a headless session is reused, only tool activity from the current run is printed.
+
+The interactive prompt offers four choices:
+
+| Choice | Permission |
+|---|---|
+| Deny | No fetch and no saved grant. |
+| Approve one attempt | Only the exact pending URL and invocation. |
+| Approve for this session | Public default-port HTTPS pages on the exact hostname across turns in this live repository-bound session. |
+| Add to user allowed list | Add the exact hostname to `tools.allowedNetworkHosts` in `~/.threadsmith/config.json`, effective immediately and in future sessions. |
+
+Session approval ends when the live session changes, the repository changes, or tool/consent/options authority is reset; completing or cancelling one run does not end it. It is held only in memory, with up to 100 distinct scoped hostname entries and oldest-issuance eviction. Resuming or cloning a session does not restore it. Saved user entries survive restart and apply across repositories where fetch is enabled and consented. Remove a hostname from the user list to revoke that saved permission; the next check rereads the list. Search or session grants for the same hostname retain their own remaining lifetimes.
+
+Hostname approvals exclude subdomains and permit only bounded same-origin redirects. Existing exact invocation and explicit redirect-chain grants take priority. Current-user references retain their exact one-shot scope. The permanent choice uses the existing user network-host list, so it also supplies that ordinary network policy claim; it does not enable a tool or replace consent. Repository, machine, environment, session, and CLI host-list values do not create this user-owned fetch grant. Unrelated user configuration values are preserved when saving; invalid configuration, write failure, or cancellation fails the save without fetching or substituting a temporary approval.
 
 `/fetch-authorize <initial-public-https-url> [redirect-public-https-url ...]` and headless `AuthorizeWebFetch`/`AuthorizeWebFetchChain` remain the advance-authorization and exact redirect-chain surfaces. Search-result retrieval permits only bounded same-origin redirects. Current-message and inline-approved routes authorize only their initial URL. Every destination is DNS/address validated and connection-pinned; local, private, metadata, reserved, mixed, and rebound targets fail closed. Cookies, ambient credentials/proxies, authentication, active content, subresources, binary/PDF content, and automatic redirects are disabled. Returned HTML/plain/Markdown/JSON is bounded readable text framed as untrusted evidence, with query-free provenance and content digests. See [Governed web fetch operations](operations/web-fetch.md).
 
@@ -973,7 +1004,7 @@ THREADSMITH_secrets__BRAVE_SEARCH_API_KEY='<your-Brave-Search-API-key>' \
   dotnet run --project src/Threadsmith.App -- --tui
 ```
 
-Brave requires `UserOwned` source trust, so the lower-trust repository store is ineligible even when ignored and untracked. If `secretReference` is changed, add that exact logical reference to `tools.allowedSecretReferences` and use the corresponding nested user-store path or environment key. For example, `secrets:search:brave` is stored under `secrets` → `search` → `brave` and maps to `THREADSMITH_secrets__search__brave`. Credentials are resolved only at the transport boundary and are not exposed to the model, recorded in consent, or included in result provenance.
+Brave requires `UserOwned` source trust, so the lower-trust repository store is ineligible even when ignored and untracked. If `secretReference` is changed, use the corresponding nested user-store path or environment key. For example, `secrets:search:brave` is stored under `secrets` → `search` → `brave` and maps to `THREADSMITH_secrets__search__brave`. Credentials are resolved only at the transport boundary and are not exposed to the model, recorded in consent, or included in result provenance.
 
 ## Model providers, secrets, and reasoning
 

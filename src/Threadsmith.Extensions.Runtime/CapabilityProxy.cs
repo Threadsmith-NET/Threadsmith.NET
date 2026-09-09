@@ -149,7 +149,6 @@ public sealed class CapabilityProxy : ITool
             ProhibitedPaths = context.ProhibitedPaths,
             AllowedExecutables = context.AllowedExecutables,
             AllowedNetworkHosts = context.AllowedNetworkHosts,
-            AllowedSecretReferences = context.AllowedSecretReferences,
             RequestedBy = context.RequestedBy,
         };
     }

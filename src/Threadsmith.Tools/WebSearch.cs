@@ -1,10 +1,12 @@
 namespace Threadsmith.Tools;
 
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
@@ -12,13 +14,13 @@ using Threadsmith.Core;
 /// <summary>Provider-neutral bounded web-search request.</summary>
 public sealed record WebSearchRequest
 {
-    /// <summary>Text disclosed to the configured external provider.</summary>
+    /// <summary>Plain text disclosed to the provider, at most 500 characters and 75 words.</summary>
     public required string Query { get; init; }
 
     /// <summary>Requested result count, from one through twenty.</summary>
     public int MaximumResults { get; init; } = 5;
 
-    /// <summary>Optional BCP-47 language/region hint.</summary>
+    /// <summary>Optional supported search language with a region hint, such as en-US or zh-Hant.</summary>
     public string? Locale { get; init; }
 
     /// <summary>Optional maximum result age in days, from one through 365.</summary>
@@ -186,7 +188,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         WebSearchRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        WebSearchRequestContract.Validate(request);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_options.Timeout);
         var secretRequest = new SecretResolutionRequest
@@ -243,14 +245,29 @@ public sealed class BraveWebSearchClient : IWebSearchClient
             "q=" + Uri.EscapeDataString(request.Query),
             "count=" + request.MaximumResults.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
-        if (!string.IsNullOrWhiteSpace(request.Locale))
+        if (request.Locale is not null)
         {
-            parameters.Add("search_lang=" + Uri.EscapeDataString(request.Locale));
+            var (language, country) = WebSearchRequestContract.ResolveLocale(request.Locale);
+            parameters.Add("search_lang=" + Uri.EscapeDataString(language));
+            if (country is not null)
+            {
+                parameters.Add("country=" + Uri.EscapeDataString(country));
+            }
         }
 
-        if (request.FreshnessDays is not null)
+        if (request.FreshnessDays is { } days)
         {
-            parameters.Add("freshness=" + Uri.EscapeDataString($"{request.FreshnessDays}d"));
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var freshness = days switch
+            {
+                1 => "pd",
+                7 => "pw",
+                31 => "pm",
+                365 => "py",
+                _ => today.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    + "to" + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            };
+            parameters.Add("freshness=" + Uri.EscapeDataString(freshness));
         }
 
         var builder = new UriBuilder(_options.Endpoint) { Query = string.Join('&', parameters) };
@@ -362,9 +379,8 @@ public sealed class BraveWebSearchClient : IWebSearchClient
 }
 
 /// <summary>Host-owned default-disabled governed web-search tool.</summary>
-public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
+public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, ITransientToolActivityDetail
 {
-    private static readonly Regex _locale = new("^[A-Za-z]{2,3}(?:-[A-Za-z]{2})?$", RegexOptions.CultureInvariant);
     private readonly IWebSearchClient _client;
     private readonly WebSearchOptions _options;
     private readonly IOutputSanitizer _sanitizer;
@@ -386,7 +402,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
         _options = options;
         _sanitizer = sanitizer;
         _fetchAuthorization = fetchAuthorization;
-        Definition = ToolDefinitionFactory.Create<WebSearchRequest, WebSearchResponse>(
+        var definition = ToolDefinitionFactory.Create<WebSearchRequest, WebSearchResponse>(
             "web_search",
             promptLoader.Get(PromptFileNames.ToolWebSearchDescription),
             ToolCategory.ExternalSearch,
@@ -400,6 +416,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
             EnabledByDefault = false,
             RequiresOutboundConsent = true,
         };
+        Definition = AddInputBounds(definition);
     }
 
     /// <inheritdoc />
@@ -411,7 +428,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        RejectSensitiveQuery(input.Query);
+        ValidateInput(input);
         var response = await _client.SearchAsync(input, cancellationToken);
         if (_fetchAuthorization is not null)
         {
@@ -434,21 +451,15 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
     }
 
     /// <inheritdoc />
+    string? ITransientToolActivityDetail.GetTransientActivityDetail(object input, ToolExecutionContext context)
+    {
+        return ((WebSearchRequest)input).Query;
+    }
+
+    /// <inheritdoc />
     protected override void ValidateInput(WebSearchRequest input)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
-        if (input.Query.Length > 500 || input.Query.Any(char.IsControl))
-        {
-            throw new ToolArgumentValidationException("The search query violates the 500-character plain-text bound.");
-        }
-
-        if (input.MaximumResults is < 1 or > 20
-            || (input.FreshnessDays is < 1 or > 365)
-            || (input.Locale is not null && !_locale.IsMatch(input.Locale)))
-        {
-            throw new ToolArgumentValidationException("Search result count, locale, or freshness is outside host bounds.");
-        }
-
+        WebSearchRequestContract.Validate(input);
         RejectSensitiveQuery(input.Query);
     }
 
@@ -462,6 +473,35 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>
     protected override IReadOnlyList<string> GetNetworkHosts(WebSearchRequest input)
     {
         return [_options.Endpoint.Host];
+    }
+
+    private static ToolDefinition AddInputBounds(ToolDefinition definition)
+    {
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema was empty.");
+        var properties = schema["properties"]?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema has no properties.");
+        var query = properties["query"]?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema has no query.");
+        query["minLength"] = 1;
+        query["maxLength"] = WebSearchRequestContract.MaximumQueryCharacters;
+        query["pattern"] = @"^(?![\s\S]*[\u0000-\u001F\u007F-\u009F])\s*\S+(?:\s+\S+){0,74}\s*$";
+        var count = properties["maximumResults"]?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema has no result count.");
+        count["minimum"] = 1;
+        count["maximum"] = WebSearchRequestContract.MaximumResults;
+        count["default"] = 5;
+        var locale = properties["locale"]?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema has no locale.");
+        locale["pattern"] = WebSearchRequestContract.LocalePattern;
+        var freshness = properties["freshnessDays"]?.AsObject()
+            ?? throw new InvalidOperationException("The generated web-search schema has no freshness window.");
+        freshness["minimum"] = 1;
+        freshness["maximum"] = WebSearchRequestContract.MaximumFreshnessDays;
+        return definition with
+        {
+            InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },
+        };
     }
 
     private string? TryIssueFetchReference(

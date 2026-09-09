@@ -284,7 +284,6 @@ public sealed class ParallelAgentTests
             AllowedToolIds = ["read_file", "search", "run_process"],
             AllowedExecutables = ["dotnet"],
             AllowedNetworkHosts = ["example.test"],
-            AllowedSecretReferences = ["secrets:key"],
             RequestedBy = "parent",
         };
 
@@ -301,7 +300,6 @@ public sealed class ParallelAgentTests
         Assert.Contains("search", child.DeniedToolIds);
         Assert.Equal(["dotnet"], child.AllowedExecutables);
         Assert.Empty(child.AllowedNetworkHosts);
-        Assert.Empty(child.AllowedSecretReferences);
     }
 
     /// <summary>Verifies child path scope can only narrow the parent's approved roots.</summary>

@@ -7,13 +7,14 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 
 /// <summary>Source route authorized for a governed web fetch.</summary>
 public enum WebFetchSourceKind
 {
-    /// <summary>A current host-issued search result reference.</summary>
+    /// <summary>A current search result reference or a page on a search-authorized hostname in the same run.</summary>
     SearchResult,
 
     /// <summary>A legacy exact one-shot URL grant created by a user action.</summary>
@@ -27,6 +28,12 @@ public enum WebFetchSourceKind
 
     /// <summary>An exact model-proposed URL approved for one pending invocation.</summary>
     ModelProposedApproved,
+
+    /// <summary>A hostname explicitly approved for the current live session.</summary>
+    SessionApprovedHost,
+
+    /// <summary>A hostname in the ordinary user configuration's allowed network list.</summary>
+    UserAllowedHost,
 }
 
 /// <summary>Closed fetch failure classifications safe for projection.</summary>
@@ -116,6 +123,10 @@ public sealed record WebFetchTruncation(
 /// <summary>Bounded readable response framed as untrusted external evidence.</summary>
 public sealed record WebFetchResponse
 {
+    /// <summary>Full final URL for the live tool display only; excluded from persisted and model-visible output.</summary>
+    [JsonIgnore]
+    public string? ActivityUrl { get; init; }
+
     /// <summary>Sanitized retrieval provenance.</summary>
     public required WebFetchProvenance Provenance { get; init; }
 
@@ -553,9 +564,10 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
                 }
 
                 var target = WebFetchUrlPolicy.Normalize(new Uri(current, response.Headers.Location).AbsoluteUri, options.MaximumUrlCharacters);
-                if (sourceKind == WebFetchSourceKind.SearchResult && !WebFetchUrlPolicy.SameOrigin(current, target))
+                if (sourceKind is WebFetchSourceKind.SearchResult or WebFetchSourceKind.SessionApprovedHost or WebFetchSourceKind.UserAllowedHost
+                    && !WebFetchUrlPolicy.SameOrigin(current, target))
                 {
-                    throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "Cross-origin search-result redirects are denied.");
+                    throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "Cross-origin hostname-authorized redirects are denied.");
                 }
 
                 if (redirects.Any(item => item.From == target || item.To == target))
@@ -1082,6 +1094,7 @@ public sealed class WebContentFetcher : IWebContentFetcher
             deadline.Token.ThrowIfCancellationRequested();
             return new WebFetchResponse
             {
+                ActivityUrl = transport.FinalUri.AbsoluteUri,
                 Provenance = new WebFetchProvenance
                 {
                     SourceKind = sourceKind,

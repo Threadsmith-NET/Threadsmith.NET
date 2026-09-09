@@ -422,11 +422,15 @@ public sealed class InteractionCoordinator
                     var directFetchApprovalRequested = domainEvent is DirectFetchApprovalPromptStarted;
                     var directFetchApprovalGranted = domainEvent is DirectFetchApprovalPromptCompleted
                     {
-                        Outcome: DirectFetchApprovalOutcome.Approved,
+                        Outcome: DirectFetchApprovalOutcome.Approved
+                            or DirectFetchApprovalOutcome.ApprovedForSession
+                            or DirectFetchApprovalOutcome.ApprovedForUser,
                     };
                     var directFetchApprovalDenied = domainEvent is DirectFetchApprovalPromptCompleted
                     {
-                        Outcome: not DirectFetchApprovalOutcome.Approved,
+                        Outcome: not (DirectFetchApprovalOutcome.Approved
+                            or DirectFetchApprovalOutcome.ApprovedForSession
+                            or DirectFetchApprovalOutcome.ApprovedForUser),
                     };
                     SemanticActivityKey? incomingSemanticActivityKey = null;
                     InteractionActivity? incomingActivity;
@@ -2077,24 +2081,11 @@ public sealed class InteractionCoordinator
         }
     }
 
-    private async Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
+    private Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
         DirectFetchApprovalRequest request,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        var path = string.IsNullOrEmpty(request.Path) ? "/" : request.Path;
-        var query = request.QueryPresent
-            ? "present (values hidden)"
-            : "absent";
-        var decision = await _surface.SelectAsync(
-            "The model proposed a public web destination that is not user-authored or search-result-authorized. "
-            + $"Origin: {request.Origin}; path: {path}; query: {query}; exact digest: {request.UrlDigest}. "
-            + "Approval permits one credential-free attempt for this invocation only and does not authorize redirects or the origin.",
-            ["Deny", "Approve one attempt"],
-            cancellationToken);
-        return decision == 1
-            ? DirectFetchApprovalOutcome.Approved
-            : DirectFetchApprovalOutcome.Denied;
+        return DirectFetchApprovalInteraction.RequestAsync(_surface, request, cancellationToken);
     }
 
     private async Task<bool> ManageModelsAsync(CancellationToken cancellationToken)

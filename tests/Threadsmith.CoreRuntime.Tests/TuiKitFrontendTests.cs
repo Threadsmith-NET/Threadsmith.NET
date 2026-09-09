@@ -129,6 +129,49 @@ public static class TuiKitFrontendTests
         Assert.Equal(0, view.NewCount);
     }
 
+    /// <summary>A ready composer keeps the offscreen-answer notice and working navigation visible at narrow widths.</summary>
+    [Theory]
+    [InlineData(40)]
+    [InlineData(80)]
+    public static async Task OffscreenAnswerNoticeSurvivesReadyPrompt(int width)
+    {
+        // Arrange a submitted request while the transcript is scrolled away from its tail.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var backend = new HeadlessBackend(width + 1, 24);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        await surface.RunAsync(
+            async token =>
+            {
+                var firstRead = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
+                var priorOutput = string.Join('\n', Enumerable.Range(0, 30).Select(index => $"Earlier tool output {index}"));
+                await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(priorOutput, PresentationTextRole.Default)])]), token);
+                backend.FeedInput("\u001b[18~\u001b[H\u001b[18~request\r");
+                Assert.Equal("request", (await firstRead).Text);
+
+                // Act: finish an answer, reopen the composer, and force a complete frame.
+                const string answer = "Recovered final answer";
+                var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(answer).Document);
+                await surface.PresentAsync(new PresentationBatch([new PresentationMarkdownItem(document, answer, answer, true)]), token);
+                var nextRead = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
+                await surface.PresentAsync(new PresentationBatch([]), token);
+                _ = backend.TakeOutput();
+                backend.Resize(width, 24);
+                await surface.PresentAsync(new PresentationBatch([]), token);
+                await surface.PresentAsync(new PresentationBatch([]), token);
+                var offscreenFrame = backend.TakeOutput();
+
+                // Assert: the notice leads the row, and its advertised keys reveal the saved answer.
+                Assert.Contains("new output", offscreenFrame, StringComparison.Ordinal);
+                Assert.Contains("F7, End to follow", offscreenFrame, StringComparison.Ordinal);
+                Assert.DoesNotContain(answer, offscreenFrame, StringComparison.Ordinal);
+                backend.FeedInput("\u001b[18~\u001b[F\u001b[18~\r");
+                Assert.Equal(string.Empty, (await nextRead).Text);
+                await surface.PresentAsync(new PresentationBatch([]), token);
+                Assert.Contains(answer, backend.TakeOutput(), StringComparison.Ordinal);
+            },
+            timeout.Token);
+    }
+
     /// <summary>The real UI loop preserves draft ownership across cancellation, prompts, and selectors.</summary>
     [Fact]
     public static async Task InputOwnershipAndModalCancellation()

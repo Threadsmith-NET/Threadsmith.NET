@@ -692,7 +692,7 @@ internal static class InteractionPresentationFormatter
             detail.Append(source.DisplayName);
         }
 
-        var activityDetail = started.ActivityDetail;
+        var activityDetail = completed.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
         var resultDetail = GetBuiltInSearchResultDetail(started, completed, source);
         if (resultDetail is not null)
         {

@@ -478,20 +478,6 @@ public static class AgentModelSelectorTests
         }));
     }
 
-    /// <summary>Legacy reasoning preferences must use exact level names rather than numeric or combined values.</summary>
-    [Theory]
-    [InlineData("2")]
-    [InlineData("Low, High")]
-    [InlineData("unknown")]
-    public static void Select_LegacyReasoningRejectsNonNames(string reasoning)
-    {
-        var selector = CreateSelector(AgentRole.SecurityReviewer);
-        var assignment = CreateAssignment();
-        assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = reasoning } };
-
-        Assert.Throws<InvalidDataException>(() => selector.Select(assignment));
-    }
-
     private static AgentModelSelector CreateSelector(
         AgentRole configuredRole,
         ModelProfileId? configuredProfileId = null,

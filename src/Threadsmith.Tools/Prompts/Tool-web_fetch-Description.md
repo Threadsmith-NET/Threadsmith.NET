@@ -1,1 +1,1 @@
-Retrieves one authorized public HTTPS textual document. Pass the host-issued search or current-user URL reference, or an explicitly granted or separately approved direct URL, in reference.
+Retrieves one public HTTPS textual document. Pass a host-issued reference or a URL in reference. URLs on exact hostnames returned by web_search are pre-authorized for this run; session-approved and user-allowed hostnames are also pre-authorized. Other direct URLs require an existing grant or user approval.

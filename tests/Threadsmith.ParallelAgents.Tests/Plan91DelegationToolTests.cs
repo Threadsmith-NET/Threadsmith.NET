@@ -602,7 +602,6 @@ public sealed class Plan91DelegationToolTests
                 ProhibitedPaths = prohibitedPaths ?? [],
                 AllowedExecutables = ["dotnet"],
                 AllowedNetworkHosts = ["example.test"],
-                AllowedSecretReferences = ["secret:test"],
                 ModelVisibleToolSnapshotId = snapshotId,
                 RequestedBy = "model",
             })

@@ -307,9 +307,6 @@ public sealed record ToolInvocationContext
     /// <summary>Opaque identity for the host-owned model-visible tool snapshot, when frozen.</summary>
     public Guid? ModelVisibleToolSnapshotId { get; init; }
 
-    /// <summary>Logical secret references available to this invocation.</summary>
-    public IReadOnlyList<string> AllowedSecretReferences { get; init; } = [];
-
     /// <summary>Selected model context window captured for this request, when model resolution has occurred.</summary>
     public int? ModelContextWindowTokens { get; init; }
 
@@ -362,7 +359,8 @@ public sealed record ToolExecution<TOutput>(
     TOutput Value,
     IReadOnlyList<ToolProvenanceSource> Sources,
     bool IsTruncated = false,
-    string? ModelResultContent = null);
+    string? ModelResultContent = null,
+    [property: JsonIgnore] string? TransientActivityDetail = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -497,7 +495,15 @@ public sealed record ToolExecutionEnvelope(
     IReadOnlyList<ToolProvenanceSource> Sources,
     bool IsTruncated,
     long? AuthoritativeElapsedMilliseconds = null,
-    string? ModelResultContent = null);
+    string? ModelResultContent = null,
+    [property: JsonIgnore] string? TransientActivityDetail = null);
+
+/// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
+internal interface ITransientToolActivityDetail
+{
+    /// <summary>Describes validated input without consuming or granting invocation authority.</summary>
+    string? GetTransientActivityDetail(object input, ToolExecutionContext context);
+}
 
 /// <summary>Applies a tool-specific model-output boundary after centralized sanitization.</summary>
 internal interface IPostSanitizationToolOutputBoundary
@@ -658,7 +664,12 @@ public abstract class Tool<TInput, TOutput> : ITool
             throw new InvalidOperationException("A tool returned a null output value.");
         }
 
-        return new ToolExecutionEnvelope(result.Value, result.Sources, result.IsTruncated, ModelResultContent: result.ModelResultContent);
+        return new ToolExecutionEnvelope(
+            result.Value,
+            result.Sources,
+            result.IsTruncated,
+            ModelResultContent: result.ModelResultContent,
+            TransientActivityDetail: result.TransientActivityDetail);
     }
 
     /// <summary>Executes validated typed input.</summary>

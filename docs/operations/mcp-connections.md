@@ -61,7 +61,7 @@ Header values may be ordinary static configuration. A value beginning with `secr
 
 ## Authentication
 
-Static bearer tokens and API keys are supported through `headers` plus `secretScope`. Store the actual value under the matching nested path in `~/.threadsmith/secrets/config.json` or an exact environment variable; trusted MCP bootstrap requires a `UserOwned` source, so repository secret values are rejected. Never place a credential directly in repository configuration. Imported tools also declare the profile's complete `secretScope` to invocation policy, so every reference must appear in trusted `tools.allowedSecretReferences`. See [static secret discovery](secret-discovery.md).
+Static bearer tokens and API keys are supported through `headers` plus `secretScope`. Store the actual value under the matching nested path in `~/.threadsmith/secrets/config.json` or an exact environment variable; trusted MCP bootstrap requires a `UserOwned` source, so repository secret values are rejected. Never place a credential directly in repository configuration. Imported tools declare the profile's complete `secretScope` for reference validation; no additional global secret allowlist is required. The profile's explicit scope and user-owned source requirement still apply. See [static secret discovery](secret-discovery.md).
 
 ### Interactive OAuth SSO
 

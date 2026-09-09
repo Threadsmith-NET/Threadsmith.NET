@@ -44,7 +44,7 @@ Scheduling uses the immutable state captured for the current model request:
 
 - the complete sibling call list and original ordinals/correlation IDs;
 - current session and run IDs and authoritative `RunPhase`;
-- repository root, approved/prohibited roots, trust, executable/network/secret policy, and requester identity from `ToolInvocationContext`;
+- repository root, approved/prohibited roots, trust, executable/network policy, and requester identity from `ToolInvocationContext`;
 - current workspace ID for semantic-workspace claims;
 - the exact enabled registry instance and host-owned activity source;
 - the batch-bound `ToolParallelOptions` snapshot.

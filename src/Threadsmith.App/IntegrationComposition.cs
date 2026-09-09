@@ -175,8 +175,6 @@ internal static class IntegrationComposition
                             DeniedToolIds = trustedConfiguration.GetSection("tools:deny").Get<string[]>() ?? [],
                             RequireApprovalToolIds = trustedConfiguration
                                 .GetSection("tools:requireApproval").Get<string[]>() ?? [],
-                            AllowedSecretReferences = trustedConfiguration
-                                .GetSection("tools:allowedSecretReferences").Get<string[]>() ?? [],
                             RequestedBy = "host:mcp-explicit-read",
                         },
                     },

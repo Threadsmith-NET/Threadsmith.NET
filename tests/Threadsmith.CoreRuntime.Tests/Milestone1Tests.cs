@@ -50,6 +50,39 @@ public static class Milestone1Tests
         Assert.Equal(-1, selected);
     }
 
+    /// <summary>The shared URL approval prompt exposes all durations and maps cancellation to denial.</summary>
+    [Theory]
+    [InlineData("0", DirectFetchApprovalOutcome.Denied)]
+    [InlineData("1", DirectFetchApprovalOutcome.Approved)]
+    [InlineData("2", DirectFetchApprovalOutcome.ApprovedForSession)]
+    [InlineData("3", DirectFetchApprovalOutcome.ApprovedForUser)]
+    [InlineData(null, DirectFetchApprovalOutcome.Denied)]
+    public static async Task DirectFetchApprovalInteraction_ChoicesMapToDurationAsync(string? selectedId, DirectFetchApprovalOutcome expected)
+    {
+        // Arrange
+        var surface = new RecordingInteractionSurface([], new InteractionSelectionResult(selectedId, IsCancelled: selectedId is null));
+        var request = new DirectFetchApprovalRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolInvocationId = ToolInvocationId.New(),
+            Origin = "https://example.com",
+            Path = "/[REDACTED]",
+            UrlDigest = new string('a', 64),
+            QueryPresent = true,
+        };
+
+        // Act
+        var outcome = await DirectFetchApprovalInteraction.RequestAsync(new InteractionSessionSurface(surface), request);
+
+        // Assert
+        Assert.Equal(expected, outcome);
+        var selection = Assert.Single(surface.SelectionRequests);
+        Assert.Equal(["Deny", "Approve one attempt", "Approve for this session", "Add to user allowed list"], selection.Options.Select(option => option.Label));
+        Assert.Contains("exact hostname", selection.Title, StringComparison.Ordinal);
+        Assert.Contains("future sessions", selection.Title, StringComparison.Ordinal);
+    }
+
     /// <summary>The public command list cannot be cast back to and mutate its backing array.</summary>
     [Fact]
     public static void InteractiveCommandCatalog_All_DoesNotExposeMutableBackingArray()
@@ -5116,6 +5149,8 @@ public static class Milestone1Tests
 
         internal List<ComposerRequest> ComposerRequests { get; } = [];
 
+        internal List<InteractionSelectionRequest> SelectionRequests { get; } = [];
+
         internal List<SessionStatusSnapshot> SessionStatuses { get; } = [];
 
         public Task<InteractionInput> ReadComposerAsync(
@@ -5132,6 +5167,7 @@ public static class Milestone1Tests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            SelectionRequests.Add(request);
             return Task.FromResult(_selectionResult
                 ?? throw new InvalidOperationException("The scripted interaction does not request a selection."));
         }

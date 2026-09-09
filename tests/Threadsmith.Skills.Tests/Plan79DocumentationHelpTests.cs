@@ -19,7 +19,6 @@ public sealed class Plan79DocumentationHelpTests
             TrustLevel = RepositoryTrustLevel.TrustedRead,
             AllowedExecutables = ["pwsh"],
             AllowedNetworkHosts = ["example.com"],
-            AllowedSecretReferences = ["token"],
             RequestedBy = "test",
         };
 
@@ -31,7 +30,6 @@ public sealed class Plan79DocumentationHelpTests
             bound.RepositoryPath);
         Assert.Empty(bound.AllowedExecutables);
         Assert.Empty(bound.AllowedNetworkHosts);
-        Assert.Empty(bound.AllowedSecretReferences);
         Assert.True(PackagedDocumentationPolicy.IsDocumentationSkill(
             SkillScope.Maintained,
             "threadsmith-docs-help"));

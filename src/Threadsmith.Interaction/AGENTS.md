@@ -16,10 +16,12 @@ Own frontend-neutral interactive coordination over existing host commands and pr
 
 - Reference only Core, Context, Tools, and Execution plus Markdig/BCL.
 - Never reference PrettyPrompt, Spectre.Console, configuration binding, ANSI, cursor placement, native scrollback, or frontend widgets. Shared Markdown and status layout may consume backend-supplied display metrics through the BCL-only `IDisplayTextMetrics` contract; it does not choose terminal geometry or expose terminal-library types.
+- DirectFetchApprovalInteraction presents Deny, Approve one attempt, Approve for this session, and Add to user allowed list through the shared semantic selection surface. Known identities map to typed outcomes; cancellation denies, unknown identities fail, and all affirmative durations resume active-fetch presentation. Tools owns grants and persistence.
 - This project coordinates authority but does not own it. Trust, policy, approval, mutation, validation, repository, session, tool, and execution decisions continue through typed host commands and projections.
 - `/trust automation` and `/trust FullyTrustedAutomation` explicitly request the highest repository trust through the existing repository lifecycle. The selector exposes the same option without changing its safe default or enabling optional tools.
 - Treat all surface results as untrusted. Unknown option identities, stale decisions, malformed commands, and impossible active-run signals fail closed.
 - Preserve exact command text, visible wording, roles, spacing, ordering, Markdown limits, fallback behavior, and cancellation semantics during refactors.
+- Completed tool blocks prefer sanitized live completion detail, then live start detail, then durable activity detail. Web search shows its query and web fetch shows the final resolved URL with ordinary parameters; the existing 240-character display bound truncates long values with an ellipsis. Live-only detail is absent from serialized event history.
 - Completed interactive skill commands render their bounded terminal output after the invocation summary; waiting and failed invocations retain their status/action presentation without inventing output.
 - Parsed Markdown is presentation-only; raw Markdown remains authoritative in events, transcript, persistence, context, and headless output.
 - Frontend-local command contributions are fixed by application composition, presentation-only, and receive no general dispatcher or service provider.

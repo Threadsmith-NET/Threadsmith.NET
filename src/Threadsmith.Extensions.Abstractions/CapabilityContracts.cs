@@ -143,9 +143,6 @@ public sealed record ExtensionToolInvocationContext
     /// <summary>Network hostnames permitted for network-aware tools.</summary>
     public IReadOnlyList<string> AllowedNetworkHosts { get; init; } = [];
 
-    /// <summary>Logical secret references available to this invocation.</summary>
-    public IReadOnlyList<string> AllowedSecretReferences { get; init; } = [];
-
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
 }

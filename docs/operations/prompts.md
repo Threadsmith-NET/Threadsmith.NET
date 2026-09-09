@@ -2,6 +2,8 @@
 
 Threadsmith ships its host-authored, model-facing prose as UTF-8 Markdown files. Source assets stay under the owning project's `Prompts/` directory and every build, publish, archive, and installer flattens the declared catalog into `<application-directory>/prompts/`. The application loads the complete catalog once during startup and then serves an immutable in-memory snapshot; it does not stat, reread, watch, or hot-reload these files.
 
+`Tool-web_search-Description.md` and `Tool-web_fetch-Description.md` explain that search-result hostnames are pre-authorized for public HTTPS fetches during the producing run, whether the model supplies an opaque reference or a raw URL. The fetch description also identifies session-approved and saved user hostnames as pre-authorized. Other direct URLs still need an existing grant or approval. The search description also lists the four canonical arguments, their limits/defaults, locale and freshness semantics, and a valid JSON invocation example. These assets describe code-enforced validation and authority; editing their wording cannot change argument bounds or grant hostname access.
+
 ## Safe customization
 
 Back up any local experiment before editing a deployed prompt. Edit only the file body and retain every declared `{{TokenName}}` shown in the catalog below. Token replacement is one-pass and non-executable: assets cannot add tools, change schemas or tool availability, approve or apply mutations, widen repository or child-agent authority, alter trust, select a model, grant network or secret access, or bypass host validation. Repository `AGENTS.md` and [project prompt appends](project-prompt-append.md) remain separate untrusted inputs with their existing precedence.

@@ -3,6 +3,7 @@ namespace Threadsmith.ModelTooling.Tests;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Tools;
@@ -1077,6 +1078,418 @@ public sealed class WebFetchTests
         Assert.True(currentMessageAfter);
     }
 
+    /// <summary>Search result hostnames authorize raw URLs without an approval prompt.</summary>
+    [Theory]
+    [InlineData("https://example.com/result?q=one")]
+    [InlineData("https://example.com/another-page")]
+    public async Task SearchHost_RawUrl_ReusesCurrentRunAuthorizationAsync(string url)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(options);
+        var fetcher = new StubFetcher();
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.Denied);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+        var context = CreateContext(fixture.Path) with
+        {
+            Invocation = new ToolInvocationContext { RepositoryPath = fixture.Path, RequestedBy = "test" },
+        };
+        _ = authority.IssueSearchResult(
+            fixture.Path,
+            new Uri("https://example.com/result?q=one"),
+            context.SessionId,
+            context.RunId,
+            context.ToolInvocationId,
+            "test",
+            "query",
+            1);
+        var request = new WebFetchRequest { Reference = url };
+
+        // Act
+        var policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
+        var response = await tool.ExecuteAsync(request, context);
+        _ = await tool.ExecuteAsync(request, context with { ToolInvocationId = ToolInvocationId.New() });
+
+        // Assert
+        Assert.True(policy.IsAllowed);
+        Assert.Equal(0, prompt.CallCount);
+        Assert.Equal(2, fetcher.CallCount);
+        Assert.Equal(WebFetchSourceKind.SearchResult, response.Value.Provenance.SourceKind);
+    }
+
+    /// <summary>A result hostname does not authorize subdomains or unrelated hosts.</summary>
+    [Theory]
+    [InlineData("https://sub.example.com/page")]
+    [InlineData("https://example.com.other.test/page")]
+    [InlineData("https://other.example/page")]
+    public async Task SearchHost_UnknownHostname_StillRequestsApprovalAsync(string url)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(options);
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.Denied);
+        var fetcher = new StubFetcher();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+
+        // Act
+        await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(new WebFetchRequest { Reference = url }, context));
+
+        // Assert
+        Assert.False(authority.HasSearchHostGrant(context, url));
+        Assert.Equal(1, prompt.CallCount);
+        Assert.Equal(0, fetcher.CallCount);
+    }
+
+    /// <summary>Search host permission cannot cross repository, session, or run boundaries.</summary>
+    [Theory]
+    [InlineData("repository")]
+    [InlineData("session")]
+    [InlineData("run")]
+    public void SearchHost_DifferentScope_CannotResolve(string differentScope)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        var other = differentScope switch
+        {
+            "repository" => context with { Invocation = context.Invocation with { RepositoryPath = Path.Combine(fixture.Path, "other") } },
+            "session" => context with { SessionId = SessionId.New() },
+            _ => context with { RunId = RunId.New() },
+        };
+
+        // Act / Assert
+        Assert.False(authority.HasSearchHostGrant(other, "https://example.com/page"));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(other, new WebFetchRequest { Reference = "https://example.com/page" }));
+    }
+
+    /// <summary>Consuming or expiring opaque IDs does not end the hostname grant before the run ends.</summary>
+    [Fact]
+    public async Task SearchHost_OpaqueReferenceConsumedOrExpired_RemainsAuthorizedUntilRunEndsAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var options = new WebFetchOptions { ReferenceLifetime = TimeSpan.FromMinutes(1) };
+        var clock = new FetchTestTimeProvider();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), clock);
+        var context = CreateContext(fixture.Path);
+        var consumed = IssueSearchHost(authority, context);
+        _ = authority.Resolve(context, new WebFetchRequest { Reference = consumed });
+        var expired = IssueSearchHost(authority, context);
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.Denied);
+        var fetcher = new StubFetcher();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+
+        // Act
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var response = await tool.ExecuteAsync(new WebFetchRequest { Reference = "https://EXAMPLE.com/another" }, context);
+
+        // Assert
+        Assert.Equal(WebFetchSourceKind.SearchResult, response.Value.Provenance.SourceKind);
+        Assert.Equal(0, prompt.CallCount);
+        Assert.True(authority.IsActive("web_fetch", context.SessionId, context.RunId));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(context, new WebFetchRequest { Reference = consumed }));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(context, new WebFetchRequest { Reference = expired }));
+        authority.RevokeRun(context.SessionId, context.RunId);
+        Assert.False(authority.HasSearchHostGrant(context, "https://example.com/another"));
+        Assert.False(authority.IsActive("web_fetch", context.SessionId, context.RunId));
+    }
+
+    /// <summary>Existing run, consent/policy, and next-message invalidation removes search host grants.</summary>
+    [Theory]
+    [InlineData("run")]
+    [InlineData("all")]
+    [InlineData("next-message")]
+    public void SearchHost_LifecycleRevocation_RemovesGrant(string action)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+
+        // Act
+        if (action == "run")
+        {
+            authority.RevokeRun(context.SessionId, context.RunId);
+        }
+        else if (action == "all")
+        {
+            authority.RevokeAll();
+        }
+        else
+        {
+            _ = authority.IssueCurrentUserMessageUrls(
+                fixture.Path,
+                context.SessionId,
+                RunId.New(),
+                ConversationMessageId.New(),
+                "Continue",
+                context.Invocation);
+        }
+
+        // Assert
+        Assert.False(authority.HasSearchHostGrant(context, "https://example.com/page"));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(context, new WebFetchRequest { Reference = "https://example.com/page" }));
+    }
+
+    /// <summary>Repository option rebinding revokes search hostname authority alongside the other routes.</summary>
+    [Fact]
+    public async Task SearchHost_RepositoryRebind_RevokesGrantAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var configuration = new ConfigurationBuilder().Build();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(configuration, configuration));
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+
+        // Act
+        await authority.BindRepositoryAsync(fixture.Path);
+
+        // Assert
+        Assert.False(authority.HasSearchHostGrant(context, "https://example.com/page"));
+    }
+
+    /// <summary>The transient hostname cache remains bounded and evicts the oldest distinct scope.</summary>
+    [Fact]
+    public void SearchHost_CapacityBound_RetainsNewestHostnames()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var clock = new FetchTestTimeProvider();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(new WebFetchOptions()), clock);
+        var context = CreateContext(fixture.Path);
+
+        // Act: exercise the existing 100-entry transient-reference capacity boundary.
+        for (var index = 0; index <= 100; index++)
+        {
+            _ = IssueSearchHost(authority, context, $"https://host{index}.example.com/result");
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        // Assert
+        Assert.False(authority.HasSearchHostGrant(context, "https://host0.example.com/page"));
+        Assert.True(authority.HasSearchHostGrant(context, "https://host1.example.com/page"));
+        Assert.True(authority.HasSearchHostGrant(context, "https://host100.example.com/page"));
+    }
+
+    /// <summary>An explicit redirect group retains priority over the broader search-host grant.</summary>
+    [Fact]
+    public async Task SearchHost_ExplicitRedirectGroup_PreservesExactApprovalAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(options);
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        _ = authority.GrantDirectUrlChain(fixture.Path, context.SessionId, ["https://example.com/start", "https://other.example/end"]);
+        var fetcher = new StubFetcher();
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.Denied);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+
+        // Act
+        var response = await tool.ExecuteAsync(new WebFetchRequest { Reference = "https://example.com/start" }, context);
+
+        // Assert
+        Assert.Equal(WebFetchSourceKind.ExplicitDirectGroup, response.Value.Provenance.SourceKind);
+        Assert.Equal(2, fetcher.LastAuthorizedDirectUrlDigests.Count);
+        Assert.Equal(0, prompt.CallCount);
+        Assert.True(authority.HasSearchHostGrant(context, "https://example.com/start"));
+        Assert.False(authority.HasSearchHostGrant(context, "https://other.example/end"));
+    }
+
+    /// <summary>Broader user choices authorize the hostname repeatedly across turns with the selected lifetime.</summary>
+    [Theory]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForSession, WebFetchSourceKind.SessionApprovedHost)]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForUser, WebFetchSourceKind.UserAllowedHost)]
+    public async Task ApprovalDuration_HostnameReusedAcrossRunsAsync(DirectFetchApprovalOutcome outcome, WebFetchSourceKind expectedSource)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var configurationPath = Path.Combine(fixture.Path, "user", "config.json");
+        var store = new UserAllowedNetworkHostStore(configurationPath);
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), TimeProvider.System, store);
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context, "https://activator.example/start");
+        var prompt = new CapturingApprovalPrompt(outcome);
+        var fetcher = new StubFetcher();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+
+        // Act
+        var first = await tool.ExecuteAsync(new WebFetchRequest { Reference = "https://proposed.example/one?secret=hidden" }, context);
+        authority.RevokeRun(context.SessionId, context.RunId);
+        var next = context with { RunId = RunId.New(), ToolInvocationId = ToolInvocationId.New() };
+        _ = authority.IssueCurrentUserMessageUrls(fixture.Path, next.SessionId, next.RunId, ConversationMessageId.New(), "Continue", next.Invocation);
+        var request = new WebFetchRequest { Reference = "https://PROPOSED.example/two" };
+        var decision = new DefaultPolicyEngine().Evaluate(tool, request, next.Invocation with { AllowedNetworkHosts = [] });
+        var second = await tool.ExecuteAsync(request, next);
+
+        // Assert
+        Assert.True(decision.IsAllowed);
+        Assert.True(authority.IsActive("web_fetch", next.SessionId, next.RunId));
+        Assert.Equal(expectedSource, first.Value.Provenance.SourceKind);
+        Assert.Equal(expectedSource, second.Value.Provenance.SourceKind);
+        Assert.Equal(1, prompt.CallCount);
+        Assert.Equal(2, fetcher.CallCount);
+        Assert.False(authority.HasHostGrant(next, "https://sub.proposed.example/page"));
+        Assert.False(authority.HasHostGrant(next, "https://proposed.example.other.test/page"));
+        Assert.Equal(outcome == DirectFetchApprovalOutcome.ApprovedForUser, File.Exists(configurationPath));
+
+        authority.RevokeAll();
+        var otherSession = next with { SessionId = SessionId.New() };
+        Assert.Equal(outcome == DirectFetchApprovalOutcome.ApprovedForUser, authority.HasHostGrant(otherSession, request.Reference));
+    }
+
+    /// <summary>Session grants cannot leak to another repository or session and are revoked at lifecycle reset.</summary>
+    [Fact]
+    public async Task ApprovalDuration_SessionScopeAndResetAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        var generation = authority.BeginModelProposedApproval(context);
+
+        // Act
+        await authority.ApplyModelProposedApprovalAsync(context, new Uri("https://approved.example/page"), DirectFetchApprovalOutcome.ApprovedForSession, generation);
+
+        // Assert
+        var otherSession = context with { SessionId = SessionId.New() };
+        var otherRepository = context with { Invocation = context.Invocation with { RepositoryPath = Path.Combine(fixture.Path, "other") } };
+        Assert.False(authority.HasHostGrant(otherSession, "https://approved.example/page"));
+        Assert.False(authority.HasHostGrant(otherRepository, "https://approved.example/page"));
+        authority.RevokeAll();
+        Assert.False(authority.HasHostGrant(context, "https://approved.example/page"));
+    }
+
+    /// <summary>A completed run or revoked lifecycle cannot apply an earlier approval choice.</summary>
+    [Theory]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForSession, false)]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForSession, true)]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForUser, false)]
+    [InlineData(DirectFetchApprovalOutcome.ApprovedForUser, true)]
+    public async Task ApprovalDuration_StalePromptCannotGrantAsync(DirectFetchApprovalOutcome outcome, bool revokeAll)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var path = Path.Combine(fixture.Path, "user", "config.json");
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(new WebFetchOptions()), TimeProvider.System, new UserAllowedNetworkHostStore(path));
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        var generation = authority.BeginModelProposedApproval(context);
+
+        // Act
+        if (revokeAll)
+        {
+            authority.RevokeAll();
+        }
+        else
+        {
+            authority.RevokeRun(context.SessionId, context.RunId);
+        }
+
+        // Assert
+        await Assert.ThrowsAsync<WebFetchException>(() => authority.ApplyModelProposedApprovalAsync(context, new Uri("https://approved.example/page"), outcome, generation));
+        Assert.False(File.Exists(path));
+        Assert.False(authority.HasHostGrant(context, "https://approved.example/page"));
+    }
+
+    /// <summary>Saving a hostname preserves unrelated values, deduplicates, and supports restart and live removal.</summary>
+    [Fact]
+    public async Task ApprovalDuration_UserStoreSurvivesRestartAndHonorsRemovalAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var path = Path.Combine(fixture.Path, "config.json");
+        await File.WriteAllTextAsync(path, """
+            { "Tools": { "AllowedNetworkHosts": ["existing.example"], "disabled": ["run_process"] }, "models": { "chosen": "preserved" } }
+            """);
+        var store = new UserAllowedNetworkHostStore(path);
+
+        // Act
+        await Task.WhenAll(store.AddAsync("approved.example"), new UserAllowedNetworkHostStore(path).AddAsync("APPROVED.example"));
+        var restored = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(new WebFetchOptions()), TimeProvider.System, new UserAllowedNetworkHostStore(path));
+        var context = CreateContext(fixture.Path);
+        var resolved = restored.Resolve(context, new WebFetchRequest { Reference = "https://approved.example/page" });
+
+        // Assert
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(path));
+        Assert.NotNull(root);
+        Assert.Equal("preserved", root["models"]?["chosen"]?.GetValue<string>());
+        Assert.Equal("run_process", root["Tools"]?["disabled"]?[0]?.GetValue<string>());
+        Assert.Equal(2, root["Tools"]?["AllowedNetworkHosts"]?.AsArray().Count);
+        Assert.Equal(WebFetchSourceKind.UserAllowedHost, resolved.SourceKind);
+        Assert.True(restored.IsActive("web_fetch", context.SessionId, context.RunId));
+
+        await File.WriteAllTextAsync(path, "{}");
+        Assert.False(restored.HasHostGrant(context, "https://approved.example/page"));
+        Assert.False(restored.IsActive("web_fetch", context.SessionId, context.RunId));
+    }
+
+    /// <summary>A failed durable save cannot fall back to an unrequested temporary approval.</summary>
+    [Fact]
+    public async Task ApprovalDuration_SaveFailureDoesNotFetchAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var path = Path.Combine(fixture.Path, "user", "config.json");
+        Directory.CreateDirectory(path);
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), TimeProvider.System, new UserAllowedNetworkHostStore(path));
+        var context = CreateContext(fixture.Path);
+        _ = IssueSearchHost(authority, context);
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.ApprovedForUser);
+        var fetcher = new StubFetcher();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+
+        // Act / Assert
+        var error = await Assert.ThrowsAsync<ToolExecutionException>(() => tool.ExecuteAsync(new WebFetchRequest { Reference = "https://approved.example/page" }, context));
+        Assert.Equal(ToolErrorClassification.ExecutionFailure, error.ErrorClassification);
+        Assert.Contains("could not be saved to the user allowed list", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, prompt.CallCount);
+        Assert.Equal(0, fetcher.CallCount);
+        Assert.False(authority.HasHostGrant(context, "https://approved.example/page"));
+    }
+
+    /// <summary>Cancelling a save preserves the original configuration and creates no user grant.</summary>
+    [Fact]
+    public async Task ApprovalDuration_CancelledSavePreservesConfigurationAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var path = Path.Combine(fixture.Path, "config.json");
+        const string original = "{ \"unrelated\": true }";
+        await File.WriteAllTextAsync(path, original);
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        // Act / Assert
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new UserAllowedNetworkHostStore(path).AddAsync("approved.example", cancellation.Token));
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+    }
+
+    private static string IssueSearchHost(WebFetchAuthorizationAuthority authority, ToolExecutionContext context, string url = "https://example.com/result")
+    {
+        return authority.IssueSearchResult(
+            context.Invocation.RepositoryPath,
+            new Uri(url),
+            context.SessionId,
+            context.RunId,
+            context.ToolInvocationId,
+            "test",
+            "query",
+            1);
+    }
+
     private static DirectFetchApprovalRequest CreateApprovalRequest()
     {
         return new()
@@ -1106,6 +1519,15 @@ public sealed class WebFetchTests
                     RequestedBy = "test",
                     AllowedNetworkHosts = ["example.com"],
                 });
+    }
+
+    private sealed class FetchTestTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow = DateTimeOffset.UnixEpoch;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan elapsed) => _utcNow += elapsed;
     }
 
     private sealed class CapturingApprovalPrompt : IDirectFetchApprovalPrompt

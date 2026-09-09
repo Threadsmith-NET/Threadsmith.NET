@@ -8,7 +8,7 @@ public sealed record ToolPolicyDecision(
     ApprovalLevel RequiredApproval,
     string Reason);
 
-/// <summary>Evaluates repository, path, command, network, and secret policy.</summary>
+/// <summary>Evaluates repository, path, command, and network policy plus secret-reference validity.</summary>
 public interface IPolicyEngine
 {
     /// <summary>Evaluates a validated tool request.</summary>
@@ -100,15 +100,12 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         foreach (var secretReference in tool.GetSecretReferences(input))
         {
-            if (!secretReference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase)
-                || !context.AllowedSecretReferences.Contains(
-                    secretReference,
-                    StringComparer.OrdinalIgnoreCase))
+            if (!SecretReference.TryParse(secretReference, out _))
             {
                 return new ToolPolicyDecision(
                     false,
                     requiredApproval,
-                    "The requested secret scope is not permitted.");
+                    "The tool declared an invalid secret reference.");
             }
         }
 

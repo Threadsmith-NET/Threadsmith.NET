@@ -71,9 +71,6 @@ public static class AgentToolPolicy
                 .ToArray(),
             AllowedExecutables = parent.AllowedExecutables,
             AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? parent.AllowedNetworkHosts : [],
-            AllowedSecretReferences = frozenAssignment.Policy.AllowNetwork
-                ? parent.AllowedSecretReferences
-                : [],
             ModelVisibleToolSnapshotId = null,
             ModelContextWindowTokens = null,
             ModelRequestOutputReserveTokens = null,

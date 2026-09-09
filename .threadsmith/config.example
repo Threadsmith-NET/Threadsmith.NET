@@ -350,9 +350,8 @@
     "allowedExecutables": [ "powershell", "bash", "dotnet", "git" ],
     // Network-aware tools are denied unless their destination hostname appears here.
     "allowedNetworkHosts": [ "api.example.invalid", "api.search.brave.com", "api.nuget.org" ],
-    // Credential-bearing secret allowlists are effective only from trusted machine/user/env
-    // configuration. Repository/session/CLI values cannot grant a secret reference.
-    "allowedSecretReferences": [ "secrets:BRAVE_SEARCH_API_KEY" ],
+    // In the user config only, these exact hostnames also authorize public HTTPS web_fetch.
+    // The URL prompt can add a hostname here; repository values cannot grant fetch authority.
     // Approval required before these tools execute (§10.5).
     "requireApproval": [ "run_tests", "apply_mutation" ],
     // M21 sibling scheduling. Repository configuration may narrow but never broaden

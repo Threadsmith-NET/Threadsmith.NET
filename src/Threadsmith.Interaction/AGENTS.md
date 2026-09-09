@@ -36,6 +36,8 @@ Own frontend-neutral interactive coordination over existing host commands and pr
 - Keep contracts immutable and free of third-party types.
 - Prefer focused existing fixtures and terminal-free recording surfaces; do not create repository-scale fixtures for local interaction behavior.
 
+- `/policy` and `/plan-policy` report repository-only persistence for every non-session choice. `TrustSession` reports that the saved repository policy is unchanged. Plan reset/revoke saves `ReviewAll`; services own persistence and no user-side plan-trust grant is involved.
+
 ## Verification
 
 - `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj`

@@ -1,11 +1,12 @@
 # Tool Runtime Operations
 
-The built-in read-only registry contains:
+The built-in tool registry includes:
 
 | Tool | Minimum trust | Approval | Purpose |
 |---|---|---|---|
 | `list_files` | `UntrustedInspection` | None | Bounded repository file inventory. |
 | `read_file` | `TrustedRead` | None | Bounded file range read (files up to 1 MiB). |
+| `write_file` | `TrustedRead` | None | Direct UTF-8 report/data output inside `tools.writeFile.allowedFolders` (default `.inbox`); 1 MiB maximum. |
 | `search` | `TrustedRead` | None | Bounded plain-text or timeout-limited regular-expression search. Installed releases use their RID-matched bundled `tools/rg(.exe)` for whole-repository literal searches; source-development launches may resolve `rg` from `PATH`. The fast path respects repository ignore files and falls back to the confined managed scanner when unavailable or when host pre-read path filtering is required. Generated/Git/reparse-point subtrees, SQLite databases, oversized files, and files that become locked or inaccessible are excluded as applicable. Use semantic tools for declarations, references, and implementations. |
 | `git_status` | `TrustedRead` | None | Bounded Git branch and working-tree status. |
 | `find_symbol` | `TrustedBuild` | None | Compiler-backed symbol declarations. |
@@ -40,3 +41,25 @@ Process executable values must be bare names; path-qualified values are rejected
 ## Code exploration operational settings
 
 `tools:codeExplore` supplies one restart-scoped snapshot to main and child calls. Positive numeric caps are enforced, zero disables them, and malformed negative values fail startup. Set `adaptiveSizingEnabled=false` to remove tier reductions, or `enforceOperationalLimits=false` to disable this tool's operational caps. Model capacity, cancellation, trust, paths, source identity and sanitization still apply. Configure source/artifact limits under `limits`, and output caps with `maximumResultBytes` and `maximumMarkdownBytes`; raising one does not implicitly change another. Both output boundaries use the effective limits after sanitization. Small, back-referenced and unavailable source sections release reservations and source-bearing slots for relevant remaining source. See the [configuration inventory](../architecture/code-explore-tool.md#operational-configuration-and-consumers) and [user guide](../user-guide.md#code_explore-task-sufficient-c-exploration).
+
+### Saving reports and data with `write_file`
+
+`write_file` creates text artifacts directly during a conversation. It avoids change planning, mutation proposals, builds, and tests. For an existing answer, use `{"path":".inbox/report.md","useLastResponse":true}`: the host copies the latest archived assistant answer from the current session exactly. Missing/removed answer bodies produce an error instead of a substituted report. For new content, supply `content` instead of `useLastResponse`.
+
+Configure the folder list in machine, user, or repository `config.json`:
+
+```json
+{
+  "tools": {
+    "writeFile": {
+      "allowedFolders": [".inbox", "reports", "C:/Reports"]
+    }
+  }
+}
+```
+
+The default list is `[".inbox"]`. Higher-precedence lists replace lower lists completely; `[]` or `null` permits no writes. Relative entries resolve under the active repository; outside folders must be absolute. Entries are literal folders, include descendants, and do not accept globs or relative `..` escapes. Absolute paths may identify folders elsewhere on the machine. Repository settings can grant these destinations as requested by the operator; an allowlisted folder is direct file-write authority. Restart after configuration edits. Opening another repository rebinds its folder grants without inheriting the former repository's overrides.
+
+Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. Git metadata, `.threadsmith` settings, `AGENTS.md`, prohibited paths, and symlink/junction traversal are rejected even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
+
+The tool remains subject to repository trust, `/tools` availability, `tools.allow`/`deny`/`requireApproval`, normal tool audit, and cancellation. If an existing configuration has a nonempty `tools.allow` or explicit `tools.enabled` list, add `write_file`; remove any legacy placeholder denial of that name. It has a file-write side effect, serializes with conflicting work, and is excluded from read-only delegated-agent tool sets. Tool activity shows the destination; successful results report path and byte count without echoing the saved report.

@@ -432,7 +432,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 toolLimits,
                 codeExploreOutputOptions,
                 promptLoader,
-                codeExploreOptions);
+                codeExploreOptions,
+                persistence.ConversationStore);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -859,7 +860,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         ToolLimits limits,
         CodeExploreOutputOptions codeExploreOutputOptions,
         IPromptLoader promptLoader,
-        CodeExploreOptions codeExploreOptions)
+        CodeExploreOptions codeExploreOptions,
+        IConversationStore conversationStore)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -903,6 +905,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             webSearchOptions,
             promptLoader);
         var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
+        var writeFileConfiguration = new WriteFileConfiguration(configuration, trustedConfiguration, paths.RepositoryRoot);
         var allowedExecutables = ResolveAllowedExecutables(configuration);
         var requireRunProcessApproval = trustedConfiguration.GetValue(
             "tools:runProcess:requireApproval",
@@ -913,6 +916,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         [
             new ListFilesTool(promptLoader, limits),
             new ReadFileTool(promptLoader, limits),
+            new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader),
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),
             new GitDiffTool(gitQueries, promptLoader),
@@ -971,7 +975,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             configuration,
             paths.RepositoryConfiguration,
             mcpApprovalPath: mcpApprovalPath,
-            fetchAuthorization: webFetchAuthorization);
+            fetchAuthorization: webFetchAuthorization,
+            writeFileConfiguration: writeFileConfiguration);
         return (
             stateManager,
             new ToolRegistry(tools, stateManager, webFetchAuthorization),

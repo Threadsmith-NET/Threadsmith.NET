@@ -4,15 +4,14 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Threadsmith.Core;
 
-/// <summary>Repository-bound session plan policy with exact repository-identity fencing for persisted trust.</summary>
+/// <summary>Repository-bound plan policy with repository-only persistence and a session-only override.</summary>
 public sealed class PlanApprovalPolicyService :
     IPlanApprovalPolicy,
     ICommandHandler<GetPlanApprovalPolicyCommand, PlanApprovalPolicy>,
     ICommandHandler<SetPlanApprovalPolicyCommand, PlanApprovalPolicy>
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly IUserPlanTrustGrantStore _trustGrantStore;
-    private readonly PlanApprovalPolicyPersistence _persistence;
+    private readonly IRepositoryPlanApprovalPolicyStore _repositoryStore;
     private readonly IDomainEventStream? _events;
     private readonly IReadOnlyDictionary<string, string?> _configurationBeforeRepository;
     private readonly IReadOnlyDictionary<string, string?> _configurationAfterRepository;
@@ -21,57 +20,35 @@ public sealed class PlanApprovalPolicyService :
 
     /// <summary>Initializes a new instance of the <see cref="PlanApprovalPolicyService"/> class.</summary>
     /// <param name="configuration">Effective layered configuration.</param>
-    /// <param name="repositoryConfigurationPath">Repository configuration path used for persistent trust markers.</param>
-    /// <param name="userPlanTrustPath">User-owned trust store required before persistent plan trust is honored.</param>
+    /// <param name="repositoryConfigurationPath">Repository configuration path for saved policy choices.</param>
     /// <param name="events">Optional durable event stream used by command-boundary policy changes.</param>
     public PlanApprovalPolicyService(
         IConfiguration? configuration = null,
         string? repositoryConfigurationPath = null,
-        string? userPlanTrustPath = null,
         IDomainEventStream? events = null)
-        : this(configuration, CreateDefaultDependencies(repositoryConfigurationPath, userPlanTrustPath), events)
+        : this(
+            configuration,
+            PlanApprovalRepositoryBinding.CreateFromConfigurationPath(repositoryConfigurationPath),
+            new RepositoryPlanApprovalPolicyStore(),
+            events)
     {
     }
 
-    /// <summary>Initializes a new instance of the <see cref="PlanApprovalPolicyService"/> class with explicit storage collaborators.</summary>
-    /// <param name="configuration">Effective layered configuration.</param>
-    /// <param name="repositoryBinding">Immutable repository binding, or <see langword="null" /> when no repository is active.</param>
-    /// <param name="trustGrantStore">User-owned trust-grant store.</param>
-    /// <param name="persistence">Cross-store persistence protocol.</param>
-    /// <param name="events">Optional durable event stream used by command-boundary policy changes.</param>
+    /// <summary>Initializes a new instance of the <see cref="PlanApprovalPolicyService"/> class with explicit repository storage.</summary>
     internal PlanApprovalPolicyService(
         IConfiguration? configuration,
         PlanApprovalRepositoryBinding? repositoryBinding,
-        IUserPlanTrustGrantStore trustGrantStore,
-        PlanApprovalPolicyPersistence persistence,
+        IRepositoryPlanApprovalPolicyStore repositoryStore,
         IDomainEventStream? events = null)
     {
-        ArgumentNullException.ThrowIfNull(trustGrantStore);
-        ArgumentNullException.ThrowIfNull(persistence);
-
+        ArgumentNullException.ThrowIfNull(repositoryStore);
         _repositoryBinding = repositoryBinding;
-        _trustGrantStore = trustGrantStore;
-        _persistence = persistence;
+        _repositoryStore = repositoryStore;
         _events = events;
-        var layers = CaptureRebindableConfiguration(
-            configuration,
-            _repositoryBinding?.ConfigurationPath);
+        var layers = CaptureRebindableConfiguration(configuration, repositoryBinding?.ConfigurationPath);
         _configurationBeforeRepository = layers.BeforeRepository;
         _configurationAfterRepository = layers.AfterRepository;
-        ApplyConfiguration(configuration, _repositoryBinding, layers.Repository);
-    }
-
-    private PlanApprovalPolicyService(
-        IConfiguration? configuration,
-        PlanApprovalPolicyDependencies dependencies,
-        IDomainEventStream? events)
-        : this(
-            configuration,
-            dependencies.RepositoryBinding,
-            dependencies.TrustGrantStore,
-            dependencies.Persistence,
-            events)
-    {
+        ApplyConfiguration(configuration, layers.Repository);
     }
 
     /// <inheritdoc />
@@ -97,7 +74,7 @@ public sealed class PlanApprovalPolicyService :
 
             var configuration = BuildConfigurationForRepository(binding.ConfigurationPath);
             var layers = CaptureRebindableConfiguration(configuration, binding.ConfigurationPath);
-            ApplyConfiguration(configuration, binding, layers.Repository);
+            ApplyConfiguration(configuration, layers.Repository);
             _repositoryBinding = binding;
         }
         finally
@@ -121,7 +98,7 @@ public sealed class PlanApprovalPolicyService :
         {
             if (_repositoryBinding is not null && policy != PlanApprovalPolicy.TrustSession)
             {
-                await _persistence.PersistAsync(_repositoryBinding, policy, cancellationToken);
+                await _repositoryStore.WritePolicyAsync(_repositoryBinding, policy, cancellationToken);
             }
 
             _currentPolicy = policy;
@@ -215,18 +192,6 @@ public sealed class PlanApprovalPolicyService :
         return _currentPolicy;
     }
 
-    private static PlanApprovalPolicyDependencies CreateDefaultDependencies(
-        string? repositoryConfigurationPath,
-        string? userPlanTrustPath)
-    {
-        var trustGrantStore = new UserPlanTrustGrantStore(userPlanTrustPath);
-        var repositoryStore = new RepositoryPlanApprovalPolicyStore();
-        return new PlanApprovalPolicyDependencies(
-            PlanApprovalRepositoryBinding.CreateFromConfigurationPath(repositoryConfigurationPath),
-            trustGrantStore,
-            new PlanApprovalPolicyPersistence(repositoryStore, trustGrantStore));
-    }
-
     private IConfigurationRoot BuildConfigurationForRepository(string configurationPath)
     {
         return new ConfigurationBuilder()
@@ -238,7 +203,6 @@ public sealed class PlanApprovalPolicyService :
 
     private void ApplyConfiguration(
         IConfiguration? configuration,
-        PlanApprovalRepositoryBinding? binding,
         IReadOnlyDictionary<string, string?> repositoryConfiguration)
     {
         const string policyKey = "planning:approvalPolicy";
@@ -254,18 +218,6 @@ public sealed class PlanApprovalPolicyService :
                 ? trustedValue ?? "reviewAll"
                 : "reviewAll";
             parsed = ParsePolicy(configured);
-        }
-
-        if (parsed is PlanApprovalPolicy.AlwaysTrustRepo)
-        {
-            var configuredIdentity = configuration?["planning:approvalRepositoryIdentity"];
-            if (binding is null
-                || !string.Equals(configuredIdentity, binding.RepositoryIdentity, StringComparison.Ordinal)
-                || !_trustGrantStore.IsGranted(binding.RepositoryIdentity))
-            {
-                _currentPolicy = PlanApprovalPolicy.ReviewAll;
-                return;
-            }
         }
 
         _currentPolicy = parsed;
@@ -449,11 +401,6 @@ public sealed class PlanApprovalPolicyService :
         IReadOnlyDictionary<string, string?> BeforeRepository,
         IReadOnlyDictionary<string, string?> Repository,
         IReadOnlyDictionary<string, string?> AfterRepository);
-
-    private sealed record PlanApprovalPolicyDependencies(
-        PlanApprovalRepositoryBinding? RepositoryBinding,
-        IUserPlanTrustGrantStore TrustGrantStore,
-        PlanApprovalPolicyPersistence Persistence);
 
     private static string NormalizeScope(string scope)
     {

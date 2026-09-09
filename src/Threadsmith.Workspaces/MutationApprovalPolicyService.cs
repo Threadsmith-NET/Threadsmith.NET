@@ -107,7 +107,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
 
     /// <summary>Initializes a new instance of the <see cref="MutationApprovalPolicyService"/> class.</summary>
     /// <param name="configuration">Effective layered configuration.</param>
-    /// <param name="repositoryConfigurationPath">Repository config path used for persistent trust.</param>
+    /// <param name="repositoryConfigurationPath">Repository config path used for saved policy choices.</param>
     public MutationApprovalPolicyService(
         IConfiguration? configuration = null,
         string? repositoryConfigurationPath = null)
@@ -174,9 +174,9 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_repositoryConfigurationPath is not null)
+            if (_repositoryConfigurationPath is not null && policy != MutationApprovalPolicy.TrustSession)
             {
-                await PersistRepositoryTrustAsync(policy, cancellationToken);
+                await PersistRepositoryPolicyAsync(policy, cancellationToken);
             }
 
             _currentPolicy = policy;
@@ -276,7 +276,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             : int.Parse(thresholdText, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private async Task PersistRepositoryTrustAsync(
+    private async Task PersistRepositoryPolicyAsync(
         MutationApprovalPolicy policy,
         CancellationToken cancellationToken)
     {
@@ -307,18 +307,14 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     : [];
                 var mutation = root["mutation"] as JsonObject ?? [];
                 root["mutation"] = mutation;
-                if (policy == MutationApprovalPolicy.AlwaysTrustRepo)
+                mutation["approvalPolicy"] = policy switch
                 {
-                    mutation["approvalPolicy"] = "alwaysTrustRepo";
-                }
-                else
-                {
-                    mutation.Remove("approvalPolicy");
-                    if (mutation.Count == 0)
-                    {
-                        root.Remove("mutation");
-                    }
-                }
+                    MutationApprovalPolicy.ReviewAll => "reviewAll",
+                    MutationApprovalPolicy.ReviewRisky => "reviewRisky",
+                    MutationApprovalPolicy.TrustPlan => "trustPlan",
+                    MutationApprovalPolicy.AlwaysTrustRepo => "alwaysTrustRepo",
+                    _ => throw new ArgumentOutOfRangeException(nameof(policy)),
+                };
 
                 var temporaryPath = configurationPath + $".{Guid.NewGuid():N}.tmp";
                 try

@@ -157,20 +157,9 @@ internal static class ApplicationComposition
         var approvalPolicy = new MutationApprovalPolicyService(
             host.Configuration,
             host.Paths.RepositoryConfiguration);
-        var userPlanTrustPath = Path.Combine(
-            Path.GetDirectoryName(host.Paths.UserConfiguration)
-                ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
-            "plan-policy-trust.json");
-        var planTrustGrantStore = new UserPlanTrustGrantStore(userPlanTrustPath);
-        var planRepositoryPolicyStore = new RepositoryPlanApprovalPolicyStore();
-        var planPolicyPersistence = new PlanApprovalPolicyPersistence(
-            planRepositoryPolicyStore,
-            planTrustGrantStore);
         var planApprovalPolicy = new PlanApprovalPolicyService(
             host.Configuration,
-            PlanApprovalRepositoryBinding.CreateFromConfigurationPath(host.Paths.RepositoryConfiguration),
-            planTrustGrantStore,
-            planPolicyPersistence,
+            host.Paths.RepositoryConfiguration,
             host.Events);
         var planSanityChecker = new PlanSanityChecker(host.PromptLoader);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);

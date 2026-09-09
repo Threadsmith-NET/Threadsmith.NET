@@ -336,10 +336,10 @@
   "tools": {
     // Plan-27 availability state. When enabled is present, non-essential tools must
     // be listed explicitly; disabled wins over enabled. Essential tools remain on.
-    "enabled": [ "list_files", "read_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
+    "enabled": [ "list_files", "read_file", "write_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
     "disabled": [ "csharp_script", "example_optional_tool" ],
-    "allow": [ "list_files", "read_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "csharp_script", "invoke_skill" ],
-    "deny": [ "shell", "write_file" ],
+    "allow": [ "list_files", "read_file", "write_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "csharp_script", "invoke_skill" ],
+    "deny": [ "shell" ],
     // web_search is default-disabled. Repository entries request availability but
     // cannot grant outbound consent; the user must confirm through /tools.
     // MCP entries likewise cannot grant execution availability: /mcp enable writes an
@@ -369,6 +369,10 @@
       "defaultEntries": 200,
       "maxEntries": 2000
     },
+    // Direct text/report output; machine < user < repo, higher lists replace lower ones.
+    // Relative folders are under the active repo. Absolute folders may be anywhere
+    // on the machine (for example "C:/Reports"). No globs; [] disables all writes.
+    "writeFile": { "allowedFolders": [ ".inbox" ] },
     "readFile": {
       "maxBytes": 1048576,
       "defaultLines": 2000,
@@ -560,19 +564,16 @@
   // mutation proposal; it never approves exact diffs or repository writes.
   // Repository-persisted values: reviewAll (default), reviewRisky,
   // autoApproveAllValid, and alwaysTrustRepo. TrustSession is session-only.
-  // alwaysTrustRepo also writes an exact repository marker plus a user-owned
-  // trust grant outside the repository.
+  // /plan-policy saves every non-session selection only in this repo config.
+  // TrustSession leaves the saved policy unchanged; no user-side grant is needed.
   "planning": {
-    "approvalPolicy": "reviewAll",
-    // Host-written repository marker for AlwaysTrustRepo. It is accepted only when
-    // the matching user-owned plan-policy trust store also grants this repository.
-    "approvalRepositoryIdentity": null
+    "approvalPolicy": "reviewAll"
   },
 
   // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────
-  // reviewAll (default), reviewRisky, trustPlan, and trustSession are process-
-  // session choices. alwaysTrustRepo is an explicit persistent repository opt-in;
-  // selecting another policy through /policy revokes that persisted trust.
+  // /policy saves reviewAll (default), reviewRisky, trustPlan, and alwaysTrustRepo
+  // only in this repo config. TrustSession applies only to the running session
+  // and leaves the saved policy unchanged.
   "mutation": {
     "approvalPolicy": "reviewAll",
     // ReviewRisky pauses when the exact preview exceeds this many changed lines.

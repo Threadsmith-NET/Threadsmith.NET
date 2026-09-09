@@ -181,6 +181,7 @@ internal static class ConfigurationBootstrap
             ["tools:listFiles:defaultEntries"] = "200",
             ["tools:listFiles:maxEntries"] = "2000",
             ["tools:readFile:maxBytes"] = (1024 * 1024).ToString(CultureInfo.InvariantCulture),
+            ["tools:writeFile:allowedFolders:0"] = ".inbox",
             ["tools:readFile:defaultLines"] = ToolLimits.ReadFileLineLimitCeiling.ToString(CultureInfo.InvariantCulture),
             ["tools:readFile:maxLines"] = ToolLimits.ReadFileLineLimitCeiling.ToString(CultureInfo.InvariantCulture),
             ["tools:readFile:maxContentBytes"] = ToolLimits.ReadFileContentByteLimitCeiling.ToString(CultureInfo.InvariantCulture),

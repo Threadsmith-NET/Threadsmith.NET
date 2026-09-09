@@ -68,7 +68,10 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         {
             try
             {
-                _ = ToolPathRules.NormalizeAndValidate(resourcePath, context);
+                // Only the compiled direct-write capability can use its separate folder grant.
+                _ = tool is WriteFileTool writeFile
+                    ? writeFile.ValidatePath(resourcePath, context)
+                    : ToolPathRules.NormalizeAndValidate(resourcePath, context);
             }
             catch (UnauthorizedAccessException exception)
             {

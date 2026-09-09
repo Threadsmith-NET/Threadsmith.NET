@@ -1,16 +1,11 @@
 namespace Threadsmith.Workspaces;
 
-using System.Security.Cryptography;
-using System.Text;
-
-/// <summary>Immutable repository identity and configuration path used by plan approval policy storage.</summary>
+/// <summary>Immutable repository root and configuration path used by plan approval policy storage.</summary>
 /// <param name="RepositoryRoot">Normalized repository root.</param>
 /// <param name="ConfigurationPath">Normalized repository configuration path.</param>
-/// <param name="RepositoryIdentity">Exact deterministic repository identity.</param>
 internal sealed record PlanApprovalRepositoryBinding(
     string RepositoryRoot,
-    string ConfigurationPath,
-    string RepositoryIdentity)
+    string ConfigurationPath)
 {
     /// <summary>Gets the directory containing the repository configuration file.</summary>
     public string ConfigurationDirectory => Path.GetDirectoryName(ConfigurationPath)
@@ -32,8 +27,7 @@ internal sealed record PlanApprovalRepositoryBinding(
         PlanApprovalPathSafety.EnsureRepositoryConfinedWithoutReparsePoints(normalizedRoot, configurationPath);
         return new PlanApprovalRepositoryBinding(
             normalizedRoot,
-            configurationPath,
-            CreateRepositoryIdentity(normalizedRoot));
+            configurationPath);
     }
 
     /// <summary>Creates a binding from a known repository configuration path, when one is configured.</summary>
@@ -65,16 +59,6 @@ internal sealed record PlanApprovalRepositoryBinding(
         PlanApprovalPathSafety.EnsureRepositoryConfinedWithoutReparsePoints(normalizedRoot, normalizedConfigurationPath);
         return new PlanApprovalRepositoryBinding(
             normalizedRoot,
-            normalizedConfigurationPath,
-            CreateRepositoryIdentity(normalizedRoot));
-    }
-
-    private static string CreateRepositoryIdentity(string repositoryRoot)
-    {
-        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
-        var identityInput = OperatingSystem.IsWindows()
-            ? normalized.ToUpperInvariant()
-            : normalized;
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identityInput)));
+            normalizedConfigurationPath);
     }
 }

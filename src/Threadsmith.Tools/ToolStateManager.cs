@@ -79,6 +79,7 @@ public sealed class ToolStateManager : IToolStateManager
     private readonly OutboundConsentStore _consentStore;
     private readonly McpToolApprovalStore _mcpApprovals;
     private readonly WebFetchAuthorizationAuthority? _fetchAuthorization;
+    private readonly WriteFileConfiguration? _writeFileConfiguration;
     private string _repositoryRoot;
     private bool _hasEnabledAllowList;
     private string _repositoryConfigurationPath;
@@ -93,7 +94,8 @@ public sealed class ToolStateManager : IToolStateManager
         string repositoryConfigurationPath,
         string? userConsentPath = null,
         string? mcpApprovalPath = null,
-        WebFetchAuthorizationAuthority? fetchAuthorization = null)
+        WebFetchAuthorizationAuthority? fetchAuthorization = null,
+        WriteFileConfiguration? writeFileConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -106,6 +108,7 @@ public sealed class ToolStateManager : IToolStateManager
         _consentStore = new OutboundConsentStore(userConsentPath);
         _mcpApprovals = new McpToolApprovalStore(mcpApprovalPath);
         _fetchAuthorization = fetchAuthorization;
+        _writeFileConfiguration = writeFileConfiguration;
         _fetchAuthorization?.SetCurrentMessageConsentEvaluator(
             repositoryRoot => _consentStore.HasCurrentMessageUrlConsent(repositoryRoot));
         var enabledSection = configuration.GetSection("tools:enabled");
@@ -160,6 +163,8 @@ public sealed class ToolStateManager : IToolStateManager
                 hasEnabledAllowList = repositoryConfiguration["tools"] is JsonObject tools
                     && tools.ContainsKey("enabled");
             }
+
+            _writeFileConfiguration?.BindRepository(repositoryRoot, configuration);
 
             if (_fetchAuthorization is not null)
             {

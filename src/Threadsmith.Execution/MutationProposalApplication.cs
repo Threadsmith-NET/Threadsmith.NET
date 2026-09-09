@@ -1166,63 +1166,130 @@ public sealed class MutationProposalApplication :
                 $"ReplaceText target '{relativePath}' was not present in the immutable baseline.");
         }
 
+        var resolved = ResolveReplacement(relativePath, current, mutation);
+        return string.Concat(
+            current.AsSpan(0, resolved.StartOffset),
+            resolved.ReplacementText,
+            current.AsSpan(resolved.StartOffset + resolved.Length));
+    }
+
+    private Mutation ResolveReplacement(string path, string current, Mutation mutation)
+    {
         var expected = mutation.ExpectedText
             ?? throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                $"ReplaceText target '{relativePath}' requires exact expectedText.");
+                $"ReplaceText target '{path}' requires exact expectedText.");
         var exactRange = mutation.StartOffset >= 0
             && mutation.Length >= 0
             && mutation.StartOffset <= current.Length - mutation.Length
             && mutation.Length == expected.Length
             && current.AsSpan(mutation.StartOffset, mutation.Length).SequenceEqual(expected);
-        var startOffset = mutation.StartOffset;
-        var length = mutation.Length;
-        if (!exactRange)
+        if (exactRange)
         {
-            if (expected.Length == 0)
-            {
-                throw CreateRepairableMutationFailure(
-                    ModelCorrectionCategory.MutationProposal,
-                    MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    $"ReplaceText insertion in '{relativePath}' requires the exact offset.");
-            }
-
-            var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
-            if (firstMatch < 0)
-            {
-                throw CreateRepairableMutationFailure(
-                    ModelCorrectionCategory.MutationProposal,
-                    MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    $"ReplaceText expectedText was not found in '{relativePath}'.");
-            }
-
-            var secondMatch = current.IndexOf(
-                expected,
-                firstMatch + 1,
-                StringComparison.Ordinal);
-            if (secondMatch >= 0)
-            {
-                throw CreateRepairableMutationFailure(
-                    ModelCorrectionCategory.MutationProposal,
-                    MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    _prompts.Render(
-                        PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
-                        new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            ["RelativePath"] = relativePath,
-                        }));
-            }
-
-            startOffset = firstMatch;
-            length = expected.Length;
+            return mutation;
         }
 
-        return string.Concat(
-            current.AsSpan(0, startOffset),
-            mutation.ReplacementText,
-            current.AsSpan(startOffset + length));
+        if (expected.Length == 0)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                $"ReplaceText insertion in '{path}' requires the exact offset.");
+        }
+
+        var searchText = current;
+        var searchExpected = expected;
+        var firstMatch = searchText.IndexOf(searchExpected, StringComparison.Ordinal);
+        var normalizeEndings = firstMatch < 0;
+        if (normalizeEndings)
+        {
+            // Match logical line breaks even in mixed-ending files. Original
+            // UTF-16 offsets and bytes remain authoritative for staging.
+            searchText = NormalizeLineEndings(current, "\n");
+            searchExpected = NormalizeLineEndings(expected, "\n");
+            firstMatch = searchText.IndexOf(searchExpected, StringComparison.Ordinal);
+        }
+
+        if (firstMatch < 0)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                $"ReplaceText expectedText was not found in '{path}'.");
+        }
+
+        if (searchText.IndexOf(searchExpected, firstMatch + 1, StringComparison.Ordinal) >= 0)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                _prompts.Render(
+                    PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["RelativePath"] = path,
+                    }));
+        }
+
+        var replacement = mutation.ReplacementText;
+        if (normalizeEndings)
+        {
+            var originalStart = MapNormalizedOffset(current, firstMatch);
+            var originalEnd = MapNormalizedOffset(current, firstMatch + searchExpected.Length);
+            expected = current[originalStart..originalEnd];
+            firstMatch = originalStart;
+            if (GetFirstLineEnding(expected) is { } lineEnding)
+            {
+                replacement = NormalizeLineEndings(replacement, lineEnding);
+            }
+        }
+
+        return mutation with
+        {
+            StartOffset = firstMatch,
+            Length = expected.Length,
+            ExpectedText = expected,
+            ReplacementText = replacement,
+        };
     }
+
+    private static int MapNormalizedOffset(string text, int normalizedOffset)
+    {
+        var originalOffset = 0;
+        for (var index = 0; index < normalizedOffset; index++)
+        {
+            if (text[originalOffset] == '\r' && originalOffset + 1 < text.Length && text[originalOffset + 1] == '\n')
+            {
+                originalOffset++;
+            }
+
+            originalOffset++;
+        }
+
+        return originalOffset;
+    }
+
+    private static string? GetFirstLineEnding(string text)
+    {
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] == '\n')
+            {
+                return "\n";
+            }
+
+            if (text[index] == '\r')
+            {
+                return index + 1 < text.Length && text[index + 1] == '\n' ? "\r\n" : "\r";
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeLineEndings(string text, string lineEnding) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace("\n", lineEnding, StringComparison.Ordinal);
 
     private static string NormalizeProposalPath(string path)
     {
@@ -1509,59 +1576,7 @@ public sealed class MutationProposalApplication :
                     $"ReplaceText target '{path}' was not present in the immutable baseline.");
             }
 
-            var expected = mutation.ExpectedText
-                ?? throw CreateRepairableMutationFailure(
-                    ModelCorrectionCategory.MutationProposal,
-                    MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    $"ReplaceText target '{path}' requires exact expectedText.");
-            var exactRange = mutation.StartOffset >= 0
-                && mutation.Length >= 0
-                && mutation.StartOffset <= current.Length - mutation.Length
-                && mutation.Length == expected.Length
-                && current.AsSpan(mutation.StartOffset, mutation.Length).SequenceEqual(expected);
-            var resolvedMutation = mutation;
-            if (!exactRange)
-            {
-                if (expected.Length == 0)
-                {
-                    throw CreateRepairableMutationFailure(
-                        ModelCorrectionCategory.MutationProposal,
-                        MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                        $"ReplaceText insertion in '{path}' requires the exact offset.");
-                }
-
-                var firstMatch = current.IndexOf(expected, StringComparison.Ordinal);
-                if (firstMatch < 0)
-                {
-                    throw CreateRepairableMutationFailure(
-                        ModelCorrectionCategory.MutationProposal,
-                        MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                        $"ReplaceText expectedText was not found in '{path}'.");
-                }
-
-                var secondMatch = current.IndexOf(
-                    expected,
-                    firstMatch + 1,
-                    StringComparison.Ordinal);
-                if (secondMatch >= 0)
-                {
-                    throw CreateRepairableMutationFailure(
-                        ModelCorrectionCategory.MutationProposal,
-                        MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                        _prompts.Render(
-                            PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
-                            new Dictionary<string, string>(StringComparer.Ordinal)
-                            {
-                                ["RelativePath"] = path,
-                            }));
-                }
-
-                resolvedMutation = mutation with
-                {
-                    StartOffset = firstMatch,
-                    Length = expected.Length,
-                };
-            }
+            var resolvedMutation = ResolveReplacement(path, current, mutation);
 
             current = string.Concat(
                 current.AsSpan(0, resolvedMutation.StartOffset),

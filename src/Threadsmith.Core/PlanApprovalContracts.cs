@@ -12,7 +12,7 @@ public enum PlanApprovalPolicy
     /// <summary>Automatically approves low- and moderate-risk valid plans for the current session.</summary>
     TrustSession,
 
-    /// <summary>Persistently approves low- and moderate-risk valid plans for the exact repository identity.</summary>
+    /// <summary>Persistently approves low- and moderate-risk valid plans for this repository.</summary>
     AlwaysTrustRepo,
 
     /// <summary>Automatically approves every valid non-blocked plan after explicit trusted selection.</summary>

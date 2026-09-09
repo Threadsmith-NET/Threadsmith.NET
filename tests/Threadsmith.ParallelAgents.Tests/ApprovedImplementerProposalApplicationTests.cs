@@ -168,6 +168,22 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
     }
 
+    /// <summary>Exhausted proposal repairs retain the bounded failure reason at the parent execution boundary.</summary>
+    [Fact]
+    public async Task InvalidExpectedText_ExhaustedRetries_PreservesFailureReason()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Model.DefaultOutput = Proposal.Replace("before", "missing", StringComparison.Ordinal);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Application.HandleAsync(fixture.Command));
+
+        Assert.Contains("corrective-turn budget was exhausted", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("ReplaceText expectedText was not found in 'example.txt'", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(2, fixture.Model.Requests.Count);
+        Assert.Equal(0, fixture.Workspaces.StageCalls);
+        Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
+    }
+
     /// <summary>A configured Implementer route uses only trusted assembly and dispatch on initial and correction turns.</summary>
     [Fact]
     public async Task ConfiguredRole_UsesTrustedProviderAndContextForPreparationAndCorrection()

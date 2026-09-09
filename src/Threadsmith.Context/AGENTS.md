@@ -19,6 +19,8 @@ Own phase-specific evidence governance, bounded cross-turn conversation memory, 
 - ModelResolver.cs — host-controlled configured-profile selection with advisory hint snapshots.
 - AgentContext.cs - child evidence assembly and legacy structured complete-batch finding admission with assignment, role, baseline, citation, and model provenance checks; ordinary response bodies are not promoted to findings.
 
+When `write_file` is advertised, ordinary report/data saves in its allowed output folders go directly through that tool. Saving the previous answer uses `useLastResponse:true` instead of regenerating a mutation proposal. Source/project changes continue to converge to `propose_plan`; an allowlist denial cannot be worked around through another tool.
+
 ## Local Contracts
 
 - Always preserve the sanitized current turn. Native user/assistant messages retain sanitized plain text without XML entity encoding; escaping applies only to the legacy XML rendering. In Conversation-aware mode, admit only bounded complete recent turns plus provenance-linked structured/retrieved memory; Governed-memory-only excludes raw prior messages; Stateless excludes every prior-turn category.

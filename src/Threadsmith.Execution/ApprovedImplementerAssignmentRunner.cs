@@ -14,6 +14,7 @@ internal sealed class ApprovedImplementerAssignmentRunner : IAgentAssignmentRunn
     private readonly DelegateAgentsOptions _options;
     private readonly MutationProposalApplication _proposals;
     private PreparedMutationProposal? _prepared;
+    private MalformedModelOutputException? _proposalFailure;
 
     /// <summary>Initializes a new instance of the <see cref="ApprovedImplementerAssignmentRunner"/> class.</summary>
     public ApprovedImplementerAssignmentRunner(
@@ -56,6 +57,7 @@ internal sealed class ApprovedImplementerAssignmentRunner : IAgentAssignmentRunn
         }
         catch (Exception exception)
         {
+            _proposalFailure = exception as MalformedModelOutputException;
             var safeReason = exception is OperationCanceledException
                 ? "Approved Implementer preparation was cancelled."
                 : "Approved Implementer preparation failed before staging.";
@@ -89,6 +91,14 @@ internal sealed class ApprovedImplementerAssignmentRunner : IAgentAssignmentRunn
             || outcome.Implementation is null
             || outcome.Findings is null)
         {
+            if (_proposalFailure is not null
+                && checkpoint.DelegationId == _plan.DelegationId
+                && checkpoint.Provenance == _plan.Provenance
+                && checkpoint.Phase == DelegationCheckpointPhase.Failed)
+            {
+                throw new InvalidOperationException(_proposalFailure.Message, _proposalFailure);
+            }
+
             throw new InvalidOperationException("The approved Implementer child did not complete an authoritative proposal join.");
         }
 

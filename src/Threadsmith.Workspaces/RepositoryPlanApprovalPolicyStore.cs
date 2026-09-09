@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Threadsmith.Core;
 
-/// <summary>Writes repository-owned plan approval policy markers.</summary>
+/// <summary>Writes repository-owned plan approval policy choices.</summary>
 internal interface IRepositoryPlanApprovalPolicyStore
 {
     /// <summary>Writes one persistable plan approval policy for the supplied repository binding.</summary>
@@ -17,7 +17,7 @@ internal interface IRepositoryPlanApprovalPolicyStore
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Persists repository-controlled plan approval policy markers in `.threadsmith/config.json`.</summary>
+/// <summary>Persists repository-controlled plan approval policy choices in `.threadsmith/config.json`.</summary>
 internal sealed class RepositoryPlanApprovalPolicyStore : IRepositoryPlanApprovalPolicyStore
 {
     private static readonly JsonNodeOptions JsonNodeOptions = new() { PropertyNameCaseInsensitive = true };
@@ -56,16 +56,8 @@ internal sealed class RepositoryPlanApprovalPolicyStore : IRepositoryPlanApprova
         var root = await ReadRootAsync(binding.ConfigurationPath, cancellationToken);
         var planning = root["planning"] as JsonObject ?? [];
         root["planning"] = planning;
-        if (policy == PlanApprovalPolicy.AlwaysTrustRepo)
-        {
-            planning["approvalPolicy"] = "alwaysTrustRepo";
-            planning["approvalRepositoryIdentity"] = binding.RepositoryIdentity;
-        }
-        else
-        {
-            planning["approvalPolicy"] = SerializePolicy(policy);
-            planning.Remove("approvalRepositoryIdentity");
-        }
+        planning["approvalPolicy"] = SerializePolicy(policy);
+        planning.Remove("approvalRepositoryIdentity");
 
         await WriteAtomicAsync(binding, root, cancellationToken);
     }
@@ -136,6 +128,7 @@ internal sealed class RepositoryPlanApprovalPolicyStore : IRepositoryPlanApprova
         {
             PlanApprovalPolicy.ReviewAll => "reviewAll",
             PlanApprovalPolicy.ReviewRisky => "reviewRisky",
+            PlanApprovalPolicy.AlwaysTrustRepo => "alwaysTrustRepo",
             PlanApprovalPolicy.AutoApproveAllValid => "autoApproveAllValid",
             _ => throw new ArgumentOutOfRangeException(nameof(policy)),
         };

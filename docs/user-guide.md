@@ -445,12 +445,12 @@ A typical change follows this sequence:
 2. **Plan proposal** — the model calls the host-owned `propose_plan` tool. Text that merely describes edits is not enough to enter mutation flow.
 3. **Plan sanity and approval policy** — the host validates plan schema 2, runs cheap repository sanity checks over structured `fileIntents` (`Modify`, `Create`, `Delete`, `Move`, or `Rename`), classifies risk, and either returns repairable scope failures to the model for a bounded plan revision, prompts for manual review, or auto-approves according to `/plan-policy` / `planning:approvalPolicy`. Plan approval authorizes implementation work only, not repository writes.
 4. **Implementation proposal** — after manual or policy plan approval, the TUI shows mutation-preview preparation status while the same run receives bounded phase-eligible read tools plus proposal-only `propose_mutations`. The model proposes typed text, supported semantic, or structured lifecycle mutations correlated to accepted plan steps.
-5. **Proposal validation before Roslyn** — the host assigns identities and validates the proposal schema, plan-step ids, scope, paths, trust, current mutation baseline, baseline hashes, exact replacement text, lifecycle preconditions, structured-output size, and budgets. C# `RenameSymbol` proposals expand through the loaded semantic workspace when the model supplies the semantic symbol id and new identifier. Repairable host validation failures, such as wrong `expectedText`, are returned to the model for a bounded proposal retry; non-repairable policy/trust/path failures fail closed.
+5. **Proposal validation before Roslyn** — the host assigns identities and validates the proposal schema, plan-step ids, scope, paths, trust, current mutation baseline, baseline hashes, exact replacement text, lifecycle preconditions, structured-output size, and budgets. C# `RenameSymbol` proposals expand through the loaded semantic workspace when the model supplies the semantic symbol id and new identifier. When replacement matching differs only in CRLF, LF, or CR line endings, the host recovers a unique match without another model call, including in mixed-ending files. The replacement uses the matched region's first line-ending style; text outside that region stays unchanged. Ambiguous matches and other text differences still require repair. Repairable host validation failures, such as wrong `expectedText`, are returned to the model for a bounded proposal retry; exhausted retries report the rejection reason, and non-repairable policy/trust/path failures fail closed.
 6. **Pre-mutation Roslyn screening** — before staging or user approval, proposed `.cs` changes are applied only to an in-memory overlay. Threadsmith parses the would-be source with Roslyn and, when a loaded project is available at sufficient semantic confidence, runs fast compilation diagnostics against the overlay without `dotnet build`. Blocking diagnostics are mapped to file/range, diagnostic id, message, changed line/hunk, containing syntax when available, and explicit omissions, then returned to the model for proposal-phase repair. Repository files remain unchanged. Trusted or isolated analyzer/code-style checks may participate when implemented and available; ordinary repository-supplied third-party analyzers and source generators are not loaded pre-approval and are reported as degraded omissions until post-approval validation.
 7. **Private staging and exact diff** — only a proposal that passes host validation and cheap pre-mutation gates enters the private staged workspace. Threadsmith records the exact bounded diff. Interactive TUI presentation shows compact changed hunks with bounded unchanged context, hidden-line markers, and one blank display line after each hunk header without changing canonical diff content.
 8. **Mutation approval policy** — depending on `/policy` and `mutation:approvalPolicy`, Threadsmith either prompts for approval or applies the host-authorized set automatically. Every policy preserves the exact diff and invariant guardrails.
 9. **Authoritative pre-write baseline** — under the configured post-mutation validation stages, Threadsmith captures the exact affected pre-mutation diagnostic baseline before write-ahead mutation intent. When semantic-only validation is configured, this uses the loaded semantic workspace without launching a build; when compile/diagnostics stages are configured, affected projects are built to capture authoritative baseline diagnostics.
-10. **Transactional application** — after authorization and baseline capture, the host records write-ahead intent, hash- and path-checks authorized files, applies atomic replacements/lifecycle operations, and reconciles the result before advancing.
+10. **Transactional application** — after authorization and baseline capture, the host records write-ahead intent, hash- and path-checks authorized files, applies atomic replacements/lifecycle operations, and reconciles the result before advancing. The next transactional baseline reuses unchanged captured files and reads only changed endpoints, preserving later external-edit checks without rereading the entire repository.
 11. **Post-mutation validation** — configured validation stages run in order. The default is semantic, compile, diagnostics, and affected tests. Build/test validation remains authoritative even if pre-mutation Roslyn screening passed.
 12. **Correction or completion** — introduced compiler/test failures can stage a bounded correction against a promoted transactional baseline while retaining the original diagnostic baseline. Every correction repeats proposal validation, pre-mutation screening, exact diff, policy, transaction, and validation gates. The host records an authoritative final outcome rather than trusting model success claims.
 
@@ -501,8 +501,7 @@ Mutation-related controls:
 ```json
 {
   "planning": {
-    "approvalPolicy": "reviewAll",
-    "approvalRepositoryIdentity": null
+    "approvalPolicy": "reviewAll"
   },
   "mutation": {
     "approvalPolicy": "reviewAll",
@@ -521,9 +520,9 @@ Mutation-related controls:
 }
 ```
 
-- `planning:approvalPolicy` sets the default plan approval behavior; `/plan-policy` persists every plan policy except `TrustSession` in repository settings, while `/plan-policy AlwaysTrustRepo` also requires both the repository marker and user-owned trust grant to match.
-- `planning:approvalRepositoryIdentity` is a host-written repository marker for `AlwaysTrustRepo`; repository content alone cannot grant persistent plan trust without the matching user-owned plan-policy trust store.
-- `mutation:approvalPolicy` sets exact-diff mutation approval behavior; `/policy` changes it for the running session and persists only the explicit `alwaysTrustRepo` opt-in.
+- `planning:approvalPolicy` sets plan approval behavior; `/plan-policy` saves every choice except `TrustSession` only in the active repository’s `.threadsmith/config.json`, including `AlwaysTrustRepo`. No user-side trust record is needed.
+- `TrustSession` for either approval command applies in memory only and leaves the saved repository policy untouched. Restarting or switching back to the repository restores its configured policy.
+- `mutation:approvalPolicy` sets exact-diff mutation approval behavior; `/policy` saves `ReviewAll`, `ReviewRisky`, `TrustPlan`, and `AlwaysTrustRepo` only in the active repository’s `.threadsmith/config.json`.
 - `mutation:largeDiffThreshold` controls when `ReviewRisky` treats an exact diff as large.
 - `execution:maxCorrectiveTurns` bounds active-turn correction attempts for recoverable malformed or invalid model-authored requests, including malformed `propose_plan` arguments, invalid pre-execution tool batches, repairable plan revisions, mutation-proposal retries, and post-validation correction attempts.
 - `execution:maxModelRounds` optionally bounds total model continuation rounds for a request, and `0` disables that separate cutoff; `execution:maxPlanningToolRounds` optionally bounds the initial planning rounds that advertise inspection tools before only `propose_plan` remains, and `0` disables that separate cutoff so exploration can use the full model-round budget; `execution:maxStructuredOutputCharacters` bounds mutation proposal output when positive, and `0` disables that configured output cap.
@@ -531,29 +530,29 @@ Mutation-related controls:
 
 ### Plan approval policies
 
-`/plan-policy` opens a numbered selector; `/plan-policy current` reports the active choice, `/plan-policy reset` returns to repository-persisted `ReviewAll` and revokes identity-fenced repository plan trust, and `/plan-policy <name>` selects directly:
+`/plan-policy` opens a numbered selector; `/plan-policy current` reports the active choice, `/plan-policy reset` saves `ReviewAll` in repository configuration, and `/plan-policy <name>` selects directly:
 
 | Policy | Behavior |
 |---|---|
 | `ReviewAll` | Default. Prompt for every valid sanity-checked plan. Persisted in repository settings when selected through `/plan-policy`. |
 | `ReviewRisky` | Auto-approve low-risk valid plans; prompt for moderate or high risk. Persisted in repository settings when selected through `/plan-policy`. |
 | `TrustSession` | Auto-approve low- and moderate-risk valid plans for the current process session. Session-only; does not rewrite repository settings. |
-| `AlwaysTrustRepo` | Persistently auto-approve low- and moderate-risk valid plans for the exact repository identity. The host writes a repository marker plus user-owned trust grant; selecting another persisted policy or reset revokes the grant. |
+| `AlwaysTrustRepo` | Persistently auto-approve low- and moderate-risk valid plans for this repository. Saved only in repository configuration. |
 | `AutoApproveAllValid` | Strongest explicit mode. Auto-approve every valid non-blocked plan after sanity checks, subject to repository trust and hard guardrails. Persisted in repository settings when selected through `/plan-policy`. |
 
 Plan policy is distinct from mutation policy. Auto-approved plans still appear in the transcript as `PLAN: auto-approved`, remain durable structured contracts, and only allow the implementation proposal phase to start. They do not approve exact staged diffs, writes, process execution, validation results, commits, pushes, or external-system effects.
 
 ### Mutation approval policies
 
-`/policy` opens a numbered selector; `/policy current` reports the active choice, and `/policy <name>` selects directly:
+`/policy` opens a numbered selector; `/policy current` reports the active choice, and `/policy <name>` selects directly. Every choice except `TrustSession` is saved only in repository configuration:
 
 | Policy | Behavior |
 |---|---|
 | `ReviewAll` | Default. Prompt for every staged mutation set. |
 | `ReviewRisky` | Auto-apply ordinary edits; prompt for moves, deletions, configuration or dependency changes, diffs over `mutation:largeDiffThreshold`, and invalid/outside-repository targets. |
 | `TrustPlan` | Auto-apply only mutations contained by the accepted plan's declared files. Scope expansion still requires review. |
-| `TrustSession` | Auto-apply valid in-repository mutations until the process session ends. |
-| `AlwaysTrustRepo` | Auto-apply valid in-repository mutations and persist `mutation.approvalPolicy` in this repository. Selecting any other policy revokes persistent trust. |
+| `TrustSession` | Auto-apply valid in-repository mutations until the process session ends. Leaves the saved repository policy untouched. |
+| `AlwaysTrustRepo` | Auto-apply valid in-repository mutations and save `mutation.approvalPolicy` only in this repository. |
 
 Trust-based choices print a warning. Every policy still requires `TrustedMutation`, preserves the exact diff in events/projections, validates baseline hashes and approved roots, rejects prohibited/secret-bearing paths and `.git` metadata, runs configured validation, and never commits, pushes, resets, cleans, or otherwise performs destructive Git operations.
 
@@ -1835,3 +1834,25 @@ The worker process tree is terminated. Reduce the work, increase `tools:config:c
 ## Maintaining this guide
 
 This is the primary user-facing reference. Update it in the same change whenever implemented behavior affects installation, startup, commands, configuration, trust, tools, models, extensions, safety boundaries, output, exit codes, or troubleshooting. Keep the README concise and link here for operational detail. Do not document planned behavior as available.
+
+### Saving reports and data with `write_file`
+
+`write_file` creates text artifacts directly during a conversation. It avoids change planning, mutation proposals, builds, and tests. For an existing answer, use `{"path":".inbox/report.md","useLastResponse":true}`: the host copies the latest archived assistant answer from the current session exactly. Missing/removed answer bodies produce an error instead of a substituted report. For new content, supply `content` instead of `useLastResponse`.
+
+Configure the folder list in machine, user, or repository `config.json`:
+
+```json
+{
+  "tools": {
+    "writeFile": {
+      "allowedFolders": [".inbox", "reports", "C:/Reports"]
+    }
+  }
+}
+```
+
+The default list is `[".inbox"]`. Higher-precedence lists replace lower lists completely; `[]` or `null` permits no writes. Relative entries resolve under the active repository; outside folders must be absolute. Entries are literal folders, include descendants, and do not accept globs or relative `..` escapes. Absolute paths may identify folders elsewhere on the machine. Repository settings can grant these destinations as requested by the operator; an allowlisted folder is direct file-write authority. Restart after configuration edits. Opening another repository rebinds its folder grants without inheriting the former repository's overrides.
+
+Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. Git metadata, `.threadsmith` settings, `AGENTS.md`, prohibited paths, and symlink/junction traversal are rejected even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
+
+The tool remains subject to repository trust, `/tools` availability, `tools.allow`/`deny`/`requireApproval`, normal tool audit, and cancellation. If an existing configuration has a nonempty `tools.allow` or explicit `tools.enabled` list, add `write_file`; remove any legacy placeholder denial of that name. It has a file-write side effect, serializes with conflicting work, and is excluded from read-only delegated-agent tool sets. Tool activity shows the destination; successful results report path and byte count without echoing the saved report.

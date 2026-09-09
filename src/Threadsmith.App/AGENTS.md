@@ -19,6 +19,8 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 - `ShellRunner.cs` — interactive/headless projection, exact `--mcp` routing, and process-global cancellation registration.
 - `Threadsmith.App.csproj` — executable references, configuration-example deployment, explicit flattening of every owning project's prompt assets into `prompts/`, and manifest-controlled `ThreadsmithDocs` deployment; canonical release assembly is owned by `eng/release/`.
 
+Foundation composition supplies `write_file` with the existing conversation store and one repository-bound folder configuration. Tool-state rebinding updates that configuration before repository-open completion. `tools:writeFile:allowedFolders` defaults to `.inbox`; ordinary higher-precedence lists replace lower ones, and repository settings explicitly may select outside absolute output folders.
+
 ## Local Contracts
 
 - `Program.Main` reads as the startup sequence; move cohesive phases into descriptively named files when doing so clarifies ordering, testability, or resource ownership.
@@ -54,6 +56,8 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 - Preserve startup order: parse → paths/configuration → foundation → models → hook adapters → MCP manager/auto-connect → applications/dispatcher → `--mcp` shell or optional extensions → ordinary shell.
 - Keep provider SDK, MCP SDK, terminal-library, and persistence implementation types within their existing composition boundaries.
 - Do not shorten owned `HttpClient`, event subscription, semantic workspace, mutation coordinator, agent scheduler, skill workflow/tool registration, MCP adapter, or cancellation-source lifetimes during refactoring.
+
+- Approval policy composition binds both services to the active repository configuration. Plan policy uses only repository storage; do not compose a user-owned plan-trust store. Session selections are in-memory overrides and never rewrite saved settings.
 
 ## Verification
 

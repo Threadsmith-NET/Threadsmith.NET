@@ -3960,9 +3960,9 @@ public sealed class InteractionCoordinator
             or MutationApprovalPolicy.AlwaysTrustRepo
             ? " Warning: eligible diffs will apply without a separate mutation prompt; hard guardrails and validation remain active."
             : string.Empty;
-        var persistence = policy == MutationApprovalPolicy.AlwaysTrustRepo
-            ? " This repository-wide choice persists across restarts."
-            : string.Empty;
+        var persistence = policy == MutationApprovalPolicy.TrustSession
+            ? " This choice is session-only; the saved repository policy is unchanged."
+            : " This choice is saved only in repository configuration and persists across restarts.";
         await _surface.WriteAsync(
             $"Mutation policy changed to {policy}.{warning}{persistence}{Environment.NewLine}",
             PresentationTextRole.Status,
@@ -4013,7 +4013,7 @@ public sealed class InteractionCoordinator
         {
             await controller.SetPlanApprovalPolicyAsync(PlanApprovalPolicy.ReviewAll, cancellationToken);
             await _surface.WriteAsync(
-                "Plan policy reset to ReviewAll and persisted for this repository; repository plan trust was revoked when present.\n",
+                "Plan policy reset to ReviewAll and saved only in repository configuration.\n",
                 PresentationTextRole.Status,
                 cancellationToken);
             return;
@@ -4067,12 +4067,9 @@ public sealed class InteractionCoordinator
             or PlanApprovalPolicy.AutoApproveAllValid
             ? " Warning: valid plans may skip manual plan review; exact-diff mutation approval, pre-mutation screening, and validation remain active."
             : string.Empty;
-        var persistence = policy switch
-        {
-            PlanApprovalPolicy.TrustSession => " This choice is session-only.",
-            PlanApprovalPolicy.AlwaysTrustRepo => " This exact repository choice persists with an identity fence.",
-            _ => " This repository default persists across restarts.",
-        };
+        var persistence = policy == PlanApprovalPolicy.TrustSession
+            ? " This choice is session-only; the saved repository policy is unchanged."
+            : " This choice is saved only in repository configuration and persists across restarts.";
         await _surface.WriteAsync(
             $"Plan policy changed to {policy}.{warning}{persistence}{Environment.NewLine}",
             PresentationTextRole.Status,

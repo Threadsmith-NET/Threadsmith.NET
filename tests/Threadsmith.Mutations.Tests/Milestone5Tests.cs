@@ -1421,6 +1421,212 @@ public static class Milestone5Tests
         Assert.Equal(content, mutation.ReplacementText);
     }
 
+    /// <summary>Line-ending-only model mismatches stage once with exact baseline text and preserved file terminators.</summary>
+    [Theory]
+    [InlineData("\n", "\r\n")]
+    [InlineData("\r\n", "\n")]
+    [InlineData("\r", "\n")]
+    public static async Task ModelMutationProposal_LineEndings_StagesWithoutRetry(string actualEnding, string modelEnding)
+    {
+        var source = "// unchanged" + actualEnding + "class Example" + actualEnding + "{" + actualEnding + "}" + actualEnding;
+        var expected = "class Example" + modelEnding + "{";
+        var replacement = expected + modelEnding + "    private const string _test = \"tested\";";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string> { ["src/Example.cs"] = source });
+        var baselineFile = Assert.Single(repository.Baseline.Files);
+        var arguments = JsonSerializer.Serialize(new
+        {
+            mutationSet = new
+            {
+                rationale = "Add one constant.",
+                mutations = new[] { new { type = "ReplaceText", relativePath = "src/Example.cs", baselineSha256 = baselineFile.Sha256, startOffset = 0, length = expected.Length - 1, expectedText = expected, replacementText = replacement } },
+            },
+        });
+        var model = new QueueModelProvider(new ModelChunk { Output = new ToolRequestModelOutput("propose_mutations", arguments) });
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(repository, model, new ExecutionLimits { MaxCorrectiveTurns = 0 });
+        var plan = new ImplementationPlan
+        {
+            Summary = "Add one constant.",
+            Steps = [new ImplementationPlanStep { StepId = StepId.New(), Title = "Add constant", Description = "Add one constant.", FileIntents = ModifyIntents("src/Example.cs"), ExpectedOutcome = "Constant added." }],
+        };
+
+        var staged = await scenario.ProposeAsync(RunId.New(), new TaskSpecification("Add one constant", []), plan, RunPhase.ImplementationModelTurn);
+
+        Assert.Single(model.Requests);
+        Assert.Empty(scenario.Events<ModelCorrectionAttempted>());
+        var mutation = Assert.Single(staged.MutationSet.Mutations);
+        var exactExpected = "class Example" + actualEnding + "{";
+        Assert.Equal(exactExpected, mutation.ExpectedText);
+        Assert.Equal(exactExpected.Length, mutation.Length);
+        Assert.Equal(source.IndexOf(exactExpected, StringComparison.Ordinal), mutation.StartOffset);
+        Assert.Equal(exactExpected + actualEnding + "    private const string _test = \"tested\";", mutation.ReplacementText);
+        Assert.Equal(baselineFile.Sha256, mutation.BaselineSha256);
+        Assert.Equal(source, await File.ReadAllTextAsync(Path.Combine(repository.Root, "src/Example.cs")));
+    }
+
+    /// <summary>Line-ending adaptation never guesses between equivalent matches or changes other whitespace.</summary>
+    [Theory]
+    [InlineData("same\ntext\nsame\ntext", "same\r\ntext")]
+    [InlineData("same\r\ntext\nsame\ntext", "same\rtext")]
+    [InlineData("same\ntext", "same \r\ntext")]
+    public static async Task ModelMutationProposal_LineEndings_RejectsUnsafeRecovery(string source, string expected)
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string> { ["src/Example.cs"] = source });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            mutationSet = new
+            {
+                rationale = "Replace text.",
+                mutations = new[] { new { type = "ReplaceText", relativePath = "src/Example.cs", startOffset = 0, length = expected.Length, expectedText = expected, replacementText = "new" } },
+            },
+        });
+        var model = new QueueModelProvider(new ModelChunk { Output = new ToolRequestModelOutput("propose_mutations", arguments) });
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(repository, model, new ExecutionLimits { MaxCorrectiveTurns = 0 });
+        var plan = new ImplementationPlan
+        {
+            Summary = "Replace text.",
+            Steps = [new ImplementationPlanStep { StepId = StepId.New(), Title = "Replace", Description = "Replace text.", FileIntents = ModifyIntents("src/Example.cs"), ExpectedOutcome = "Text replaced." }],
+        };
+
+        await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() => scenario.ProposeAsync(RunId.New(), new TaskSpecification("Replace", []), plan, RunPhase.ImplementationModelTurn));
+
+        Assert.Single(model.Requests);
+        Assert.Empty(scenario.Events<MutationSetProposed>());
+        Assert.Equal(source, await File.ReadAllTextAsync(Path.Combine(repository.Root, "src/Example.cs")));
+    }
+
+    /// <summary>A mixed-ending mismatch cannot discard sibling changes; resolved offsets also follow earlier edits in the same file.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_LineEndings_CommitsCompleteMultiFileChange()
+    {
+        const string firstSource = "// α😀\r\none\ntwo\rthree\r\n// tail\n";
+        const string secondSource = "// header\r\nleft\r\nright\r\n";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["first.txt"] = firstSource, ["second.txt"] = secondSource,
+        });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            mutationSet = new
+            {
+                rationale = "Update both files.",
+                mutations = new[]
+                {
+                    new { type = "ReplaceText", relativePath = "first.txt", startOffset = 0, length = 0, expectedText = "one\r\ntwo\r\nthree", replacementText = "ONE\r\nTWO\r\nTHREE" },
+                    new { type = "ReplaceText", relativePath = "first.txt", startOffset = 0, length = 0, expectedText = "TWO\r\nTHREE", replacementText = "done\r\nok" },
+                    new { type = "ReplaceText", relativePath = "second.txt", startOffset = 0, length = 0, expectedText = "left\nright\n", replacementText = "LEFT\nRIGHT\n" },
+                },
+            },
+        });
+        var model = new QueueModelProvider(new ModelChunk { Output = new ToolRequestModelOutput("propose_mutations", arguments) });
+        await using var scenario = await MutationScenario.CreateWithLimitsAsync(repository, model, new ExecutionLimits { MaxCorrectiveTurns = 0 });
+        var plan = new ImplementationPlan
+        {
+            Summary = "Update both files.",
+            Steps = [new ImplementationPlanStep { StepId = StepId.New(), Title = "Update", Description = "Update both files.", FileIntents = ModifyIntents("first.txt", "second.txt"), ExpectedOutcome = "Both files updated." }],
+        };
+
+        var staged = await scenario.ProposeAsync(RunId.New(), new TaskSpecification("Update both files", []), plan, RunPhase.ImplementationModelTurn);
+        Assert.Equal(firstSource, await File.ReadAllTextAsync(Path.Combine(repository.Root, "first.txt")));
+        Assert.Equal(secondSource, await File.ReadAllTextAsync(Path.Combine(repository.Root, "second.txt")));
+        var committed = await scenario.ExecuteAsync(
+            staged.MutationSet.MutationSetId,
+            new MutationApproval { Level = MutationApprovalLevel.EntireSet, ApprovalId = staged.ApprovalId });
+
+        Assert.Single(model.Requests);
+        Assert.Empty(scenario.Events<ModelCorrectionAttempted>());
+        Assert.Equal(3, staged.MutationSet.Mutations.Count);
+        Assert.Equal(2, committed.ChangedFiles.Count);
+        Assert.Equal("// α😀\r\nONE\ndone\nok\r\n// tail\n", await File.ReadAllTextAsync(Path.Combine(repository.Root, "first.txt")));
+        Assert.Equal("// header\r\nLEFT\r\nRIGHT\r\n", await File.ReadAllTextAsync(Path.Combine(repository.Root, "second.txt")));
+    }
+
+    /// <summary>Promoting one changed file reuses untouched snapshots without rereading them or hiding later external conflicts.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_PromoteBaseline_ReusesUnchangedContentAndRetainsConflicts()
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["changed.txt"] = "before", ["untouched.txt"] = "original",
+        });
+        await using var events = new DomainEventStream();
+        await using var coordinator = new TransactionalWorkspaceCoordinator(events);
+        await coordinator.RegisterBaselineAsync(repository.Baseline);
+        var changedPath = Path.Combine(repository.Root, "changed.txt");
+        var untouchedPath = Path.Combine(repository.Root, "untouched.txt");
+        await File.WriteAllTextAsync(changedPath, "after");
+        WorkspaceBaseline promoted;
+
+        await using (var heldFile = new FileStream(untouchedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            promoted = await coordinator.PromoteBaselineAsync(repository.Baseline.WorkspaceId, ["changed.txt"]);
+        }
+
+        var workspace = coordinator.GetWorkspace(promoted.WorkspaceId);
+        Assert.Equal("after", await workspace.ReadBaselineTextAsync("changed.txt"));
+        Assert.Equal("original", await workspace.ReadBaselineTextAsync("untouched.txt"));
+        var originalHash = Assert.Single(repository.Baseline.Files, file => file.RelativePath == "untouched.txt");
+        Assert.Equal(originalHash, Assert.Single(promoted.Files, file => file.RelativePath == "untouched.txt"));
+        await File.WriteAllTextAsync(untouchedPath, "external edit");
+        var mutationSet = new MutationSet
+        {
+            MutationSetId = MutationSetId.New(), SessionId = repository.SessionId, RunId = RunId.New(), WorkspaceId = promoted.WorkspaceId,
+            BaselineCapturedAt = promoted.CapturedAt, BaselineRevision = promoted.GitRevision,
+            Mutations = [new Mutation { MutationId = MutationId.New(), Type = MutationType.ReplaceText, RelativePath = "untouched.txt", BaselineSha256 = originalHash.Sha256, StartOffset = 0, Length = 8, ExpectedText = "original", ReplacementText = "requested" }],
+            Rationale = "Replace untouched text.", Risk = MutationRisk.Low,
+        };
+
+        var staged = await coordinator.HandleAsync(new StageMutationSetCommand(mutationSet));
+        Assert.True(staged.Conflicts.HasConflicts);
+        await Assert.ThrowsAsync<WorkspaceConflictException>(() => workspace.CommitAsync(
+            mutationSet.MutationSetId,
+            new MutationApproval { Level = MutationApprovalLevel.EntireSet, ApprovalId = staged.ApprovalId }));
+        Assert.Equal("external edit", await File.ReadAllTextAsync(untouchedPath));
+    }
+
+    /// <summary>Promotion accounts for all removed identities before adding new files at the captured byte limit.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_PromoteBaseline_TracksCreatedDeletedAndMovedFilesAtByteLimit()
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["deleted.txt"] = "1234", ["old.txt"] = "5678",
+        });
+        await using var events = new DomainEventStream();
+        await using var coordinator = new TransactionalWorkspaceCoordinator(events, maximumBaselineContentBytes: 8);
+        await coordinator.RegisterBaselineAsync(repository.Baseline);
+        File.Move(Path.Combine(repository.Root, "old.txt"), Path.Combine(repository.Root, "moved.txt"));
+        File.Delete(Path.Combine(repository.Root, "deleted.txt"));
+        await File.WriteAllTextAsync(Path.Combine(repository.Root, "created.txt"), "abcd");
+
+        var promoted = await coordinator.PromoteBaselineAsync(repository.Baseline.WorkspaceId, ["created.txt", "moved.txt", "deleted.txt", "old.txt"]);
+
+        Assert.Equal(new[] { "created.txt", "moved.txt" }, promoted.Files.Select(file => file.RelativePath));
+        var workspace = coordinator.GetWorkspace(promoted.WorkspaceId);
+        Assert.Equal("abcd", await workspace.ReadBaselineTextAsync("created.txt"));
+        Assert.Equal("5678", await workspace.ReadBaselineTextAsync("moved.txt"));
+    }
+
+    /// <summary>Cancellation and a byte-limit failure leave the original baseline registered and readable.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_PromoteBaseline_FailureRetainsOriginalBaseline()
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string> { ["file.txt"] = "old" });
+        await using var events = new DomainEventStream();
+        await using var coordinator = new TransactionalWorkspaceCoordinator(events, maximumBaselineContentBytes: 3);
+        await coordinator.RegisterBaselineAsync(repository.Baseline);
+        var original = coordinator.GetWorkspace(repository.Baseline.WorkspaceId);
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.PromoteBaselineAsync(repository.Baseline.WorkspaceId, ["file.txt"], cancellation.Token));
+        Assert.Same(original, coordinator.GetWorkspace(repository.Baseline.WorkspaceId));
+        await File.WriteAllTextAsync(Path.Combine(repository.Root, "file.txt"), "too long");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.PromoteBaselineAsync(repository.Baseline.WorkspaceId, ["file.txt"]));
+
+        Assert.Same(original, coordinator.GetWorkspace(repository.Baseline.WorkspaceId));
+        Assert.Equal("old", await original.ReadBaselineTextAsync("file.txt"));
+    }
+
     /// <summary>A bad model-authored expectedText receives corrective feedback and can repair.</summary>
     [Fact]
     public static async Task ModelMutationProposal_BadExpectedText_ReasksWithCorrectiveMessage()
@@ -2374,135 +2580,6 @@ public static class Milestone5Tests
         Assert.Equal(501, risk.TotalLinesChanged);
     }
 
-    /// <summary>Persistent repository trust round-trips and selecting another policy revokes it without losing config.</summary>
-    [Fact]
-    public static async Task MutationApprovalPolicy_AlwaysTrustRepo_PersistsAndRevokesAtomically()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            await File.WriteAllTextAsync(configPath, "{\"unrelated\":{\"kept\":true}}");
-            IConfiguration configuration = new ConfigurationBuilder().Build();
-            var service = new MutationApprovalPolicyService(configuration, configPath);
-
-            await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo);
-
-            using (var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
-            {
-                Assert.True(persisted.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
-                Assert.Equal(
-                    "alwaysTrustRepo",
-                    persisted.RootElement.GetProperty("mutation").GetProperty("approvalPolicy").GetString());
-            }
-
-            IConfiguration reloaded = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            var restored = new MutationApprovalPolicyService(reloaded, configPath);
-            Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, restored.CurrentPolicy);
-            await restored.SetPolicyAsync(MutationApprovalPolicy.ReviewAll);
-            using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
-            Assert.False(revoked.RootElement.TryGetProperty("mutation", out _));
-            Assert.True(revoked.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Repository-owned plan config cannot forge persistent plan trust without user-owned grant state.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_RepositoryConfigAlone_CannotGrantPersistentTrust()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-forge-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            var identity = CreatePlanPolicyRepositoryIdentity(root);
-            await File.WriteAllTextAsync(
-                configPath,
-                $"{{\"planning\":{{\"approvalPolicy\":\"alwaysTrustRepo\",\"approvalRepositoryIdentity\":\"{identity}\"}}}}");
-            IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            Assert.Equal(PlanApprovalPolicy.ReviewAll, service.CurrentPolicy);
-            await service.BindRepositoryAsync(root);
-            Assert.Equal(PlanApprovalPolicy.ReviewAll, service.CurrentPolicy);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>User-owned grant state cannot establish persistent plan trust without a repository marker.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_UserGrantAlone_CannotGrantPersistentTrust()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-user-alone-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            await File.WriteAllTextAsync(configPath, "{}");
-            var grantStore = new UserPlanTrustGrantStore(userTrustPath);
-            await grantStore.GrantAsync(CreatePlanPolicyRepositoryIdentity(root));
-            IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            Assert.Equal(PlanApprovalPolicy.ReviewAll, service.CurrentPolicy);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Persistent plan trust requires the repository marker to match the exact granted identity.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_MismatchedRepositoryIdentity_CannotGrantPersistentTrust()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-mismatch-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            await File.WriteAllTextAsync(
-                configPath,
-                "{\"planning\":{\"approvalPolicy\":\"alwaysTrustRepo\",\"approvalRepositoryIdentity\":\"different\"}}");
-            var grantStore = new UserPlanTrustGrantStore(userTrustPath);
-            await grantStore.GrantAsync(CreatePlanPolicyRepositoryIdentity(root));
-            IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            Assert.Equal(PlanApprovalPolicy.ReviewAll, service.CurrentPolicy);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
     /// <summary>Repository configuration cannot select the session-only plan trust mode.</summary>
     [Fact]
     public static async Task PlanApprovalPolicy_RepositoryTrustSession_FallsBackToTrustedPolicy()
@@ -2565,106 +2642,9 @@ public static class Milestone5Tests
         Assert.Equal(PlanApprovalPolicy.AutoApproveAllValid, service.CurrentPolicy);
     }
 
-    /// <summary>User-owned plan trust restores for the startup repository and survives a same-repository bind.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_AlwaysTrustRepo_RestoresFromUserOwnedGrant()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            IConfiguration configuration = new ConfigurationBuilder().Build();
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            await service.SetPolicyAsync(PlanApprovalPolicy.AlwaysTrustRepo);
-
-            IConfiguration reloaded = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            var restored = new PlanApprovalPolicyService(reloaded, configPath, userTrustPath);
-            Assert.Equal(PlanApprovalPolicy.AlwaysTrustRepo, restored.CurrentPolicy);
-            await restored.BindRepositoryAsync(root);
-            Assert.Equal(PlanApprovalPolicy.AlwaysTrustRepo, restored.CurrentPolicy);
-            await restored.SetPolicyAsync(PlanApprovalPolicy.ReviewAll);
-            IConfiguration revoked = new ConfigurationBuilder().AddJsonFile(configPath, optional: true).Build();
-            Assert.Equal("reviewAll", revoked["planning:approvalPolicy"]);
-            Assert.Null(revoked["planning:approvalRepositoryIdentity"]);
-            Assert.False(await HasPlanPolicyGrantAsync(userTrustPath, CreatePlanPolicyRepositoryIdentity(root)));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>ReviewRisky persists as a safe repository default without user-owned trust state.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_ReviewRisky_PersistsAsRepositoryDefault()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-review-risky-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            IConfiguration configuration = new ConfigurationBuilder().Build();
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            await service.SetPolicyAsync(PlanApprovalPolicy.ReviewRisky);
-
-            IConfiguration reloaded = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            var restored = new PlanApprovalPolicyService(reloaded, configPath, userTrustPath);
-            Assert.Equal(PlanApprovalPolicy.ReviewRisky, restored.CurrentPolicy);
-            Assert.Equal("reviewRisky", reloaded["planning:approvalPolicy"]);
-            Assert.Null(reloaded["planning:approvalRepositoryIdentity"]);
-            Assert.False(File.Exists(userTrustPath));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>AutoApproveAllValid persists as an explicit repository policy without user-owned trust state.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_AutoApproveAllValid_PersistsAsRepositoryDefault()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-auto-all-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            IConfiguration configuration = new ConfigurationBuilder().Build();
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            await service.SetPolicyAsync(PlanApprovalPolicy.AutoApproveAllValid);
-
-            IConfiguration reloaded = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            var restored = new PlanApprovalPolicyService(reloaded, configPath, userTrustPath);
-            Assert.Equal(PlanApprovalPolicy.AutoApproveAllValid, restored.CurrentPolicy);
-            Assert.Equal("autoApproveAllValid", reloaded["planning:approvalPolicy"]);
-            Assert.Null(reloaded["planning:approvalRepositoryIdentity"]);
-            Assert.False(File.Exists(userTrustPath));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
     /// <summary>Repository plan-policy storage owns marker persistence while preserving unrelated JSON.</summary>
     [Fact]
-    public static async Task PlanApprovalRepositoryPolicyStore_PreservesUnrelatedJsonAndIdentityMarker()
+    public static async Task PlanApprovalRepositoryPolicyStore_PreservesUnrelatedJsonAndRemovesLegacyIdentityMarker()
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-store-{Guid.NewGuid():N}");
         var configPath = Path.Combine(root, ".threadsmith", "config.json");
@@ -2685,7 +2665,7 @@ public static class Milestone5Tests
                 Assert.True(trusted.RootElement.GetProperty("unrelated").GetProperty("kept").GetBoolean());
                 Assert.Equal("keep", planning.GetProperty("note").GetString());
                 Assert.Equal("alwaysTrustRepo", planning.GetProperty("approvalPolicy").GetString());
-                Assert.Equal(binding.RepositoryIdentity, planning.GetProperty("approvalRepositoryIdentity").GetString());
+                Assert.False(planning.TryGetProperty("approvalRepositoryIdentity", out _));
             }
 
             await store.WritePolicyAsync(binding, PlanApprovalPolicy.ReviewRisky);
@@ -2705,285 +2685,6 @@ public static class Milestone5Tests
         }
     }
 
-    /// <summary>User-owned plan trust storage keeps exact identity grants separate from repository markers.</summary>
-    [Fact]
-    public static async Task UserPlanTrustGrantStore_ExactGrantRevocationPreservesUnrelatedData()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-store-{Guid.NewGuid():N}");
-        var trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        string identity = new('a', 64);
-        string otherIdentity = new('b', 64);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(trustPath) ?? root);
-            await File.WriteAllTextAsync(
-                trustPath,
-                $"{{\"theme\":\"dark\",\"trustedRepositories\":{{\"{otherIdentity}\":true}}}}");
-            var store = new UserPlanTrustGrantStore(trustPath);
-
-            await store.GrantAsync(identity);
-
-            Assert.True(store.IsGranted(identity));
-            Assert.False(store.IsGranted(identity.ToUpperInvariant()));
-            using (var granted = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath)))
-            {
-                Assert.Equal("dark", granted.RootElement.GetProperty("theme").GetString());
-                var repositories = granted.RootElement.GetProperty("trustedRepositories");
-                Assert.True(repositories.GetProperty(identity).GetBoolean());
-                Assert.True(repositories.GetProperty(otherIdentity).GetBoolean());
-            }
-
-            await store.RevokeAsync(identity);
-            await store.RevokeAsync(otherIdentity);
-
-            using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(trustPath));
-            Assert.Equal("dark", revoked.RootElement.GetProperty("theme").GetString());
-            Assert.False(revoked.RootElement.TryGetProperty("trustedRepositories", out _));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Malformed user-owned trust data fails closed instead of authorizing repository trust.</summary>
-    [Fact]
-    public static async Task UserPlanTrustGrantStore_MalformedTrustDataFailsClosed()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-trust-malformed-{Guid.NewGuid():N}");
-        var trustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(trustPath) ?? root);
-            await File.WriteAllTextAsync(trustPath, "{\"trustedRepositories\":{\"repo\":\"true\"}}");
-            var store = new UserPlanTrustGrantStore(trustPath);
-
-            Assert.Throws<InvalidOperationException>(() => store.IsGranted("repo"));
-            await Assert.ThrowsAsync<InvalidOperationException>(() => store.GrantAsync("other"));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Persistent trust persistence compensates user grants when repository marker writes fail.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicyPersistence_RepositoryFailureRevokesNewTrustGrant()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-fail-{Guid.NewGuid():N}");
-        try
-        {
-            Directory.CreateDirectory(root);
-            var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
-            var operations = new List<string>();
-            var repositoryStore = new RecordingPlanApprovalRepositoryStore(operations)
-            {
-                Failure = new IOException("repository marker failed"),
-            };
-            var trustStore = new RecordingPlanTrustGrantStore(operations);
-            var persistence = new PlanApprovalPolicyPersistence(repositoryStore, trustStore);
-
-            var exception = await Assert.ThrowsAnyAsync<Exception>(
-                () => persistence.PersistAsync(binding, PlanApprovalPolicy.AlwaysTrustRepo));
-
-            Assert.True(exception is IOException or AggregateException);
-            Assert.Equal(["grant:false", "write:AlwaysTrustRepo:false", "revoke:false"], operations);
-            Assert.False(trustStore.IsGranted(binding.RepositoryIdentity));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Policy downgrades revoke user-owned trust before writing the weaker repository marker.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicyPersistence_DowngradeRevokesBeforeRepositoryWrite()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-protocol-downgrade-{Guid.NewGuid():N}");
-        try
-        {
-            Directory.CreateDirectory(root);
-            var binding = PlanApprovalRepositoryBinding.CreateFromRepositoryRoot(root);
-            var operations = new List<string>();
-            var repositoryStore = new RecordingPlanApprovalRepositoryStore(operations);
-            var trustStore = new RecordingPlanTrustGrantStore(operations);
-            await trustStore.GrantAsync(binding.RepositoryIdentity);
-            operations.Clear();
-            var persistence = new PlanApprovalPolicyPersistence(repositoryStore, trustStore);
-
-            await persistence.PersistAsync(binding, PlanApprovalPolicy.ReviewAll);
-
-            Assert.Equal(["revoke:false", "write:ReviewAll:false"], operations);
-            Assert.False(trustStore.IsGranted(binding.RepositoryIdentity));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>TrustSession is session-only and does not rewrite repository policy configuration.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_TrustSession_DoesNotRewriteRepositoryPolicy()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-session-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            await File.WriteAllTextAsync(
-                configPath,
-                "{\"planning\":{\"approvalPolicy\":\"reviewRisky\",\"approvalRepositoryIdentity\":\"stale\",\"note\":\"keep\"}}");
-            IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            await service.SetPolicyAsync(PlanApprovalPolicy.TrustSession);
-
-            Assert.Equal(PlanApprovalPolicy.TrustSession, service.CurrentPolicy);
-            IConfiguration updated = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            Assert.Equal("reviewRisky", updated["planning:approvalPolicy"]);
-            Assert.Equal("stale", updated["planning:approvalRepositoryIdentity"]);
-            Assert.Equal("keep", updated["planning:note"]);
-            Assert.False(File.Exists(userTrustPath));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Reset revokes dormant persistent trust hidden by a higher-precedence session policy.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_Reset_RevokesDormantPersistentTrust()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-dormant-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        var identity = CreatePlanPolicyRepositoryIdentity(root);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            var initial = new PlanApprovalPolicyService(
-                new ConfigurationBuilder().Build(),
-                configPath,
-                userTrustPath);
-            await initial.SetPolicyAsync(PlanApprovalPolicy.AlwaysTrustRepo);
-            IConfiguration overriddenConfiguration = new ConfigurationBuilder()
-                .AddJsonFile(configPath)
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["planning:approvalPolicy"] = "reviewRisky",
-                })
-                .Build();
-            var overridden = new PlanApprovalPolicyService(
-                overriddenConfiguration,
-                configPath,
-                userTrustPath);
-            Assert.Equal(PlanApprovalPolicy.ReviewRisky, overridden.CurrentPolicy);
-
-            await overridden.SetPolicyAsync(PlanApprovalPolicy.ReviewAll);
-
-            IConfiguration revoked = new ConfigurationBuilder().AddJsonFile(configPath).Build();
-            Assert.Equal("reviewAll", revoked["planning:approvalPolicy"]);
-            Assert.Null(revoked["planning:approvalRepositoryIdentity"]);
-            Assert.False(await HasPlanPolicyGrantAsync(userTrustPath, identity));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Marker removal failure cannot leave the activating user grant behind.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_RevocationMarkerFailure_RemovesGrantBeforeMarker()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-revoke-fail-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        var identity = CreatePlanPolicyRepositoryIdentity(root);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? root);
-            var service = new PlanApprovalPolicyService(
-                new ConfigurationBuilder().Build(),
-                configPath,
-                userTrustPath);
-            await service.SetPolicyAsync(PlanApprovalPolicy.AlwaysTrustRepo);
-            Assert.True(await HasPlanPolicyGrantAsync(userTrustPath, identity));
-            File.SetAttributes(configPath, File.GetAttributes(configPath) | FileAttributes.ReadOnly);
-
-            var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
-                service.SetPolicyAsync(PlanApprovalPolicy.ReviewAll));
-
-            Assert.True(exception is IOException or UnauthorizedAccessException);
-            Assert.False(await HasPlanPolicyGrantAsync(userTrustPath, identity));
-        }
-        finally
-        {
-            if (File.Exists(configPath))
-            {
-                File.SetAttributes(configPath, FileAttributes.Normal);
-            }
-
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>A failed repository marker write rolls back the user-owned persistent plan trust grant.</summary>
-    [Fact]
-    public static async Task PlanApprovalPolicy_AlwaysTrustRepoRepositoryWriteFailure_RollsBackUserGrant()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-fail-{Guid.NewGuid():N}");
-        var configPath = Path.Combine(root, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(root, "user", "plan-policy-trust.json");
-        var identity = CreatePlanPolicyRepositoryIdentity(root);
-        try
-        {
-            Directory.CreateDirectory(configPath);
-            IConfiguration configuration = new ConfigurationBuilder().Build();
-            var service = new PlanApprovalPolicyService(configuration, configPath, userTrustPath);
-
-            var exception = await Assert.ThrowsAnyAsync<Exception>(
-                () => service.SetPolicyAsync(PlanApprovalPolicy.AlwaysTrustRepo));
-
-            Assert.True(exception is IOException or UnauthorizedAccessException);
-            Assert.Equal(PlanApprovalPolicy.ReviewAll, service.CurrentPolicy);
-            Assert.False(await HasPlanPolicyGrantAsync(userTrustPath, identity));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
-    }
-
     /// <summary>Repository rebinding falls back to lower-precedence user policy when the new repository omits it.</summary>
     [Fact]
     public static async Task PlanApprovalPolicy_BindRepository_RetainsUserLayerWhenRepositoryOmitsPolicy()
@@ -2992,7 +2693,6 @@ public static class Milestone5Tests
         var secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
         var firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
         var secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(firstConfigPath) ?? firstRoot);
@@ -3005,7 +2705,7 @@ public static class Milestone5Tests
                 })
                 .AddJsonFile(firstConfigPath, optional: true)
                 .Build();
-            var service = new PlanApprovalPolicyService(configuration, firstConfigPath, userTrustPath);
+            var service = new PlanApprovalPolicyService(configuration, firstConfigPath);
 
             await service.BindRepositoryAsync(secondRoot);
 
@@ -3033,7 +2733,6 @@ public static class Milestone5Tests
         var secondRoot = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-plan-policy-second-{Guid.NewGuid():N}");
         var firstConfigPath = Path.Combine(firstRoot, ".threadsmith", "config.json");
         var secondConfigPath = Path.Combine(secondRoot, ".threadsmith", "config.json");
-        var userTrustPath = Path.Combine(firstRoot, "user", "plan-policy-trust.json");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(firstConfigPath) ?? firstRoot);
@@ -3050,7 +2749,7 @@ public static class Milestone5Tests
                     ["planning:approvalPolicy"] = "trustSession",
                 })
                 .Build();
-            var service = new PlanApprovalPolicyService(configuration, firstConfigPath, userTrustPath);
+            var service = new PlanApprovalPolicyService(configuration, firstConfigPath);
 
             await service.BindRepositoryAsync(secondRoot);
 
@@ -3096,9 +2795,9 @@ public static class Milestone5Tests
         Assert.Equal("headless", changed.Scope);
     }
 
-    /// <summary>Revocation finds configuration keys case-insensitively and preserves their original spelling.</summary>
+    /// <summary>Policy replacement finds configuration keys case-insensitively and preserves their original spelling.</summary>
     [Fact]
-    public static async Task MutationApprovalPolicy_Revocation_HandlesDifferentlyCasedKeys()
+    public static async Task MutationApprovalPolicy_Replacement_HandlesDifferentlyCasedKeys()
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m5-policy-case-{Guid.NewGuid():N}");
         var configPath = Path.Combine(root, ".threadsmith", "config.json");
@@ -3116,7 +2815,7 @@ public static class Milestone5Tests
 
             using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             var mutation = revoked.RootElement.GetProperty("Mutation");
-            Assert.False(mutation.TryGetProperty("ApprovalPolicy", out _));
+            Assert.Equal("reviewAll", mutation.GetProperty("ApprovalPolicy").GetString());
             Assert.Equal(42, mutation.GetProperty("LargeDiffThreshold").GetInt32());
             Assert.False(revoked.RootElement.TryGetProperty("mutation", out _));
         }
@@ -3510,75 +3209,6 @@ public static class Milestone5Tests
         }
     }
 
-    private sealed class RecordingPlanApprovalRepositoryStore : IRepositoryPlanApprovalPolicyStore
-    {
-        private readonly List<string> _operations;
-
-        public RecordingPlanApprovalRepositoryStore(List<string> operations)
-        {
-            ArgumentNullException.ThrowIfNull(operations);
-            _operations = operations;
-        }
-
-        public Exception? Failure { get; init; }
-
-        public Task WritePolicyAsync(
-            PlanApprovalRepositoryBinding binding,
-            PlanApprovalPolicy policy,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(binding);
-            _operations.Add($"write:{policy}:{cancellationToken.CanBeCanceled.ToString().ToLowerInvariant()}");
-            if (Failure is not null)
-            {
-                throw Failure;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingPlanTrustGrantStore : IUserPlanTrustGrantStore
-    {
-        private readonly HashSet<string> _grants = new(StringComparer.Ordinal);
-        private readonly List<string> _operations;
-
-        public RecordingPlanTrustGrantStore(List<string> operations)
-        {
-            ArgumentNullException.ThrowIfNull(operations);
-            _operations = operations;
-        }
-
-        public bool IsGranted(string repositoryIdentity)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
-            return _grants.Contains(repositoryIdentity);
-        }
-
-        public Task GrantAsync(
-            string repositoryIdentity,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
-            _operations.Add($"grant:{cancellationToken.CanBeCanceled.ToString().ToLowerInvariant()}");
-            cancellationToken.ThrowIfCancellationRequested();
-            _grants.Add(repositoryIdentity);
-            return Task.CompletedTask;
-        }
-
-        public Task RevokeAsync(
-            string repositoryIdentity,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
-            _operations.Add($"revoke:{cancellationToken.CanBeCanceled.ToString().ToLowerInvariant()}");
-            cancellationToken.ThrowIfCancellationRequested();
-            _grants.Remove(repositoryIdentity);
-            return Task.CompletedTask;
-        }
-    }
-
     private static IReadOnlyList<PlanFileIntent> ModifyIntents(params string[] paths)
     {
         return CreateIntents(PlanFileChangeKind.Modify, paths);
@@ -3594,31 +3224,9 @@ public static class Milestone5Tests
         return [.. paths.Select(path => new PlanFileIntent { Kind = kind, Path = path })];
     }
 
-    private static string CreatePlanPolicyRepositoryIdentity(string repositoryRoot)
-    {
-        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
-        var identityInput = OperatingSystem.IsWindows()
-            ? normalized.ToUpperInvariant()
-            : normalized;
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identityInput)));
-    }
-
     private static string CreateSemanticContentIdentity(string text)
     {
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-    }
-
-    private static async Task<bool> HasPlanPolicyGrantAsync(string userTrustPath, string repositoryIdentity)
-    {
-        if (!File.Exists(userTrustPath))
-        {
-            return false;
-        }
-
-        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(userTrustPath));
-        return document.RootElement.TryGetProperty("trustedRepositories", out var repositories)
-            && repositories.TryGetProperty(repositoryIdentity, out var grant)
-            && grant.ValueKind == JsonValueKind.True;
     }
 
     private static Mutation CreateReplacement(

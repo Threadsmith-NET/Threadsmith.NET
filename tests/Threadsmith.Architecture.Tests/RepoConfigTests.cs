@@ -11,6 +11,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Context;
 using Threadsmith.Execution;
+using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>
@@ -239,7 +240,7 @@ public static class RepoConfigTests
     {
         var config = LoadConfigExample();
         Assert.Equal("reviewAll", config["planning:approvalPolicy"]);
-        Assert.Null(config["planning:approvalRepositoryIdentity"]);
+        Assert.DoesNotContain(config.AsEnumerable(), item => item.Key.Equals("planning:approvalRepositoryIdentity", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>The execution-limit and repository-safety keys bind to their documented values (§21.2).</summary>
@@ -263,6 +264,18 @@ public static class RepoConfigTests
         var validationStages = config.GetSection("validation:stages").Get<string[]>() ?? [];
         Assert.Equal(["semantic", "compile", "diagnostics", "tests"], validationStages);
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
+    }
+
+    /// <summary>The artifact tool is enabled in the scaffold and defaults to an explicit .inbox folder grant.</summary>
+    [Fact]
+    public static void WriteFile_DefaultsToInboxAndIsNotDenied()
+    {
+        var config = LoadConfigExample();
+
+        Assert.Equal([".inbox"], WriteFileConfiguration.LoadAllowedFolders(config));
+        Assert.Contains("write_file", config.GetSection("tools:enabled").Get<string[]>() ?? []);
+        Assert.Contains("write_file", config.GetSection("tools:allow").Get<string[]>() ?? []);
+        Assert.DoesNotContain("write_file", config.GetSection("tools:deny").Get<string[]>() ?? []);
     }
 
     /// <summary>The production composition root binds the documented corrective-turn limit key.</summary>

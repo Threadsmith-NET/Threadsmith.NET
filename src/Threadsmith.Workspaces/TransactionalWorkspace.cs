@@ -766,6 +766,81 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         return workspace;
     }
 
+    /// <summary>Creates the next immutable generation by rereading only the committed paths.</summary>
+    internal async Task<TransactionalWorkspace> CreatePromotedAsync(
+        IReadOnlyList<string> changedFiles,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var snapshots = new Dictionary<string, FileSnapshot>(_baselineFiles, _pathComparer);
+            var totalBytes = snapshots.Values.Sum(snapshot => snapshot.Bytes.LongLength);
+            var paths = changedFiles.Select(NormalizeRelativePath).Distinct(_pathComparer).ToArray();
+            foreach (var path in paths)
+            {
+                if (snapshots.Remove(path, out var previous))
+                {
+                    totalBytes -= previous.Bytes.LongLength;
+                }
+            }
+
+            foreach (var path in paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var fullPath = ResolveConfinedPath(path, mustExist: false);
+                if (!File.Exists(fullPath))
+                {
+                    continue;
+                }
+
+                var remaining = _maximumBaselineContentBytes - totalBytes;
+                if (new FileInfo(fullPath).Length > remaining)
+                {
+                    throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
+                }
+
+                var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+                totalBytes += bytes.LongLength;
+                if (totalBytes > _maximumBaselineContentBytes)
+                {
+                    throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
+                }
+
+                snapshots[path] = FileSnapshot.FromBytes(bytes, Hash(bytes));
+            }
+
+            var baseline = Baseline with
+            {
+                CapturedAt = DateTimeOffset.UtcNow,
+                Files = snapshots.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new WorkspaceFileHash(pair.Key, pair.Value.Sha256, pair.Value.Bytes.LongLength))
+                    .ToArray(),
+            };
+            var promoted = new TransactionalWorkspace(
+                baseline,
+                _events,
+                Isolation,
+                _logger,
+                _maximumBaselineContentBytes,
+                _mutationApprovalPolicy,
+                _transactionObserver,
+                _semanticMutationAttribution);
+            foreach (var (path, snapshot) in snapshots)
+            {
+                // FileSnapshot byte arrays are private immutable captured content.
+                promoted._baselineFiles.Add(path, snapshot);
+            }
+
+            return promoted;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Stages without publishing until the coordinator has registered review ownership.</summary>
     internal Task<StagedMutationSet> StageForCoordinatorAsync(
         MutationSet mutationSet,
@@ -2039,45 +2114,40 @@ public sealed class TransactionalWorkspaceCoordinator :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(changedFiles);
-        var workspace = GetWorkspace(workspaceId);
-        var prior = workspace.Baseline;
-        var repositoryRoot = Path.GetFullPath(prior.RepositoryPath);
-        var files = prior.Files.ToDictionary(
-            file => file.RelativePath,
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var relativePath in changedFiles.Distinct(StringComparer.OrdinalIgnoreCase))
+        var previous = (TransactionalWorkspace)GetWorkspace(workspaceId);
+        var promoted = await previous.CreatePromotedAsync(changedFiles, cancellationToken);
+        var published = false;
+        try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var normalized = relativePath.Replace('\\', '/');
-            var fullPath = Path.GetFullPath(normalized, repositoryRoot);
-            var relative = Path.GetRelativePath(repositoryRoot, fullPath).Replace('\\', '/');
-            if (relative.StartsWith("../", StringComparison.Ordinal)
-                || string.Equals(relative, "..", StringComparison.Ordinal))
+            lock (_registrationGate)
             {
-                throw new UnauthorizedAccessException(
-                    $"Promoted mutation path '{relativePath}' escapes the repository root.");
-            }
+                if (!_workspaces.TryGetValue(workspaceId, out var current) || !ReferenceEquals(current, previous))
+                {
+                    throw new InvalidOperationException("The workspace changed while its baseline was being promoted.");
+                }
 
-            if (!File.Exists(fullPath))
+                _workspaces[workspaceId] = promoted;
+                foreach (var mutationSetId in _mutationWorkspaces
+                    .Where(item => item.Value.WorkspaceId == workspaceId)
+                    .Select(item => item.Key))
+                {
+                    _mutationWorkspaces.TryRemove(mutationSetId, out _);
+                }
+
+                published = true;
+            }
+        }
+        finally
+        {
+            if (!published)
             {
-                files.Remove(normalized);
-                continue;
+                await promoted.DisposeAsync();
             }
-
-            var content = await File.ReadAllBytesAsync(fullPath, cancellationToken);
-            files[normalized] = new WorkspaceFileHash(
-                normalized,
-                Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
-                content.LongLength);
         }
 
-        var promoted = prior with
-        {
-            CapturedAt = DateTimeOffset.UtcNow,
-            Files = files.Values.OrderBy(file => file.RelativePath, StringComparer.Ordinal).ToArray(),
-        };
-        await RegisterBaselineAsync(promoted, workspace.Isolation, cancellationToken);
-        return promoted;
+        await previous.DisposeAsync();
+        return promoted.Baseline;
     }
 
     /// <inheritdoc />

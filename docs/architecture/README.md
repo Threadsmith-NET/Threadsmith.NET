@@ -15,3 +15,7 @@ Key governing decisions include [central tool policy](adr-11-central-tool-policy
 [ADR-54](adr-54-direct-fetch-approval-durations.md) defines one-attempt, live-session, and saved user hostname approval choices.
 
 [ADR-53](adr-53-search-result-host-authorization.md) defines current-run hostname authorization from eligible search results and its relationship to exact URL grants.
+
+[ADR-55](adr-55-direct-artifact-file-writes.md) defines direct allowlisted report/data writes and exact saving of prior assistant answers.
+
+[ADR-56](adr-56-repository-only-approval-policy-preferences.md) defines repository-only persistence for plan and mutation policy selections, with session-only overrides.

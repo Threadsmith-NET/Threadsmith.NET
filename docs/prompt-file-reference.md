@@ -1,5 +1,7 @@
 # Prompt File Reference
 
+`Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-Phase-EvidenceCollection.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
+
 This guide explains how Threadsmith uses the editable Markdown files in the deployed `prompts/` directory. It lists the complete shipped catalog by category and defines every case-sensitive `{{Placeholder}}` that Threadsmith may substitute.
 
 For source-owner paths, deployed paths, byte limits, logging behavior, and the authoritative catalog metadata, see [Deployed prompt assets](operations/prompts.md).
@@ -36,11 +38,11 @@ Common editing rules:
 | System and phase prompts | 24 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 192 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 193 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **299** | Complete deployed catalog. |
+| **Total** | **300** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -634,6 +636,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-read_file-Description.md` | Advertised description for `read_file`. | `None` |
+| `Tool-write_file-Description.md` | Advertised description for `write_file`. | `None` |
 
 #### `run_process` family
 

@@ -38,6 +38,9 @@ public enum ToolCategory
 
     /// <summary>Host-owned workflow orchestration.</summary>
     Workflow,
+
+    /// <summary>Direct writes of allowlisted text artifacts.</summary>
+    FileWrite,
 }
 
 /// <summary>Whether a tool can change externally visible state.</summary>
@@ -48,6 +51,9 @@ public enum ToolSideEffect
 
     /// <summary>May execute repository or external code without changing files intentionally.</summary>
     ExecutesCode,
+
+    /// <summary>Writes files through a host-enforced folder allowlist.</summary>
+    WritesFiles,
 }
 
 /// <summary>Whether retrying an identical tool call is safe.</summary>
@@ -623,9 +629,12 @@ public abstract class Tool<TInput, TOutput> : ITool
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
-        var accessMode = Definition.SideEffect == ToolSideEffect.ReadOnly
-            ? ToolAccessMode.Read
-            : ToolAccessMode.Execute;
+        var accessMode = Definition.SideEffect switch
+        {
+            ToolSideEffect.ReadOnly => ToolAccessMode.Read,
+            ToolSideEffect.WritesFiles => ToolAccessMode.Write,
+            _ => ToolAccessMode.Execute,
+        };
         var claims = GetResourcePaths((TInput)input, context)
             .Select(path => new ToolResourceClaim(
                 ToolResourceKind.Path,

@@ -752,6 +752,8 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 9. Inspect interactive/headless output, tool inventory, context inspection, events, telemetry, persistence, cache/stateful-continuation behavior, support bundles, and restored sessions. Confirm bounded provenance and metrics without source leakage, hidden reasoning, provider payloads, Roslyn objects, secrets, or unsafe cross-session deduplication.
 10. Compare repeated fixed-task runs against the granular-tool baseline. Confirm equal or better answer correctness with fewer dependent rounds, fewer repeated/contained searches and overlapping reads, lower repeated model-visible source, and no regression in policy, approval, audit, cancellation, semantic confidence, or mutation/build/test authority.
 
+11. Repeat matched questions with higher/lower/zero operational caps and adaptation enabled/disabled. Confirm the same effective settings reach main and child requests, reads, timeouts, structured output, Markdown and sanitized output; tighter hints and actual model capacity remain enforced. Verify that a small, unavailable, already-visible or empty section releases capacity/slots for other relevant source, short exact ranges remain available, and near-complete declarations finish only within enabled total/per-file allowances.
+
 **Verifies:** compiler-aware repository discovery, native tool policy, semantic generation and confidence, context/cache/session governance, source provenance, bounded flow and impact, natural-language structural retrieval, safe model-visible deduplication, associated textual artifacts, interactive/headless parity, and task-sufficient exploration without replacing granular tools or host authority.
 
 ---

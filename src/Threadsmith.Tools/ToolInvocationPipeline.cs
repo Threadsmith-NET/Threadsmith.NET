@@ -574,7 +574,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             var resultJson = JsonOutputSanitizer.Sanitize(
                 Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length),
                 _sanitizer);
-            if (Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
+            if (tool is not IPostSanitizationToolOutputBoundary
+                && Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(
                     request,
@@ -591,7 +592,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             if (!string.IsNullOrEmpty(execution.ModelResultContent))
             {
                 modelResultContent = JsonOutputSanitizer.SanitizeJsonOrText(execution.ModelResultContent, _sanitizer);
-                if (Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
+                if (tool is not IPostSanitizationToolOutputBoundary
+                    && Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
                 {
                     return await CompleteFailureAsync(
                         request,

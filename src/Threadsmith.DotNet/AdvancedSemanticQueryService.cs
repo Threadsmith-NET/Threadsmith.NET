@@ -18,20 +18,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 {
     private const int MaximumGeneratedDocuments = 100;
     private const int MaximumGeneratedContentCharacters = 16_384;
-    private const int MaximumCurrentSourceFileBytes = 1024 * 1024;
-    private const int MaximumCodeExploreCatalogEntries = 50_000;
-    private const int MaximumCodeExploreCatalogs = 4;
-    private const int MaximumNaturalLanguageCandidateSummaries = 64;
     private const int NaturalLanguageNameSegmentBaseScore = 160;
     private const int NaturalLanguageNameSegmentConceptScore = 40;
     private const int NaturalLanguagePrimaryNameSegmentConceptScore = 20;
     private const int NaturalLanguageMaximumNameSegmentCoverageScore = 40;
     private const int NaturalLanguageRareNameSegmentScore = 120;
-    private const int MaximumNaturalLanguageGraphDepth = 3;
-    private const int MaximumNaturalLanguageGraphNodes = 200;
-    private const int MaximumNaturalLanguageGraphEdges = 800;
-    private const int MaximumNaturalLanguageGraphConcurrency = 4;
-    private const int MaximumNaturalLanguageGraphReferenceLocations = 32;
     private const int NaturalLanguageDefaultCoLocationBoost = 60;
     private const int NaturalLanguageToolIntentCoLocationBoost = 10;
     private const int NaturalLanguageCoLocationConceptBoost = 20;
@@ -41,16 +32,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const int ToolIntentMaximumSelectedPerFile = 3;
     private const int SurveyIntentMaximumSelectedPerType = 3;
     private const int SurveyIntentMaximumSelectedPerFile = 5;
-    private const int MinimumUsefulSourceCharacters = 256;
     private const int MinimumDedupSourceCharacters = 256;
-    private const int MaximumArtifactLiteralLength = 512;
-    private const int MaximumExactNameArtifactLiterals = 16;
-    private const int MaximumExactNameArtifactLookups = 32;
-    private const int MaximumPresentationSummaryCharacters = 900;
-    private const int MaximumPresentationGuarantees = 12;
-    private const int MaximumPresentationNotShownTargets = 12;
-    private const int MaximumPresentationNextActions = 8;
-    private const int MaximumFileRelevanceSummaries = 24;
     private const int MaximumCodeExploreScaleProjects = 121;
     private const int MaximumCodeExploreScaleDocuments = 2_501;
     private const string NaturalLanguageAnchorSourceReason = "Stable symbol id declaration source.";
@@ -262,14 +244,16 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private readonly Dictionary<Guid, long> _latestCodeExploreCatalogGenerations = [];
     private readonly Dictionary<string, IReadOnlyList<string>> _naturalLanguageGraphNeighbors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SharedCodeExploreBuild<IReadOnlyList<string>>> _naturalLanguageGraphBuilds = new(StringComparer.Ordinal);
+    private readonly CodeExploreOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
-    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts)
+    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts, CodeExploreOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(prompts);
+        _options = (options ?? new CodeExploreOptions()).Resolve();
         _registry = registry;
         _prompts = prompts;
     }
@@ -798,6 +782,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(sourceReader);
+        request = _options.ResolveRequest(request);
         ValidateCodeExploreRequest(request);
         using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
         timeout.Token.ThrowIfCancellationRequested();
@@ -1140,179 +1125,208 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     queryInterpretation,
                     request.Limits.MaximumPerFileSourceCharacters,
                     timeout.Token);
+
+                // Inspect each relevant section once before reserving output. Actual demand releases
+                // small, visible, and unavailable sections before file slots or source space are assigned.
                 var sourceAllocationCandidates = CreateSourceAllocationCandidates(
                     orderedCandidates,
                     selectedRelevance,
                     queryInterpretation);
-                var allocationPlan = CodeExploreSourceAllocationPlanner.Create(
+                var relevancePlan = CodeExploreSourceAllocationPlanner.Create(
                     sourceAllocationCandidates,
-                    remainingSourceCharacters,
-                    Math.Max(0, request.Limits.MaximumFiles - selectedSourceFiles.Count),
-                    request.Limits.MaximumPerFileSourceCharacters);
-                var remainingReservations = allocationPlan.Reservations.ToDictionary(
-                    item => item.Key,
-                    item => item.Value,
-                    StringComparer.Ordinal);
-                var remainingCandidatesByAllocationKey = orderedCandidates
-                    .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
-                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+                    int.MaxValue,
+                    int.MaxValue,
+                    int.MaxValue);
+                var prepared = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
+                var reemissionKeys = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var candidate in orderedCandidates)
                 {
-                    timeout.Token.ThrowIfCancellationRequested();
-                    var dedupeKey = CreateSectionKey(candidate);
-                    var allocationKey = CreateSourceAllocationKey(candidate);
-                    if (!seenSections.Add(dedupeKey))
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (timeout.IsCancellationRequested)
+                    {
+                        timeReached = true;
+                        break;
+                    }
+
+                    var key = CreateSectionKey(candidate);
+                    if (!seenSections.Add(key))
                     {
                         continue;
                     }
 
-                    if (!allocationPlan.Reservations.TryGetValue(allocationKey, out var reservation))
+                    if (!relevancePlan.Reservations.ContainsKey(CreateSourceAllocationKey(candidate)))
                     {
                         outputBoundReached = true;
-                        var continuation = CreateSkippedCandidateContinuation(
+                        AddOrMergeContinuation(continuations, CreateSkippedCandidateContinuation(
                             snapshot,
                             candidate,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationStrongerEvidence));
-                        AddOrMergeContinuation(continuations, continuation);
-                        allocationFiles.Add(new CodeExploreAllocationFileSummary(
-                            ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
-                            0,
-                            0,
-                            CodeExploreSourceCompleteness.Omitted,
-                            false,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceRelevanceCliffContinuation)));
+                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationStrongerEvidence)));
                         continue;
                     }
 
-                    dedupCandidateRanges++;
-                    var priorCovered = await TryCreateCodeExploreBackReferenceAsync(
+                    try
+                    {
+                        dedupCandidateRanges++;
+                        var priorCovered = await TryCreateCodeExploreBackReferenceAsync(
                         workspaceId,
                         snapshot,
                         sourceReader,
                         visibleSourceFrontier,
                         candidate,
                         timeout.Token);
-                    if (priorCovered.BackReference is not null)
-                    {
-                        selectedArtifactOrigins.Add(candidate);
-                        coveredRanges++;
-                        suppressedRanges++;
-                        reclaimedCharacters += priorCovered.SourceCharacters;
-                        _ = ConsumeSourceCharacters(
-                            ref remainingSourceCharactersWithoutSuppression,
-                            priorCovered.SourceCharacters);
-                        backReferences.Add(priorCovered.BackReference);
-                        dedupReasons.Add("An unchanged complete source range already visible in the current request was replaced with a compact back-reference.");
-                        continue;
-                    }
+                        if (priorCovered.BackReference is not null)
+                        {
+                            selectedArtifactOrigins.Add(candidate);
+                            coveredRanges++;
+                            suppressedRanges++;
+                            reclaimedCharacters += priorCovered.SourceCharacters;
+                            _ = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, priorCovered.SourceCharacters);
+                            backReferences.Add(priorCovered.BackReference);
+                            dedupReasons.Add("An unchanged complete source range already visible in the current request was replaced with a compact back-reference.");
+                            continue;
+                        }
 
-                    var disqualificationReason = priorCovered.DisqualificationReason;
-                    if (disqualificationReason is not null)
-                    {
-                        dedupReasons.Add(disqualificationReason);
-                    }
+                        if (priorCovered.DisqualificationReason is { } reason)
+                        {
+                            dedupReasons.Add(reason);
+                            reemissionKeys.Add(key);
+                        }
 
-                    var relativeCandidatePath = ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath);
-                    if (!selectedSourceFiles.Contains(relativeCandidatePath)
-                        && selectedSourceFiles.Count >= request.Limits.MaximumFiles)
-                    {
-                        outputBoundReached = true;
-                        AddOrMergeContinuation(
-                            continuations,
-                            CreateSkippedCandidateContinuation(
-                                snapshot,
-                                candidate,
-                                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceMaximumFileSections)));
-                        continue;
-                    }
-
-                    if (remainingSourceCharacters <= 0 && selectedSections.Count > 0)
-                    {
-                        outputBoundReached = true;
-                        AddOrMergeContinuation(
-                            continuations,
-                            CreateSkippedCandidateContinuation(
-                                snapshot,
-                                candidate,
-                                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceMaximumSourceCharacters)));
-                        continue;
-                    }
-
-                    var remainingFileReservation = remainingReservations.GetValueOrDefault(allocationKey);
-                    var remainingCandidatesInFile = remainingCandidatesByAllocationKey.GetValueOrDefault(allocationKey, 1);
-                    var fairFileShare = remainingFileReservation / Math.Max(1, remainingCandidatesInFile);
-                    var availableForCandidate = Math.Min(
-                        request.Limits.MaximumPerFileSourceCharacters,
-                        Math.Min(remainingFileReservation, Math.Max(0, remainingSourceCharacters)));
-                    var sourceAllowance = Math.Min(
-                        availableForCandidate,
-                        Math.Max(MinimumUsefulSourceCharacters, fairFileShare));
-                    if (sourceAllowance <= 0
-                        || (sourceAllowance < MinimumUsefulSourceCharacters && selectedSections.Count > 0))
-                    {
-                        outputBoundReached = true;
-                        var continuation = CreateSkippedCandidateContinuation(
-                            snapshot,
-                            candidate,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationReservedStronger));
-                        AddOrMergeContinuation(continuations, continuation);
-                        allocationFiles.Add(new CodeExploreAllocationFileSummary(
-                            ToRepositoryRelativePath(candidate.FilePath, snapshot.RepositoryPath),
-                            0,
-                            0,
-                            CodeExploreSourceCompleteness.Omitted,
-                            false,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceRelevanceCliffContinuation)));
-                        continue;
-                    }
-
-                    var projected = await ProjectCodeExploreSectionAsync(
+                        prepared[key] = await ProjectCodeExploreSectionAsync(
                         snapshot,
                         activeProjection,
                         sourceReader,
                         candidate,
-                        sourceAllowance,
+                        request.Limits.MaximumPerFileSourceCharacters,
                         timeout.Token);
-                    remainingReservations[allocationKey] = Math.Max(
-                        0,
-                        remainingFileReservation - projected.SourceCharacters);
-                    remainingCandidatesByAllocationKey[allocationKey] = Math.Max(
-                        0,
-                        remainingCandidatesInFile - 1);
-                    remainingSourceCharacters -= projected.SourceCharacters;
-                    var unreclaimedSourceCharacters = ConsumeSourceCharacters(
-                        ref remainingSourceCharactersWithoutSuppression,
-                        projected.SourceCharacters);
-                    var reclaimedSourceCharacters = projected.SourceCharacters - unreclaimedSourceCharacters;
-                    if (reclaimedSourceCharacters > 0)
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
                     {
-                        usedForNewSourceCharacters += Math.Min(
-                            reclaimedSourceCharacters,
-                            Math.Max(0, reclaimedCharacters - usedForNewSourceCharacters));
+                        timeReached = true;
+                        break;
+                    }
+                }
+
+                var demandByFile = orderedCandidates
+                    .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => (int)Math.Min(int.MaxValue, group.Sum(candidate => (long)(prepared.GetValueOrDefault(CreateSectionKey(candidate))?.SourceCharacters ?? 0))),
+                        StringComparer.Ordinal);
+                var allocationPlan = CodeExploreSourceAllocationPlanner.Create(
+                    sourceAllocationCandidates.Select(candidate => candidate with
+                    {
+                        RequiredCharacters = demandByFile.GetValueOrDefault(candidate.StableKey),
+                    }).ToArray(),
+                    remainingSourceCharacters,
+                    Math.Max(0, request.Limits.MaximumFiles - selectedSourceFiles.Count),
+                    request.Limits.MaximumPerFileSourceCharacters);
+                var remainingReservations = allocationPlan.Reservations.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+                var fittedSections = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
+                var allowances = new Dictionary<string, int>(StringComparer.Ordinal);
+                var fileSpend = new Dictionary<string, int>(StringComparer.Ordinal);
+                var bearingFiles = new HashSet<string>(selectedSourceFiles, PathComparer);
+                var unspent = remainingSourceCharacters;
+                foreach (var candidate in orderedCandidates)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var key = CreateSectionKey(candidate);
+                    if (!prepared.TryGetValue(key, out var inspected))
+                    {
+                        continue;
                     }
 
+                    var allocationKey = CreateSourceAllocationKey(candidate);
+                    var allowance = Math.Min(unspent, remainingReservations.GetValueOrDefault(allocationKey));
+                    var fitted = inspected.SourceCharacters <= allowance
+                        ? inspected
+                        : FitPreparedSource(inspected, allowance, snapshot.Generation);
+                    fittedSections[key] = fitted;
+                    allowances[key] = allowance;
+                    remainingReservations[allocationKey] = allowance - fitted.SourceCharacters;
+                    fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + fitted.SourceCharacters;
+                    unspent -= fitted.SourceCharacters;
+                    if (fitted.SourceCharacters > 0)
+                    {
+                        bearingFiles.Add(fitted.Section.FilePath);
+                    }
+                }
+
+                // Whole-line fitting may leave slack or an empty file slot. Reconsider prepared
+                // sections in the same relevance order, retaining all stronger source already fitted.
+                foreach (var candidate in orderedCandidates)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var key = CreateSectionKey(candidate);
+                    if (unspent <= 0 || !fittedSections.TryGetValue(key, out var previous))
+                    {
+                        continue;
+                    }
+
+                    var inspected = prepared[key];
+                    if (previous.SourceCharacters >= inspected.SourceCharacters
+                        || (!bearingFiles.Contains(inspected.Section.FilePath) && bearingFiles.Count >= request.Limits.MaximumFiles))
+                    {
+                        continue;
+                    }
+
+                    var allocationKey = CreateSourceAllocationKey(candidate);
+                    var extra = Math.Min(unspent, request.Limits.MaximumPerFileSourceCharacters - fileSpend.GetValueOrDefault(allocationKey));
+                    var allowance = previous.SourceCharacters + extra;
+                    var fitted = inspected.SourceCharacters <= allowance
+                        ? inspected
+                        : FitPreparedSource(inspected, allowance, snapshot.Generation);
+                    var additional = fitted.SourceCharacters - previous.SourceCharacters;
+                    if (additional <= 0)
+                    {
+                        continue;
+                    }
+
+                    fittedSections[key] = fitted;
+                    allowances[key] = allowance;
+                    fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + additional;
+                    unspent -= additional;
+                    bearingFiles.Add(fitted.Section.FilePath);
+                }
+
+                foreach (var candidate in orderedCandidates)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var key = CreateSectionKey(candidate);
+                    if (!fittedSections.TryGetValue(key, out var projected))
+                    {
+                        continue;
+                    }
+
+                    var sourceAllowance = allowances[key];
+                    remainingSourceCharacters -= projected.SourceCharacters;
+                    var unreclaimedSourceCharacters = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, projected.SourceCharacters);
+                    usedForNewSourceCharacters += Math.Min(
+                        projected.SourceCharacters - unreclaimedSourceCharacters,
+                        Math.Max(0, reclaimedCharacters - usedForNewSourceCharacters));
                     selectedSections.Add(projected.Section);
-                    _ = selectedSourceFiles.Add(projected.Section.FilePath);
+                    if (projected.SourceCharacters > 0 && projected.Section.Source.NumberedLines.Count > 0)
+                    {
+                        _ = selectedSourceFiles.Add(projected.Section.FilePath);
+                        if (reemissionKeys.Contains(key))
+                        {
+                            reEmittedRanges++;
+                        }
+
+                        if (projected.Section.Source.FileSha256 is not null)
+                        {
+                            emissionRecords.Add(new CodeExploreEmissionRecord(
+                                projected.Section.FilePath,
+                                projected.Section.Source.Range,
+                                projected.Section.Source.FileSha256,
+                                projected.Section.Source.RangeSha256,
+                                projected.SourceCharacters));
+                        }
+                    }
+
                     if (CanUseProjectedSectionAsArtifactOrigin(projected))
                     {
                         selectedArtifactOrigins.Add(candidate);
-                    }
-
-                    if (disqualificationReason is not null && projected.SourceCharacters > 0)
-                    {
-                        reEmittedRanges++;
-                    }
-
-                    if (projected.Section.Source.NumberedLines.Count > 0
-                        && projected.Section.Source.FileSha256 is not null
-                        && projected.SourceCharacters > 0)
-                    {
-                        emissionRecords.Add(new CodeExploreEmissionRecord(
-                            projected.Section.FilePath,
-                            projected.Section.Source.Range,
-                            projected.Section.Source.FileSha256,
-                            projected.Section.Source.RangeSha256,
-                            projected.SourceCharacters));
                     }
 
                     allocationFiles.Add(new CodeExploreAllocationFileSummary(
@@ -1761,59 +1775,42 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return CodeExploreRepositoryScaleTier.VeryLarge;
     }
 
-    private static CodeExploreRequest ApplyCodeExploreAdaptiveDefaults(
+    private CodeExploreRequest ApplyCodeExploreAdaptiveDefaults(
         CodeExploreRequest request,
         CodeExploreRepositoryScale repositoryScale,
         out CodeExploreAdaptiveBudget adaptiveBudget)
     {
-        var envelope = SelectAdaptiveEnvelope(repositoryScale.Tier);
-        var appliesToSourceDefaults = UsesDefaultCodeExploreSourceEnvelope(request.Limits);
-        var limits = appliesToSourceDefaults
-            ? request.Limits with
+        var envelope = _options.AdaptiveSizingEnabled && request.UseAdaptiveDefaults
+            ? _options.GetTier(repositoryScale.Tier)
+            : null;
+        var originalLimits = request.Limits;
+        var limits = envelope is not null
+            ? originalLimits with
             {
-                MaximumFiles = Math.Min(request.Limits.MaximumFiles, envelope.MaximumFiles),
-                MaximumSourceCharacters = Math.Min(request.Limits.MaximumSourceCharacters, envelope.MaximumSourceCharacters),
-                MaximumPerFileSourceCharacters = Math.Min(request.Limits.MaximumPerFileSourceCharacters, envelope.MaximumPerFileSourceCharacters),
+                MaximumFiles = AdaptiveCap(originalLimits.MaximumFiles, envelope.MaximumFiles, _options.Limits.MaximumFiles),
+                MaximumSourceCharacters = AdaptiveCap(originalLimits.MaximumSourceCharacters, envelope.MaximumSourceCharacters, _options.Limits.MaximumSourceCharacters),
+                MaximumPerFileSourceCharacters = AdaptiveCap(originalLimits.MaximumPerFileSourceCharacters, envelope.MaximumPerFileSourceCharacters, _options.Limits.MaximumPerFileSourceCharacters),
             }
-            : request.Limits;
-        var budgetSource = appliesToSourceDefaults
-            ? $"repository scale {repositoryScale.Tier} adaptive defaults applied within request/model source limits"
-            : $"repository scale {repositoryScale.Tier} recorded; explicit request source limits retained";
+            : originalLimits;
+        var budgetSource = envelope is not null
+            ? $"repository scale {repositoryScale.Tier} configured adaptive defaults applied within request/model source limits"
+            : $"repository scale {repositoryScale.Tier}; adaptation disabled, explicit request, or unknown scale; configured source limits retained";
         adaptiveBudget = new CodeExploreAdaptiveBudget(
             repositoryScale,
             limits.MaximumFiles,
             limits.MaximumSourceCharacters,
             limits.MaximumPerFileSourceCharacters,
             ResolveNaturalLanguageCandidateSummaryLimit(limits.MaximumSourceCharacters, 0, 0),
-            envelope.RecommendedFollowUpCount,
-            envelope.PresentationVerbosity,
-            budgetSource);
-        return request with { Limits = limits };
+            envelope?.RecommendedFollowUpCount ?? 0,
+            envelope?.PresentationVerbosity ?? CodeExplorePresentationVerbosity.Standard,
+            budgetSource,
+            AdaptiveDefaultsApplied: envelope is not null);
+        return request with { Limits = limits, UseAdaptiveDefaults = request.UseAdaptiveDefaults };
     }
 
-    private static bool UsesDefaultCodeExploreSourceEnvelope(CodeExploreLimits limits)
+    private static int AdaptiveCap(int requested, int tier, int configured)
     {
-        var defaults = new CodeExploreLimits();
-        return limits.MaximumFiles == defaults.MaximumFiles
-            && limits.MaximumSourceCharacters == defaults.MaximumSourceCharacters
-            && limits.MaximumPerFileSourceCharacters == defaults.MaximumPerFileSourceCharacters;
-    }
-
-    private static (
-        int MaximumFiles,
-        int MaximumSourceCharacters,
-        int MaximumPerFileSourceCharacters,
-        int RecommendedFollowUpCount,
-        CodeExplorePresentationVerbosity PresentationVerbosity) SelectAdaptiveEnvelope(CodeExploreRepositoryScaleTier tier)
-    {
-        return tier switch
-        {
-            CodeExploreRepositoryScaleTier.Tiny => (4, 13_000, 3_800, 1, CodeExplorePresentationVerbosity.Compact),
-            CodeExploreRepositoryScaleTier.Small => (5, 18_000, 3_800, 1, CodeExplorePresentationVerbosity.Compact),
-            CodeExploreRepositoryScaleTier.Large => (8, 24_000, 6_500, 3, CodeExplorePresentationVerbosity.Guided),
-            CodeExploreRepositoryScaleTier.VeryLarge => (8, 24_000, 7_000, 4, CodeExplorePresentationVerbosity.Guided),
-            _ => (8, 24_000, 6_500, 2, CodeExplorePresentationVerbosity.Standard),
-        };
+        return configured == int.MaxValue ? requested : Math.Min(requested, tier);
     }
 
     private static CodeExploreAdaptiveBudget UpdateAdaptiveBudgetScale(
@@ -2359,9 +2356,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyList<CodeExploreBackReference> backReferences,
         CodeExplorePresentationVerbosity verbosity)
     {
-        var maximumGuarantees = verbosity == CodeExplorePresentationVerbosity.Compact
-            ? Math.Min(6, MaximumPresentationGuarantees)
-            : MaximumPresentationGuarantees;
+        var maximumGuarantees = _options.MaximumPresentationGuarantees;
         var guarantees = new List<CodeExploreSourceGuarantee>();
         foreach (var section in sections.OrderBy(section => section.FilePath, PathComparer).ThenBy(section => section.Source.Range.StartLine))
         {
@@ -2404,8 +2399,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 readEquivalent,
                 source.FileSha256,
                 source.RangeSha256,
-                section.SemanticIdentities.Select(identity => identity.Id).Take(8).ToArray(),
-                BoundPresentationText(message, 420)));
+                section.SemanticIdentities.Select(identity => identity.Id).Take(_options.MarkdownMaximumSemanticIdentities).ToArray(),
+                BoundPresentationText(message, _options.MaximumPresentationGuaranteeCharacters)));
         }
 
         foreach (var reference in backReferences.OrderBy(reference => reference.FilePath, PathComparer).ThenBy(reference => reference.Range.StartLine))
@@ -2434,22 +2429,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 true,
                 reference.FileSha256,
                 reference.RangeSha256,
-                reference.SymbolIds.Take(8).ToArray(),
-                BoundPresentationText(message, 420)));
+                reference.SymbolIds.Take(_options.MarkdownMaximumSemanticIdentities).ToArray(),
+                BoundPresentationText(message, _options.MaximumPresentationGuaranteeCharacters)));
         }
 
         return guarantees;
     }
 
-    private static IReadOnlyList<CodeExploreNotShownTarget> CreateNotShownTargets(
+    private IReadOnlyList<CodeExploreNotShownTarget> CreateNotShownTargets(
         IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
         IReadOnlyList<string> omissions,
         CodeExploreArtifactCoverage? artifactCoverage,
         CodeExplorePresentationVerbosity verbosity)
     {
-        var maximumTargets = verbosity == CodeExplorePresentationVerbosity.Compact
-            ? Math.Min(6, MaximumPresentationNotShownTargets)
-            : MaximumPresentationNotShownTargets;
+        var maximumTargets = _options.MaximumPresentationNotShownTargets;
         var targets = new List<CodeExploreNotShownTarget>();
         foreach (var continuation in continuationTargets)
         {
@@ -2462,7 +2455,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreNotShownTargetKind.Source,
                 continuation.FilePath,
                 CreateContinuationRange(continuation),
-                BoundPresentationText(continuation.Reason, 320),
+                BoundPresentationText(continuation.Reason, _options.MaximumPresentationContinuationReasonCharacters),
                 continuation.Anchor,
                 continuation.ExpectedFileSha256,
                 continuation.WorkspaceGeneration));
@@ -2479,7 +2472,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreNotShownTargetKind.Artifact,
                 continuation.FilePath,
                 CreateArtifactContinuationRange(continuation),
-                BoundPresentationText(continuation.Reason, 320),
+                BoundPresentationText(continuation.Reason, _options.MaximumPresentationContinuationReasonCharacters),
                 continuation.FilePath,
                 continuation.ExpectedFileSha256,
                 continuation.WorkspaceGeneration));
@@ -2492,7 +2485,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 CodeExploreNotShownTargetKind.General,
                 null,
                 null,
-                BoundPresentationText(omission, 280)));
+                BoundPresentationText(omission, _options.MaximumPresentationOmissionCharacters)));
         }
 
         return targets;
@@ -2538,9 +2531,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyList<CodeExploreContinuationTarget> continuationTargets,
         CodeExplorePresentationVerbosity verbosity)
     {
-        var maximumActions = verbosity == CodeExplorePresentationVerbosity.Compact
-            ? Math.Min(5, MaximumPresentationNextActions)
-            : MaximumPresentationNextActions;
+        var maximumActions = _options.MaximumPresentationNextActions;
         var actions = new List<CodeExploreNextActionHint>();
         foreach (var action in availability.RecommendedActions)
         {
@@ -2702,13 +2693,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }));
         }
 
-        var maximumCharacters = verbosity == CodeExplorePresentationVerbosity.Compact
-            ? 520
-            : MaximumPresentationSummaryCharacters;
+        var maximumCharacters = _options.MaximumPresentationSummaryCharacters;
         return BoundPresentationText(string.Join(' ', parts), maximumCharacters);
     }
 
-    private static IReadOnlyList<CodeExploreFileRelevanceSummary> CreateCodeExploreFileRelevanceSummaries(
+    private IReadOnlyList<CodeExploreFileRelevanceSummary> CreateCodeExploreFileRelevanceSummaries(
         IReadOnlyList<CodeExploreCandidateSummary>? candidateSummaries,
         IReadOnlyList<CodeExploreAllocationFileSummary> allocationFiles,
         IReadOnlyList<CodeExploreFileSection> sections,
@@ -2814,7 +2803,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .ThenByDescending(summary => summary.SpentCharacters)
             .ThenByDescending(summary => summary.QueryTermCoverage)
             .ThenBy(summary => summary.FilePath, PathComparer)
-            .Take(MaximumFileRelevanceSummaries)
+            .Take(_options.MaximumFileRelevanceSummaries)
             .Select((summary, index) => summary with { Rank = index + 1 })
             .ToArray();
     }
@@ -3071,8 +3060,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var policyExcludedCandidates = 0;
         var candidateLimitReached = false;
         var exactNameLookups = new CodeExploreExactNameLookupState(
-            Math.Min(MaximumExactNameArtifactLiterals, request.Limits.MaximumAssociatedArtifactCandidates),
-            Math.Min(MaximumExactNameArtifactLookups, request.Limits.MaximumAssociatedArtifactCandidates * 2));
+            Math.Min(_options.MaximumExactNameArtifactLiterals, request.Limits.MaximumAssociatedArtifactCandidates),
+            Math.Min(_options.MaximumExactNameArtifactLookups, (int)Math.Min(int.MaxValue, (long)request.Limits.MaximumAssociatedArtifactCandidates * 2)));
 
         CodeExploreArtifactCandidateAdmission AddCandidate(CodeExploreArtifactCandidate candidate)
         {
@@ -3407,7 +3396,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || artifact.Omissions.Count > 0;
     }
 
-    private static void AddExplicitArtifactPathCandidates(
+    private void AddExplicitArtifactPathCandidates(
         AdvancedSemanticSnapshot snapshot,
         CodeExploreRequest request,
         CodeExploreArtifactOrigin origin,
@@ -3449,7 +3438,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task AddProjectArtifactCandidatesAsync(
+    private async Task AddProjectArtifactCandidatesAsync(
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
@@ -3552,7 +3541,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             cancellationToken);
     }
 
-    private static async Task AddProjectItemCandidatesAsync(
+    private async Task AddProjectItemCandidatesAsync(
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
@@ -3655,7 +3644,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task AddLiteralArtifactCandidatesAsync(
+    private async Task AddLiteralArtifactCandidatesAsync(
         AdvancedSemanticSnapshot snapshot,
         ICodeExploreArtifactReader artifactReader,
         CodeExploreRequest request,
@@ -4037,7 +4026,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.Identity?.Id);
     }
 
-    private static bool TryGetLiteralArtifactValue(
+    private bool TryGetLiteralArtifactValue(
         SyntaxNode node,
         out string value)
     {
@@ -4132,7 +4121,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 || character is '.' or '-' or '_' or ':');
     }
 
-    private static IEnumerable<string> EnumerateLiteralArtifactPaths(
+    private IEnumerable<string> EnumerateLiteralArtifactPaths(
         AdvancedSemanticSnapshot snapshot,
         CodeExploreArtifactOrigin origin,
         string literal)
@@ -4177,7 +4166,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static bool TryNormalizeRepositoryPath(
+    private bool TryNormalizeRepositoryPath(
         AdvancedSemanticSnapshot snapshot,
         string? path,
         string baseDirectory,
@@ -4207,7 +4196,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static bool LooksLikeArtifactPathLiteral(string literal)
+    private bool LooksLikeArtifactPathLiteral(string literal)
     {
         if (!IsSafeArtifactPathText(literal)
             || literal.Contains('$', StringComparison.Ordinal)
@@ -4222,10 +4211,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || IsSafeExactArtifactFileNameLiteral(literal);
     }
 
-    private static bool IsSafeArtifactPathText(string? path)
+    private bool IsSafeArtifactPathText(string? path)
     {
         return !string.IsNullOrWhiteSpace(path)
-            && path.Length <= MaximumArtifactLiteralLength
+            && path.Length <= _options.MaximumArtifactLiteralLength
             && !path.Any(char.IsControl)
             && !path.Contains("..", StringComparison.Ordinal)
             && !path.Contains("<", StringComparison.Ordinal)
@@ -4235,14 +4224,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             && !Uri.TryCreate(path, UriKind.Absolute, out _);
     }
 
-    private static bool IsSafeArtifactLiteral(string literal)
+    private bool IsSafeArtifactLiteral(string literal)
     {
         return !string.IsNullOrWhiteSpace(literal)
-            && literal.Length <= MaximumArtifactLiteralLength
+            && literal.Length <= _options.MaximumArtifactLiteralLength
             && !literal.Any(char.IsControl);
     }
 
-    private static bool IsSafeExactArtifactFileNameLiteral(string literal)
+    private bool IsSafeExactArtifactFileNameLiteral(string literal)
     {
         return IsSafeArtifactLiteral(literal)
             && !literal.Contains('/', StringComparison.Ordinal)
@@ -4253,7 +4242,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             && !literal.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsSafeProjectItemInclude(string? include)
+    private bool IsSafeProjectItemInclude(string? include)
     {
         return include is not null
             && IsSafeArtifactPathText(include)
@@ -4960,7 +4949,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private sealed record ProjectedCodeExploreSection(
         CodeExploreFileSection Section,
         int SourceCharacters,
-        IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets);
+        IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets,
+        SourceText? Text = null,
+        TextSpan? Span = null);
 
     private enum CodeExploreArtifactCandidateAdmission
     {
@@ -6880,11 +6871,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return indexes.TryGetValue(symbolId, out var index) ? index : fallback;
     }
 
-    private static void ValidateCodeExploreRequest(CodeExploreRequest request)
+    private void ValidateCodeExploreRequest(CodeExploreRequest request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Query);
         ArgumentNullException.ThrowIfNull(request.Limits);
-        if (request.Query.Length > 1024)
+        if (request.Query.Length > _options.MaximumQueryCharacters)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Code exploration queries are limited to 1,024 characters.");
         }
@@ -6900,27 +6891,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var limits = request.Limits;
-        if (limits.MaximumAnchors is < 1 or > 16
-            || limits.MaximumAlternatives is < 1 or > 25
-            || limits.MaximumFiles is < 1 or > 16
-            || limits.MaximumSourceCharacters is < 1 or > 100_000
-            || limits.MaximumPerFileSourceCharacters is < 1 or > 65_536
-            || limits.MaximumFlowPaths is < 1 or > 32
-            || limits.MaximumFlowBridgeSymbols is < 0 or > 128
-            || limits.MaximumFlowDepth is < 1 or > 8
-            || limits.MaximumFlowNodes is < 1 or > 1000
-            || limits.MaximumFlowEdges is < 1 or > 5000
-            || limits.MaximumDispatchBranches is < 0 or > 200
-            || limits.MaximumBlastRadiusItems is < 0 or > 200
-            || limits.MaximumAssociatedArtifacts is < 0 or > 16
-            || limits.MaximumAssociatedArtifactCandidates is < 0 or > 128
-            || limits.MaximumAssociatedArtifactCharacters is < 0 or > 100_000
-            || limits.MaximumPerAssociatedArtifactCharacters is < 0 or > 65_536
-            || limits.MaximumAssociatedArtifactBytes is < 1 or > 1024 * 1024
-            || limits.MaximumAssociatedArtifactNameMatches is < 0 or > 64
-            || limits.TimeoutMilliseconds is < 1 or > 60_000)
+        if (limits.MaximumAnchors < 0
+            || limits.MaximumAlternatives < 0
+            || limits.MaximumFiles < 0
+            || limits.MaximumSourceCharacters < 0
+            || limits.MaximumPerFileSourceCharacters < 0
+            || limits.MaximumFlowPaths < 0
+            || limits.MaximumFlowBridgeSymbols < 0
+            || limits.MaximumFlowDepth < 0
+            || limits.MaximumFlowNodes < 0
+            || limits.MaximumFlowEdges < 0
+            || limits.MaximumDispatchBranches < 0
+            || limits.MaximumBlastRadiusItems < 0
+            || limits.MaximumAssociatedArtifacts < 0
+            || limits.MaximumAssociatedArtifactCandidates < 0
+            || limits.MaximumAssociatedArtifactCharacters < 0
+            || limits.MaximumPerAssociatedArtifactCharacters < 0
+            || limits.MaximumAssociatedArtifactBytes < 0
+            || limits.MaximumAssociatedArtifactNameMatches < 0
+            || limits.TimeoutMilliseconds < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(request), "Code exploration bounds are outside host limits.");
+            throw new ArgumentOutOfRangeException(nameof(request), "Code exploration caps must be non-negative.");
         }
 
         var anchorCount = request.ExactSymbolAnchors.Count + request.SymbolIds.Count + request.PathAnchors.Count;
@@ -6932,7 +6923,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         foreach (var anchor in request.ExactSymbolAnchors.Concat(request.SymbolIds))
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor, nameof(request));
-            if (anchor.Length > 2048)
+            if (anchor.Length > _options.MaximumAnchorCharacters)
             {
                 throw new ArgumentOutOfRangeException(nameof(request), "Symbol anchors are limited to 2,048 characters.");
             }
@@ -6945,7 +6936,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var invalidPathMode = !Enum.IsDefined(anchor.SelectionMode);
             var missingRequiredLine = RequiresLine(anchor.SelectionMode) && anchor.Line is null;
             var missingRequiredEndLine = anchor.SelectionMode == CodeExplorePathSelectionMode.ExactLineRange && anchor.EndLine is null;
-            if (anchor.Path.Length > 4096
+            if (anchor.Path.Length > _options.MaximumPathCharacters
                 || anchor.Line is <= 0
                 || anchor.EndLine is <= 0
                 || anchor.EndLine < anchor.Line
@@ -6973,7 +6964,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             ArgumentNullException.ThrowIfNull(anchor);
             ArgumentException.ThrowIfNullOrWhiteSpace(anchor.Path);
-            if (anchor.Path.Length > 4096
+            if (anchor.Path.Length > _options.MaximumPathCharacters
                 || anchor.Line is <= 0
                 || anchor.EndLine is <= 0
                 || anchor.EndLine < anchor.Line
@@ -7249,7 +7240,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var sourceCompanions = SelectNaturalLanguageSourceCompanions(
             rankedByIdentity,
             selected,
-            request.Limits);
+            request.Limits,
+            cancellationToken);
         foreach (var candidate in selected)
         {
             if (!selectedIdentityIds.Add(candidate.Entry.Identity.Id))
@@ -7298,7 +7290,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var candidateLimitReached = rankedByIdentity.Length > maximumCandidateSummaries;
+        var candidateLimitReached = rankedByIdentity.Length > maximumCandidateSummaries
+            || pinnedSummaryCount > _options.MaximumNaturalLanguageCandidateSummaries;
         if (candidateLimitReached)
         {
             omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -7337,7 +7330,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 candidateLimitReached || !catalog.IsComplete,
                 ambiguityGroups,
                 "request.maximumAnchors, request.maximumFiles, and request.maximumSourceCharacters"),
-            [.. summaries],
+            [.. summaries.Take(_options.MaximumNaturalLanguageCandidateSummaries)],
             sourceCompanions,
             selected
                 .Concat(sourceCompanions)
@@ -7494,7 +7487,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
 
                 _codeExploreCatalogs[key] = catalog;
-                while (_codeExploreCatalogs.Count > MaximumCodeExploreCatalogs)
+                while (_codeExploreCatalogs.Count > _options.MaximumCodeExploreCatalogs)
                 {
                     var firstKey = _codeExploreCatalogs.Keys.Order(StringComparer.Ordinal).First();
                     _codeExploreCatalogs.Remove(firstKey);
@@ -7597,7 +7590,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
+    private async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
         string key,
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
@@ -7616,7 +7609,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             foreach ((var document, var isSourceGenerated) in documents)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (entries.Count >= MaximumCodeExploreCatalogEntries)
+                if (entries.Count >= _options.MaximumCodeExploreCatalogEntries)
                 {
                     isComplete = false;
                     omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -7682,7 +7675,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     if (seen.Add(entryKey))
                     {
                         entries.Add(entry);
-                        if (entries.Count >= MaximumCodeExploreCatalogEntries)
+                        if (entries.Count >= _options.MaximumCodeExploreCatalogEntries)
                         {
                             isComplete = false;
                             omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -8279,7 +8272,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         };
     }
 
-    private static CodeExploreRetrievedCandidate[] GetIndexedCodeExploreCandidates(
+    private CodeExploreRetrievedCandidate[] GetIndexedCodeExploreCandidates(
         CodeExploreCandidateIndex index,
         IReadOnlyList<CodeExploreDeclarationCatalogEntry> allowedEntries,
         CodeExploreQueryInterpretation interpretation,
@@ -8335,6 +8328,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     .Concat(interpretation.QualifiedNames)
                     .Select(NormalizeComparableName)
                     .ToArray()),
+            _options,
             cancellationToken);
     }
 
@@ -8685,7 +8679,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 ? KindSortRank(item.Candidate.Entry.Kind)
                 : 0)
             .ThenBy(item => item.Rank)
-            .Take(CodeExploreRelevancePolicy.MaximumGraphEntryPoints)
+            .Take(Math.Min(CodeExploreRelevancePolicy.MaximumGraphEntryPoints, _options.MaximumNaturalLanguageGraphNodes))
             .Select(item => item.Candidate)
             .ToArray();
         if (seeds.Length == 0)
@@ -8700,9 +8694,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var adjacency = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var globallyDiscovered = seedIds.ToHashSet(StringComparer.Ordinal);
         var perRootNodeLimit = (int)Math.Ceiling(
-            MaximumNaturalLanguageGraphNodes / (double)seedIds.Length);
-        var baseRootEdgeLimit = MaximumNaturalLanguageGraphEdges / seedIds.Length;
-        var extraRootEdges = MaximumNaturalLanguageGraphEdges % seedIds.Length;
+            _options.MaximumNaturalLanguageGraphNodes / (double)seedIds.Length);
+        var baseRootEdgeLimit = _options.MaximumNaturalLanguageGraphEdges / seedIds.Length;
+        var extraRootEdges = _options.MaximumNaturalLanguageGraphEdges % seedIds.Length;
         var rootEdgeLimits = seedIds
             .Select((identity, index) => new
             {
@@ -8726,7 +8720,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         var remainingExpansionBudget = Math.Max(
             seedIds.Length,
-            MaximumNaturalLanguageGraphNodes / MaximumNaturalLanguageGraphConcurrency);
+            _options.MaximumNaturalLanguageGraphNodes);
         while (remainingExpansionBudget > 0
             && frontiers.Values.Any(frontier => frontier.Count > 0))
         {
@@ -8738,11 +8732,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     RootId = rootId,
                     Current = frontiers[rootId].Dequeue(),
                 })
-                .Where(item => item.Current.Depth < MaximumNaturalLanguageGraphDepth)
+                .Where(item => item.Current.Depth < _options.MaximumNaturalLanguageGraphDepth)
                 .Take(remainingExpansionBudget)
                 .ToArray();
             remainingExpansionBudget -= frontierItems.Length;
-            foreach (var chunk in frontierItems.Chunk(MaximumNaturalLanguageGraphConcurrency))
+            foreach (var chunk in frontierItems.Chunk(_options.MaximumNaturalLanguageGraphConcurrency))
             {
                 var expanded = await Task.WhenAll(chunk.Select(async item => new
                 {
@@ -8772,7 +8766,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         }
 
                         if (!globallyDiscovered.Contains(connectedId)
-                            && globallyDiscovered.Count >= MaximumNaturalLanguageGraphNodes)
+                            && globallyDiscovered.Count >= _options.MaximumNaturalLanguageGraphNodes)
                         {
                             continue;
                         }
@@ -8933,7 +8927,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task<IReadOnlyList<string>> BuildNaturalLanguageConnectedSymbolIdsAsync(
+    private async Task<IReadOnlyList<string>> BuildNaturalLanguageConnectedSymbolIdsAsync(
         AdvancedSemanticSnapshot snapshot,
         string identity,
         CancellationToken cancellationToken)
@@ -9036,7 +9030,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return mass;
     }
 
-    private static async Task<IReadOnlyList<ISymbol>> FindNaturalLanguageConnectedSymbolsAsync(
+    private async Task<IReadOnlyList<ISymbol>> FindNaturalLanguageConnectedSymbolsAsync(
         AdvancedSemanticSnapshot snapshot,
         ISymbol symbol,
         CancellationToken cancellationToken)
@@ -9081,7 +9075,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 .SelectMany(item => item.Locations)
                 .OrderBy(item => item.Document.FilePath, PathComparer)
                 .ThenBy(item => item.Location.SourceSpan.Start)
-                .Take(MaximumNaturalLanguageGraphReferenceLocations))
+                .Take(_options.MaximumNaturalLanguageGraphReferenceLocations))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var semanticModel = await reference.Document.GetSemanticModelAsync(cancellationToken);
@@ -9722,7 +9716,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CodeExploreRankedCandidate[] SelectNaturalLanguageSourceCompanions(
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
         IReadOnlyList<CodeExploreRankedCandidate> selected,
-        CodeExploreLimits limits)
+        CodeExploreLimits limits,
+        CancellationToken cancellationToken)
     {
         if (selected.Count == 0)
         {
@@ -9764,9 +9759,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 .ToArray(),
             PathComparer);
         var companions = new List<CodeExploreRankedCandidate>();
-        var maximumPerFile = remainingByFile.Values.DefaultIfEmpty(0).Max();
+        var maximumPerFile = candidatesByFile.Values.Select(candidates => candidates.Length).DefaultIfEmpty(0).Max();
         for (var index = 0; index < maximumPerFile && companions.Count < maximumTotal; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var path in selectedFiles)
             {
                 var fileCandidates = candidatesByFile[path];
@@ -11636,7 +11632,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         };
     }
 
-    private static IReadOnlyList<string> CreateAmbiguityGroups(
+    private IReadOnlyList<string> CreateAmbiguityGroups(
         IReadOnlyList<CodeExploreRankedCandidate> ranked,
         IReadOnlySet<string> selectedIds)
     {
@@ -11644,7 +11640,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .GroupBy(candidate => candidate.AmbiguityGroup, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1 && group.Any(candidate => selectedIds.Contains(candidate.Entry.Identity.Id)))
             .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Take(16)
+            .Take(_options.MaximumAmbiguityGroups)
             .Select(group => $"{group.Key}: {group.Count()} candidates")
             .ToArray();
     }
@@ -11728,19 +11724,26 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             : string.Join(" and ", descriptions);
     }
 
-    private static int ResolveNaturalLanguageCandidateSummaryLimit(
+    private int ResolveNaturalLanguageCandidateSummaryLimit(
         int maximumSourceCharacters,
         int pinnedSummaryCount,
         int selectedSummaryCount)
     {
+        if (!_options.AdaptiveSizingEnabled || _options.MaximumNaturalLanguageCandidateSummaries == int.MaxValue)
+        {
+            return Math.Max(0, _options.MaximumNaturalLanguageCandidateSummaries - pinnedSummaryCount);
+        }
+
         var budgetedSummaries = Math.Max(1, maximumSourceCharacters / 512);
         var budgetedNonPinnedSummaries = Math.Max(
             0,
-            Math.Min(MaximumNaturalLanguageCandidateSummaries, budgetedSummaries) - pinnedSummaryCount);
-        return Math.Max(selectedSummaryCount, budgetedNonPinnedSummaries);
+            Math.Min(_options.MaximumNaturalLanguageCandidateSummaries, budgetedSummaries) - pinnedSummaryCount);
+        return Math.Min(
+            Math.Max(selectedSummaryCount, budgetedNonPinnedSummaries),
+            Math.Max(0, _options.MaximumNaturalLanguageCandidateSummaries - pinnedSummaryCount));
     }
 
-    private static int EstimateReservedCodeExploreCharacters(
+    private int EstimateReservedCodeExploreCharacters(
         CodeExploreQueryInterpretation interpretation,
         CodeExploreDiscoverySummary? discovery)
     {
@@ -11748,7 +11751,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             + (interpretation.Terms.Count * 16)
             + (interpretation.PathLikeSpans.Count * 48)
             + ((discovery?.SelectedCount ?? 0) * 64);
-        return Math.Min(4096, reserved);
+        return Math.Min(_options.MaximumMetadataReservationCharacters, reserved);
     }
 
     private static bool IsUsefulCodeExploreSection(CodeExploreFileSection section)
@@ -11758,8 +11761,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return false;
         }
 
-        return section.Source.Completeness == CodeExploreSourceCompleteness.Complete
-            || section.Source.NumberedLines.Sum(line => line.Length) >= MinimumUsefulSourceCharacters;
+        return true;
     }
 
     private static bool IsTestProjectNameOrPath(string projectName, string relativePath)
@@ -11992,7 +11994,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return new(alternativesCapped);
     }
 
-    private static async Task<CodeExploreSymbolResolution> ResolveCodeExplorePathAsync(
+    private async Task<CodeExploreSymbolResolution> ResolveCodeExplorePathAsync(
         AdvancedSemanticSnapshot snapshot,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
@@ -12062,7 +12064,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             {
                 sourceText = await sourceReader.ReadTextAsync(
                     fullPath,
-                    MaximumCurrentSourceFileBytes,
+                    _options.MaximumCurrentSourceFileBytes,
                     cancellationToken);
             }
             catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
@@ -12253,7 +12255,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             selected.Location,
             alternatives,
             ModelVisibleStructuredFact.Exact(reason)));
-        candidates.AddRange(pathCandidates.Take(maximumAlternatives + 1));
+        candidates.AddRange(pathCandidates.Take((int)Math.Min(int.MaxValue, (long)maximumAlternatives + 1)));
         return new(alternativesCapped);
     }
 
@@ -13022,40 +13024,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(drifted, 0, []);
         }
 
-        if (sourceCharacterBudget < MinimumUsefulSourceCharacters && span.Value.Length > sourceCharacterBudget)
-        {
-            var startLine = text.Lines.GetLineFromPosition(Math.Min(span.Value.Start, text.Length)).LineNumber + 1;
-            var endLine = GetSpanEndLine(text, span.Value);
-            var source = new CodeExploreSourceRange(
-                new SourceRange(startLine, 1, endLine, 1),
-                [],
-                fileIdentity.FileSha256,
-                null,
-                CodeExploreSourceCompleteness.Omitted,
-                [$"L{startLine}-L{endLine} omitted because the remaining per-file budget is below the minimum useful source section size."],
-                relativePath);
-            var omitted = new CodeExploreFileSection(
-                relativePath,
-                projectName,
-                targetFramework,
-                CreateSectionIdentities(candidate),
-                source,
-                IsGeneratedPath(candidate.FilePath),
-                candidate.Location?.IsLinked ?? false,
-                candidate.SelectionReason);
-            return new(omitted, 0, [new CodeExploreContinuationTarget(
-                CodeExploreAnchorKind.Path,
-                relativePath,
-                relativePath,
-                startLine,
-                endLine,
-                false,
-                CodeExplorePathSelectionMode.ExactLineRange,
-                fileIdentity.FileSha256,
-                snapshot.Generation,
-                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceLimitRetry))]);
-        }
-
         var projected = ProjectSourceRange(
             text,
             span.Value,
@@ -13086,7 +13054,33 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath),
             candidate.Location?.IsLinked ?? false,
             candidate.SelectionReason);
-        return new(section, projected.SourceCharacters, continuations);
+        return new(section, projected.SourceCharacters, continuations, text, span);
+    }
+
+    private ProjectedCodeExploreSection FitPreparedSource(ProjectedCodeExploreSection prepared, int allowance, long generation)
+    {
+        if (prepared.Text is not { } text || prepared.Span is not { } span)
+        {
+            return prepared;
+        }
+
+        var section = prepared.Section;
+        var fitted = ProjectSourceRange(text, span, section.Source.FileSha256, allowance, section.FilePath);
+        var remainingLine = fitted.NextLine ?? (fitted.SourceCharacters == 0 ? section.Source.Range.StartLine : (int?)null);
+        IReadOnlyList<CodeExploreContinuationTarget> continuations = remainingLine is { } line
+            ? [new CodeExploreContinuationTarget(
+                CodeExploreAnchorKind.Path,
+                section.FilePath,
+                section.FilePath,
+                line,
+                GetSpanEndLine(text, span),
+                true,
+                CodeExplorePathSelectionMode.ExactLineRange,
+                section.Source.FileSha256,
+                generation,
+                GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceLineRangeRetry))]
+            : [];
+        return prepared with { Section = section with { Source = fitted.Range }, SourceCharacters = fitted.SourceCharacters, ContinuationTargets = continuations };
     }
 
     private static int GetSpanEndLine(SourceText text, TextSpan span)
@@ -13097,14 +13091,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return text.Lines.GetLineFromPosition(Math.Min(endPosition, text.Length)).LineNumber + 1;
     }
 
-    private static async Task<SourceText> ReadSourceTextFromFileAsync(
+    private async Task<SourceText> ReadSourceTextFromFileAsync(
         ICodeExploreSourceReader sourceReader,
         string filePath,
         CancellationToken cancellationToken)
     {
         var content = await sourceReader.ReadTextAsync(
             filePath,
-            MaximumCurrentSourceFileBytes,
+            _options.MaximumCurrentSourceFileBytes,
             cancellationToken);
         return SourceText.From(content.Text, Encoding.UTF8);
     }
@@ -13162,7 +13156,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             : CodeExplorePathSelectionMode.ContainingDeclaration;
     }
 
-    private static async Task<(string? FileSha256, string? DriftReason)> VerifyCurrentFileIdentityAsync(
+    private async Task<(string? FileSha256, string? DriftReason)> VerifyCurrentFileIdentityAsync(
         ICodeExploreSourceReader sourceReader,
         string filePath,
         SourceText semanticText,
@@ -13184,7 +13178,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             current = await sourceReader.ReadTextAsync(
                 filePath,
-                MaximumCurrentSourceFileBytes,
+                _options.MaximumCurrentSourceFileBytes,
                 cancellationToken);
         }
         catch (FileNotFoundException)
@@ -13744,7 +13738,11 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private static CancellationTokenSource CreateTimeout(int milliseconds, CancellationToken cancellationToken)
     {
         var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(milliseconds));
+        if (milliseconds > 0)
+        {
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(milliseconds));
+        }
+
         return timeout;
     }
 

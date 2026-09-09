@@ -962,7 +962,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateAgentQuestionLimits() });
         }
 
         public AdvancedSemanticQueryService Service { get; }

@@ -25,6 +25,32 @@ The query can contain:
 - feature terms when the exact declaration is unknown
 - a host-issued `code_explore:continue:...` cursor
 
+## Operational configuration and consumers
+
+`HostFoundation` binds one immutable `CodeExploreOptions` snapshot from `tools:codeExplore` through ordinary configuration precedence and passes it to the shared semantic service, tool, and formatter. Main and child registrations use this same snapshot; visibility, path permission, and actual model capacity remain invocation-specific. Restart to apply changed settings.
+
+Every numeric operational cap accepts a positive value or zero (disabled); negatives fail startup, including when `enforceOperationalLimits=false`. Disabled count/size caps resolve to the integer representation limit for existing count APIs; disabled timers use the existing infinite/linked-cancellation convention. `enforceOperationalLimits=false` disables all caps in this inventory. It does not change model capacity, cancellation, source identity, permissions, provider behavior, or process authority.
+
+| Configuration family under `tools:codeExplore` | Consumers |
+|---|---|
+| `limits:maximumAnchors`, `maximumAlternatives`, `maximumFiles`, source/flow/dispatch/blast/artifact fields, and `timeoutMilliseconds` | Request defaults, semantic validation, discovery, traversal, source/artifact projection and the semantic query lifetime |
+| `maximumQueryCharacters`, `maximumAnchorCharacters`, `maximumPathCharacters` | Adapter and semantic request validation |
+| `maximumCurrentSourceFileBytes` | Both policy source reads and semantic current-file identity verification; artifact reads also retain their independent `limits:maximumAssociatedArtifactBytes` |
+| `maximumCodeExploreCatalogEntries`, `maximumCodeExploreCatalogs`, `maximumPrefixKeysPerTerm`, `maximumFuzzyNames`, `maximumNaturalLanguageGraph*` | Catalog construction/retention, indexed retrieval, graph expansion and concurrency |
+| `maximumArtifactLiteralLength`, `maximumExactNameArtifactLiterals`, `maximumExactNameArtifactLookups`, `maximumArtifactEnumerationEntries` | Artifact discovery, cached directory/name lookup and inventory admission |
+| `maximumGitInventoryOutputCharacters`, `gitInventoryTimeoutMilliseconds` | The existing declared, policy-confined Git inventory process |
+| `maximumResultBytes`, `maximumMarkdownBytes` | Tool definition, structured fit, Markdown rendering and post-sanitization fitting, intersected with actual model capacity |
+| `maximumNaturalLanguageCandidateSummaries`, `maximumPresentation*`, `maximumFileRelevanceSummaries`, `maximumAmbiguityGroups`, `maximumMetadataReservationCharacters`, `markdownMaximum*` | Structured presentation details, source metadata reservation and Markdown category/detail/omission/cursor counts |
+| `maximumCursorCharacters`, `maximumCursorPayloadBytes`, `maximumEmbeddedQueryCharacters` | Both continuation creation and replay decoding |
+| `outerTimeoutMilliseconds` | Central tool pipeline lifetime; zero disables the local timer only |
+| `adaptiveSizingEnabled`, `tiny`, `small`, `medium`, `large`, `veryLarge` | Repository-tier default file/source/per-file/Markdown allowances plus advisory follow-up count and verbosity |
+
+The complete field/default inventory is in `.threadsmith/config.example`; each field is constructor-owned immutable data, not a model argument. Provider transport timeouts and the selected profile's capacity remain owned by their existing shared configuration. Ranking weights, edit-distance relevance, declaration clustering, source-visibility proof, protocol versions, digest structure, and the thresholds used to classify repository size are not operational output caps.
+
+An omitted or nonpositive model `maxFiles` hint uses configured defaults. A positive hint narrows the effective file allowance. It does not opt source limits out of adaptation. This corrects the previous numeric-default check, which accidentally skipped source adaptation when the file hint differed from eight; disabling `adaptiveSizingEnabled` retains the configured base source allowances. `CodeExploreRequest.UseAdaptiveDefaults` records default origin explicitly, so an explicit host limit numerically equal to a historical default does not activate adaptation. Tier limits can narrow defaults but never restore a disabled controlling cap; unknown scale retains the explicit settings. `CodeExploreAdaptiveBudget.AdaptiveDefaultsApplied` carries this decision to rendering without interpreting prose. `CodeExploreResult.EffectiveMaximumMarkdownBytes` preserves the resolved display cap when structured fitting removes verbose adaptive metadata. Follow-up counts are advisory only.
+
+Source and output ceilings are independent and inspectable. Raising source limits may require raising `maximumResultBytes` and `maximumMarkdownBytes` as well; the remaining enabled ceiling still applies and reports omitted output. Disabling adaptation removes repository-scale reductions, including Markdown reductions. The selected model's effective input capacity still bounds both structured and Markdown results before and after sanitization.
+
 ## Request pipeline
 
 Named C# files in a query become exact path requests before natural-language declaration ranking. Each requested file has its own resolution outcome; missing files do not cause loosely related declarations to be returned instead. A bare filename first checks that exact repository-root file, then can resolve to a unique, policy-allowed loaded document. Distinct loaded files with the same name return ambiguity and path alternatives; linked copies of the same physical file retain their existing handling. An explicit repository-relative path outside the semantic workspace can still return permitted source, labeled as lacking semantic identity. Unknown filenames require a repository file lookup or an exact path, not another broad semantic query.
@@ -171,11 +197,12 @@ Relative score floors remove weak tail candidates after ranking while protecting
 
 The source planner allocates the host-owned source envelope across selected files. It uses effective relevance weight, exact and graph-spine protection, and these general rules:
 
-- reserve fixed rendering overhead
-- allocate a useful minimum to admitted files
-- distribute the remaining envelope proportionally
-- prevent one file from consuming the whole response
-- remove the weakest unprotected file when the envelope cannot support all files
+- protect exact targets, required flow evidence, and existing relevance order
+- inspect source demand and visible-range back-references before assigning output reservations
+- reserve only what small, available sections can actually use; empty sections consume no source-bearing file slot
+- distribute unused capacity among eligible files and complete nearby declarations or small files when they fit
+- reconsider whole-line fitting slack and unused slots without displacing stronger retained source
+- retain short exact targets and useful partial ranges without a minimum-character admission gate
 
 Selected declarations in the same file can be clustered when their source ranges are close. The planner allocates whole declaration or clustered ranges and never emits a partial source line. Projection can return the complete lines that fit from an allocated range, mark that section partial, and issue a continuation for the remainder.
 
@@ -216,7 +243,7 @@ Artifact budgets and continuations are independent from source budgets so a larg
 
 `CodeExploreTool` returns the structured `CodeExploreResult`. `CodeExploreOutputFormattingTool` renders the default concise Markdown projection.
 
-Both projections share a ceiling derived from the selected model's effective input budget and the tool's hard result bound. Fitting is progressive and source-first:
+Both projections respect actual model capacity plus their separately configured operational output caps, including after sanitization. Fitting is progressive and source-first:
 
 1. retain whole primary source sections and exact anchors
 2. compact artifacts, flow, impact, candidate diagnostics, and other secondary evidence
@@ -239,6 +266,8 @@ The service rechecks workspace generation before publishing cached or final evid
 
 ## Main implementation files
 
+- `src/Threadsmith.Core/CodeExploreOptions.cs`: immutable operational and adaptive settings
+- `src/Threadsmith.Tools/CodeExploreConfiguration.cs`: ordinary-layer configuration binding
 - `src/Threadsmith.Core/CodeExploreContracts.cs`: host-owned request, result, evidence, coverage, continuation, and allocation DTOs
 - `src/Threadsmith.Core/CodeExploreQueryIntentPolicy.cs`: shared relationship-intent parsing and consumed relationship terms
 - `src/Threadsmith.DotNet/AdvancedSemanticQueryService.cs`: snapshot, catalog, ranking, graph, source, flow, impact, artifact, and continuation orchestration

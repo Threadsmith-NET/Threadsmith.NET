@@ -67,7 +67,7 @@ Configure how Threadsmith.NET behaves when operating on this repository. Config 
 
 - **`coding-standards.md`** — C# coding standards summary (references guardrails).
 - **`domain-glossary.md`** — Domain terminology and subsystem descriptions.
-- Appended to the model's system prompt at request-assembly time.
+- Appended to the model's system prompt at request-assembly time. Root and applicable ancestor `AGENTS.md` files are discovered automatically; do not list them as prompt appends. Existing duplicate paths render once as a compatibility fallback.
 - **Untrusted input** (§22.2): sanitized + bounded, never executed as code, never overrides host policy or guardrails.
 - Versioned and referenced by id+version in execution records (§11.6).
 - Loaded in configured order after stable host policy and before phase instructions, with 32 KiB per-file and 64 KiB total default bounds.

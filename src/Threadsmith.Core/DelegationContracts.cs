@@ -907,11 +907,6 @@ public interface IDelegationCheckpointStore
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Starts one accepted delegation.</summary>
-public sealed record StartDelegationCommand(
-    DelegationPlan Plan,
-    IAgentAssignmentRunner Runner) : ICommand<DelegationCheckpoint>;
-
 /// <summary>Inspects one delegation run tree.</summary>
 public sealed record GetDelegationCommand(DelegationId DelegationId)
     : ICommand<DelegationCheckpoint?>;

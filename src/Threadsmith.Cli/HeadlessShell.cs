@@ -520,17 +520,6 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
-    /// <summary>Starts a validated delegation through the shared host boundary.</summary>
-    public Task<DelegationCheckpoint> StartDelegationAsync(
-        DelegationPlan plan,
-        IAgentAssignmentRunner runner,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new StartDelegationCommand(plan, runner),
-            cancellationToken);
-    }
-
     /// <summary>Writes a stable JSON delegation run tree for automation.</summary>
     public async Task<bool> WriteDelegationAsync(
         DelegationId delegationId,

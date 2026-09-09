@@ -13,7 +13,7 @@ using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Verifies Plan 37 orchestration, write-ahead, resume, and migration contracts.</summary>
-public sealed class ExecutionOrchestratorTests
+public sealed partial class ExecutionOrchestratorTests
 {
     /// <summary>Verifies an approved plan stages an exact diff and completes only after separate authorization and validation.</summary>
     [Fact]
@@ -1417,7 +1417,7 @@ public sealed class ExecutionOrchestratorTests
                 throw new InvalidOperationException("Simulated baseline interruption.");
             }
 
-            return Task.FromResult(_result);
+            return Task.FromResult(_result with { BaselineCapturedAt = command.Request.Baseline.CapturedAt });
         }
     }
 

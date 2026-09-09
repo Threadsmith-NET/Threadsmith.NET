@@ -18,7 +18,7 @@ using Threadsmith.Workspaces;
 using Xunit;
 
 /// <summary>Verifies plans 10 and 11 transactional and semantic mutation contracts.</summary>
-public static class Milestone5Tests
+public static partial class Milestone5Tests
 {
     /// <summary>Preview remains private until approval, can be configured per change, commits, and rolls back.</summary>
     [Fact]
@@ -355,11 +355,11 @@ public static class Milestone5Tests
         });
 
         Assert.Equal(WorkloadClass.CodeEdit, assembled.WorkloadClass);
-        Assert.Contains("host assigns session, run, workspace, baseline", assembled.ModelInput);
+        Assert.Contains("host assigns all execution, baseline, mutation, and approved-step identities", assembled.ModelInput);
         Assert.Contains("mutationSet.rationale", assembled.ModelInput);
-        Assert.Contains("type and relativePath", assembled.ModelInput);
+        Assert.Contains("Use type, relativePath", assembled.ModelInput);
         Assert.Contains("baselineSha256", assembled.ModelInput);
-        Assert.Contains("Do not use plan file-intent or legacy synonyms kind, path, baselineHash", assembled.ModelInput);
+        Assert.Contains("never substitute kind, path, or baselineHash", assembled.ModelInput);
         Assert.Contains("src/Example.cs", assembled.ModelInput);
         Assert.DoesNotContain("src/Unplanned.cs", assembled.ModelInput);
         Assert.Contains(
@@ -459,10 +459,10 @@ public static class Milestone5Tests
         var modelTool = Assert.Single(modelRequest.Tools);
         Assert.Equal(contextTool.Id, modelTool.Name);
         Assert.Equal(contextTool.Description, modelTool.Description);
-        Assert.Contains("host already owns the approved plan revision and step identities", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("host owns approved steps and all execution identities", modelTool.Description, StringComparison.Ordinal);
         Assert.Contains("operation-specific shape", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("relativePath and, when advertised, baselineSha256", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("never use plan file-intent or legacy names kind, path, baselineHash", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("Use type and relativePath", modelTool.Description, StringComparison.Ordinal);
+        Assert.Contains("omit startOffset/length", modelTool.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("planRevision", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("planStepIds", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
         var strictMutationSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(

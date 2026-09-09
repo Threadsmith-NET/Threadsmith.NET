@@ -1268,7 +1268,7 @@ public static class Milestone1Tests
             string.Empty);
 
         Assert.Equal(
-            $"Delegation started: {delegationId.Value:D}\n"
+            $"\nDelegation started: {delegationId.Value:D}\n"
             + $"  Inspect or cancel: /agents {delegationId.Value:D}\n",
             string.Concat(segments.Select(segment => segment.Text)));
         Assert.All(segments, segment => Assert.Equal(PresentationTextRole.Status, segment.Role));
@@ -2929,7 +2929,7 @@ public static class Milestone1Tests
         var occurredAt = DateTimeOffset.UtcNow;
         var runId = RunId.New();
         var segments = new List<PresentationTextSegment>();
-        var startedText = " MUTATION: Preparing preview"
+        var startedText = " MUTATION: Generating edits"
             + Environment.NewLine
             + " \u2514 Attempt: 1/2"
             + Environment.NewLine;
@@ -2959,7 +2959,7 @@ public static class Milestone1Tests
         Assert.Contains(
             segments,
             segment => segment.Role == PresentationTextRole.Status
-                && segment.Text.Contains(" MUTATION: Preparing preview", StringComparison.Ordinal));
+                && segment.Text.Contains(" MUTATION: Generating edits", StringComparison.Ordinal));
         Assert.Contains(
             segments,
             segment => segment.Role == PresentationTextRole.Warning
@@ -3734,7 +3734,7 @@ public static class Milestone1Tests
 
         Assert.StartsWith(
             Environment.NewLine
-                + " MUTATION: Preparing preview"
+                + " MUTATION: Generating edits"
                 + Environment.NewLine
                 + " \u2514 Attempt: 1/2"
                 + Environment.NewLine,

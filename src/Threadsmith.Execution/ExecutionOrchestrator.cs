@@ -86,6 +86,18 @@ public sealed class ExecutionOrchestrator :
             throw new InvalidOperationException("A terminal execution cannot be started again.");
         }
 
+        // A new execution may follow an external edit or manual rollback, even
+        // after /new. Freeze current approved endpoints before asking for edits;
+        // retries and approval keep this generation so later drift still conflicts.
+        var baseline = await _workspaces.PromoteBaselineAsync(
+            request.Baseline.WorkspaceId,
+            request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
+            cancellationToken);
+        request = request with
+        {
+            Baseline = baseline,
+            ValidationRequest = request.ValidationRequest with { Baseline = baseline },
+        };
         var diagnosticIdentity = GetBaselineIdentity(request.Baseline);
         var planHash = GetHash(JsonSerializer.Serialize(request.ApprovedPlan, JsonOptions));
         var preparing = CreateCheckpoint(

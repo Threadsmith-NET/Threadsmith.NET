@@ -69,6 +69,7 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
 
         var segments = new List<PromptAppendSegment>();
         var configuredCacheKeys = new HashSet<string>(PathComparer);
+        var loadedSegments = new Dictionary<string, PromptAppendSegment>(PathComparer);
         long totalBytes = 0;
         for (var position = 0; position < request.ConfiguredPaths.Count; position++)
         {
@@ -117,6 +118,14 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
             if (!File.Exists(path))
             {
                 throw new FileNotFoundException("Configured prompt append file does not exist.", path);
+            }
+
+            if (loadedSegments.TryGetValue(path, out var loaded))
+            {
+                // Retain each configured position for completeness checks while
+                // reading and charging this file only once at this boundary.
+                segments.Add(loaded with { Position = position });
+                continue;
             }
 
             CachedPromptAppend? cached;
@@ -176,13 +185,15 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
 
             totalBytes += cached.ByteLength;
             var idHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(relativePath)));
-            segments.Add(new PromptAppendSegment(
+            var loadedSegment = new PromptAppendSegment(
                 $"project-append:{idHash[..16]}",
                 $"sha256:{cached.ContentHash}",
                 cached.ContentHash,
                 relativePath,
                 position,
-                cached.Content));
+                cached.Content);
+            segments.Add(loadedSegment);
+            loadedSegments.Add(path, loadedSegment);
         }
 
         lock (_gate)

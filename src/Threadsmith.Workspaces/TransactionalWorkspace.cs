@@ -766,7 +766,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         return workspace;
     }
 
-    /// <summary>Creates the next immutable generation by rereading only the committed paths.</summary>
+    /// <summary>Creates the next immutable generation by rereading only the specified paths.</summary>
     internal async Task<TransactionalWorkspace> CreatePromotedAsync(
         IReadOnlyList<string> changedFiles,
         CancellationToken cancellationToken)

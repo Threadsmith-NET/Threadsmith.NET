@@ -74,23 +74,6 @@ internal static class ApplicationComposition
             repositoryInstructionResolver,
             persistence.RepositoryMemoryStore,
             providerInstructionResolver: providerInstructionResolver);
-        var trustedAgentContextAssembler = integration.Models.RoleModels.Get(AgentRole.Implementer) is null
-            ? null
-            : new ContextAssembler(
-                persistence.EvidenceStore,
-                new TokenEstimator(),
-                new ContextPolicy(),
-                host.PromptAppendLoader,
-                host.Sanitizer,
-                host.Events,
-                host.PromptLoader,
-                contextOptions,
-                new ModelResolver(integration.Models.TrustedCatalog, modelHints),
-                persistence.ConversationStore,
-                conversationRetriever,
-                repositoryInstructionResolver,
-                persistence.RepositoryMemoryStore,
-                providerInstructionResolver: trustedProviderInstructionResolver);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -332,9 +315,7 @@ internal static class ApplicationComposition
                 semanticMutations: semantic.SemanticMutations,
                 preMutationAnalyzer: semantic.SemanticEngines,
                 correctiveMessages: correctiveMessages,
-                prompts: host.PromptLoader,
-                trustedAgentContextAssembler: trustedAgentContextAssembler,
-                trustedAgentModelProvider: integration.Models.TrustedProvider);
+                prompts: host.PromptLoader);
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -403,15 +384,7 @@ internal static class ApplicationComposition
                 integration.Models.RoleModels,
                 trustedProviderInstructionResolver);
             var executionOrchestrator = new ExecutionOrchestrator(
-                integration.Models.Catalog.Profiles.Count == 0
-                    ? mutationProposals
-                    : new ApprovedImplementerProposalApplication(
-                        mutationProposals,
-                        delegationCoordinator,
-                        childModelSelection,
-                        mutationCoordinator,
-                        delegateAgentsOptions,
-                        preferences),
+                mutationProposals,
                 mutationCoordinator,
                 validationApplication,
                 validationApplication,

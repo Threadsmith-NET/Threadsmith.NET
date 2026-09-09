@@ -10,16 +10,15 @@ using Threadsmith.Models;
 using Threadsmith.Tools;
 using Xunit;
 
-public sealed partial class ApprovedImplementerProposalApplicationTests
+public sealed partial class ApprovedMutationProposalApplicationTests
 {
     /// <summary>A separately delegated read-only review of a prepared candidate cannot authorize its application.</summary>
     [Fact]
-    public async Task PreparedChild_ReadOnlyReviewerJoinsBeforeExactApprovalAndApplication()
+    public async Task PreparedProposal_ReadOnlyReviewerJoinsBeforeExactApprovalAndApplication()
     {
         await using var fixture = await Fixture.CreateAsync();
         var staged = await fixture.Application.HandleAsync(fixture.Command);
-        var prepared = Assert.Single(fixture.Checkpoints.Terminals);
-        Assert.NotNull(Assert.Single(prepared.ChildOutcomes).Implementation);
+        var baseline = fixture.Workspaces.GetWorkspace(fixture.Command.WorkspaceId).Baseline;
         Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
 
         await using var events = new DomainEventStream();
@@ -37,7 +36,7 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
             {
                 Source = "approved-candidate-diff",
                 SourcePath = "example.txt",
-                BaselineIdentity = prepared.Provenance.BaselineIdentity,
+                BaselineIdentity = WorkspaceBaselineIdentity.Create(baseline),
             },
             CollectedAt = DateTimeOffset.UtcNow,
             Relevance = 1,
@@ -45,7 +44,7 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         var profile = CreateProfile() with { IntendedWorkloadClasses = [WorkloadClass.Review] };
         var catalog = new ConfiguredModelCatalog([profile]);
         var selection = new AgentModelSelector(catalog, new DefaultModelSelectionPolicy(catalog));
-        var plan = CreateCandidateReviewPlan(prepared, profile.Id, selection);
+        var plan = CreateCandidateReviewPlan(fixture, profile.Id, selection);
         var provider = new CandidateReviewModel(diffEvidenceId);
         var runner = CreateCandidateReviewer(plan, selection, provider, evidence, events, sanitizer);
         await using var scheduler = new AgentRunScheduler();
@@ -58,7 +57,7 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         var outcome = Assert.Single(reviewed.ChildOutcomes);
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal(AgentRole.TestReviewer, outcome.Role);
-        Assert.NotEqual(Assert.Single(prepared.ChildOutcomes).ChildRunId, outcome.ChildRunId);
+        Assert.NotEqual(fixture.Command.RunId, outcome.ChildRunId);
         Assert.Equal(provider.Response, outcome.Response);
         Assert.Null(outcome.Findings);
         Assert.Null(outcome.Review);
@@ -98,12 +97,12 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
     }
 
     private static DelegationPlan CreateCandidateReviewPlan(
-        DelegationCheckpoint prepared,
+        Fixture fixture,
         ModelProfileId profileId,
         AgentModelSelector selection)
     {
         var acceptedAt = DateTimeOffset.UtcNow;
-        var assignment = Assert.Single(prepared.Assignments) with
+        var assignment = new AgentAssignment
         {
             AssignmentId = AgentAssignmentId.New(),
             ChildRunId = RunId.New(),
@@ -114,6 +113,8 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
             OutputSchema = AgentAssignment.ResponseSchema,
             StoppingCondition = "Return your review of the prepared candidate.",
             Deadline = acceptedAt.AddMinutes(1),
+            Scope = new AgentAssignmentScope { Files = ["example.txt"], IsOwnershipProven = true },
+            Budget = new AgentResourceBudget { WallTime = TimeSpan.FromMinutes(1) },
             Policy = new AgentPolicySnapshot
             {
                 AllowedToolIds = [],
@@ -129,7 +130,14 @@ public sealed partial class ApprovedImplementerProposalApplicationTests
         return new DelegationPlan
         {
             DelegationId = DelegationId.New(),
-            Provenance = prepared.Provenance,
+            Provenance = new DelegationProvenance
+            {
+                SessionId = fixture.Command.SessionId,
+                ParentRunId = fixture.Command.RunId,
+                WorkspaceId = fixture.Command.WorkspaceId,
+                RepositoryIdentity = fixture.Root,
+                BaselineIdentity = WorkspaceBaselineIdentity.Create(fixture.Workspaces.GetWorkspace(fixture.Command.WorkspaceId).Baseline),
+            },
             Assignments = [assignment],
             ParentBudget = assignment.Budget,
             ImplementationAuthorized = false,

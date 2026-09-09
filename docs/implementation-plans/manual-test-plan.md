@@ -1554,13 +1554,16 @@ Prerequisite: use a controlled host harness for the existing isolated-worker API
 
 Expected: agent control flow remains in-process while each worker's file state is isolated in a confined worktree at the exact parent baseline. Worktree authorization resolves the stored plan assignment and rejects forged/mismatched role, mode, or child-run identity before Git executes. Every mutation follows the governed proposal, exact diff, policy, transaction, validation, correction, and cancellation rules. Worker output is a frozen structured change set with provenance; no worker touches the primary/peer worktree, creates required commits, merges, or exceeds ownership.
 
-Separately verify approved implementer preparation:
+Separately verify parent-run mutation preparation:
 
-1. With configured models, approve a small plan through normal application execution. Confirm implementation and correction turns select the approved implementer proposal adapter and the delegation coordinator, with schema `approved-implementer-preparation/1`. Hold preparation before its authoritative join and inspect workspace staging and repository bytes. Separately confirm the no-model offline flow retains the direct mutation proposal path.
-2. Return a repairable proposal and confirm existing proposal correction and scope checks run before preparation completes. Cancel or fail the join in separate runs.
-3. Allow a valid proposal to join. Review the parent-staged exact diff, deny it once, then repeat and authorize it. Exercise a validation failure and the existing governed correction flow.
+1. With configured models, approve a small plan through normal application execution. Confirm implementation and correction requests keep the parent run identity and current session model/reasoning settings. No delegation announcement or child checkpoint appears. Repeat with an Implementer role model configured and with a multi-step plan.
+2. Return a repairable proposal and confirm bounded corrections stay in the parent run. Cancel or fail the provider before staging in separate runs.
+3. Allow a valid proposal to complete. Review the exact diff, deny it once, then repeat and authorize it. Exercise validation failure, governed correction, and execution resume.
+4. Have the model explicitly call `delegate_agents` and confirm child execution and inspection still work. Attempt direct host, CLI, skill, and hook tool invocation and confirm rejection before any child starts.
+5. Apply a one-line field edit, manually restore the file, enter `/new`, and repeat. Confirm `MUTATION: Generating edits` covers the model wait, the approved file baseline reflects the restoration, and the exact preview succeeds. Edit the file externally after preview and confirm approval cannot overwrite that edit.
+6. With a scripted proposal, omit offsets for a unique multiline anchor; repeat with LF/CRLF differences. Confirm one proposal stages the correct bytes. Repeat with repeated anchors, an empty insertion without an offset, malformed double-escaped strings, and real backslash sequences in source. Confirm ambiguity and invalid input are rejected and matching literal escapes remain unchanged. Compare provider usage/timing separately from host screening; no fixed live latency is promised.
 
-Expected: this actual mutation protocol remains validated separately from ordinary free-form replies. The child creates only a proposal, with no staging or writes during preparation. Failed or cancelled joins do not stage. After the authoritative join, the parent stages and uses the existing exact-diff approval, transaction, validation, and correction lifecycle. No automatic parallel worktree application occurs.
+Expected: only a model-requested delegation tool call launches subagents. Ordinary proposal generation retains exact-diff approval, scope/baseline checks, transactional writes, validation, and cancellation. Failed or cancelled proposal generation does not stage or apply a candidate. Headless interfaces can inspect or cancel existing delegations but cannot start them directly.
 
 ### MTP-170 — Independent specialist reviewers
 

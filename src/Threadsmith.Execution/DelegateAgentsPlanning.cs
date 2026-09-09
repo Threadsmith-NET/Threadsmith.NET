@@ -44,6 +44,11 @@ public sealed class DelegateAgentsPlanFactory
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
+        if (!string.Equals(context.Invocation.RequestedBy, "model", StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Subagents require a model-requested delegate_agents tool call.");
+        }
+
         DelegateAgentsInputValidator.Validate(input, _options);
         var workspaceId = context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Agent delegation requires an opened workspace.");

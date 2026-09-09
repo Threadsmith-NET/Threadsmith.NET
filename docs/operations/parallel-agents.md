@@ -1,6 +1,6 @@
 # Parallel-agent operations
 
-Threadsmith has one host-owned delegation layer for bounded research, isolated implementation, and independent review. It composes over the serial approved-plan execution path; it does not replace mutation approval, transactions, validation, or recovery.
+Threadsmith starts subagents only for model-requested `delegate_agents` tool calls. The host validates and schedules those requests; serial approved-plan execution never launches children automatically.
 
 For a component-by-component explanation of the conversation tool, see [`delegate_agents` under the hood](../architecture/delegate-agents-tool.md).
 
@@ -9,7 +9,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
 - Delegation depth is exactly one; children cannot create descendants or change their assignment.
 - Ordinary conversation delegation supports all six roles. Every child is read-only, including an implementer that proposes changes.
-- Approved implementer preparation uses the existing mutation proposal flow. The child prepares only a proposal; the parent stages it after the authoritative join and retains exact-diff approval, transactions, validation, and corrections.
+- Approved implementation and correction use the parent run through `MutationProposalApplication`, retaining exact-diff approval, transactions, validation, and corrections.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
 - Worktrees isolate file state but are not sandboxes. Trust, prohibited paths, reparse checks, tool policy, secrets, network, process, and approval gates still apply.
 - Ordinary final responses cross durable join boundaries with host-owned role, model, and status metadata. Their claims are not promoted to verified findings. Legacy structured outcomes and approved mutation packages remain separate supported contracts; hidden reasoning is not joined.
@@ -79,7 +79,6 @@ Press unmodified Escape twice within 850 ms to cooperatively cancel the active c
 
 Headless automation uses the same command dispatcher:
 
-- `StartDelegationCommand`
 - `GetDelegationCommand`
 - `CancelDelegationCommand`
 - `CancelAgentAssignmentCommand`
@@ -116,9 +115,9 @@ Use trusted `agents:roleModels` to select existing provider/profile/reasoning pr
 
 Role keys and field names are case-sensitive; provider IDs and reasoning names are case-insensitive. Invalid role configuration stops startup instead of falling back. Only `RoleConfiguration` selections and their fallbacks use the trusted catalog. Application pins, inherited preferences, and defaults use ordinary model routing and its normal repository and secret rules. Tool access mode does not change the model's routing authority.
 
-## Approved implementer preparation
+## Parent-run mutation preparation
 
-With configured models, normal approved implementation and correction turns select `ApprovedImplementerProposalApplication`, which uses `MutationProposalApplication` and the delegation coordinator to prepare a candidate for the accepted plan. Unlike an ordinary final response, this actual mutation protocol validates the proposal and can request corrections, but does not stage or apply it. The parent stages the prepared proposal only after the child has joined authoritatively, then uses the existing exact-diff approval, transaction, validation, and correction flow. Cancellation or a failed join prevents staging. The no-model offline flow keeps the direct mutation proposal path.
+Normal approved implementation and correction run directly through `MutationProposalApplication` with the parent run identity, current session model/reasoning preferences, and ordinary request-capacity checks. The application validates the proposal and can request bounded corrections before staging it for exact-diff approval. Provider failures, cancellation, invalid scope, or exhausted repairs prevent staging. Configuring an Implementer role model affects only model-requested delegation. Plan approval, preflight, and execution resume do not create child assignments.
 
 This path does not automatically partition, apply, or merge parallel worktree changes. The existing isolated-worker APIs and their integration checks remain separate. A role name, a proposed file change, or a clean review cannot authorize a repository write.
 

@@ -7,7 +7,7 @@ using Threadsmith.Models;
 using Xunit;
 
 /// <summary>Milestone 19 cache-optimized request generation acceptance coverage.</summary>
-public sealed class Milestone19Tests
+public sealed partial class Milestone19Tests
 {
     /// <summary>Canonicalization changes encoding and order without erasing explicit null defaults.</summary>
     [Fact]

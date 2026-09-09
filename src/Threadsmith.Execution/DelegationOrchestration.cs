@@ -984,7 +984,6 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 /// <summary>Coordinates validated delegation scheduling and durable boundaries.</summary>
 public sealed class DelegationCoordinator :
     IDelegationCoordinator,
-    ICommandHandler<StartDelegationCommand, DelegationCheckpoint>,
     ICommandHandler<GetDelegationCommand, DelegationCheckpoint?>,
     ICommandHandler<CancelDelegationCommand, bool>,
     ICommandHandler<CancelAgentAssignmentCommand, bool>
@@ -1257,15 +1256,6 @@ public sealed class DelegationCoordinator :
         }
 
         return Task.FromResult(active.TryCancel());
-    }
-
-    /// <inheritdoc />
-    public Task<DelegationCheckpoint> HandleAsync(
-        StartDelegationCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        return StartAsync(command.Plan, command.Runner, cancellationToken);
     }
 
     /// <inheritdoc />

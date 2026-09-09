@@ -209,10 +209,6 @@ public sealed record ContextAssemblyRequest
     /// <summary>User or session default model, which takes precedence over advisory hints.</summary>
     public ModelProfileId? DefaultModelProfileId { get; init; }
 
-    /// <summary>Preserves provisional approved-child context for complete-request model selection before provider dispatch.</summary>
-    /// <remarks>The approved preparation host must validate the returned wire capacity with its agent selector and rebuild after fallback.</remarks>
-    public bool DeferAgentModelCapacityValidation { get; init; }
-
     /// <summary>Pending plan supplied as explicit governed state during revision.</summary>
     public ImplementationPlan? PlanUnderRevision { get; init; }
 

@@ -190,11 +190,11 @@ public sealed record ReplaceTextMutationProposal : MutationProposalChange
     /// <summary>Expected baseline hash.</summary>
     public string? BaselineSha256 { get; init; }
 
-    /// <summary>Zero-based character offset for replacement.</summary>
-    public required int StartOffset { get; init; }
+    /// <summary>Optional zero-based UTF-16 offset; required only to disambiguate repeated text or place an empty insertion.</summary>
+    public int? StartOffset { get; init; }
 
-    /// <summary>Number of baseline characters replaced.</summary>
-    public required int Length { get; init; }
+    /// <summary>Optional range length; the host derives it from exact expected text when omitted.</summary>
+    public int? Length { get; init; }
 
     /// <summary>Expected text at the replacement range.</summary>
     public required string ExpectedText { get; init; }

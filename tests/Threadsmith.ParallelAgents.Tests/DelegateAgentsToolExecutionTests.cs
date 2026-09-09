@@ -636,36 +636,26 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(AgentAssignment.ResponseSchema, Assert.Single(checkpoints.History.Last().Assignments).OutputSchema);
     }
 
-    /// <summary>Verifies the legacy approved-plan preflight may complete with coverage and no findings.</summary>
-    [Fact]
-    public async Task StartAsync_ApprovedPlanPreflightWithCoverageOnly_RemainsCompleted()
+    /// <summary>A host or workflow cannot launch children even with a valid model-visible snapshot.</summary>
+    [Theory]
+    [InlineData("host")]
+    [InlineData("cli")]
+    [InlineData("skill:test")]
+    [InlineData("hook:test")]
+    public async Task ExecuteAsync_NonModelCallerCannotLaunchChildren(string requestedBy)
     {
-        // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
-        var basePlan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
-        var plan = basePlan with
+        var context = fixture.Context with
         {
-            Provenance = basePlan.Provenance with
-            {
-                ApprovedPlanIdentity = Guid.NewGuid().ToString("D"),
-                ApprovedPlanRevision = 1,
-            },
+            Invocation = fixture.Context.Invocation with { RequestedBy = requestedBy },
         };
 
-        // Act
-        var checkpoint = await coordinator.StartAsync(plan, new ApprovedPlanAssignmentRunner());
-
-        // Assert
-        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoint.Phase);
-        var outcome = Assert.Single(checkpoint.ChildOutcomes);
-        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Null(outcome.Response);
-        Assert.Empty(Assert.IsType<AgentFindingSet>(outcome.Findings).Findings);
-        Assert.NotEmpty(outcome.Findings.CoverageNotes);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Tool.ExecuteAsync(CreateInput(1), context));
+        Assert.Empty(checkpoints.History);
     }
 
     /// <summary>Verifies approved-plan identity and revision provenance cannot be supplied independently.</summary>

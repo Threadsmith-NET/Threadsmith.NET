@@ -187,7 +187,7 @@ internal static class InteractionPresentationFormatter
         return FormatBlock(new TuiBlockPresentation(
             new TuiBlockHeader(
                 "MUTATION",
-                "Preparing preview",
+                "Generating edits",
                 Outcome: null,
                 ElapsedText: null,
                 PresentationTextRole.Status,

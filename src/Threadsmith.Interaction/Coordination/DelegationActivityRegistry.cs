@@ -99,7 +99,7 @@ internal sealed class DelegationActivityRegistry
     internal static string FormatAccepted(DelegationCheckpointWritten checkpoint)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
-        return $"Delegation started: {checkpoint.DelegationId.Value:D}\n"
+        return $"\nDelegation started: {checkpoint.DelegationId.Value:D}\n"
             + $"  Inspect or cancel: /agents {checkpoint.DelegationId.Value:D}\n";
     }
 

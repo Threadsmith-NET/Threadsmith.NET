@@ -66,13 +66,13 @@ public sealed class MutationProposalApplication :
             "replaceText": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["type", "relativePath", "startOffset", "length", "expectedText", "replacementText"],
+              "required": ["type", "relativePath", "expectedText", "replacementText"],
               "properties": {
                 "type": { "type": "string", "const": "ReplaceText" },
                 "relativePath": { "type": "string" },
                 "baselineSha256": { "type": "string" },
-                "startOffset": { "type": "integer", "minimum": 0 },
-                "length": { "type": "integer", "minimum": 0 },
+                "startOffset": { "type": ["integer", "null"], "minimum": 0 },
+                "length": { "type": ["integer", "null"], "minimum": 0 },
                 "expectedText": { "type": "string" },
                 "replacementText": { "type": "string" },
                 "relatedSymbolId": { "type": "string" },
@@ -168,8 +168,6 @@ public sealed class MutationProposalApplication :
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly ITransactionalWorkspaceResolver _workspaces;
-    private readonly IContextAssembler? _trustedAgentContextAssembler;
-    private readonly IModelProvider? _trustedAgentModelProvider;
 
     /// <summary>Initializes a new instance of the <see cref="MutationProposalApplication"/> class.</summary>
     public MutationProposalApplication(
@@ -187,9 +185,7 @@ public sealed class MutationProposalApplication :
         ISemanticMutationEngine? semanticMutations = null,
         IPreMutationAnalyzer? preMutationAnalyzer = null,
         CorrectiveMessageFactory? correctiveMessages = null,
-        IPromptLoader? prompts = null,
-        IContextAssembler? trustedAgentContextAssembler = null,
-        IModelProvider? trustedAgentModelProvider = null)
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(contextAssembler);
@@ -214,8 +210,6 @@ public sealed class MutationProposalApplication :
         _correctiveMessages = correctiveMessages;
         _prompts = prompts;
         _proposeMutationsTool = CreateProposeMutationsTool(RequirePrompts());
-        _trustedAgentContextAssembler = trustedAgentContextAssembler;
-        _trustedAgentModelProvider = trustedAgentModelProvider;
     }
 
     /// <inheritdoc />
@@ -223,14 +217,13 @@ public sealed class MutationProposalApplication :
         ProposeMutationSetCommand command,
         CancellationToken cancellationToken = default)
     {
-        var prepared = await PrepareAsync(command, null, cancellationToken);
+        var prepared = await PrepareAsync(command, cancellationToken);
         return await StagePreparedAsync(prepared, cancellationToken);
     }
 
     /// <summary>Runs governed proposal generation and corrections without staging or applying candidate changes.</summary>
-    internal async Task<PreparedMutationProposal> PrepareAsync(
+    private async Task<PreparedMutationProposal> PrepareAsync(
         ProposeMutationSetCommand command,
-        ApprovedImplementerPreparationContext? child,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -248,9 +241,7 @@ public sealed class MutationProposalApplication :
                 cancellationToken);
             try
             {
-                child?.Corrections = correctiveTurns.AttemptsUsed;
-
-                return await HandleCoreAsync(command, correctiveMessages, child, cancellationToken);
+                return await HandleCoreAsync(command, correctiveMessages, cancellationToken);
             }
             catch (RepairableMutationProposalException exception)
             {
@@ -278,7 +269,7 @@ public sealed class MutationProposalApplication :
     }
 
     /// <summary>Stages an accepted candidate for the existing separate exact-diff approval workflow.</summary>
-    internal async Task<StagedMutationSet> StagePreparedAsync(
+    private async Task<StagedMutationSet> StagePreparedAsync(
         PreparedMutationProposal prepared,
         CancellationToken cancellationToken = default)
     {
@@ -346,7 +337,6 @@ public sealed class MutationProposalApplication :
     private async Task<PreparedMutationProposal> HandleCoreAsync(
         ProposeMutationSetCommand command,
         IReadOnlyList<ModelMessage> correctiveMessages,
-        ApprovedImplementerPreparationContext? child,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -382,26 +372,22 @@ public sealed class MutationProposalApplication :
                 "The transactional resolver returned a baseline for a different workspace.");
         }
 
-        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, child, cancellationToken);
-        var model = child?.Selection.UsesTrustedCatalog == true
-            ? _trustedAgentModelProvider
-                ?? throw new InvalidOperationException("Trusted Implementer model dispatch is unavailable.")
-            : _model;
+        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, cancellationToken);
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
         var usageRequestId = new ModelRequestUsageId(
-            child?.ChildRunId ?? command.RunId,
+            command.RunId,
             "mutation",
             0,
             Guid.NewGuid());
         ModelUsage? reportedUsage = null;
         try
         {
-            await foreach (var chunk in model.StreamAsync(modelRequest, cancellationToken))
+            await foreach (var chunk in _model.StreamAsync(modelRequest, cancellationToken))
             {
-                if (child is null && chunk.Reasoning is not null)
+                if (chunk.Reasoning is not null)
                 {
                     await _events.PublishAsync(
                         new ModelReasoningObserved(
@@ -462,11 +448,6 @@ public sealed class MutationProposalApplication :
                     }
 
                     proposalToolObserved = true;
-                    if (child is not null)
-                    {
-                        child.ToolCalls++;
-                    }
-
                     try
                     {
                         envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(
@@ -514,8 +495,6 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Usage is not null)
                 {
-                    child?.ModelTokens += chunk.Usage.InputTokens + chunk.Usage.OutputTokens;
-
                     reportedUsage = chunk.Usage;
                     _sessionUsage?.Observe(
                         command.SessionId,
@@ -661,87 +640,66 @@ public sealed class MutationProposalApplication :
         ProposeMutationSetCommand command,
         WorkspaceBaseline baseline,
         IReadOnlyList<ModelMessage> additionalMessages,
-        ApprovedImplementerPreparationContext? child,
         CancellationToken cancellationToken)
     {
-        const int maximumSelectionAttempts = 4;
-        for (var attempt = 0; attempt < maximumSelectionAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var assembler = child?.Selection.UsesTrustedCatalog == true
-                ? _trustedAgentContextAssembler
-                    ?? throw new InvalidOperationException("Trusted Implementer context assembly is unavailable.")
-                : _contextAssembler;
-            var context = await assembler.AssembleAsync(
-                new ContextAssemblyRequest
+        cancellationToken.ThrowIfCancellationRequested();
+        var requiresToolCall = command.Phase is RunPhase.ImplementationModelTurn or RunPhase.CorrectionModelTurn;
+        var context = await _contextAssembler.AssembleAsync(
+            new ContextAssemblyRequest
+            {
+                SessionId = command.SessionId,
+                RunId = command.RunId,
+                Phase = command.Phase,
+                Task = command.Task,
+                RepositoryPath = baseline.RepositoryPath,
+                WorkingScope = RepositoryWorkingScope.Resolve(
+                    baseline.RepositoryPath,
+                    command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
+                ProhibitedPaths = baseline.ProhibitedPaths ?? [],
+                RequiredCapabilities = new ModelCapabilitySet
                 {
-                    SessionId = command.SessionId,
-                    RunId = command.RunId,
-                    Phase = command.Phase,
-                    Task = command.Task,
-                    RepositoryPath = baseline.RepositoryPath,
-                    WorkingScope = RepositoryWorkingScope.Resolve(
-                        baseline.RepositoryPath,
-                        command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
-                    ProhibitedPaths = baseline.ProhibitedPaths ?? [],
-                    RequiredCapabilities = new ModelCapabilitySet
-                    {
-                        Streaming = true,
-                        StructuredOutput = child is null,
-                        ToolCalls = child is not null,
-                    },
-                    DefaultModelProfileId = child?.Selection.ProfileId
-                        ?? _sessionPreferences?.CurrentProfileId
-                        ?? _defaultModelProfileId,
-                    DeferAgentModelCapacityValidation = child is not null,
-                    ApprovedPlan = command.ApprovedPlan,
-                    MutationBaseline = baseline,
-                    ToolSchemas =
-                    [
-                        new ContextToolSchema(
-                            _proposeMutationsTool.Name,
-                            _proposeMutationsTool.Description,
-                            _proposeMutationsTool.ArgumentsJsonSchema,
-                            _proposeMutationsTool.PreferStrictArguments),
-                    ],
-                    AdditionalMessages = additionalMessages,
+                    Streaming = true,
+                    StructuredOutput = !requiresToolCall,
+                    ToolCalls = requiresToolCall,
                 },
-                cancellationToken);
-            var messages = context.Messages ?? [];
-            IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
-            var modelRequest = new ModelStreamRequest
-            {
-                RunId = child?.ChildRunId ?? command.RunId,
-                Input = context.ModelInput,
+                DefaultModelProfileId = _sessionPreferences?.CurrentProfileId ?? _defaultModelProfileId,
+                ApprovedPlan = command.ApprovedPlan,
+                MutationBaseline = baseline,
+                ToolSchemas =
+                [
+                    new ContextToolSchema(
+                        _proposeMutationsTool.Name,
+                        _proposeMutationsTool.Description,
+                        _proposeMutationsTool.ArgumentsJsonSchema,
+                        _proposeMutationsTool.PreferStrictArguments),
+                ],
+                AdditionalMessages = additionalMessages,
+            },
+            cancellationToken);
+        var messages = context.Messages ?? [];
+        IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
+        return new ModelStreamRequest
+        {
+            RunId = command.RunId,
+            Input = context.ModelInput,
 
-                // Preserve deterministic scripted-provider chunking and reproducible proposal tests.
-                Seed = 42,
-                WorkloadClass = context.WorkloadClass,
-                ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
-                RequiredCapabilities = context.RequiredCapabilities,
-                SelectionConstraints = context.ModelConstraints,
-                ResolvedProfileId = context.ModelResolution?.ProfileId,
-                ReasoningLevel = child?.Selection.ReasoningLevel
-                    ?? _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId)
-                    ?? ReasoningLevel.None,
-                MaximumOutputTokens = child is null ? null : context.ModelResolution?.EffectiveRequestOutputTokenReserve,
-                Tools = modelTools,
-                AllowMultipleToolCalls = false,
-                Messages = messages,
-                Layout = context.Layout,
-                ToolTransportMode = ToolTransportMode.Native,
-                WireEstimate = EstimateAndValidateCompleteRequest(context, messages, modelTools, child is not null),
-                ProviderInstructions = context.ProviderInstructions,
-            };
-            if (child is null || (child.ResolveRequest(modelRequest)
-                && context.ModelResolution?.ProfileId == child.Selection.ProfileId))
-            {
-                child?.RecordDeliveredEvidence(context.Inspection.Evidence.Where(item => item.Included).Select(item => item.EvidenceId));
-                return modelRequest;
-            }
-        }
-
-        throw new InvalidOperationException("The approved Implementer model selection did not stabilize for the complete request.");
+            // Preserve deterministic scripted-provider chunking and reproducible proposal tests.
+            Seed = 42,
+            WorkloadClass = context.WorkloadClass,
+            ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData,
+            RequiredCapabilities = context.RequiredCapabilities,
+            SelectionConstraints = context.ModelConstraints,
+            ResolvedProfileId = context.ModelResolution?.ProfileId,
+            ReasoningLevel = _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId) ?? ReasoningLevel.None,
+            MaximumOutputTokens = context.ModelResolution?.EffectiveRequestOutputTokenReserve,
+            Tools = modelTools,
+            AllowMultipleToolCalls = false,
+            Messages = messages,
+            Layout = context.Layout,
+            ToolTransportMode = ToolTransportMode.Native,
+            WireEstimate = EstimateAndValidateCompleteRequest(context, messages, modelTools),
+            ProviderInstructions = context.ProviderInstructions,
+        };
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
@@ -884,8 +842,7 @@ public sealed class MutationProposalApplication :
     private static ModelWireEstimate EstimateAndValidateCompleteRequest(
         ContextAssemblyResult context,
         IReadOnlyList<ModelMessage> requestMessages,
-        IReadOnlyList<ModelToolDefinition> modelTools,
-        bool deferAgentModelCapacityValidation = false)
+        IReadOnlyList<ModelToolDefinition> modelTools)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(requestMessages);
@@ -903,7 +860,7 @@ public sealed class MutationProposalApplication :
             stablePrefixMessageCount,
             outputReserveTokens,
             context.ProviderInstructions);
-        if (!deferAgentModelCapacityValidation && wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
+        if (wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
         {
             throw new InvalidOperationException(
                 $"Structured mutation provider wire input requires {wireEstimate.WireInputTokens} tokens but the budget is "
@@ -1211,6 +1168,7 @@ public sealed class MutationProposalApplication :
             firstMatch = searchText.IndexOf(searchExpected, StringComparison.Ordinal);
         }
 
+        var replacement = mutation.ReplacementText;
         if (firstMatch < 0)
         {
             throw CreateRepairableMutationFailure(
@@ -1232,7 +1190,6 @@ public sealed class MutationProposalApplication :
                     }));
         }
 
-        var replacement = mutation.ReplacementText;
         if (normalizeEndings)
         {
             var originalStart = MapNormalizedOffset(current, firstMatch);
@@ -1644,8 +1601,8 @@ public sealed class MutationProposalApplication :
                 RelativePath = replace.RelativePath,
                 BaselineSha256 = replace.BaselineSha256,
                 ProjectFilePath = replace.ProjectFilePath,
-                StartOffset = replace.StartOffset,
-                Length = replace.Length,
+                StartOffset = replace.StartOffset ?? -1,
+                Length = replace.Length ?? replace.ExpectedText.Length,
                 ExpectedText = replace.ExpectedText,
                 ReplacementText = replace.ReplacementText,
                 RelatedSymbolId = replace.RelatedSymbolId,
@@ -1705,7 +1662,9 @@ public sealed class MutationProposalApplication :
                 || delete.ExpectedIdentity is null,
             ReplaceTextMutationProposal replace => string.IsNullOrWhiteSpace(replace.RelativePath)
                 || replace.ExpectedText is null
-                || replace.ReplacementText is null,
+                || replace.ReplacementText is null
+                || replace.StartOffset is < 0
+                || replace.Length is < 0,
             RenameSymbolMutationProposal rename => string.IsNullOrWhiteSpace(rename.RelativePath)
                 || string.IsNullOrWhiteSpace(rename.RelatedSymbolId)
                 || string.IsNullOrWhiteSpace(rename.ReplacementText),

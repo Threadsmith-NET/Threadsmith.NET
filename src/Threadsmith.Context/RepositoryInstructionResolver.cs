@@ -133,15 +133,33 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
             }
         }
 
+        var sourcesByPath = sources.ToDictionary(source => source.RelativePath, PathComparer);
         foreach (var append in promptAppends.OrderBy(item => item.Position))
         {
-            sources.Add(new RepositoryInstructionSource(
+            var relativePath = Path.GetRelativePath(root, Path.GetFullPath(append.SourcePath, root)).Replace('\\', '/');
+            var content = NormalizeNewlines(append.Content);
+            if (sourcesByPath.TryGetValue(relativePath, out var existing))
+            {
+                if (!string.Equals(existing.Version, append.Version, StringComparison.Ordinal)
+                    || !string.Equals(existing.Content, content, StringComparison.Ordinal))
+                {
+                    throw new IOException($"Repository instruction path '{relativePath}' changed between source reads.");
+                }
+
+                // Hierarchical AGENTS.md keeps its original parent-to-child
+                // position when the same file is also configured as an append.
+                continue;
+            }
+
+            var source = new RepositoryInstructionSource(
                 RepositoryInstructionSourceKind.PromptAppend,
                 append.Id,
-                append.SourcePath,
+                relativePath,
                 append.Version,
-                NormalizeNewlines(append.Content),
-                sources.Count));
+                content,
+                sources.Count);
+            sources.Add(source);
+            sourcesByPath.Add(relativePath, source);
         }
 
         var identityParts = new[]

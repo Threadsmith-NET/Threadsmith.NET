@@ -303,13 +303,6 @@ public sealed class ContextAssembler : IContextAssembler
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Task);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Task.Intent);
-        if (request.DeferAgentModelCapacityValidation
-            && (request.Phase is not RunPhase.ImplementationModelTurn and not RunPhase.CorrectionModelTurn
-                || request.ApprovedPlan is null || request.MutationBaseline is null))
-        {
-            throw new InvalidOperationException("Deferred agent capacity validation requires approved implementation or correction context.");
-        }
-
         using var activity = _activitySource.StartActivity("context.assemble");
         activity?.SetTag("threadsmith.session.id", request.SessionId.Value.ToString("D"));
         activity?.SetTag("threadsmith.run.id", request.RunId.Value.ToString("D"));
@@ -466,6 +459,8 @@ public sealed class ContextAssembler : IContextAssembler
         var selected = new List<Evidence>();
         var selectedTokens = 0;
         var contentHashes = new HashSet<string>(StringComparer.Ordinal);
+        var instructionEvidence = new InstructionEvidenceMatcher(instructionBundle);
+        var instructionEvidenceIsSensitive = false;
         foreach (var item in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -480,6 +475,11 @@ public sealed class ContextAssembler : IContextAssembler
             else if (!allowedKinds.Contains(item.Kind))
             {
                 omissionReason = $"{item.Kind} is excluded by {request.Phase} context policy.";
+            }
+            else if (instructionEvidence.IsAlreadyIncluded(item))
+            {
+                omissionReason = "Exact file-read content is already present in the current repository instruction bundle.";
+                instructionEvidenceIsSensitive |= item.Sensitivity == EvidenceSensitivity.Sensitive;
             }
             else
             {
@@ -523,6 +523,7 @@ public sealed class ContextAssembler : IContextAssembler
         {
             ContainsSensitiveData = request.ModelConstraints.ContainsSensitiveData
                 || selected.Any(item => item.Sensitivity == EvidenceSensitivity.Sensitive)
+                || instructionEvidenceIsSensitive
                 || conversation.ContainsSensitiveData
                 || repositoryMemory.ContainsSensitiveData,
         };
@@ -552,8 +553,7 @@ public sealed class ContextAssembler : IContextAssembler
             outputSchema,
             additionalMessageContent);
         var totalTokens = EstimateCompleteInputTokens(modelInput, evidenceContent);
-        while (!request.DeferAgentModelCapacityValidation
-            && totalTokens > tokenBudget
+        while (totalTokens > tokenBudget
             && (conversation.CanReduce || repositoryMemory.CanReduce || selected.Count > 0))
         {
             if (conversation.TryReduce() || repositoryMemory.TryReduce())
@@ -633,7 +633,7 @@ public sealed class ContextAssembler : IContextAssembler
             return Math.Max(legacyTokens, wireTokens);
         }
 
-        if (!request.DeferAgentModelCapacityValidation && totalTokens > tokenBudget)
+        if (totalTokens > tokenBudget)
         {
             throw new InvalidOperationException(
                 $"Governed request framing requires {totalTokens} tokens but the budget is "
@@ -706,7 +706,7 @@ public sealed class ContextAssembler : IContextAssembler
             modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
             providerInstructions,
             _prompts);
-        if (!request.DeferAgentModelCapacityValidation && wireEstimate.WireInputTokens > tokenBudget)
+        if (wireEstimate.WireInputTokens > tokenBudget)
         {
             throw new InvalidOperationException(
                 $"Structured provider wire input requires {wireEstimate.WireInputTokens} tokens but the budget is "
@@ -1399,7 +1399,7 @@ public sealed class ContextAssembler : IContextAssembler
                 + revision
                 + invocation
                 + " untrusted=\"true\">\n"
-                + Escape(item.Content)
+                + Escape(FileReadEvidenceRenderer.Render(item))
                 + "\n</evidence>";
         }));
     }

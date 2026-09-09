@@ -88,9 +88,9 @@ public static class Plan33ConversationArchiveTests
         Assert.Equal(body, Assert.Single(restored.Messages).Content);
     }
 
-    /// <summary>All seven categories and their provenance edges survive an atomic summary replacement.</summary>
+    /// <summary>Historical automatic snapshots remain inert while archived transcript and stored history survive reopening.</summary>
     [Fact]
-    public static async Task Structured_memory_and_provenance_round_trip()
+    public static async Task Historical_memory_and_provenance_are_not_restored_into_current_snapshots()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
@@ -125,20 +125,33 @@ public static class Plan33ConversationArchiveTests
             CreatedAt = now,
         };
 
-        await fixture.Store.ReplaceSummaryAsync(sessionId, items, snapshot);
-        var restored = await fixture.Store.GetSnapshotAsync(sessionId);
+        await fixture.SeedHistoricalMemoryAsync(sessionId, items, snapshot);
+        var reopened = await fixture.ReopenStoreAsync();
+        var restored = await reopened.GetSnapshotAsync(sessionId);
 
-        Assert.Equal(Enum.GetValues<ConversationMemoryKind>().Length, restored.MemoryItems.Count);
-        Assert.All(restored.MemoryItems, item =>
-        {
-            Assert.Equal(message.Id, Assert.Single(item.SourceMessageIds));
-            Assert.Equal(runId, Assert.Single(item.SourceRunIds));
-            Assert.Equal("artifact-reference", Assert.Single(item.SourceArtifactIds));
-        });
-        Assert.Equal(1, restored.Summary?.Version);
+        Assert.Empty(restored.MemoryItems);
+        Assert.Null(restored.Summary);
+        Assert.Equal(message.Id, Assert.Single(restored.Messages).Id);
+        Assert.Equal("retain this", restored.Messages[0].Content);
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM conversation_memory WHERE session_id = $session),
+                (SELECT COUNT(*) FROM conversation_memory_sources
+                 WHERE memory_id IN (SELECT memory_id FROM conversation_memory WHERE session_id = $session)),
+                (SELECT COUNT(*) FROM conversation_summaries WHERE session_id = $session);
+            """;
+        command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(items.Length, reader.GetInt32(0));
+        Assert.Equal(items.Length * 3, reader.GetInt32(1));
+        Assert.Equal(1, reader.GetInt32(2));
     }
 
-    /// <summary>Mode changes survive restore without deleting archive or governed memory.</summary>
+    /// <summary>Mode changes survive restore without deleting the archive.</summary>
     [Fact]
     public static async Task Mode_change_preserves_underlying_archive()
     {
@@ -157,18 +170,38 @@ public static class Plan33ConversationArchiveTests
         Assert.Single(snapshot.Messages);
     }
 
-    /// <summary>Unknown future memory schema is skipped with a bounded warning rather than fabricated.</summary>
+    /// <summary>Malformed retired rows are never parsed and cannot prevent ordinary transcript restoration.</summary>
     [Fact]
-    public static async Task Unknown_memory_schema_produces_warning_and_no_fabricated_item()
+    public static async Task Malformed_retired_memory_and_summary_do_not_block_transcript_restore()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var sessionId = SessionId.New();
+        var message = await fixture.Store.ArchiveMessageAsync(CreateMessage(sessionId, RunId.New(), ConversationRole.User, "preserved transcript"));
         await fixture.InsertFutureMemoryAsync(sessionId, schemaVersion: 99);
+        await using (var connection = new SqliteConnection(fixture.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE conversation_memory SET memory_id = 'retired-invalid-id' WHERE session_id = $session;
+                INSERT INTO conversation_summaries(
+                    session_id, version, through_message_sequence, repository_revision,
+                    memory_index_json, created_at, schema_version)
+                VALUES($session, 1, 1, NULL, 'invalid json', $now, 1);
+                """;
+            command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
+            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync();
+        }
 
-        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
+        var reopened = await fixture.ReopenStoreAsync();
+        var snapshot = await reopened.GetSnapshotAsync(sessionId);
 
         Assert.Empty(snapshot.MemoryItems);
-        Assert.Contains(snapshot.Warnings, warning => warning == "UnsupportedConversationMemorySchema:99");
+        Assert.Null(snapshot.Summary);
+        Assert.Equal(message.Id, Assert.Single(snapshot.Messages).Id);
+        Assert.Equal("preserved transcript", snapshot.Messages[0].Content);
+        Assert.Empty(snapshot.Warnings);
     }
 
     /// <summary>Retention removes bodies but preserves ordered message provenance metadata.</summary>
@@ -333,6 +366,82 @@ internal sealed class ConversationFixture : IAsyncDisposable
             artifacts,
             sanitizer,
             artifactThresholdCharacters: artifactThreshold);
+    }
+
+    internal async Task SeedHistoricalMemoryAsync(
+        SessionId sessionId,
+        IReadOnlyList<ConversationMemoryItem> items,
+        ConversationSummarySnapshot summary)
+    {
+        await using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+        foreach (var item in items)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO conversation_memory(
+                    memory_id, session_id, kind, content, repository_revision,
+                    repository_dependent, supersedes_id, validity, created_at, updated_at, schema_version)
+                VALUES($id, $session, $kind, $content, $revision, $dependent, NULL, $validity, $created, $updated, $schema);
+                """;
+            command.Parameters.AddWithValue("$id", item.Id.Value.ToString("D"));
+            command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
+            command.Parameters.AddWithValue("$kind", (int)item.Kind);
+            command.Parameters.AddWithValue("$content", item.Content);
+            command.Parameters.AddWithValue("$revision", (object?)item.RepositoryRevision ?? DBNull.Value);
+            command.Parameters.AddWithValue("$dependent", item.RepositoryDependent ? 1 : 0);
+            command.Parameters.AddWithValue("$validity", (int)item.Validity);
+            command.Parameters.AddWithValue("$created", item.CreatedAt.ToString("O"));
+            command.Parameters.AddWithValue("$updated", item.UpdatedAt.ToString("O"));
+            command.Parameters.AddWithValue("$schema", item.SchemaVersion);
+            await command.ExecuteNonQueryAsync();
+
+            (string Kind, IEnumerable<string> Ids)[] sources =
+            [
+                ("message", item.SourceMessageIds.Select(id => id.Value.ToString("D"))),
+                ("run", item.SourceRunIds.Select(id => id.Value.ToString("D"))),
+                ("evidence", item.SourceEvidenceIds.Select(id => id.Value.ToString("D"))),
+                ("artifact", item.SourceArtifactIds),
+            ];
+            foreach (var source in sources)
+            {
+                var ordinal = 0;
+                foreach (var sourceId in source.Ids)
+                {
+                    await using var sourceCommand = connection.CreateCommand();
+                    sourceCommand.Transaction = transaction;
+                    sourceCommand.CommandText = """
+                        INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)
+                        VALUES($memory, $kind, $source, $ordinal);
+                        """;
+                    sourceCommand.Parameters.AddWithValue("$memory", item.Id.Value.ToString("D"));
+                    sourceCommand.Parameters.AddWithValue("$kind", source.Kind);
+                    sourceCommand.Parameters.AddWithValue("$source", sourceId);
+                    sourceCommand.Parameters.AddWithValue("$ordinal", ordinal++);
+                    await sourceCommand.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        await using var summaryCommand = connection.CreateCommand();
+        summaryCommand.Transaction = transaction;
+        summaryCommand.CommandText = """
+            INSERT INTO conversation_summaries(
+                session_id, version, through_message_sequence, repository_revision,
+                memory_index_json, created_at, schema_version)
+            VALUES($session, $version, $through, $revision, $index, $created, $schema);
+            """;
+        summaryCommand.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
+        summaryCommand.Parameters.AddWithValue("$version", summary.Version);
+        summaryCommand.Parameters.AddWithValue("$through", summary.ThroughMessageSequence);
+        summaryCommand.Parameters.AddWithValue("$revision", (object?)summary.RepositoryRevision ?? DBNull.Value);
+        summaryCommand.Parameters.AddWithValue("$index", JsonSerializer.Serialize(summary.MemoryIdsByKind));
+        summaryCommand.Parameters.AddWithValue("$created", summary.CreatedAt.ToString("O"));
+        summaryCommand.Parameters.AddWithValue("$schema", summary.SchemaVersion);
+        await summaryCommand.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
     }
 
     internal async Task InsertFutureMemoryAsync(SessionId sessionId, int schemaVersion)

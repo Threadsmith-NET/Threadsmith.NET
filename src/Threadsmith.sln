@@ -97,6 +97,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Interaction", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Tui.TuiKit", "Threadsmith.Tui.TuiKit\Threadsmith.Tui.TuiKit.csproj", "{60753969-DAAC-427C-A500-605D71B4FEC3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Embeddings.Local", "Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj", "{256974AD-10DD-4425-8919-379A932E6E6A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Embeddings.Local.Tests", "..\tests\Threadsmith.Embeddings.Local.Tests\Threadsmith.Embeddings.Local.Tests.csproj", "{15AD35BE-CDEC-4E32-818A-9943067A03C5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -659,6 +663,30 @@ Global
 		{60753969-DAAC-427C-A500-605D71B4FEC3}.Release|x64.Build.0 = Release|Any CPU
 		{60753969-DAAC-427C-A500-605D71B4FEC3}.Release|x86.ActiveCfg = Release|Any CPU
 		{60753969-DAAC-427C-A500-605D71B4FEC3}.Release|x86.Build.0 = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|x64.Build.0 = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Debug|x86.Build.0 = Debug|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|x64.ActiveCfg = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|x64.Build.0 = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|x86.ActiveCfg = Release|Any CPU
+		{256974AD-10DD-4425-8919-379A932E6E6A}.Release|x86.Build.0 = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|x64.Build.0 = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Debug|x86.Build.0 = Debug|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|x64.ActiveCfg = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|x64.Build.0 = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|x86.ActiveCfg = Release|Any CPU
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -686,5 +714,6 @@ Global
 		{74F92F92-5EAE-47A2-98AC-3B8A3754D092} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 		{4E8E8757-B652-4D68-BABF-B0294A92641E} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 		{D8123055-29AF-4E32-91B0-9F8AEF004FAE} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
+		{15AD35BE-CDEC-4E32-818A-9943067A03C5} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 	EndGlobalSection
 EndGlobal

@@ -83,10 +83,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             HttpResponseMessage response;
             try
             {
-                response = await _httpClient.SendAsync(
+                timeout.Token.ThrowIfCancellationRequested();
+                var pendingResponse = _httpClient.SendAsync(
                     message,
                     HttpCompletionOption.ResponseHeadersRead,
-                    timeout.Token).ConfigureAwait(false);
+                    timeout.Token);
+                request.SubmissionObserver?.Invoke();
+                response = await pendingResponse.ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {

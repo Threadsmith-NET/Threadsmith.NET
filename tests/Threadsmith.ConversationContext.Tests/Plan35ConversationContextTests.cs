@@ -43,9 +43,9 @@ public static class Plan35ConversationContextTests
             constraint.Contains("transient-id", StringComparison.Ordinal));
     }
 
-    /// <summary>Included sensitive memory provenance constrains model selection without raw history.</summary>
+    /// <summary>Retired automatic memory cannot affect model selection after restoration.</summary>
     [Fact]
-    public static async Task Included_memory_sensitivity_constrains_model_selection()
+    public static async Task Retired_memory_does_not_constrain_model_selection()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         await using var events = new DomainEventStream();
@@ -67,7 +67,7 @@ public static class Plan35ConversationContextTests
             ConversationModeOverride = ConversationContextMode.GovernedMemoryOnly,
         });
 
-        Assert.True(resolver.Constraints?.ContainsSensitiveData);
+        Assert.False(resolver.Constraints?.ContainsSensitiveData);
     }
 
     /// <summary>Included sensitive raw conversation constrains model selection.</summary>
@@ -199,7 +199,7 @@ public static class Plan35ConversationContextTests
         Assert.Equal(2, result.Inspection.ConversationItems.Count(item => item.Included && item.Kind is "User" or "Assistant"));
     }
 
-    /// <summary>Governed-memory-only excludes every raw prior message while retaining typed memory.</summary>
+    /// <summary>Governed-memory-only excludes raw prior messages and retired automatic snapshots.</summary>
     [Fact]
     public static async Task Governed_memory_mode_excludes_raw_prior_turns()
     {
@@ -224,7 +224,7 @@ public static class Plan35ConversationContextTests
 
         Assert.DoesNotContain("raw-prior-marker", result.ModelInput, StringComparison.Ordinal);
         Assert.DoesNotContain("raw-answer-marker", result.ModelInput, StringComparison.Ordinal);
-        Assert.Contains("governed-marker", result.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("governed-marker", result.ModelInput, StringComparison.Ordinal);
         Assert.All(
             result.Inspection.ConversationItems.Where(item => item.Kind is "User" or "Assistant"),
             item => Assert.False(item.Included));
@@ -261,9 +261,9 @@ public static class Plan35ConversationContextTests
         Assert.DoesNotContain("<retrieved_memory>", result.ModelInput, StringComparison.Ordinal);
     }
 
-    /// <summary>Pressure removes ordinary history before explicit decisions and records exact reductions.</summary>
+    /// <summary>Pressure reduces ordinary history without restoring retired automatic decisions.</summary>
     [Fact]
-    public static async Task Pressure_reduces_history_before_explicit_memory()
+    public static async Task Pressure_reduces_history_and_never_restores_automatic_memory()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         await using var events = new DomainEventStream();
@@ -290,7 +290,7 @@ public static class Plan35ConversationContextTests
             current,
             "small-current"));
 
-        Assert.Contains("must-preserve-decision", result.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("must-preserve-decision", result.ModelInput, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('h', 100), result.ModelInput, StringComparison.Ordinal);
         Assert.Contains(result.Inspection.Reductions, reduction => reduction.Contains("oldest complete turn", StringComparison.OrdinalIgnoreCase));
     }
@@ -378,22 +378,14 @@ public static class Plan35ConversationContextTests
         var current = await ArchiveAsync(fixture, sessionId, ConversationRole.User, "current");
         var assembler = CreateAssembler(fixture, events);
         await assembler.AssembleAsync(CreateRequest(fixture, sessionId, current, "current") with { RunId = runId });
-        ConversationCompactionPolicy policy = new() { ArchivedMessageThreshold = 1 };
-        var compactor = new ConversationCompactor(
-            fixture.Store,
-            new DeterministicConversationSummaryCandidateProvider(),
-            new ConversationSummaryValidator(policy, new SecretOutputSanitizer()),
-            policy);
-        var application = new ConversationContextApplication(
-            assembler,
-            compactor,
-            new EvidenceStore(events, new SecretOutputSanitizer()));
+        var application = new ConversationContextApplication(assembler);
 
         var inspection = await application.HandleAsync(new GetContextInspectionCommand(runId));
-        var compacted = await application.HandleAsync(new RequestConversationCompactionCommand(sessionId));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            application.HandleAsync(new RequestConversationCompactionCommand(sessionId)));
 
         Assert.NotNull(inspection);
-        Assert.True(compacted);
+        Assert.Contains("retired", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>TUI and headless controls dispatch identical host-owned mode commands.</summary>
@@ -439,137 +431,36 @@ public static class Plan35ConversationContextTests
         Assert.Equal(runId, controller.LatestRunId);
     }
 
-    /// <summary>Acceptance Scenario I survives compaction, invalidation, mode changes, and store restart.</summary>
+    /// <summary>Restart preserves archive continuity while historical automatic memory cannot enter prompts.</summary>
     [Fact]
-    public static async Task Scenario_I_cross_turn_continuity_and_compaction()
+    public static async Task Restart_preserves_transcript_and_excludes_legacy_memory()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         await using var events = new DomainEventStream();
         var sessionId = SessionId.New();
-        var sanitizer = new SecretOutputSanitizer();
-        var governor = new ConversationMemoryGovernor(fixture.Store, sanitizer);
-
-        var requirement = await ArchiveAsync(
-            fixture,
-            sessionId,
-            ConversationRole.User,
-            "Requirement: retain deterministic ordering.");
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = requirement,
-            UserRequirements = ["Retain deterministic ordering."],
-        });
-        await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "Requirement recorded.");
-
-        var decision = await ArchiveAsync(
-            fixture,
-            sessionId,
-            ConversationRole.User,
-            "Decision: use bounded complete turns. Question: what becomes stale?");
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = decision,
-            Decisions = ["Use bounded complete turns."],
-            UnresolvedQuestions = ["What becomes stale?"],
-        });
-        await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "Decision and question recorded.");
-
-        Evidence findingEvidence = new()
-        {
-            EvidenceId = EvidenceId.New(),
-            SessionId = sessionId,
-            Kind = EvidenceKind.SemanticFact,
-            Content = "Repository uses revision-sensitive context assembly.",
-            Provenance = new EvidenceProvenance
-            {
-                Source = "semantic:scenario-i",
-                RepositoryRevision = "revision-old",
-                SemanticConfidence = SemanticConfidenceLevel.FullSemantic,
-            },
-            CollectedAt = DateTimeOffset.UtcNow,
-            Relevance = 1,
-            EstimatedTokens = 10,
-            InvalidationKeys = ["repository"],
-        };
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = decision,
-            RepositoryEvidence = [findingEvidence],
-        });
-
-        ConversationCompactionPolicy compactionPolicy = new() { ArchivedMessageThreshold = 1 };
-        var compactor = new ConversationCompactor(
-            fixture.Store,
-            new DeterministicConversationSummaryCandidateProvider(),
-            new ConversationSummaryValidator(compactionPolicy, sanitizer),
-            compactionPolicy);
-        var compaction = await compactor.CompactAtTurnBoundaryAsync(
-            sessionId,
-            [findingEvidence],
-            force: true);
-        Assert.Equal(ConversationCompactionOutcomeKind.Completed, compaction.Outcome);
-
-        var invalidator = new ConversationMemoryInvalidator(fixture.Store);
-        var invalidation = await invalidator.InvalidateAtTurnBoundaryAsync(
-            sessionId,
-            ["repository"],
-            "revision-new");
-        Assert.Equal(1, invalidation.InvalidatedCount);
-
-        var followUp = await ArchiveAsync(
-            fixture,
-            sessionId,
-            ConversationRole.User,
-            "Follow up on deterministic bounded turns.");
-        var assembler = CreateAssembler(fixture, events);
-        var request = CreateRequest(
-            fixture,
-            sessionId,
-            followUp,
-            "Follow up on deterministic bounded turns.");
-        var aware = await assembler.AssembleAsync(request);
-        Assert.Contains("Retain deterministic ordering.", aware.ModelInput, StringComparison.Ordinal);
-        Assert.Contains("Use bounded complete turns.", aware.ModelInput, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repository uses revision-sensitive context assembly.", aware.ModelInput, StringComparison.Ordinal);
-        Assert.Contains(aware.Inspection.ConversationItems, item =>
-            !item.Included && item.Rationale.Contains("stale", StringComparison.OrdinalIgnoreCase));
-
-        var governed = await assembler.AssembleAsync(request with
-        {
-            RunId = RunId.New(),
-            ConversationModeOverride = ConversationContextMode.GovernedMemoryOnly,
-        });
-        Assert.DoesNotContain("Requirement recorded.", governed.ModelInput, StringComparison.Ordinal);
-        Assert.Contains("Retain deterministic ordering.", governed.ModelInput, StringComparison.Ordinal);
-
-        var stateless = await assembler.AssembleAsync(request with
-        {
-            RunId = RunId.New(),
-            ConversationModeOverride = ConversationContextMode.Stateless,
-        });
-        Assert.DoesNotContain("Retain deterministic ordering.", stateless.ModelInput, StringComparison.Ordinal);
-        Assert.Contains("Follow up on deterministic bounded turns.", stateless.ModelInput, StringComparison.Ordinal);
-
+        var source = await ArchiveAsync(fixture, sessionId, ConversationRole.User, "prior exact instruction");
+        await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "prior exact response");
+        await AddMemoryAsync(fixture, sessionId, source, "retired automatic secret marker");
+        var current = await ArchiveAsync(fixture, sessionId, ConversationRole.User, "continue");
         var reopened = await fixture.ReopenStoreAsync();
-        var restored = await reopened.GetSnapshotAsync(sessionId);
-        var retriever = new ConversationMemoryRetriever(reopened);
-        var retrieved = await retriever.RetrieveAsync(new ConversationRetrievalRequest
-        {
-            SessionId = sessionId,
-            Query = "deterministic bounded turns",
-            Phase = ConversationRetrievalPhase.Planning,
-        });
+        var sanitizer = new SecretOutputSanitizer();
+        var assembler = new ContextAssembler(
+            new EvidenceStore(events, sanitizer),
+            new TokenEstimator(),
+            new ContextPolicy(),
+            new PromptAppendLoader(sanitizer),
+            sanitizer,
+            events,
+            TestPromptLoader.Instance,
+            conversationStore: reopened);
 
-        Assert.Equal(ConversationContextMode.ConversationAware, restored.Mode);
-        Assert.NotNull(restored.Summary);
-        Assert.Equal(
-            restored.Messages.Select(message => message.Sequence),
-            restored.Messages.Select(message => message.Sequence).Order());
-        Assert.Contains(retrieved.Selected, item => item.Item.Kind == ConversationMemoryKind.UserRequirement);
-        Assert.DoesNotContain(retrieved.Selected, item => item.Item.Kind == ConversationMemoryKind.RepositoryFinding);
+        var result = await assembler.AssembleAsync(CreateRequest(fixture, sessionId, current, "continue"));
+
+        Assert.Contains("prior exact instruction", result.ModelInput, StringComparison.Ordinal);
+        Assert.Contains("prior exact response", result.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("retired automatic secret marker", result.ModelInput, StringComparison.Ordinal);
+        Assert.Null(result.Inspection.ConversationSummaryVersion);
+        Assert.Null(result.Inspection.CompactedThroughMessageSequence);
     }
 
     /// <summary>Conversation policy rejects unsafe or nonsensical bounds.</summary>
@@ -610,7 +501,7 @@ public static class Plan35ConversationContextTests
             },
             CreatedAt = now,
         };
-        await fixture.Store.ReplaceSummaryAsync(sessionId, [item], snapshot);
+        await fixture.SeedHistoricalMemoryAsync(sessionId, [item], snapshot);
     }
 
     private static async Task<ConversationMessage> ArchiveAsync(
@@ -658,8 +549,7 @@ public static class Plan35ConversationContextTests
                 Conversation = policy ?? new ConversationContextPolicy(),
             },
             modelResolver,
-            conversationStore: fixture.Store,
-            conversationRetriever: new ConversationMemoryRetriever(fixture.Store));
+            conversationStore: fixture.Store);
     }
 
     private static ContextAssemblyRequest CreateRequest(

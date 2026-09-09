@@ -11,7 +11,7 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 - `Program.cs` — ordered top-level orchestration and compatibility entry points only.
 - `CommandLineParser.cs` — side-effect-free host argument parsing, including informational `--help` and `--version` switches used by installed-layout verification; MCP-only confirmation flags are host switches only when `--mcp` selects management mode.
 - `ConfigurationBootstrap.cs` — normalized configuration paths, bounded ordinary layering that excludes secret values, a repository-excluding trusted machine/user/environment view, compiled defaults, and first-launch scaffolding.
-- `HostFoundation.cs` — event, persistence, telemetry, semantic engine/refresh lifetime and deferred publication routing, process, tool, compiled static-secret provider registration, extension-capability, and repository-memory invalidation foundations with reverse-order async disposal.
+- `HostFoundation.cs` — event, persistence, telemetry, semantic engine/refresh lifetime and deferred publication routing, process, tool, compiled static-secret provider registration, extension-capability, and repository-memory persistence foundations with reverse-order async disposal.
 - `ModelComposition.cs` — provider catalogs, migration, authenticated host-owned Codex metadata contribution, repository-over-user startup selection, host-owned active-model state, request-bound provider switching, offline fallback, and owned application-lifetime HTTP/OAuth resources.
 - `AgentRoleModelConfiguration.cs` - strict startup binding for trusted role provider/profile/reasoning preferences.
 - `ApplicationComposition.cs` - evidence/conversation context, compaction/retrieval, session, repository, mutation, validation, parent-run approved-plan mutation preparation, model-callable delegation for all six roles, governed skill catalog/workflow/tool registration, and shared TUI/headless command-dispatch composition.
@@ -22,6 +22,8 @@ Coordinate Threadsmith startup without concentrating subsystem construction, pol
 Foundation composition supplies `write_file` with the existing conversation store and one repository-bound folder configuration. Tool-state rebinding updates that configuration before repository-open completion. `tools:writeFile:allowedFolders` defaults to `.inbox`; ordinary higher-precedence lists replace lower ones, and repository settings explicitly may select outside absolute output folders.
 
 ## Local Contracts
+
+- Application composition owns one embedding generator and hybrid retriever, shares explicit repository memories across tools/commands/context, captures effective bounds per operation/turn, and rebinds memory persistence and options with repository lifecycle. Dispose retrieval and inference resources with the application; log verified migration backup paths.
 
 - `Program.Main` reads as the startup sequence; move cohesive phases into descriptively named files when doing so clarifies ordering, testability, or resource ownership.
 - Startup eagerly creates exactly one deployed prompt loader from `AppContext.BaseDirectory` before prompt consumers are composed, then passes that immutable instance through constructor injection. Missing or invalid catalog content fails before provider/tool activity; no consumer receives an override or fallback seam.

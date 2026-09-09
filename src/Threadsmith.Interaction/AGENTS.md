@@ -14,6 +14,8 @@ Own frontend-neutral interactive coordination over existing host commands and pr
 
 ## Local Contracts
 
+- Manual `/memory` list/inspect/remember/update/forget commands share managed repository-memory authority with the headless adapter; supersede aliases in-place update, while validate and category arguments return corrective retirement messages. Inspection omits vector payloads and distinguishes assembled candidates from submitted revision receipts.
+
 - Reference only Core, Context, Tools, and Execution plus Markdig/BCL.
 - Never reference PrettyPrompt, Spectre.Console, configuration binding, ANSI, cursor placement, native scrollback, or frontend widgets. Shared Markdown and status layout may consume backend-supplied display metrics through the BCL-only `IDisplayTextMetrics` contract; it does not choose terminal geometry or expose terminal-library types.
 - DirectFetchApprovalInteraction presents Deny, Approve one attempt, Approve for this session, and Add to user allowed list through the shared semantic selection surface. Known identities map to typed outcomes; cancellation denies, unknown identities fail, and all affirmative durations resume active-fetch presentation. Tools owns grants and persistence.

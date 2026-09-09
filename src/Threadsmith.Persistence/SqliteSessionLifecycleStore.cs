@@ -1,7 +1,6 @@
 namespace Threadsmith.Persistence;
 
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
@@ -162,11 +161,8 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         command.Transaction = transaction;
         command.CommandText = """
             CREATE TEMP TABLE clone_message_map(old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL);
-            CREATE TEMP TABLE clone_memory_map(old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL);
             INSERT INTO clone_message_map(old_id, new_id)
                 SELECT message_id, lower(hex(randomblob(16))) FROM conversation_messages WHERE session_id = $source;
-            INSERT INTO clone_memory_map(old_id, new_id)
-                SELECT memory_id, lower(hex(randomblob(16))) FROM conversation_memory WHERE session_id = $source;
             INSERT INTO conversation_sessions(session_id, mode, updated_at)
                 SELECT $destination, mode, $updatedAt FROM conversation_sessions WHERE session_id = $source;
             INSERT INTO conversation_messages(
@@ -176,87 +172,15 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
                        source.body, source.artifact_id, source.content_hash, source.estimated_tokens,
                        source.sensitivity, source.repository_revision, source.occurred_at, source.schema_version
                 FROM conversation_messages source JOIN clone_message_map map ON map.old_id = source.message_id;
-            INSERT INTO conversation_memory(
-                memory_id, session_id, kind, content, repository_revision, repository_dependent,
-                supersedes_id, validity, created_at, updated_at, schema_version)
-                SELECT map.new_id, $destination, source.kind, source.content, source.repository_revision,
-                       source.repository_dependent, superseded.new_id, source.validity, source.created_at,
-                       source.updated_at, source.schema_version
-                FROM conversation_memory source
-                JOIN clone_memory_map map ON map.old_id = source.memory_id
-                LEFT JOIN clone_memory_map superseded ON superseded.old_id = source.supersedes_id;
-            INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)
-                SELECT memory_map.new_id, source.source_kind,
-                       CASE WHEN source.source_kind = 'message' THEN COALESCE(message_map.new_id, source.source_id)
-                            WHEN source.source_kind = 'memory' THEN COALESCE(source_memory_map.new_id, source.source_id)
-                            ELSE source.source_id END,
-                       source.ordinal
-                FROM conversation_memory_sources source
-                JOIN clone_memory_map memory_map ON memory_map.old_id = source.memory_id
-                LEFT JOIN clone_message_map message_map ON source.source_kind = 'message' AND message_map.old_id = source.source_id
-                LEFT JOIN clone_memory_map source_memory_map ON source.source_kind = 'memory' AND source_memory_map.old_id = source.source_id;
-            INSERT INTO conversation_summaries(
-                session_id, version, through_message_sequence, repository_revision,
-                memory_index_json, created_at, schema_version)
-                SELECT $destination, version, through_message_sequence, repository_revision,
-                       '{}', created_at, schema_version
-                FROM conversation_summaries WHERE session_id = $source;
             """;
         command.Parameters.AddWithValue("$source", source.Value.ToString("D"));
         command.Parameters.AddWithValue("$destination", destination.Value.ToString("D"));
         command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
-        await RemapSummaryAsync(connection, transaction, source, destination, cancellationToken);
         await using var cleanup = connection.CreateCommand();
         cleanup.Transaction = transaction;
-        cleanup.CommandText = "DROP TABLE clone_message_map; DROP TABLE clone_memory_map;";
+        cleanup.CommandText = "DROP TABLE clone_message_map;";
         await cleanup.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task RemapSummaryAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        SessionId source,
-        SessionId destination,
-        CancellationToken cancellationToken)
-    {
-        await using var read = connection.CreateCommand();
-        read.Transaction = transaction;
-        read.CommandText = "SELECT memory_index_json FROM conversation_summaries WHERE session_id = $session;";
-        read.Parameters.AddWithValue("$session", source.Value.ToString("D"));
-        if (await read.ExecuteScalarAsync(cancellationToken) is not string json)
-        {
-            return;
-        }
-
-        var sourceIndex =
-            JsonSerializer.Deserialize<Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>>>(json)
-            ?? [];
-        var mapped = new Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>>();
-        foreach ((var kind, var ids) in sourceIndex)
-        {
-            var destinationIds = new List<ConversationMemoryId>();
-            foreach (var id in ids)
-            {
-                await using var map = connection.CreateCommand();
-                map.Transaction = transaction;
-                map.CommandText = "SELECT new_id FROM clone_memory_map WHERE old_id = $id;";
-                map.Parameters.AddWithValue("$id", id.Value.ToString("D"));
-                if (await map.ExecuteScalarAsync(cancellationToken) is string mappedId)
-                {
-                    destinationIds.Add(new ConversationMemoryId(Guid.Parse(mappedId)));
-                }
-            }
-
-            mapped[kind] = destinationIds;
-        }
-
-        await using var update = connection.CreateCommand();
-        update.Transaction = transaction;
-        update.CommandText = "UPDATE conversation_summaries SET memory_index_json = $json WHERE session_id = $session;";
-        update.Parameters.AddWithValue("$json", JsonSerializer.Serialize(mapped));
-        update.Parameters.AddWithValue("$session", destination.Value.ToString("D"));
-        await update.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task<SessionCatalogEntry> EnrichFromConversationAsync(

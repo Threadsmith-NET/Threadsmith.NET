@@ -50,6 +50,15 @@ public sealed record ModelStreamRequest
     /// <summary>User input.</summary>
     public required string Input { get; init; }
 
+    /// <summary>Host-only final submitted repository memory receipt; never part of provider wire content.</summary>
+    [JsonIgnore]
+    public RepositoryMemorySubmission? MemorySubmission { get; init; }
+
+    /// <summary>Host-only notification after transport begins; provider validation failures must not invoke it.</summary>
+    /// <remarks>The observer is nonthrowing and carries no provider-visible content.</remarks>
+    [JsonIgnore]
+    public Action? SubmissionObserver { get; init; }
+
     /// <summary>Deterministic seed when supported.</summary>
     public int Seed { get; init; }
 

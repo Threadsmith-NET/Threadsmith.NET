@@ -4,7 +4,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
@@ -110,113 +109,6 @@ public sealed class SqliteConversationStore : IConversationStore
     }
 
     /// <inheritdoc />
-    public async Task ReplaceSummaryAsync(
-        SessionId sessionId,
-        IReadOnlyList<ConversationMemoryItem> items,
-        ConversationSummarySnapshot snapshot,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(items);
-        ArgumentNullException.ThrowIfNull(snapshot);
-        ValidateSummary(sessionId, items, snapshot);
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await EnsureSessionAsync(connection, transaction, sessionId, cancellationToken);
-        var newlyPromoted = new List<ConversationMemoryItem>();
-        foreach (var item in items)
-        {
-            if (!await MemoryExistsAsync(connection, transaction, item.Id, cancellationToken))
-            {
-                newlyPromoted.Add(item);
-            }
-
-            await UpsertMemoryAsync(connection, transaction, item, cancellationToken);
-        }
-
-        var memoryIndex = JsonSerializer.Serialize(snapshot.MemoryIdsByKind);
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                INSERT INTO conversation_summaries(
-                    session_id, version, through_message_sequence, repository_revision,
-                    memory_index_json, created_at, schema_version)
-                VALUES($session, $version, $through, $revision, $index, $createdAt, $schemaVersion)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    version = excluded.version,
-                    through_message_sequence = excluded.through_message_sequence,
-                    repository_revision = excluded.repository_revision,
-                    memory_index_json = excluded.memory_index_json,
-                    created_at = excluded.created_at,
-                    schema_version = excluded.schema_version;
-                """;
-            command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-            command.Parameters.AddWithValue("$version", snapshot.Version);
-            command.Parameters.AddWithValue("$through", snapshot.ThroughMessageSequence);
-            command.Parameters.AddWithValue("$revision", (object?)snapshot.RepositoryRevision ?? DBNull.Value);
-            command.Parameters.AddWithValue("$index", memoryIndex);
-            command.Parameters.AddWithValue("$createdAt", snapshot.CreatedAt.ToString("O"));
-            command.Parameters.AddWithValue("$schemaVersion", snapshot.SchemaVersion);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-        if (_events is not null)
-        {
-            foreach (var item in newlyPromoted)
-            {
-                await _events.PublishAsync(
-                    new ConversationMemoryPromoted(sessionId, item.CreatedAt, item.Id, item.Kind),
-                    cancellationToken);
-                if (item.SupersedesId is { } supersededId)
-                {
-                    await _events.PublishAsync(
-                        new ConversationMemorySuperseded(
-                            sessionId,
-                            item.UpdatedAt,
-                            supersededId,
-                            item.Id),
-                        cancellationToken);
-                }
-            }
-
-            await _events.PublishAsync(
-                new ConversationSummarySnapshotReplaced(
-                    sessionId,
-                    snapshot.CreatedAt,
-                    snapshot.Version,
-                    snapshot.ThroughMessageSequence,
-                    snapshot.MemoryIdsByKind.Values.Sum(ids => ids.Count)),
-                cancellationToken);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task UpdateMemoryAsync(
-        ConversationMemoryItem item,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(item);
-        ValidateMemory(item);
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await UpsertMemoryAsync(connection, transaction, item, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        if (_events is not null && item.Validity is MemoryValidity.Stale or MemoryValidity.Invalid)
-        {
-            await _events.PublishAsync(
-                new ConversationMemoryInvalidated(
-                    item.SessionId,
-                    item.UpdatedAt,
-                    item.Id,
-                    item.Validity.ToString()),
-                cancellationToken);
-        }
-    }
-
-    /// <inheritdoc />
     public async Task<ConversationStateSnapshot> GetSnapshotAsync(
         SessionId sessionId,
         bool includeBodies = true,
@@ -232,17 +124,9 @@ public sealed class SqliteConversationStore : IConversationStore
             includeBodies,
             warnings,
             cancellationToken);
-        var memory = await ReadMemoryAsync(
-            connection,
-            sessionId,
-            warnings,
-            cancellationToken);
-        var summary = await ReadSummaryAsync(
-            connection,
-            sessionId,
-            warnings,
-            cancellationToken);
-        if (messages.Count == 0 && memory.Count == 0 && summary is null)
+
+        // Retired automatic memory rows and indexes are historical data, never restoration input.
+        if (messages.Count == 0)
         {
             AddWarning(warnings, "LegacySessionWithoutConversationArchive");
         }
@@ -252,8 +136,8 @@ public sealed class SqliteConversationStore : IConversationStore
             SessionId = sessionId,
             Mode = mode,
             Messages = messages,
-            MemoryItems = memory,
-            Summary = summary,
+            MemoryItems = [],
+            Summary = null,
             Warnings = warnings,
         };
     }
@@ -522,237 +406,6 @@ public sealed class SqliteConversationStore : IConversationStore
         return messages;
     }
 
-    private static async Task<IReadOnlyList<ConversationMemoryItem>> ReadMemoryAsync(
-        SqliteConnection connection,
-        SessionId sessionId,
-        List<string> warnings,
-        CancellationToken cancellationToken)
-    {
-        var sourceMap = await ReadSourcesAsync(connection, sessionId, cancellationToken);
-        var items = new List<ConversationMemoryItem>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT memory_id, kind, content, repository_revision, repository_dependent,
-                   supersedes_id, validity, created_at, updated_at, schema_version
-            FROM conversation_memory WHERE session_id = $session ORDER BY created_at, memory_id;
-            """;
-        command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var schemaVersion = reader.GetInt32(9);
-            if (schemaVersion != ConversationSchemaVersions.Memory)
-            {
-                AddWarning(warnings, $"UnsupportedConversationMemorySchema:{schemaVersion}");
-                continue;
-            }
-
-            var id = new ConversationMemoryId(Guid.Parse(reader.GetString(0)));
-            sourceMap.TryGetValue(id, out var sources);
-            items.Add(new ConversationMemoryItem
-            {
-                Id = id,
-                SessionId = sessionId,
-                Kind = (ConversationMemoryKind)reader.GetInt32(1),
-                Content = reader.GetString(2),
-                SourceMessageIds = sources?.Messages ?? [],
-                SourceRunIds = sources?.Runs ?? [],
-                SourceEvidenceIds = sources?.Evidence ?? [],
-                SourceArtifactIds = sources?.Artifacts ?? [],
-                RepositoryRevision = await reader.IsDBNullAsync(3) ? null : reader.GetString(3),
-                RepositoryDependent = reader.GetInt32(4) != 0,
-                SupersedesId = await reader.IsDBNullAsync(5)
-                    ? null
-                    : new ConversationMemoryId(Guid.Parse(reader.GetString(5))),
-                Validity = (MemoryValidity)reader.GetInt32(6),
-                CreatedAt = DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
-                UpdatedAt = DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture),
-                SchemaVersion = schemaVersion,
-            });
-        }
-
-        return items;
-    }
-
-    private static async Task<Dictionary<ConversationMemoryId, MemorySources>> ReadSourcesAsync(
-        SqliteConnection connection,
-        SessionId sessionId,
-        CancellationToken cancellationToken)
-    {
-        var raw = new Dictionary<ConversationMemoryId, List<(string Kind, string Id, int Ordinal)>>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT s.memory_id, s.source_kind, s.source_id, s.ordinal
-            FROM conversation_memory_sources s
-            JOIN conversation_memory m ON m.memory_id = s.memory_id
-            WHERE m.session_id = $session ORDER BY s.memory_id, s.source_kind, s.ordinal;
-            """;
-        command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var memoryId = new ConversationMemoryId(Guid.Parse(reader.GetString(0)));
-            if (!raw.TryGetValue(memoryId, out var sources))
-            {
-                sources = [];
-                raw.Add(memoryId, sources);
-            }
-
-            sources.Add((reader.GetString(1), reader.GetString(2), reader.GetInt32(3)));
-        }
-
-        return raw.ToDictionary(
-            pair => pair.Key,
-            pair => new MemorySources(
-                pair.Value.Where(source => source.Kind == "message").OrderBy(source => source.Ordinal)
-                    .Select(source => new ConversationMessageId(Guid.Parse(source.Id))).ToArray(),
-                pair.Value.Where(source => source.Kind == "run").OrderBy(source => source.Ordinal)
-                    .Select(source => new RunId(Guid.Parse(source.Id))).ToArray(),
-                pair.Value.Where(source => source.Kind == "evidence").OrderBy(source => source.Ordinal)
-                    .Select(source => new EvidenceId(Guid.Parse(source.Id))).ToArray(),
-                pair.Value.Where(source => source.Kind == "artifact").OrderBy(source => source.Ordinal)
-                    .Select(source => source.Id).ToArray()));
-    }
-
-    private static async Task<ConversationSummarySnapshot?> ReadSummaryAsync(
-        SqliteConnection connection,
-        SessionId sessionId,
-        List<string> warnings,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT version, through_message_sequence, repository_revision, memory_index_json,
-                   created_at, schema_version
-            FROM conversation_summaries WHERE session_id = $session;
-            """;
-        command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
-
-        var schemaVersion = reader.GetInt32(5);
-        if (schemaVersion != ConversationSchemaVersions.Summary)
-        {
-            AddWarning(warnings, $"UnsupportedConversationSummarySchema:{schemaVersion}");
-            return null;
-        }
-
-        IReadOnlyDictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>> index;
-        try
-        {
-            index = JsonSerializer.Deserialize<Dictionary<ConversationMemoryKind, IReadOnlyList<ConversationMemoryId>>>(
-                reader.GetString(3)) ?? [];
-        }
-        catch (JsonException)
-        {
-            AddWarning(warnings, "InvalidConversationSummaryIndex");
-            return null;
-        }
-
-        return new ConversationSummarySnapshot
-        {
-            SessionId = sessionId,
-            Version = reader.GetInt64(0),
-            ThroughMessageSequence = reader.GetInt64(1),
-            RepositoryRevision = await reader.IsDBNullAsync(2) ? null : reader.GetString(2),
-            MemoryIdsByKind = index,
-            CreatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
-            SchemaVersion = schemaVersion,
-        };
-    }
-
-    private static async Task<bool> MemoryExistsAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        ConversationMemoryId memoryId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "SELECT 1 FROM conversation_memory WHERE memory_id = $id LIMIT 1;";
-        command.Parameters.AddWithValue("$id", memoryId.Value.ToString("D"));
-        return await command.ExecuteScalarAsync(cancellationToken) is not null;
-    }
-
-    private static async Task UpsertMemoryAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        ConversationMemoryItem item,
-        CancellationToken cancellationToken)
-    {
-        ValidateMemory(item);
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = """
-                INSERT INTO conversation_memory(
-                    memory_id, session_id, kind, content, repository_revision,
-                    repository_dependent, supersedes_id, validity, created_at, updated_at, schema_version)
-                VALUES($id, $session, $kind, $content, $revision, $dependent, $supersedes,
-                    $validity, $createdAt, $updatedAt, $schemaVersion)
-                ON CONFLICT(memory_id) DO UPDATE SET
-                    kind = excluded.kind, content = excluded.content,
-                    repository_revision = excluded.repository_revision,
-                    repository_dependent = excluded.repository_dependent,
-                    supersedes_id = excluded.supersedes_id, validity = excluded.validity,
-                    updated_at = excluded.updated_at, schema_version = excluded.schema_version;
-                """;
-            command.Parameters.AddWithValue("$id", item.Id.Value.ToString("D"));
-            command.Parameters.AddWithValue("$session", item.SessionId.Value.ToString("D"));
-            command.Parameters.AddWithValue("$kind", (int)item.Kind);
-            command.Parameters.AddWithValue("$content", item.Content);
-            command.Parameters.AddWithValue("$revision", (object?)item.RepositoryRevision ?? DBNull.Value);
-            command.Parameters.AddWithValue("$dependent", item.RepositoryDependent ? 1 : 0);
-            command.Parameters.AddWithValue("$supersedes", (object?)item.SupersedesId?.Value.ToString("D") ?? DBNull.Value);
-            command.Parameters.AddWithValue("$validity", (int)item.Validity);
-            command.Parameters.AddWithValue("$createdAt", item.CreatedAt.ToString("O"));
-            command.Parameters.AddWithValue("$updatedAt", item.UpdatedAt.ToString("O"));
-            command.Parameters.AddWithValue("$schemaVersion", item.SchemaVersion);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var delete = connection.CreateCommand())
-        {
-            delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM conversation_memory_sources WHERE memory_id = $id;";
-            delete.Parameters.AddWithValue("$id", item.Id.Value.ToString("D"));
-            await delete.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await InsertSourcesAsync(connection, transaction, item.Id, "message", item.SourceMessageIds.Select(id => id.Value.ToString("D")), cancellationToken);
-        await InsertSourcesAsync(connection, transaction, item.Id, "run", item.SourceRunIds.Select(id => id.Value.ToString("D")), cancellationToken);
-        await InsertSourcesAsync(connection, transaction, item.Id, "evidence", item.SourceEvidenceIds.Select(id => id.Value.ToString("D")), cancellationToken);
-        await InsertSourcesAsync(connection, transaction, item.Id, "artifact", item.SourceArtifactIds, cancellationToken);
-    }
-
-    private static async Task InsertSourcesAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        ConversationMemoryId memoryId,
-        string kind,
-        IEnumerable<string> ids,
-        CancellationToken cancellationToken)
-    {
-        var ordinal = 0;
-        foreach (var id in ids)
-        {
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = """
-                INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)
-                VALUES($memory, $kind, $source, $ordinal);
-                """;
-            command.Parameters.AddWithValue("$memory", memoryId.Value.ToString("D"));
-            command.Parameters.AddWithValue("$kind", kind);
-            command.Parameters.AddWithValue("$source", id);
-            command.Parameters.AddWithValue("$ordinal", ordinal++);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-    }
-
     private static void ValidateMessage(ConversationMessage message)
     {
         if (message.Id == default || message.SessionId == default || message.RunId == default)
@@ -770,49 +423,4 @@ public sealed class SqliteConversationStore : IConversationStore
             throw new ArgumentException("A conversation message requires visible content or an artifact.", nameof(message));
         }
     }
-
-    private static void ValidateMemory(ConversationMemoryItem item)
-    {
-        if (item.Id == default || item.SessionId == default)
-        {
-            throw new ArgumentException("Conversation memory requires non-default identifiers.", nameof(item));
-        }
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(item.Content);
-        if (item.SourceMessageIds.Count == 0)
-        {
-            throw new ArgumentException("Conversation memory requires message provenance.", nameof(item));
-        }
-
-        if (item.RepositoryDependent
-            && (item.SourceEvidenceIds.Count == 0 || string.IsNullOrWhiteSpace(item.RepositoryRevision)))
-        {
-            throw new ArgumentException(
-                "Repository-dependent memory requires evidence and revision provenance.",
-                nameof(item));
-        }
-    }
-
-    private static void ValidateSummary(
-        SessionId sessionId,
-        IReadOnlyList<ConversationMemoryItem> items,
-        ConversationSummarySnapshot snapshot)
-    {
-        if (snapshot.SessionId != sessionId || items.Any(item => item.SessionId != sessionId))
-        {
-            throw new ArgumentException("Summary state must belong to one session.", nameof(snapshot));
-        }
-
-        HashSet<ConversationMemoryId> ids = [.. items.Select(item => item.Id)];
-        if (snapshot.MemoryIdsByKind.Values.SelectMany(value => value).Any(id => !ids.Contains(id)))
-        {
-            throw new ArgumentException("Summary references memory not included in the atomic write.", nameof(snapshot));
-        }
-    }
-
-    private sealed record MemorySources(
-        IReadOnlyList<ConversationMessageId> Messages,
-        IReadOnlyList<RunId> Runs,
-        IReadOnlyList<EvidenceId> Evidence,
-        IReadOnlyList<string> Artifacts);
 }

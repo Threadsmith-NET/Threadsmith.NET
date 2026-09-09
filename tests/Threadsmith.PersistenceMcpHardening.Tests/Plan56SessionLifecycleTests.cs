@@ -377,6 +377,61 @@ public static class Plan56SessionLifecycleTests
         Assert.Empty(destinationState.Messages);
     }
 
+    /// <summary>Historical automatic-memory corruption cannot reappear in current snapshots or prevent transcript cloning.</summary>
+    [Fact]
+    public static async Task Clone_preserves_messages_and_ignores_malformed_legacy_memory_rows()
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var source = CreateEntry(SessionId.New(), "repo-a", DateTimeOffset.UtcNow);
+        await catalog.CreateAsync(source, EmptyUsage());
+        await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = source.SessionId,
+            RunId = RunId.New(),
+            Sequence = 0,
+            Role = ConversationRole.User,
+            Content = "Visible transcript survives",
+            ContentHash = "pending",
+            EstimatedTokens = 5,
+            OccurredAt = source.CreatedAt,
+        });
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await using var legacy = connection.CreateCommand();
+        legacy.CommandText = """
+            INSERT INTO conversation_memory(memory_id, session_id, kind, content, repository_dependent,
+                validity, created_at, updated_at, schema_version)
+            VALUES('not-a-guid', $source, 0, 'retired automatic item', 0, 0, 'bad timestamp', 'bad timestamp', 1);
+            INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)
+            VALUES('not-a-guid', 'message', 'bad-source-guid', 0);
+            INSERT INTO conversation_summaries(session_id, version, through_message_sequence, memory_index_json, created_at, schema_version)
+            VALUES($source, 1, 1, 'malformed old JSON', 'bad timestamp', 1);
+            """;
+        legacy.Parameters.AddWithValue("$source", source.SessionId.Value.ToString("D"));
+        await legacy.ExecuteNonQueryAsync();
+        var snapshot = await fixture.Conversations.GetSnapshotAsync(source.SessionId);
+        Assert.Empty(snapshot.MemoryItems);
+        Assert.Null(snapshot.Summary);
+        Assert.Equal("Visible transcript survives", Assert.Single(snapshot.Messages).Content);
+        var destination = source with { SessionId = SessionId.New(), CloneSourceSessionId = source.SessionId };
+        await catalog.CloneAsync(source.SessionId, destination, EmptyUsage());
+        var cloned = await fixture.Conversations.GetSnapshotAsync(destination.SessionId);
+        Assert.Equal("Visible transcript survives", Assert.Single(cloned.Messages).Content);
+        Assert.Empty(cloned.MemoryItems);
+        Assert.Null(cloned.Summary);
+        await using var rows = connection.CreateCommand();
+        rows.CommandText = """
+            SELECT (SELECT count(*) FROM conversation_memory WHERE session_id = $destination)
+                + (SELECT count(*) FROM conversation_summaries WHERE session_id = $destination);
+            """;
+        rows.Parameters.AddWithValue("$destination", destination.SessionId.Value.ToString("D"));
+        Assert.Equal(0L, await rows.ExecuteScalarAsync());
+        rows.CommandText = "SELECT count(*) FROM conversation_memory;";
+        Assert.Equal(1L, await rows.ExecuteScalarAsync());
+    }
+
     private static SessionCatalogEntry CreateEntry(SessionId sessionId, string repository, DateTimeOffset timestamp)
     {
         return new SessionCatalogEntry

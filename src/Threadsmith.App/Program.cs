@@ -192,6 +192,7 @@ public static class Program
                 Host = new HostCompositionInputs
                 {
                     Configuration = configuration,
+                    ConfigurationArguments = [.. args.Where(argument => argument.StartsWith("--set:", StringComparison.Ordinal))],
                     TrustedConfiguration = trustedConfiguration,
                     Paths = paths,
                     LoggerFactory = loggerFactory,

@@ -3084,7 +3084,6 @@ public static class Milestone4Tests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
             var model = new CaptureToolsModelProvider(CreatePlan("plan without denied tool", 1));
-            var repositoryMemoryGovernor = new ThrowingRepositoryMemoryGovernor();
             var application = new SessionApplication(
                 events,
                 model,
@@ -3102,7 +3101,6 @@ public static class Milestone4Tests
                 CreateAssembler(events, evidence),
                 evidence,
                 registry,
-                repositoryMemoryGovernor: repositoryMemoryGovernor,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
@@ -3131,7 +3129,7 @@ public static class Milestone4Tests
             Assert.DoesNotContain("run_process", advertisedToolNames);
             Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-            Assert.True(repositoryMemoryGovernor.PromotionAttempted);
+            Assert.DoesNotContain(firstRequest.Tools, tool => tool.Name == "memories");
         }
         finally
         {
@@ -5405,61 +5403,6 @@ public static class Milestone4Tests
         public bool SetEnabled(HookHandlerId handlerId, bool enabled)
         {
             return false;
-        }
-    }
-
-    private sealed class ThrowingRepositoryMemoryGovernor : IRepositoryMemoryGovernor
-    {
-        public bool PromotionAttempted { get; private set; }
-
-        public Task<bool> ForgetAsync(
-            ForgetRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<RepositoryMemoryItem?> InspectAsync(
-            InspectRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<RepositoryMemorySnapshot> ListAsync(
-            ListRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<RepositoryMemoryRememberResult> PromoteHostObservedAsync(
-            HostObservedRepositoryMemoryPromotion promotion,
-            CancellationToken cancellationToken = default)
-        {
-            PromotionAttempted = true;
-            throw new InvalidOperationException("Simulated repository-memory persistence failure.");
-        }
-
-        public Task<RepositoryMemoryRememberResult> RememberAsync(
-            RememberRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<RepositoryMemorySupersedeResult> SupersedeAsync(
-            SupersedeRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<RepositoryMemoryValidationResult> ValidateAsync(
-            ValidateRepositoryMemoryCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
         }
     }
 

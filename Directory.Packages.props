@@ -46,6 +46,10 @@
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
 
+    <!-- Local CPU text embeddings; SDKs isolated in Threadsmith.Embeddings.Local. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+
     <!-- Persistence (strategy §6: SQLite + artifact files; ADR-3). -->
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />

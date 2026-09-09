@@ -2,138 +2,94 @@ namespace Threadsmith.Execution;
 
 using Threadsmith.Core;
 
-/// <summary>Handles explicit repository-memory commands for interactive and headless surfaces.</summary>
+/// <summary>Routes explicit user commands through the same memory service as the model tool.</summary>
 public sealed class RepositoryMemoryApplication :
-    ICommandHandler<RememberRepositoryMemoryCommand, RepositoryMemoryItem>,
-    ICommandHandler<ListRepositoryMemoryCommand, RepositoryMemorySnapshot>,
-    ICommandHandler<InspectRepositoryMemoryCommand, RepositoryMemoryItem?>,
-    ICommandHandler<SupersedeRepositoryMemoryCommand, RepositoryMemoryItem>,
+    ICommandHandler<RememberRepositoryMemoryCommand, RepositoryMemoryEntry>,
+    ICommandHandler<ListRepositoryMemoryCommand, RepositoryMemoryReadSnapshot>,
+    ICommandHandler<InspectRepositoryMemoryCommand, RepositoryMemoryEntry?>,
+    ICommandHandler<UpdateRepositoryMemoryCommand, RepositoryMemoryEntry>,
+    ICommandHandler<SupersedeRepositoryMemoryCommand, RepositoryMemoryEntry>,
     ICommandHandler<ForgetRepositoryMemoryCommand, bool>,
-    ICommandHandler<ValidateRepositoryMemoryCommand, RepositoryMemorySnapshot>
+    ICommandHandler<ValidateRepositoryMemoryCommand, RepositoryMemoryReadSnapshot>
 {
-    private readonly IDomainEventStream _events;
-    private readonly IRepositoryMemoryGovernor _governor;
-    private readonly TimeProvider _timeProvider;
+    private readonly IManagedRepositoryMemoryService _memories;
+    private readonly IRepositoryMemoryOptionsProvider _options;
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryMemoryApplication"/> class.</summary>
-    public RepositoryMemoryApplication(
-        IRepositoryMemoryGovernor governor,
-        IDomainEventStream events,
-        TimeProvider? timeProvider = null)
+    public RepositoryMemoryApplication(IManagedRepositoryMemoryService memories, IRepositoryMemoryOptionsProvider options)
     {
-        ArgumentNullException.ThrowIfNull(governor);
-        ArgumentNullException.ThrowIfNull(events);
-        _governor = governor;
-        _events = events;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        ArgumentNullException.ThrowIfNull(memories);
+        ArgumentNullException.ThrowIfNull(options);
+        _memories = memories;
+        _options = options;
     }
 
     /// <inheritdoc />
-    public async Task<RepositoryMemoryItem> HandleAsync(
-        RememberRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        var result = await _governor.RememberAsync(command, cancellationToken);
-        await PublishValidityChangesAsync(command.SessionId, command.RepositoryIdentity, result.StateUpdates, cancellationToken);
-        if (result.WasInserted)
-        {
-            await _events.PublishAsync(
-                new RepositoryMemoryRemembered(
-                    command.SessionId,
-                    _timeProvider.GetUtcNow(),
-                    command.RepositoryIdentity,
-                    result.Item.Id,
-                    result.Item.Kind,
-                    result.Item.Authority),
-                cancellationToken);
-        }
+    public Task<RepositoryMemoryEntry> HandleAsync(RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, cancellationToken);
 
-        return result.Item;
+    /// <inheritdoc />
+    public Task<RepositoryMemoryReadSnapshot> HandleAsync(ListRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+        => _memories.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<RepositoryMemoryEntry?> HandleAsync(InspectRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _memories.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
+        return snapshot.Entries.FirstOrDefault(item => item.Id == command.MemoryId);
     }
 
     /// <inheritdoc />
-    public Task<RepositoryMemorySnapshot> HandleAsync(
-        ListRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        return _governor.ListAsync(command, cancellationToken);
-    }
+    public Task<RepositoryMemoryEntry> HandleAsync(UpdateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, cancellationToken);
 
     /// <inheritdoc />
-    public Task<RepositoryMemoryItem?> HandleAsync(
-        InspectRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        return _governor.InspectAsync(command, cancellationToken);
-    }
+    public Task<RepositoryMemoryEntry> HandleAsync(SupersedeRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, cancellationToken);
 
     /// <inheritdoc />
-    public async Task<RepositoryMemoryItem> HandleAsync(
-        SupersedeRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> HandleAsync(ForgetRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        var result = await _governor.SupersedeAsync(command, cancellationToken);
-        await PublishValidityChangesAsync(command.SessionId, command.RepositoryIdentity, result.StateUpdates, cancellationToken);
-        await _events.PublishAsync(
-            new RepositoryMemorySuperseded(
-                command.SessionId,
-                _timeProvider.GetUtcNow(),
-                command.RepositoryIdentity,
-                command.MemoryId,
-                result.Item.Id),
+        var result = await _memories.ExecuteAsync(
+            new RepositoryMemoryOperationRequest
+            {
+                RepositoryIdentity = command.RepositoryIdentity,
+                Action = "remove",
+                Id = command.MemoryId,
+                Origin = RepositoryMemoryOrigin.Manual,
+                SourceSessionId = command.SessionId.Value.ToString("D"),
+                Options = _options.Capture(command.RepositoryIdentity),
+            },
             cancellationToken);
-        return result.Item;
+        return result.Outcome == "removed";
     }
 
     /// <inheritdoc />
-    public async Task<bool> HandleAsync(
-        ForgetRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
+    public Task<RepositoryMemoryReadSnapshot> HandleAsync(ValidateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        var forgotten = await _governor.ForgetAsync(command, cancellationToken);
-        if (forgotten)
-        {
-            await _events.PublishAsync(
-                new RepositoryMemoryValidityChanged(
-                    command.SessionId,
-                    _timeProvider.GetUtcNow(),
-                    command.RepositoryIdentity,
-                    command.MemoryId,
-                    RepositoryMemoryValidity.Forgotten,
-                    "User forgot this repository memory item."),
-                cancellationToken);
-        }
-
-        return forgotten;
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new InvalidOperationException("Memory validation and categories have been retired. Use /memory list, inspect <id>, update <id> <text>, or forget <id>.");
     }
 
-    /// <inheritdoc />
-    public async Task<RepositoryMemorySnapshot> HandleAsync(
-        ValidateRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default)
+    private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, CancellationToken cancellationToken)
     {
-        var result = await _governor.ValidateAsync(command, cancellationToken);
-        await PublishValidityChangesAsync(command.SessionId, command.RepositoryIdentity, result.StateUpdates, cancellationToken);
-        return result.Snapshot;
-    }
-
-    private async Task PublishValidityChangesAsync(
-        SessionId sessionId,
-        string repositoryIdentity,
-        IReadOnlyList<RepositoryMemoryStateUpdate> changes,
-        CancellationToken cancellationToken)
-    {
-        foreach (var change in changes.Where(change => change.PreviousValidity != change.Validity))
+        var result = await _memories.ExecuteAsync(
+            new RepositoryMemoryOperationRequest
+            {
+                RepositoryIdentity = repositoryIdentity,
+                Action = action,
+                Id = id,
+                Text = text,
+                Origin = RepositoryMemoryOrigin.Manual,
+                SourceSessionId = sessionId.Value.ToString("D"),
+                Options = _options.Capture(repositoryIdentity),
+            },
+            cancellationToken);
+        if (action == "update" && result.Outcome == "duplicate")
         {
-            await _events.PublishAsync(
-                new RepositoryMemoryValidityChanged(
-                    sessionId,
-                    _timeProvider.GetUtcNow(),
-                    repositoryIdentity,
-                    change.MemoryId,
-                    change.Validity,
-                    change.Reason),
-                cancellationToken);
+            throw new InvalidOperationException($"That text already belongs to memory {result.Id}. The requested memory was not changed.");
         }
+
+        return result.Entry ?? throw new InvalidOperationException($"Memory operation returned {result.Outcome}.");
     }
 }

@@ -6,7 +6,7 @@ Threadsmith preserves bounded cross-turn continuity without replaying an unbound
 
 The compiled default is `ConversationAware`.
 
-| Mode | Current turn | Recent complete turns | Structured/retrieved memory |
+| Mode | Current turn | Recent complete turns | Explicit repository memories |
 |---|---:|---:|---:|
 | `ConversationAware` | Yes | Bounded by age, count, and tokens | Yes |
 | `GovernedMemoryOnly` | Yes | No | Yes |
@@ -30,39 +30,50 @@ Headless integrations use the same host-owned contracts:
 - `SetConversationContextModeCommand`
 - `GetConversationStateCommand`
 - `GetContextInspectionCommand`
-- `RequestConversationCompactionCommand`
+- `RequestConversationCompactionCommand` (retired; returns actionable guidance)
 
 `HeadlessShell.WriteContextInspectionAsync` emits the shared inspection projection as stable JSON.
 
 ## Repository-scoped memory
 
-Repository memory is local, repository-scoped, and stored in the ignored repository database at `.threadsmith/threadsmith.db`. It is separate from session conversation memory: `/new`, `/resume`, process restart, and independent sessions opened against the same repository identity can reuse it, but it is not shared/team memory and is not tracked by Git.
+Memories are concise notes saved in the current repository's ignored `.threadsmith/threadsmith.db`. They survive `/new`, `/resume`, clone, and restart for that repository, and are shared by its local sessions. They are not tracked by Git or shared with other repositories.
 
-Interactive commands:
+Ask Threadsmith to remember a durable preference, correction, or project detail, and the model can call the single `memories` tool. You can also manage notes directly:
 
 ```text
-/memory remember repo <text>
-/memory list repo [active|stale|superseded|forgotten|rejected|all]
+/memory remember <text>
+/memory list
 /memory inspect <memory-id>
-/memory supersede <memory-id> <replacement-text>
+/memory update <memory-id> <replacement-text>
 /memory forget <memory-id>
-/memory validate repo
 ```
 
-Headless integrations use the same host-owned contracts:
+`supersede` is a compatibility alias for `update`: it now corrects the same ID rather than creating an inactive audit copy. `validate`, old category arguments, and validity filters are retired and return migration guidance. Both terminal frontends and headless commands use the same service. Terminal `/memory list` shows each note’s ID, origin, and text. `/memory inspect <id>` also shows creation/update times, inclusion count, last inclusion, and embedding identity or unavailability. Headless list output includes the entry metadata. Embedding vector components are excluded from headless JSON and terminal output.
 
-- `RememberRepositoryMemoryCommand`
-- `ListRepositoryMemoryCommand`
-- `InspectRepositoryMemoryCommand`
-- `SupersedeRepositoryMemoryCommand`
-- `ForgetRepositoryMemoryCommand`
-- `ValidateRepositoryMemoryCommand`
+New and updated text must fit 2,000 characters after sanitization and the local model's 256-token complete sequence limit, including boundary tokens. Shorten an oversized note; Threadsmith never saves full text with an embedding of only its beginning. Exact normalized duplicates return the existing ID, unchanged updates do nothing, and an update duplicating another note reports that note's ID without merging. Case and meaningful interior whitespace are preserved. Removing a note deletes current search/usage state; already transmitted context and historical conversation records remain historical.
 
-Explicit commands sanitize and bound text, attach user-command provenance, preserve inactive audit rows, and publish metadata-only events. Context assembly retrieves only active items for the current repository identity, applies authority/relevance ranking plus item/token budgets, treats content as untrusted prompt data, propagates sensitivity, and reports every included and omitted repository-memory item in inspection. Automatic memory must meet the configured minimum exact-token relevance score and maximum age. Age is measured from original storage; duplicate automatic observations do not extend eligibility without new durable provenance. Explicit user-authored memory is exempt from those two admission gates. Repository-dependent items with path, symbol, project, or revision support become stale after matching host-observed repository mutations and remain omitted until corrected or explicitly validated.
+By default, at most twenty notes are stored and zero to three relevant notes enter each request. Retrieval combines SQLite lexical matches and local semantic similarity, then applies mode, sensitivity, and token budgets. Unrelated notes need not appear. `/context inspect` separates selection and final budget inclusion from actual-submission receipt outcomes, and reports branch contributions, query truncation, cache reuse, and fallback. Listing or previewing context does not count as inclusion; repeated tool rounds count once per user turn/content revision. Receipt retention follows the run’s recorded repository database bindings, including a repository switch during the run, so pruning an old run also removes its bound receipt records.
 
-The active repository-memory set is deliberately bounded and ranked in memory. SQLite FTS5 is not used for this policy: relevance, authority, and recency remain separate host-owned decisions, and the current active-item ceiling does not justify a search-index migration. FTS-backed candidate retrieval can be added later if measured snapshot-load or ranking cost warrants a dedicated store query API.
+Memory is best-effort recall. At capacity, older/disused notes may be evicted, with the same policy for manual and model notes. Meaningful adds/corrections receive a seven-day recency window when older candidates exist; if all notes are new, the oldest can still be evicted. Put instructions that must always apply in `AGENTS.md`. Routine conversation, approvals, mutations, rollback, and completion do not automatically create notes, and repository edits do not automatically invalidate them.
 
-Model-proposed repository-memory candidates are disabled in this implementation. Assistant prose, repository files, prompt appends, skills, hooks, and repository configuration cannot create or authorize durable repository memory.
+Configure the two limits through ordinary machine/user/repository layering:
+
+```json
+{
+  "tools": {
+    "config": {
+      "memories": {
+        "MaxNumberOfRepoMemories": 20,
+        "MaxRepoMemoriesInContext": 3
+      }
+    }
+  }
+}
+```
+
+Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
+
+The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](conversation-context.md) for migration backups and recovery.
 
 ## Inspection
 
@@ -70,14 +81,14 @@ Model-proposed repository-memory candidates are disabled in this implementation.
 
 - effective mode and configuration/session source;
 - current archived message identity;
-- summary version and compacted-through sequence;
+- empty legacy automatic-summary fields, never restored as prompt content;
 - included and omitted recent messages;
-- included, retrieved, stale, superseded, and invalid conversation memory;
-- included, omitted, stale, superseded, forgotten, and budget-excluded repository memory;
+- selected, final included, and budget-excluded repository-memory IDs/content revisions;
+- actual-submission receipt outcome and elapsed accounting time, separate from preview/assembly;
 - source message, run, and evidence identifiers;
-- deterministic retrieval score and rationale;
+- lexical/semantic ranks, cosine/fusion scores, query truncation, model space, cache reuse, rebuild/fallback rationale;
 - category token accounting and exact pressure reductions;
-- context-window pressure and the next completed-turn compaction recommendation;
+- context-window pressure and the assembly pressure indication;
 - the latest active-turn pre-sampling estimate, pressure target, main-profile output reserve, configured/effective retention, candidate profile identity, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
 
 Inspection contains metadata, bounded sanitized memory content only in the assembled prompt, and no secret/provider/tool payloads.
@@ -96,15 +107,11 @@ A successful replacement increments a provider-neutral history generation. Compi
 
 Cancellation and failed validation leave the original continuation active. Provider failures or zero-or-negative-savings candidates enter a two-pressure-round backoff. If the request still fits, the turn continues unchanged; if it does not, the deterministic compatibility reducer may shorten only older groups already delivered verbatim. A never-delivered group is not silently shortened and produces a controlled capacity failure when it cannot fit.
 
-## Completed-turn compaction and failure behavior
+## Historical automatic memory and failure behavior
 
-Evidence storage sanitizes structured JSON value-by-value, preserving valid syntax and retaining original formatting when redaction makes no changes. Child tool results and evidence lookups use the same JSON-aware operation. Non-JSON evidence and unsupported duplicate-property objects retain ordinary text sanitization. This keeps retrieved originals usable without weakening secret redaction.
+`/context compact` no longer promotes completed turns into structured facts. Historical automatic items/snapshots may remain readable as archive metadata but never feed current prompt restoration, including resume or clone. Ordinary conversation messages and model-generated active-turn compaction remain separate context sources.
 
-Compaction runs only at a host-owned turn boundary. One operation per session may run at a time. The host bounds source messages, input tokens, candidate item count, item length, retries, and provider calls. Candidates remain untrusted until schema, sanitization, authority, provenance, evidence revision, supersession, and cycle validation pass.
-
-The compacted-through sequence never advances beyond the exact retained source range. Cancellation, malformed output, unsupported provenance, provider failure, oversize oldest input, or persistence failure leaves the prior snapshot active. Automatic compaction failure is logged without failing an otherwise successful conversation.
-
-Compaction never deletes archived messages. Full bodies have an independent retention age; ordered metadata, hashes, structured memory, and provenance remain restorable.
+Evidence storage sanitizes structured JSON value-by-value, preserving valid syntax and retaining original formatting when no redaction occurs. Non-JSON evidence retains ordinary text sanitization. Memory search failure cannot manufacture notes or fail an otherwise valid conversation; cancellation still cancels the request. Receipt-accounting failure is diagnosed without a second model submission.
 
 ## Configuration
 
@@ -133,37 +140,31 @@ Compiled defaults:
 |---|---:|
 | `mode` | `ConversationAware` |
 | `recentTurnTokens` | 8,000 |
-| `summaryTokens` | 4,000 |
-| `retrievedMemoryTokens` | 4,000 |
 | `recentTurnCount` | 12 |
 | `recentTurnMaximumAge` | 7 days |
 | `compactionPressurePercent` | 75 |
-| `maximumRetrievedItems` | 24 |
 | `artifactThresholdCharacters` | 16,384 |
-| `compaction.archivedTokenThreshold` | 8,000 |
-| `compaction.archivedMessageThreshold` | 12 |
-| `compaction.maximumActiveMemoryItems` | 128 |
-| `compaction.maximumCandidateItems` | 64 |
-| `compaction.maximumItemCharacters` | 2,000 |
-| `compaction.maximumSourceMessages` | 100 |
-| `compaction.maximumProviderRetries` | 1 |
-| `compaction.maximumProviderCalls` | 2 |
-| `compaction.maximumInputTokens` | 16,000 |
+| `tools:config:memories:MaxNumberOfRepoMemories` | 20 |
+| `tools:config:memories:MaxRepoMemoriesInContext` | 3 |
 | `activeTurnCompaction.summaryBudgetTokens` | 16,384 trusted-only |
 | `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
-| `context:repositoryMemory:maximumItems` | 12 |
-| `context:repositoryMemory:maximumTokens` | 2,000 |
-| `context:repositoryMemory:minimumRelevanceScore` | 0.2 |
-| `context:repositoryMemory:automaticMemoryMaximumAge` | 2 days |
 
-Invalid enum values, non-positive budgets, pressure outside 1–100%, retries exceeding the provider-call cap, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
+Invalid enum values, non-positive budgets, pressure outside 1–100%, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
 
 ## Retention and restoration
 
 Persistence migration 2 owns archive, mode, memory, provenance-edge, and summary tables. Large sanitized bodies use the content-addressed artifact store and are hash-verified during restoration. Unknown future schemas and missing/corrupt artifacts produce bounded warnings rather than fabricated content.
 
-`RetentionOptions.ConversationMessageBodyAge` defaults to 30 days independently of session-event retention. `RetainConversationBodies` can preserve full bodies. Structured memory and provenance remain cold durable state when bodies expire.
+`RetentionOptions.ConversationMessageBodyAge` defaults to 30 days independently of session-event retention. `RetainConversationBodies` can preserve full bodies. Explicit repository memories follow their own capacity/eviction rules; retired automatic snapshots are never restored to prompts.
+
+## Migration and backup recovery
+
+The forward memory migration creates a SQLite-consistent, integrity-checked sibling backup before changing a file-backed database. Its name begins `threadsmith.db.pre-managed-memory-v10.` and ends `.backup`; the exact path is recorded in migration diagnostics/metadata. This uses SQLite's backup API and includes committed WAL contents; do not copy a live WAL database as a plain file.
+
+Only active legacy entries with explicit manual/user-command provenance are imported. Their IDs, text, and timestamps are preserved where possible; usage starts at zero, capacity is enforced, automatic/inactive entries are excluded, and old repository-memory tables are retired. Oversized imported text stays inspectable and lexically searchable within context bounds; use `update` to make it encodable. Compatible vectors rebuild outside the migration transaction against unchanged content revisions.
+
+For a deliberate rollback, stop every Threadsmith process using that repository. Preserve the newer database with a fresh SQLite backup first. Verify the recorded pre-migration backup with SQLite `PRAGMA integrity_check`, then restore it with SQLite's backup/restore API into the intended database while no application is connected. Keep the preserved newer database and its backup until verification completes. Restoring intentionally loses all changes since that backup; checking out older Git code alone never downgrades a database, and Threadsmith does not automatically overwrite a newer one.
 
 ## Verification
 
-Automated acceptance coverage is in `Threadsmith.ConversationContext.Tests`, including promotion, compaction, repository invalidation, all three modes, restart restoration, deterministic retrieval, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in the source-repository [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md).
+Automated acceptance coverage is in `Threadsmith.ConversationContext.Tests`, including explicit CRUD, complete-input bounds, lexical/semantic qualification, idempotent receipts, all three modes, legacy snapshot exclusion, restart restoration, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in the source-repository [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md).

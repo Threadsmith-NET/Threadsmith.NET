@@ -176,6 +176,8 @@ public sealed partial class SessionApplication
     {
         foreach (var message in messages)
         {
+            registration.MemoryCurrentInstruction = message.Text;
+            loopState.InvalidateFrozenContext();
             loopState.CommitStandaloneMessage(
                 modelRound,
                 CreateRunSteeringMessage(message),
@@ -236,6 +238,43 @@ public sealed partial class SessionApplication
         return invocationContext;
     }
 
+    private async Task RefreshMemoryContextAsync(
+        RunRegistration registration,
+        ToolInvocationContext? invocation,
+        bool enabled,
+        ConversationLoopState loopState,
+        CancellationToken cancellationToken)
+    {
+        long? revision = null;
+        if (_repositoryMemories is not null && invocation is not null)
+        {
+            var identity = RepositoryIdentity.Create(invocation.RepositoryPath);
+            registration.MemoryOptions ??= _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
+            if (enabled)
+            {
+                try
+                {
+                    revision = (await _repositoryMemories.GetSnapshotAsync(identity, cancellationToken)).Revision;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogWarning(exception, "Repository memory revision lookup failed; context will use observable retrieval fallback.");
+                }
+            }
+        }
+
+        if (loopState.MemorySetRevision != revision || loopState.MemoriesEnabled != enabled)
+        {
+            loopState.InvalidateFrozenContext();
+            loopState.MemorySetRevision = revision;
+            loopState.MemoriesEnabled = enabled;
+        }
+    }
+
     private async Task<ConversationRound> PrepareConversationRoundAsync(
         RunId runId,
         RunRegistration registration,
@@ -258,6 +297,8 @@ public sealed partial class SessionApplication
             invocationContext,
             planningToolsWithheld);
         var conversationDefinitions = conversationTools.Definitions;
+        var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
+        await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
         var modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, phase);
         var modelPreference = _sessionPreferences?.Capture();
@@ -274,7 +315,12 @@ public sealed partial class SessionApplication
                 modelTools,
                 toolSchemas,
                 modelPreference,
-                _defaultModelProfileId);
+                _defaultModelProfileId) with
+            {
+                RepositoryMemoriesEnabled = memoriesEnabled,
+                RepositoryMemoryOptions = registration.MemoryOptions,
+                RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
+            };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
                 cancellationToken);
@@ -366,7 +412,8 @@ public sealed partial class SessionApplication
             context,
             requestEnvelope,
             modelVisibleContinuation.Messages,
-            loopState.HistoryRewriteGeneration);
+            loopState.HistoryRewriteGeneration,
+            loopState.CompactionSummary is not null || loopState.Groups.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive));
         if (invocationContext is not null)
         {
             invocationContext = invocationContext with
@@ -495,7 +542,7 @@ public sealed partial class SessionApplication
             {
                 try
                 {
-                    await foreach (var chunk in _model.StreamAsync(round.ModelRequest, cancellationToken))
+                    await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
                     {
                         await ProcessModelChunkAsync(
                             chunk,
@@ -1733,9 +1780,7 @@ public sealed partial class SessionApplication
             EligiblePrefix = eligiblePrefix,
             SelectionConstraints = context.ModelConstraints,
             ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData
-                || (_activeTurnCompactionProfile is not null
-                    && eligiblePrefix.Any(group =>
-                        group.Sensitivity == ConversationSensitivity.Sensitive)),
+                || eligiblePrefix.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive),
             ProfileContextWindowTokens = ordinaryProfile.ContextWindow,
             ProfileOutputReserveTokens = outputReserve,
             BeforeInputTokens = beforeEstimate.WireInputTokens,
@@ -2015,11 +2060,19 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? context,
         RequestEnvelope requestEnvelope,
         IReadOnlyList<ModelMessage> continuationMessages,
-        long historyRewriteGeneration)
+        long historyRewriteGeneration,
+        bool continuationContainsSensitiveData)
     {
+        var constraints = (context?.ModelConstraints ?? new ModelSelectionConstraints()) with
+        {
+            ContainsSensitiveData = context?.ModelConstraints.ContainsSensitiveData == true || continuationContainsSensitiveData,
+        };
         return new ModelStreamRequest
         {
             RunId = runId,
+            MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
+                ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
+                : null,
             Input = RenderLegacyContinuation(
                 context?.ModelInput ?? registration.Task.Intent,
                 continuationMessages),
@@ -2027,8 +2080,7 @@ public sealed partial class SessionApplication
             ToolContinuationRound = modelRound - 1,
             HistoryRewriteGeneration = historyRewriteGeneration,
             WorkloadClass = context?.WorkloadClass ?? WorkloadClass.General,
-            ContainsSensitiveData = context?.ModelConstraints.ContainsSensitiveData
-                ?? false,
+            ContainsSensitiveData = constraints.ContainsSensitiveData,
             RequiredCapabilities = context?.RequiredCapabilities
                 ?? new ModelCapabilitySet
                 {
@@ -2036,7 +2088,7 @@ public sealed partial class SessionApplication
                     StructuredOutput = phase != RunPhase.EvidenceCollection,
                     ToolCalls = modelTools.Count > 0,
                 },
-            SelectionConstraints = context?.ModelConstraints ?? new ModelSelectionConstraints(),
+            SelectionConstraints = constraints,
             ResolvedProfileId = context?.ModelResolution?.ProfileId,
             ReasoningLevel = ResolveRequestReasoning(
                 modelPreference,
@@ -2441,6 +2493,19 @@ public sealed partial class SessionApplication
         public ActiveTurnCompactionCheckpoint? LastCheckpoint { get; private set; }
 
         public ContextAssemblyResult? FrozenContext { get; set; }
+
+        public long? MemorySetRevision { get; set; }
+
+        public bool MemoriesEnabled { get; set; }
+
+        public void InvalidateFrozenContext()
+        {
+            if (FrozenContext is not null)
+            {
+                FrozenContext = null;
+                HistoryRewriteGeneration++;
+            }
+        }
 
         public IReadOnlyList<ActiveTurnContinuationGroup> Groups => _groups;
 

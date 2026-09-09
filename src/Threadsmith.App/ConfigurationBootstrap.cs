@@ -144,6 +144,8 @@ internal static class ConfigurationBootstrap
     {
         return new Dictionary<string, string?>
         {
+            ["tools:config:memories:MaxNumberOfRepoMemories"] = "20",
+            ["tools:config:memories:MaxRepoMemoriesInContext"] = "3",
             ["events:subscriberCapacity"] = "256",
             ["persistence:path"] = ".threadsmith/threadsmith.db",
             ["persistence:artifactDirectory"] = ".threadsmith/artifacts",

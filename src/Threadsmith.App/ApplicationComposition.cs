@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
+using Threadsmith.Embeddings.Local;
 using Threadsmith.Execution;
 using Threadsmith.Hooks;
 using Threadsmith.Mcp;
@@ -21,6 +22,74 @@ internal static class ApplicationComposition
 {
     /// <summary>Creates the shared context assembler, session state, governed mutation path, and dispatcher.</summary>
     internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        var embeddings = new LocalTextEmbeddingGenerator();
+        var memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings, LocalTextEmbeddingGenerator.SemanticMinimum);
+        try
+        {
+            return await CreateCoreAsync(inputs, embeddings, memoryRetriever);
+        }
+        catch
+        {
+            memoryRetriever.Dispose();
+            await embeddings.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>Builds the always-active production command middleware pipeline.</summary>
+    /// <param name="loggerFactory">The shared logger factory.</param>
+    /// <returns>Exactly one metadata-only telemetry middleware. Existing logger and activity filtering controls emission; repository configuration cannot alter activation or fields.</returns>
+    internal static ICommandMiddleware[] CreateProductionMiddleware(ILoggerFactory loggerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        return
+        [
+            new CommandTelemetryMiddleware(loggerFactory.CreateLogger<CommandTelemetryMiddleware>()),
+        ];
+    }
+
+    /// <summary>Returns the active transactional baseline when one has been registered for mutation.</summary>
+    internal static WorkspaceBaseline? TryGetWorkspaceBaseline(
+        ITransactionalWorkspaceResolver? resolver,
+        WorkspaceId? workspaceId)
+    {
+        if (resolver is null || workspaceId is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return resolver.GetWorkspace(workspaceId.Value).Baseline;
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Builds plan sanity input from the active workspace policy when a baseline is available.</summary>
+    internal static PlanSanityCheckRequest CreatePlanSanityCheckRequest(
+        ImplementationPlan plan,
+        ToolInvocationContext invocationContext,
+        WorkspaceBaseline? baseline)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(invocationContext);
+        return new PlanSanityCheckRequest
+        {
+            Plan = plan,
+            RepositoryRoot = baseline?.RepositoryPath ?? invocationContext.RepositoryPath,
+            Baseline = baseline,
+            TrustLevel = baseline?.TrustLevel ?? invocationContext.TrustLevel,
+            ProhibitedPaths = baseline?.ProhibitedPaths ?? invocationContext.ProhibitedPaths,
+        };
+    }
+
+    /// <summary>Loads trusted active-turn summary bounds while keeping repository configuration excluded.</summary>
+    private static async Task<ApplicationServices> CreateCoreAsync(ApplicationCompositionInputs inputs, LocalTextEmbeddingGenerator embeddings, HybridRepositoryMemoryRetriever memoryRetriever)
     {
         ArgumentNullException.ThrowIfNull(inputs);
 
@@ -46,7 +115,6 @@ internal static class ApplicationComposition
         var conversationPolicy = host.Configuration
             .GetSection("context:conversation")
             .Get<ConversationContextPolicy>() ?? new ConversationContextPolicy();
-        var conversationRetriever = new ConversationMemoryRetriever(persistence.ConversationStore);
         var promptAppendFiles = host.Configuration
             .GetSection("prompt append files")
             .Get<string[]>() ?? [];
@@ -56,9 +124,17 @@ internal static class ApplicationComposition
         {
             PromptAppendFiles = promptAppendFiles,
             Conversation = conversationPolicy,
-            RepositoryMemory = host.Configuration.GetSection("context:repositoryMemory")
-                .Get<RepositoryMemoryContextPolicy>() ?? new RepositoryMemoryContextPolicy(),
         };
+        var memoryOptions = new RepositoryMemoryConfiguration(host.Configuration, host.TrustedConfiguration, host.Paths.RepositoryRoot);
+        var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>());
+        var initialRepositoryIdentity = RepositoryIdentity.Create(host.Paths.RepositoryRoot);
+        await memoryService.EnforceCapacityAsync(initialRepositoryIdentity, memoryOptions.Capture(initialRepositoryIdentity));
+        if (host.Configuration.GetSection("context:repositoryMemory").Exists())
+        {
+            host.LoggerFactory.CreateLogger<RepositoryMemoryService>().LogWarning(
+                "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and MaxRepoMemoriesInContext (3) instead.");
+        }
+
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
             new TokenEstimator(),
@@ -70,34 +146,15 @@ internal static class ApplicationComposition
             contextOptions,
             modelResolver,
             persistence.ConversationStore,
-            conversationRetriever,
             repositoryInstructionResolver,
-            persistence.RepositoryMemoryStore,
-            providerInstructionResolver: providerInstructionResolver);
+            providerInstructionResolver: providerInstructionResolver,
+            repositoryMemoryRetriever: memoryRetriever);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
         var preferences = integration.Models.SessionPreferences;
         var usage = new SessionUsageProjection();
-        var compactionPolicy = host.Configuration
-            .GetSection("context:conversation:compaction")
-            .Get<ConversationCompactionPolicy>() ?? new ConversationCompactionPolicy();
-        var conversationGovernor = new ConversationMemoryGovernor(
-            persistence.ConversationStore,
-            host.Sanitizer,
-            compactionPolicy);
-        var repositoryMemoryGovernor = new RepositoryMemoryGovernor(
-            persistence.RepositoryMemoryStore,
-            host.Sanitizer,
-            host.Configuration.GetSection("context:repositoryMemory").Get<RepositoryMemoryPolicy>());
-        var repositoryMemoryApplication = new RepositoryMemoryApplication(
-            repositoryMemoryGovernor,
-            host.Events);
-        var conversationCompactor = new ConversationCompactor(
-            persistence.ConversationStore,
-            new DeterministicConversationSummaryCandidateProvider(),
-            new ConversationSummaryValidator(compactionPolicy, host.Sanitizer),
-            compactionPolicy);
+        var repositoryMemoryApplication = new RepositoryMemoryApplication(memoryService, memoryOptions);
         var activeTurnCompactionPolicy = CreateActiveTurnCompactionPolicy(
             host.TrustedConfiguration);
         var activeTurnCompactionModelProfile = ModelComposition.ResolveActiveTurnCompactionProfile(
@@ -131,10 +188,7 @@ internal static class ApplicationComposition
                 host.PromptLoader),
             activeTurnCompactionPolicy,
             host.PromptLoader);
-        var conversationContextApplication = new ConversationContextApplication(
-            contextAssembler,
-            conversationCompactor,
-            persistence.EvidenceStore);
+        var conversationContextApplication = new ConversationContextApplication(contextAssembler);
         TransactionalWorkspaceCoordinator? mutationCoordinator = null;
         var executionRouter = new ExecutionOrchestratorRouter();
         var approvalPolicy = new MutationApprovalPolicyService(
@@ -181,9 +235,7 @@ internal static class ApplicationComposition
             preferences,
             usage,
             persistence.ConversationStore,
-            conversationGovernor,
             conversationPolicy.Mode,
-            conversationCompactor,
             executionRouter,
             async (sessionId, runId, task, plan, cancellationToken) =>
             {
@@ -267,7 +319,6 @@ internal static class ApplicationComposition
                 var invocationContext = CreateToolInvocationContext(host, state);
                 return CreatePlanSanityCheckRequest(plan, invocationContext, baseline);
             },
-            repositoryMemoryGovernor: repositoryMemoryGovernor,
             activeTurnCompactor: activeTurnCompactor,
             activeTurnCompactionPolicy: activeTurnCompactionPolicy,
             activeTurnCompactionProfile: activeTurnCompactionProfile,
@@ -276,7 +327,9 @@ internal static class ApplicationComposition
             steering: runSteering,
             correctiveMessages: correctiveMessages,
             prompts: host.PromptLoader,
-            semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator);
+            semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator,
+            repositoryMemories: memoryService,
+            repositoryMemoryOptions: memoryOptions);
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.
@@ -290,7 +343,11 @@ internal static class ApplicationComposition
             approvalPolicy,
             planApprovalPolicy,
             tools.RepositorySecretProvider,
-            integration.McpManager);
+            integration.McpManager,
+            persistence.RepositoryMemoryStore,
+            memoryOptions,
+            memoryService,
+            repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)));
         mutationCoordinator = new TransactionalWorkspaceCoordinator(
             host.Events,
             mutationApprovalPolicy: approvalPolicy,
@@ -298,8 +355,10 @@ internal static class ApplicationComposition
             semanticMutationAttribution: semantic.SemanticRefreshCoordinator);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
+        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader);
         try
         {
+            tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
             var mutationProposals = new MutationProposalApplication(
                 integration.Models.Provider,
                 contextAssembler,
@@ -315,7 +374,23 @@ internal static class ApplicationComposition
                 semanticMutations: semantic.SemanticMutations,
                 preMutationAnalyzer: semantic.SemanticEngines,
                 correctiveMessages: correctiveMessages,
-                prompts: host.PromptLoader);
+                prompts: host.PromptLoader,
+                repositoryMemories: memoryService,
+                repositoryMemoryOptions: memoryOptions,
+                repositoryMemoriesEnabled: async (sessionId, runId, cancellationToken) =>
+                {
+                    var state = await host.Projections.GetAsync<SessionProjection>(
+                        new ProjectionKey("session", sessionId.Value.ToString("D")), cancellationToken);
+                    var invocation = CreateToolInvocationContext(host, state);
+                    return tools.ToolRegistry.GetRegistrations(sessionId, runId).Any(registration =>
+                        registration.Tool.Definition.Id == "memories"
+                        && invocation.TrustLevel >= registration.Tool.Definition.RequiredTrust
+                        && !invocation.DenyAllTools
+                        && !invocation.DeniedToolIds.Contains("memories", StringComparer.OrdinalIgnoreCase)
+                        && (invocation.AllowedToolIds.Count == 0 || invocation.AllowedToolIds.Contains("memories", StringComparer.OrdinalIgnoreCase))
+                        && !invocation.RequireApprovalToolIds.Contains("memories", StringComparer.OrdinalIgnoreCase));
+                },
+                logger: host.LoggerFactory.CreateLogger<MutationProposalApplication>());
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -676,7 +751,10 @@ internal static class ApplicationComposition
                 sessionCheckpointSubscription,
                 integration.Models.StartupProfile?.Id,
                 claudeSkillCatalog,
-                validationStages);
+                validationStages,
+                embeddings,
+                memoriesTool,
+                memoryRetriever);
         }
         catch
         {
@@ -690,62 +768,12 @@ internal static class ApplicationComposition
                 tools.ToolRegistry.Remove(delegateAgentsTool.Definition.Id, delegateAgentsTool);
             }
 
+            tools.ToolRegistry.Remove(memoriesTool.Definition.Id, memoriesTool);
             await mutationCoordinator.DisposeAsync();
             throw;
         }
     }
 
-    /// <summary>Builds the always-active production command middleware pipeline.</summary>
-    /// <param name="loggerFactory">The shared logger factory.</param>
-    /// <returns>Exactly one metadata-only telemetry middleware. Existing logger and activity filtering controls emission; repository configuration cannot alter activation or fields.</returns>
-    internal static ICommandMiddleware[] CreateProductionMiddleware(ILoggerFactory loggerFactory)
-    {
-        ArgumentNullException.ThrowIfNull(loggerFactory);
-        return
-        [
-            new CommandTelemetryMiddleware(loggerFactory.CreateLogger<CommandTelemetryMiddleware>()),
-        ];
-    }
-
-    /// <summary>Returns the active transactional baseline when one has been registered for mutation.</summary>
-    internal static WorkspaceBaseline? TryGetWorkspaceBaseline(
-        ITransactionalWorkspaceResolver? resolver,
-        WorkspaceId? workspaceId)
-    {
-        if (resolver is null || workspaceId is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return resolver.GetWorkspace(workspaceId.Value).Baseline;
-        }
-        catch (KeyNotFoundException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Builds plan sanity input from the active workspace policy when a baseline is available.</summary>
-    internal static PlanSanityCheckRequest CreatePlanSanityCheckRequest(
-        ImplementationPlan plan,
-        ToolInvocationContext invocationContext,
-        WorkspaceBaseline? baseline)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(invocationContext);
-        return new PlanSanityCheckRequest
-        {
-            Plan = plan,
-            RepositoryRoot = baseline?.RepositoryPath ?? invocationContext.RepositoryPath,
-            Baseline = baseline,
-            TrustLevel = baseline?.TrustLevel ?? invocationContext.TrustLevel,
-            ProhibitedPaths = baseline?.ProhibitedPaths ?? invocationContext.ProhibitedPaths,
-        };
-    }
-
-    /// <summary>Loads trusted active-turn summary bounds while keeping repository configuration excluded.</summary>
     private static ActiveTurnCompactionPolicy CreateActiveTurnCompactionPolicy(
         IConfiguration trustedConfiguration)
     {
@@ -862,6 +890,9 @@ internal sealed record HostCompositionInputs
     /// <summary>Gets effective layered configuration.</summary>
     internal required IConfiguration Configuration { get; init; }
 
+    /// <summary>Gets host CLI overrides preserved when repository and session layers are rebound.</summary>
+    internal string[] ConfigurationArguments { get; init; } = [];
+
     /// <summary>Gets the machine/user/environment configuration used for credential-bearing policy.</summary>
     internal required IConfiguration TrustedConfiguration { get; init; }
 
@@ -900,7 +931,7 @@ internal sealed record PersistenceCompositionInputs
     internal required SqliteConversationStore ConversationStore { get; init; }
 
     /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
-    internal required SqliteRepositoryMemoryStore RepositoryMemoryStore { get; init; }
+    internal required RepositoryBoundMemoryStore RepositoryMemoryStore { get; init; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal required SqliteSessionLifecycleStore SessionLifecycleStore { get; init; }
@@ -994,6 +1025,10 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly RepositorySecretProvider _repositorySecretProvider;
     private readonly IMcpManager _mcpManager;
     private readonly ToolStateManager _toolState;
+    private readonly RepositoryBoundMemoryStore? _memoryStore;
+    private readonly RepositoryMemoryConfiguration? _memoryOptions;
+    private readonly IManagedRepositoryMemoryService? _memories;
+    private readonly Func<string, IConfigurationRoot>? _memoryConfigurationLoader;
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
     private string _currentRepositoryRoot;
@@ -1008,7 +1043,11 @@ internal sealed class RepositoryScopedBindingCoordinator
         MutationApprovalPolicyService approvalPolicy,
         PlanApprovalPolicyService planApprovalPolicy,
         RepositorySecretProvider repositorySecretProvider,
-        IMcpManager mcpManager)
+        IMcpManager mcpManager,
+        RepositoryBoundMemoryStore? memoryStore = null,
+        RepositoryMemoryConfiguration? memoryOptions = null,
+        IManagedRepositoryMemoryService? memories = null,
+        Func<string, IConfigurationRoot>? memoryConfigurationLoader = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
         ArgumentNullException.ThrowIfNull(toolState);
@@ -1023,6 +1062,10 @@ internal sealed class RepositoryScopedBindingCoordinator
         _planApprovalPolicy = planApprovalPolicy;
         _repositorySecretProvider = repositorySecretProvider;
         _mcpManager = mcpManager;
+        _memoryStore = memoryStore;
+        _memoryOptions = memoryOptions;
+        _memories = memories;
+        _memoryConfigurationLoader = memoryConfigurationLoader;
     }
 
     /// <summary>Attaches the catalogs constructed later in the composition sequence.</summary>
@@ -1069,6 +1112,7 @@ internal sealed class RepositoryScopedBindingCoordinator
                     await _activeModels.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 }
 
+                await BindMemoryRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _toolState.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _approvalPolicy.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _planApprovalPolicy.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
@@ -1116,6 +1160,24 @@ internal sealed class RepositoryScopedBindingCoordinator
         }
     }
 
+    private async Task BindMemoryRepositoryAsync(string repositoryRoot, CancellationToken cancellationToken)
+    {
+        if (_memoryStore is null || _memoryOptions is null || _memories is null)
+        {
+            return;
+        }
+
+        var configuration = (_memoryConfigurationLoader
+            ?? throw new InvalidOperationException("Repository memory configuration rebinding was not composed."))(repositoryRoot);
+        using var configurationLifetime = configuration as IDisposable;
+        var options = configuration.GetSection(RepositoryMemoryConfiguration.SectionName).Get<RepositoryMemoryOptions>() ?? new RepositoryMemoryOptions();
+        options.Validate();
+        await _memoryStore.BindRepositoryAsync(repositoryRoot, options.MaxNumberOfRepoMemories, cancellationToken);
+        _memoryOptions.BindRepository(repositoryRoot, configuration);
+        var identity = RepositoryIdentity.Create(repositoryRoot);
+        await _memories.EnforceCapacityAsync(identity, _memoryOptions.Capture(identity), cancellationToken);
+    }
+
     private async Task<Exception?> RollBackAsync(string repositoryRoot)
     {
         var failures = new List<Exception>();
@@ -1148,6 +1210,7 @@ internal sealed class RepositoryScopedBindingCoordinator
 
         await RestoreAsync(() => _approvalPolicy.BindRepositoryAsync(repositoryRoot));
         await RestoreAsync(() => _planApprovalPolicy.BindRepositoryAsync(repositoryRoot));
+        await RestoreAsync(() => BindMemoryRepositoryAsync(repositoryRoot, CancellationToken.None));
         await RestoreAsync(() => _toolState.BindRepositoryAsync(repositoryRoot));
         _repositorySecretProvider.BindRepository(repositoryRoot);
         await RestoreAsync(() => _mcpManager.RebindRepositoryAsync());
@@ -1169,6 +1232,9 @@ internal sealed class RepositoryScopedBindingCoordinator
 internal sealed class ApplicationServices : IAsyncDisposable
 {
     private readonly AgentRunScheduler _agentScheduler;
+    private readonly LocalTextEmbeddingGenerator _embeddings;
+    private readonly MemoriesTool _memoriesTool;
+    private readonly HybridRepositoryMemoryRetriever _memoryRetriever;
     private readonly DelegateAgentsTool? _delegateAgentsTool;
     private readonly InvokeSkillTool _invokeSkillTool;
     private readonly TransactionalWorkspaceCoordinator _mutationCoordinator;
@@ -1193,7 +1259,10 @@ internal sealed class ApplicationServices : IAsyncDisposable
         IDomainEventSubscription sessionCheckpointSubscription,
         ModelProfileId? effectiveStartupProfileId,
         IClaudeSkillCompatibilityCatalog claudeSkillCatalog,
-        IReadOnlyList<MutationValidationStage> validationStages)
+        IReadOnlyList<MutationValidationStage> validationStages,
+        LocalTextEmbeddingGenerator embeddings,
+        MemoriesTool memoriesTool,
+        HybridRepositoryMemoryRetriever memoryRetriever)
     {
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
@@ -1214,6 +1283,9 @@ internal sealed class ApplicationServices : IAsyncDisposable
         EffectiveStartupProfileId = effectiveStartupProfileId;
         ClaudeSkillCatalog = claudeSkillCatalog;
         ValidationStages = validationStages;
+        _embeddings = embeddings;
+        _memoriesTool = memoriesTool;
+        _memoryRetriever = memoryRetriever;
     }
 
     /// <summary>Gets the dispatcher exposed to terminal command surfaces.</summary>
@@ -1252,9 +1324,12 @@ internal sealed class ApplicationServices : IAsyncDisposable
             _toolRegistry.Remove(_delegateAgentsTool.Definition.Id, _delegateAgentsTool);
         }
 
+        _toolRegistry.Remove(_memoriesTool.Definition.Id, _memoriesTool);
         _toolRegistry.Remove(_invokeSkillTool.Definition.Id, _invokeSkillTool);
         await _skillWorkflow.DisposeAsync();
         await _agentScheduler.DisposeAsync();
         await _mutationCoordinator.DisposeAsync();
+        _memoryRetriever.Dispose();
+        await _embeddings.DisposeAsync();
     }
 }

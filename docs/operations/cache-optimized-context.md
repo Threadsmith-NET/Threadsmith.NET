@@ -9,13 +9,13 @@ Structured requests use this order:
 1. stable host policy;
 2. the applicable repository instruction bundle;
 3. phase policy;
-4. bounded structured memory;
+4. relevant explicit repository-memory IDs/text;
 5. chronological complete recent user/assistant turns;
 6. current governed state and attributable evidence;
 7. the current user input;
 8. append-only correlated tool calls/results during an unchanged continuation.
 
-Hidden reasoning is never replayed. A new phase, trust/policy generation, tool inventory, instruction bundle, compaction generation, model, or layout requires reassembly rather than continuation reuse.
+Hidden reasoning is never replayed. A new phase, trust/policy generation, tool inventory, instruction bundle, compaction generation, repository-memory content, model, or layout requires reassembly rather than continuation reuse.
 
 ## Repository instructions
 
@@ -53,3 +53,5 @@ Provider cache counters are reported only when supplied by the provider. Missing
 Compiled providers currently use canonical stateless requests and automatic exact-prefix behavior, if offered by the remote service. Explicit breakpoints are emitted only when an adapter declares bounded support. Stateful continuation remains disabled unless an adapter can safely protect and bind its opaque reference.
 
 Any future opaque continuation must bind to provider/profile, request generation, instruction bundle, trust/policy, tool inventory, layout, compaction generation, and stateless request digest. A mismatch discards it. Remote rejection may retry once through canonical stateless reconstruction only when replay is safe.
+
+Repository-memory rankings and query embeddings are reused across unchanged rounds. Usage receipts never change injected text/order. A content update/delete rebuilds the request and invalidates incompatible provider continuation so removed blocks are absent from the next submission; historical conversation records are not rewritten.

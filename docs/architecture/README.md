@@ -19,3 +19,5 @@ Key governing decisions include [central tool policy](adr-11-central-tool-policy
 [ADR-55](adr-55-direct-artifact-file-writes.md) defines direct allowlisted report/data writes and exact saving of prior assistant answers.
 
 [ADR-56](adr-56-repository-only-approval-policy-preferences.md) defines repository-only persistence for plan and mutation policy selections, with session-only overrides.
+
+[ADR-59](adr-59-model-managed-repository-memories.md) defines explicit repository-memory operations, local embeddings, hybrid retrieval, inclusion accounting, and deterministic capacity eviction.

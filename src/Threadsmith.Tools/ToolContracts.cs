@@ -54,6 +54,9 @@ public enum ToolSideEffect
 
     /// <summary>Writes files through a host-enforced folder allowlist.</summary>
     WritesFiles,
+
+    /// <summary>Changes only explicit repository-local memory state.</summary>
+    WritesRepositoryMemory,
 }
 
 /// <summary>Whether retrying an identical tool call is safe.</summary>
@@ -632,7 +635,7 @@ public abstract class Tool<TInput, TOutput> : ITool
         var accessMode = Definition.SideEffect switch
         {
             ToolSideEffect.ReadOnly => ToolAccessMode.Read,
-            ToolSideEffect.WritesFiles => ToolAccessMode.Write,
+            ToolSideEffect.WritesFiles or ToolSideEffect.WritesRepositoryMemory => ToolAccessMode.Write,
             _ => ToolAccessMode.Execute,
         };
         var claims = GetResourcePaths((TInput)input, context)

@@ -581,5 +581,15 @@ public sealed class DefaultMigrations
         new ReasoningPrivacyMigration(),
         new SessionLifecycleSchemaMigration(),
         new RepositoryMemorySchemaMigration(),
+        new ManagedRepositoryMemorySchemaMigration(),
     ];
+
+    /// <summary>Uses the effective repository capacity during first import so valid manual memories are not prematurely evicted.</summary>
+    public static IReadOnlyList<IDatabaseMigration> ForRepositoryMemoryCapacity(int maximumMemoryCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumMemoryCount);
+        return All.Select(migration => migration is ManagedRepositoryMemorySchemaMigration
+            ? new ManagedRepositoryMemorySchemaMigration(maximumMemoryCount)
+            : migration).ToArray();
+    }
 }

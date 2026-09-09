@@ -15,6 +15,7 @@ $appPublish = Join-Path $publishRoot 'app'
 $workerPublish = Join-Path $publishRoot 'worker'
 $review = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
 $runtimeVersion = [string]$review.windowsSelfContainedDecision.runtimeVersion
+& (Join-Path $root 'eng/Stage-EmbeddingAssets.ps1') | Out-Null
 
 dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime $RuntimeIdentifier "-p:RuntimeFrameworkVersion=$runtimeVersion"
 if ($LASTEXITCODE -ne 0) { throw 'Application restore failed.' }
@@ -23,6 +24,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Worker restore failed.' }
 dotnet publish (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') -c Release -r $RuntimeIdentifier --self-contained true --no-restore -p:Version=$Version "-p:RuntimeFrameworkVersion=$runtimeVersion" -p:PublishSingleFile=false -p:PublishTrimmed=false -p:PublishAot=false -o $appPublish
 if ($LASTEXITCODE -ne 0) { throw 'Application publish failed.' }
 Assert-ReleasePromptPayload -PayloadDirectory $appPublish -RuntimeIdentifier $RuntimeIdentifier -SourceRoot $root
+& (Join-Path $PSScriptRoot 'Test-EmbeddingPayload.ps1') -StageDirectory $appPublish -RuntimeIdentifier $RuntimeIdentifier
 dotnet publish (Join-Path $root 'src/Threadsmith.Scripting.Worker/Threadsmith.Scripting.Worker.csproj') -c Release -r $RuntimeIdentifier --self-contained true --no-restore -p:Version=$Version "-p:RuntimeFrameworkVersion=$runtimeVersion" -p:PublishSingleFile=false -p:PublishTrimmed=false -p:PublishAot=false -o $workerPublish
 if ($LASTEXITCODE -ne 0) { throw 'Worker publish failed.' }
 

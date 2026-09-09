@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "model": "sentence-transformers/all-MiniLM-L12-v2",
+  "revision": "9bc18616990647530c139b95df1d1aa30cd115b7",
+  "source": "https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2",
+  "license": "Apache-2.0",
+  "licenseEvidence": "README.md frontmatter at the pinned source revision",
+  "dimensions": 384,
+  "maxInputTokens": 256,
+  "pooling": "attention-mask mean including boundary tokens",
+  "normalization": "L2",
+  "tokenization": "BERT WordPiece; lower-case, strip accents, basic and CJK tokenization; CLS/SEP exactly once; dynamic sequence length",
+  "nativePackage": "Microsoft.ML.OnnxRuntime",
+  "nativeVersion": "1.22.1",
+  "tokenizerPackage": "Microsoft.ML.Tokenizers",
+  "tokenizerVersion": "2.0.0",
+  "runtimeIdentifiers": [
+    "win-x64",
+    "win-arm64",
+    "linux-x64",
+    "linux-arm64",
+    "osx-x64",
+    "osx-arm64"
+  ],
+  "artifacts": [
+    {
+      "name": "config.json",
+      "path": "config.json",
+      "bytes": 615,
+      "sha256": "bc451f333af67312ba0de5018ef1c9ba663cb18549443e568f0bd35262dc1c48"
+    },
+    {
+      "name": "model.onnx",
+      "path": "onnx/model.onnx",
+      "bytes": 133126567,
+      "sha256": "84c56795d395593cbee215e2d635a8f0ad3199ae99f99299c44cf1eaecff3ad4"
+    },
+    {
+      "name": "README.md",
+      "path": "README.md",
+      "bytes": 10515,
+      "sha256": "1df133530765d5aa5155a1b0ca7e0d3048b4da12381546f86763b3753c028ed3"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "path": "tokenizer_config.json",
+      "bytes": 352,
+      "sha256": "fba7637034542f691ef4b1ad735d664971e8d9723012a1973d4ee985742e8e72"
+    },
+    {
+      "name": "tokenizer.json",
+      "path": "tokenizer.json",
+      "bytes": 466247,
+      "sha256": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"
+    },
+    {
+      "name": "vocab.txt",
+      "path": "vocab.txt",
+      "bytes": 231508,
+      "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    }
+  ],
+  "nativeAssets": {
+    "win-x64": {
+      "name": "onnxruntime.dll",
+      "bytes": 12416032,
+      "sha256": "7788f3f38e9a339003f7d7e1bf47f928287cf409bb5273273149e1282fbf503f"
+    },
+    "win-arm64": {
+      "name": "onnxruntime.dll",
+      "bytes": 12678208,
+      "sha256": "6aae7f99e716701bf7bafba629e921fc4fcd325d6b7a99e8125307ce162216a9"
+    },
+    "linux-x64": {
+      "name": "libonnxruntime.so",
+      "bytes": 21087472,
+      "sha256": "3907398e408dae083deb3439e8f643d9e26180ed614b29cc7d5ec342ce5ce06f"
+    },
+    "linux-arm64": {
+      "name": "libonnxruntime.so",
+      "bytes": 17708792,
+      "sha256": "010f1bd202a823b9eb67c89d8e493931d6f20f29a54a43ccb07076d66b444fe7"
+    },
+    "osx-x64": {
+      "name": "libonnxruntime.dylib",
+      "bytes": 37740976,
+      "sha256": "9f2f73ddae8cfb7b5d9be7b84f0bfc3db07e5883d5baa78c4b658ec022b46275"
+    },
+    "osx-arm64": {
+      "name": "libonnxruntime.dylib",
+      "bytes": 33548864,
+      "sha256": "36a46aeb65eee6618daded125577192514d058d0cce6adc4892bc1bcc77cb9be"
+    }
+  }
+}

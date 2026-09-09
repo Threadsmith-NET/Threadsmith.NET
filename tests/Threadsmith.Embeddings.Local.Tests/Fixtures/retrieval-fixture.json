@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "memories": [
+    {"id":"focused-tests","text":"For a small code fix, run the affected test suite first; broad solution tests are needed only when the change crosses project boundaries."},
+    {"id":"git-permission","text":"Leave completed changes uncommitted for review. Stage, commit, or push Git changes only when the user explicitly requests it."},
+    {"id":"symbol-search","text":"Use FindSymbolAsync for C# symbol discovery; plain text search misses overloads and inherited members."},
+    {"id":"timezone-correction","text":"Correction: release deadlines use America/New_York local time, not UTC."},
+    {"id":"concise-comments","text":"Keep code comments concise and explain the reason for surprising behavior, without repeating what the next line does."},
+    {"id":"powershell-paths","text":"On Windows, use PowerShell LiteralPath when handling filenames containing brackets or wildcard characters."},
+    {"id":"local-privacy","text":"Keep confidential repository notes on the local machine; do not send them to external hosted model services."},
+    {"id":"cloud-public","text":"Public documentation drafts may use hosted models. The restriction on cloud processing applies to confidential repository notes."}
+  ],
+  "queries": [
+    {"split":"calibration","text":"Which checks should I run after a tiny bug fix?","expected":["focused-tests"]},
+    {"split":"calibration","text":"Now that the patch is done, save it to the remote repository.","expected":["git-permission"]},
+    {"split":"calibration","text":"How should I discover inherited C# methods?","expected":["symbol-search"]},
+    {"split":"calibration","text":"What clock determines release deadlines?","expected":["timezone-correction"]},
+    {"split":"calibration","text":"Fix handling of bracket characters in Windows filenames.","expected":["powershell-paths"]},
+    {"split":"calibration","text":"May confidential notes be processed by an external cloud model?","expected":["local-privacy","cloud-public"]},
+    {"split":"calibration","text":"Find a good recipe for lentil soup.","expected":[]},
+    {"split":"calibration","text":"Explain why the moon has craters.","expected":[]},
+    {"split":"calibration","text":"Generate a random UUID.","expected":[]},
+    {"split":"heldout","text":"FindSymbolAsync overload resolution","expected":["symbol-search"]},
+    {"split":"heldout","text":"Are release deadlines in UTC?","expected":["timezone-correction"]},
+    {"split":"heldout","text":"Review the newly added comments for unnecessary verbosity.","expected":["concise-comments"]},
+    {"split":"heldout","text":"Can a hosted model rewrite our public documentation?","expected":["cloud-public"]},
+    {"split":"heldout","text":"Can a hosted model read our confidential notes?","expected":["local-privacy","cloud-public"]},
+    {"split":"heldout","text":"Finish up and leave the patch ready for my review.","expected":["git-permission"]},
+    {"split":"heldout","text":"Which one?","taskIntent":"Choose a test suite for a small bug fix.","expected":["focused-tests"]},
+    {"split":"heldout","text":"PowerShell LiteralPath filenames","expected":["powershell-paths"]},
+    {"split":"heldout","text":"What is the capital of Peru?","expected":[]},
+    {"split":"heldout","text":"Explain the rules of chess.","expected":[]},
+    {"split":"heldout","text":"Draw an orange cat sitting on a chair.","expected":[]}
+  ]
+}

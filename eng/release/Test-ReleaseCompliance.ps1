@@ -2,6 +2,8 @@
 param([Parameter(Mandatory)][string] $StageDirectory, [Parameter(Mandatory)][string] $RuntimeIdentifier, [string] $LayoutManifest)
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
 Assert-ReleaseRid $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Test-RipgrepPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Test-EmbeddingPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
 & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1') | Out-Null
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
 Assert-ReleasePromptPayload -PayloadDirectory $stage -RuntimeIdentifier $RuntimeIdentifier

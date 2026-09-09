@@ -174,14 +174,20 @@ public sealed record RepositoryMemoryContextItemProjection
     /// <summary>Stable repository-memory identifier.</summary>
     public required RepositoryMemoryId Id { get; init; }
 
-    /// <summary>Repository-memory category.</summary>
-    public required RepositoryMemoryKind Kind { get; init; }
+    /// <summary>Explicit origin supplied by the host.</summary>
+    public RepositoryMemoryOrigin Origin { get; init; }
 
-    /// <summary>Authority supporting the memory item.</summary>
-    public required RepositoryMemoryAuthority Authority { get; init; }
+    /// <summary>Content revision selected before final dispatch.</summary>
+    public long Revision { get; init; }
 
-    /// <summary>Current validity state.</summary>
-    public required RepositoryMemoryValidity Validity { get; init; }
+    /// <summary>Qualified lexical branch rank when present.</summary>
+    public int? LexicalRank { get; init; }
+
+    /// <summary>Qualified semantic branch rank when present.</summary>
+    public int? SemanticRank { get; init; }
+
+    /// <summary>Compatible-space cosine score for diagnostics only.</summary>
+    public double? CosineSimilarity { get; init; }
 
     /// <summary>Whether the item entered the assembled request.</summary>
     public required bool Included { get; init; }
@@ -378,6 +384,9 @@ public sealed record ContextInspectionProjection
 
     /// <summary>Request-local visible source frontier used for conservative code-explore deduplication.</summary>
     public VisibleSourceFrontierInspectionProjection? VisibleSourceFrontier { get; init; }
+
+    /// <summary>Most recent actual provider-submission receipt outcome; absent for assembly-only previews.</summary>
+    public RepositoryMemoryDispatchInspection? RepositoryMemoryDispatch { get; init; }
 
     /// <summary>Inspectable reason for the next compaction decision.</summary>
     public string? CompactionRationale { get; init; }

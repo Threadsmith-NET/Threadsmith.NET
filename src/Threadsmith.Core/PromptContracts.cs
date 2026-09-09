@@ -203,7 +203,10 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolReadFileDescription prompt asset.</summary>
     public const string ToolReadFileDescription = "Tool-read_file-Description.md";
 
-    /// <summary>Gets the stable filename for the direct artifact-writing tool description.</summary>
+    /// <summary>Gets the stable filename for the explicit repository-memory tool description.</summary>
+    public const string ToolMemoriesDescription = "Tool-memories-Description.md";
+
+    /// <summary>Gets the stable filename for the write-file description.</summary>
     public const string ToolWriteFileDescription = "Tool-write_file-Description.md";
 
     /// <summary>Gets the stable filename for the ToolSearchDescription prompt asset.</summary>
@@ -1055,6 +1058,7 @@ public static class PromptFileNames
         ToolListFilesDescription,
         ToolReadFileDescription,
         ToolWriteFileDescription,
+        ToolMemoriesDescription,
         ToolSearchDescription,
         ToolGitStatusDescription,
         ToolFindSymbolDescription,

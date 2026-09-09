@@ -246,6 +246,24 @@ public static class AppBootstrapTests
         Assert.True(defaults.GetValue("tui:showOperationDurations", false));
     }
 
+    /// <summary>Rebuilding the active repository preserves CLI/session precedence for memory capacity.</summary>
+    [Fact]
+    public static void ConfigurationBootstrap_MemoryRebind_PreservesEffectiveLayers()
+    {
+        using var temporary = new TemporaryDirectory("memory-layering");
+        var paths = CreatePaths(temporary.Root);
+        Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
+        File.WriteAllText(paths.RepositoryConfiguration, "{\"tools\":{\"config\":{\"memories\":{\"MaxNumberOfRepoMemories\":2}}}}");
+        File.WriteAllText(paths.SessionConfiguration, "{\"tools\":{\"config\":{\"memories\":{\"MaxNumberOfRepoMemories\":7}}}}");
+        var arguments = new[] { "--set:tools:config:memories:MaxNumberOfRepoMemories=50" };
+        var initial = ConfigurationBootstrap.Build(arguments, paths);
+        var rebound = ConfigurationBootstrap.Build(arguments, paths);
+        Assert.Equal(50, initial.GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
+        Assert.Equal(initial["tools:config:memories:MaxNumberOfRepoMemories"], rebound["tools:config:memories:MaxNumberOfRepoMemories"]);
+        Assert.Equal(7, ConfigurationBootstrap.Build([], paths).GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
+        Assert.Equal(3, rebound.GetValue<int>("tools:config:memories:MaxRepoMemoriesInContext"));
+    }
+
     /// <summary>Repository configuration cannot enter trusted credential or command-execution settings.</summary>
     [Fact]
     public static void ConfigurationBootstrap_TrustedView_ExcludesRepositoryOverrides()

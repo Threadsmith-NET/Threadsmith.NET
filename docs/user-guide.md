@@ -227,18 +227,18 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/clone` | Create and activate an independent governed copy of the current session. |
 | `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
 | `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
-| `/context compact` | Request bounded compaction at a safe turn boundary. |
+| `/context compact` | Retired automatic fact-promotion command; model-generated active-turn compaction remains automatic. |
 | `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
 | `/context mode` | Report the effective cross-turn conversation mode. |
 | `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
 | `/extensions` | Browse, load, and unload discovered extensions. |
 | `/help` | Display available commands. |
-| `/memory forget <memory-id>` | Mark an item forgotten without deleting audit metadata. |
-| `/memory inspect <memory-id>` | Inspect one repository-memory item and its provenance. |
-| `/memory list repo [active\|stale\|superseded\|forgotten\|rejected\|all]` | List local repository memory and audit rows. |
-| `/memory remember repo <text>` | Store an explicit local repository-scoped memory fact. |
-| `/memory supersede <memory-id> <replacement-text>` | Correct an item while preserving audit history. |
-| `/memory validate repo` | Recheck stale repository memory that can be validated locally. |
+| `/memory remember <text>` | Explicitly save a concise repository note. |
+| `/memory list` | List current note IDs, origins, and text. |
+| `/memory inspect <id>` | Inspect one note with timestamps, usage, and embedding status; no vector components. |
+| `/memory update <id> <text>` | Correct the same stable ID; `supersede` is a compatibility alias. |
+| `/memory forget <id>` | Delete current memory content, search state, and usage. |
+| `/memory validate` | Retired; returns migration guidance, as do old category/validity arguments. |
 | `/models` | Select and persist the active repository provider/model. |
 | `/new` | Checkpoint the current session and activate a fresh empty session. |
 | `/open [path]` | Open or switch repositories. |
@@ -260,7 +260,7 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 `/new`, `/resume`, and `/clone` use one serialized host-owned transition boundary and require active model, tool, mutation, validation, hook, skill, and delegated work to finish or be cancelled. `/resume` lists only sessions for the currently open repository, newest first; an exact ID from another repository reports a mismatch without changing repository, trust, solution, or working directory.
 
-A resumed session reconstructs tolerant event projections and the sanitized conversation archive, governed memory, mode, persisted usage, and compatible model/reasoning selection. Stale context inspections and provider continuation/cache handles are invalidated. A clone receives new session-local identities and independent future history; it does not duplicate live execution authority, approvals, transactions, leases, credentials, hidden reasoning, or provider transcripts. Clone output includes a copyable `/resume <source-session-id>` return command. See [Session lifecycle operations](operations/session-lifecycle.md).
+A resumed session reconstructs tolerant event projections and the sanitized conversation archive, explicit repository memories, mode, persisted usage, and compatible model/reasoning selection. Stale context inspections and provider continuation/cache handles are invalidated. A clone receives new session-local identities and independent future history; it does not duplicate live execution authority, approvals, transactions, leases, credentials, hidden reasoning, or provider transcripts. Clone output includes a copyable `/resume <source-session-id>` return command. See [Session lifecycle operations](operations/session-lifecycle.md).
 
 ### Retained TUIKit frontend (default)
 
@@ -304,21 +304,52 @@ Reasoning is hidden by default. While a turn is active, Threadsmith shows transi
 
 Conversation continuity is bounded and host-owned. Threadsmith archives only sanitized accepted user requests and final visible assistant responses. Hidden reasoning, provider wire payloads, and raw tool output never enter the conversation archive. Large bodies use the content-addressed artifact store while metadata, hashes, ordering, and provenance remain durable.
 
-- **Conversation-aware** (default): current input, bounded recent complete turns, active structured memory, and deterministically retrieved older memory.
-- **Governed-memory-only**: current input plus validated structured memory; no raw prior messages.
+- **Conversation-aware** (default): current input, bounded recent complete turns, and relevant explicitly saved repository memories.
+- **Governed-memory-only**: current input plus relevant explicitly saved repository memories; no raw prior messages.
 - **Stateless**: current input and current-run governed state only. Mode changes preserve the archive for later use.
 
-Structured memory distinguishes user requirements, decisions, constraints, unresolved questions, repository findings, completed work, and rejected/superseded information. Explicit corrections supersede rather than erase prior items. Repository findings require current governed evidence and revision provenance; repository changes make dependent items stale before later retrieval.
+The host does not promote requirements, decisions, questions, findings, or completion receipts into automatic memories. Old automatic snapshots never return through resume or clone. Ordinary transcript continuity and model-generated active-turn compaction remain available.
 
 ### Repository-scoped memory
 
-Repository-scoped memory is separate from session conversation memory. It is local to the current repository identity, stored in the ignored `.threadsmith/threadsmith.db` database, and is not shared or tracked by Git. A repository file, prompt append, skill, hook, or ordinary configuration cannot silently create, authorize, or elevate memory.
+Memories are concise notes saved in the current repository's ignored `.threadsmith/threadsmith.db`. They survive `/new`, `/resume`, clone, and restart for that repository, and are shared by its local sessions. They are not tracked by Git or shared with other repositories.
 
-Use `/memory remember repo <text>` only for facts you explicitly want retained for future sessions in this repository. Threadsmith sanitizes and bounds the text, records user-command provenance, and stores it as untrusted prompt data. `/memory list repo` includes active and inactive audit rows; `/memory inspect <memory-id>` shows the bounded content, validity, authority, hash, and provenance. Corrections use `/memory supersede <memory-id> <replacement-text>` so the old item becomes superseded while the replacement is preferred. `/memory forget <memory-id>` marks an item forgotten without deleting audit metadata.
+Ask Threadsmith to remember a durable preference, correction, or project detail, and the model can call the single `memories` tool. You can also manage notes directly:
 
-Repository-dependent memory with path, symbol, project, or revision support is conservatively marked stale when host-observed repository mutations affect that support. Stale, superseded, forgotten, and rejected memory is omitted from model context until explicit validation or correction changes the state. `/memory validate repo` can reactivate explicit user-authored memory that has no repository-dependent support; unverifiable path/symbol/project/revision-scoped items remain stale. `/context inspect` reports repository-memory inclusion, omission, staleness, and budget rationale alongside ordinary conversation context.
+```text
+/memory remember <text>
+/memory list
+/memory inspect <memory-id>
+/memory update <memory-id> <replacement-text>
+/memory forget <memory-id>
+```
 
-Headless callers use the same host-owned repository-memory commands and JSON DTOs as the TUI. Model-proposed repository-memory candidates remain disabled in this implementation; assistant prose alone is never enough to create durable repository memory.
+`supersede` is a compatibility alias for `update`: it now corrects the same ID rather than creating an inactive audit copy. `validate`, old category arguments, and validity filters are retired and return migration guidance. Both terminal frontends and headless commands use the same service. Terminal `/memory list` shows each note’s ID, origin, and text. `/memory inspect <id>` also shows creation/update times, inclusion count, last inclusion, and embedding identity or unavailability. Headless list output includes the entry metadata. Embedding vector components are excluded from headless JSON and terminal output.
+
+New and updated text must fit 2,000 characters after sanitization and the local model's 256-token complete sequence limit, including boundary tokens. Shorten an oversized note; Threadsmith never saves full text with an embedding of only its beginning. Exact normalized duplicates return the existing ID, unchanged updates do nothing, and an update duplicating another note reports that note's ID without merging. Case and meaningful interior whitespace are preserved. Removing a note deletes current search/usage state; already transmitted context and historical conversation records remain historical.
+
+By default, at most twenty notes are stored and zero to three relevant notes enter each request. Retrieval combines SQLite lexical matches and local semantic similarity, then applies mode, sensitivity, and token budgets. Unrelated notes need not appear. `/context inspect` separates selection and final budget inclusion from actual-submission receipt outcomes, and reports branch contributions, query truncation, cache reuse, and fallback. Listing or previewing context does not count as inclusion; repeated tool rounds count once per user turn/content revision.
+
+Memory is best-effort recall. At capacity, older/disused notes may be evicted, with the same policy for manual and model notes. Meaningful adds/corrections receive a seven-day recency window when older candidates exist; if all notes are new, the oldest can still be evicted. Put instructions that must always apply in `AGENTS.md`. Routine conversation, approvals, mutations, rollback, and completion do not automatically create notes, and repository edits do not automatically invalidate them.
+
+Configure the two limits through ordinary machine/user/repository layering:
+
+```json
+{
+  "tools": {
+    "config": {
+      "memories": {
+        "MaxNumberOfRepoMemories": 20,
+        "MaxRepoMemoriesInContext": 3
+      }
+    }
+  }
+}
+```
+
+Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
+
+The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](operations/conversation-context.md) for migration backups and recovery.
 
 #### How context optimization works
 
@@ -327,7 +358,7 @@ Threadsmith arranges every model request so content that changes least appears f
 1. stable host policy;
 2. the applicable repository instruction bundle;
 3. instructions for the current execution phase;
-4. bounded structured memory and complete recent user/assistant turns in chronological order;
+4. relevant explicit repository memories and complete recent user/assistant turns in chronological order;
 5. current governed state and attributable evidence;
 6. the current user input;
 7. correlated tool calls and results appended during an otherwise unchanged multi-round request.
@@ -336,7 +367,7 @@ This layout gives providers that support exact-prefix caching the best opportuni
 
 Eligible tool definitions are canonicalized into one deterministic inventory. A provider with native tool support receives that inventory through its native protocol rather than receiving a second copy in prompt text. Legacy adapters may receive one deterministic textual inventory. This avoids paying for duplicate schemas and prevents unrelated tool ordering from changing unpredictably.
 
-During an unchanged tool round, Threadsmith freezes the assembled prefix and appends the assistant tool call plus its correlated result. It deliberately rebuilds the request when the execution phase, repository trust or policy, eligible tools, applicable instructions, conversation compaction generation, selected model, or request layout changes. Rebuilding is a correctness boundary, not a cache failure.
+During an unchanged tool round, Threadsmith freezes the assembled prefix and appends the assistant tool call plus its correlated result. It deliberately rebuilds the request when the execution phase, repository trust or policy, eligible tools, applicable instructions, conversation compaction generation, repository-memory content, selected model, or request layout changes. Rebuilding is a correctness boundary, not a cache failure.
 
 Capacity checks use the estimated provider-wire request rather than only visible prompt text. The estimate includes structured content, native or textual tool schemas, provider framing, and the selected model's output reserve. Context reduction occurs before dispatch; a request that still cannot fit fails before contacting the provider.
 
@@ -344,7 +375,7 @@ Capacity checks use the estimated provider-wire request rather than only visible
 
 Active-turn compaction keeps one long user request from repeatedly sending every earlier tool result until the active main model's context window is exhausted. It applies automatically to ordinary multi-round evidence collection and planning. It does not end the turn, ask the user to resubmit the request, change the active main model, or expose a compaction tool to the model. Candidate generation can optionally use a separately configured auxiliary model profile.
 
-This is different from `/context compact`. The command compacts completed cross-turn conversation history at a safe turn boundary. Active-turn compaction is an automatic pre-sampling operation over tool continuation generated **inside the request currently running**. There is currently no user or repository setting that disables, postpones, or manually triggers the active-turn reliability boundary.
+`/context compact` is retired and returns guidance; it no longer creates structured facts from completed conversation turns. Active-turn compaction is an automatic pre-sampling operation over tool continuation generated **inside the request currently running**. There is currently no user or repository setting that disables, postpones, or manually triggers the active-turn reliability boundary.
 
 Threadsmith uses these terms:
 
@@ -431,9 +462,9 @@ Cancellation, hook denial, provider failure, invalid output, validation rejectio
 
 Provider cache support and reporting vary. A successful rewrite increments a provider-neutral history generation, and compiled providers receive the complete rebuilt stateless request rather than reusing an incompatible opaque conversation identity. The unchanged stable prefix remains eligible for provider prefix caching. Threadsmith reports cache-read or cache-write tokens only when the provider supplies them; a missing counter is **unavailable**, not zero, and latency alone is never treated as proof of a cache hit.
 
-Outside the active-turn line, `/context inspect` reports logical content tokens, estimated provider-wire input and budget, stable-prefix tokens, native/textual tool transport, the effective mode and source, completed-turn summary version/range, included or omitted messages and memory, retrieval rationale/provenance, stale or superseded exclusions, and exact pressure reductions. `/context compact` remains the separate completed-turn compaction command: malformed output, cancellation, provider failure, or persistence failure leaves that prior completed-turn snapshot active. Headless callers receive the same host-owned inspection projection as stable JSON.
+Outside the active-turn line, `/context inspect` reports logical content tokens, provider-wire input/budget, stable-prefix tokens, tool transport, mode/source, included/omitted messages and memories, hybrid branch scores, query truncation/cache/fallback diagnostics, actual-submission receipt outcomes, and pressure reductions. Retired automatic summary fields remain empty. Headless callers receive the same host-owned inspection projection as stable JSON.
 
-Configure budgets under `context:conversation` in `.threadsmith/config.*`; `.threadsmith/config.example` documents recent-turn, summary, retrieval, pressure, artifact, and compaction bounds. Invalid values fail before model invocation. See [Conversation context operations](operations/conversation-context.md) for continuity defaults, failure behavior, retention, restoration, and headless contracts. See [Cache-optimized context operations](operations/cache-optimized-context.md) for request ordering, instruction confinement, diagnostics, and provider-acceleration safety.
+Configure budgets under `context:conversation` in `.threadsmith/config.*`; `.threadsmith/config.example` documents recent-turn, pressure, and artifact bounds. Invalid values fail before model invocation. See [Conversation context operations](operations/conversation-context.md) for continuity defaults, failure behavior, retention, restoration, and headless contracts. See [Cache-optimized context operations](operations/cache-optimized-context.md) for request ordering, instruction confinement, diagnostics, and provider-acceleration safety.
 
 ## How repository changes are governed
 
@@ -1154,7 +1185,8 @@ Important sections include:
 | `model` | Provider profiles and defaults. |
 | `tools` | Availability, invocation policy, allowlists, and per-tool scalar configuration. |
 | `mutation` | Approval policy and the `ReviewRisky` large-diff threshold. |
-| `context.conversation` | Default mode plus recent-turn, summary, retrieval, pressure, artifact, and compaction bounds. |
+| `context.conversation` | Default mode plus recent-turn, pressure, and artifact bounds. |
+| `tools.config.memories` | Repository memory storage/context limits, default 20/3; zero context disables retrieval. |
 | `repository` | Editable roots, prohibited paths, and lifecycle policy. |
 | `tui` | Theme and session-status configuration. |
 | `extensions` / `.threadsmith/extensions.json` | Extension runtime selection and settings. |
@@ -1647,7 +1679,7 @@ The repository configuration may override the locations and cleanup policy:
 }
 ```
 
-`sessionAgeDays` and `conversationMessageBodyAge` must be positive. `metadataOnly` removes eligible aged artifact bodies regardless of their kind. Otherwise each `retain...` switch decides whether an eligible aged kind is deleted. `retainConversationBodies: false` detaches old visible message bodies after their independent age window while keeping governed memory and provenance. Retention runs at startup rather than continuously, so a long-running process does not clean newly expired records until its next launch.
+`sessionAgeDays` and `conversationMessageBodyAge` must be positive. `metadataOnly` removes eligible aged artifact bodies regardless of their kind. Otherwise each `retain...` switch decides whether an eligible aged kind is deleted. `retainConversationBodies: false` detaches old visible message bodies after their independent age window while keeping archive metadata and explicit repository memories under their separate retention/capacity rules. Retention runs at startup rather than continuously, so a long-running process does not clean newly expired records until its next launch.
 
 The redaction audit is defense in depth, not a substitute for keeping secrets out of prompts and tool output. Event history is append-only and findings there are reported but not rewritten. With `repairArtifacts: true`, unsafe artifact bodies are sanitized. Disabling the audit or retention increases local-data exposure and should be a deliberate repository-owner decision.
 

@@ -501,7 +501,10 @@
       // Zero context entries disables retrieval; stored capacity must be positive.
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3
+        "MaxRepoMemoriesInContext": 3,
+        // Semantic matches must score strictly above this finite cosine minimum (-1 to 1).
+        // Lexical matches qualify independently; 1 excludes all semantic matches.
+        "SemanticMinimum": 0.47
       },
       "csharp_script": {
         "timeout_ms": "5000",

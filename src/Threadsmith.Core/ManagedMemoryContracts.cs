@@ -2,14 +2,21 @@ namespace Threadsmith.Core;
 
 using System.Text.Json.Serialization;
 
-/// <summary>Effective repository memory bounds, frozen for each operation or user turn.</summary>
+/// <summary>Effective repository memory bounds and retrieval policy, frozen for each operation or user turn.</summary>
 public sealed record RepositoryMemoryOptions
 {
+    /// <summary>Calibrated default for the bundled local embedding model's semantic branch.</summary>
+    public const double DefaultSemanticMinimum = 0.47;
+
     /// <summary>Maximum number of stored entries, shared by manual and model origins.</summary>
     public int MaxNumberOfRepoMemories { get; init; } = 20;
 
     /// <summary>Maximum number of relevant entries injected into automatic context.</summary>
     public int MaxRepoMemoriesInContext { get; init; } = 3;
+
+    /// <summary>Strict minimum cosine similarity for semantic matches; lexical matches qualify independently.</summary>
+    /// <remarks>Must be finite and between -1 and 1 inclusive. A value of 1 excludes the semantic branch.</remarks>
+    public double SemanticMinimum { get; init; } = DefaultSemanticMinimum;
 
     /// <summary>Context maximum constrained by the storage capacity.</summary>
     public int EffectiveContextMaximum => Math.Min(MaxNumberOfRepoMemories, MaxRepoMemoriesInContext);
@@ -19,6 +26,13 @@ public sealed record RepositoryMemoryOptions
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxNumberOfRepoMemories);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRepoMemoriesInContext);
+        if (!double.IsFinite(SemanticMinimum))
+        {
+            throw new ArgumentOutOfRangeException(nameof(SemanticMinimum), "The semantic minimum must be a finite cosine similarity between -1 and 1.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfLessThan(SemanticMinimum, -1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(SemanticMinimum, 1);
     }
 }
 
@@ -187,8 +201,8 @@ public interface IManagedRepositoryMemoryStore
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Deletes current content, its FTS row and inclusion receipts atomically.</summary>
-    Task<bool> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default);
+    /// <summary>Deletes current content, its FTS row and inclusion receipts atomically, returning the deleted entry when present.</summary>
+    Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default);
 
     /// <summary>Enforces a reduced capacity at repository bind without performing inference.</summary>
     Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(

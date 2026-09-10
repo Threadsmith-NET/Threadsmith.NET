@@ -29,9 +29,14 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(RepositoryMemoryWriteStatus.Updated, updated.Status);
         Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["WidgetFactory"])).LexicalMatches);
         Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["snapshots", "detached"])).LexicalMatches);
-        Assert.True(await fixture.Store.RemoveAsync("repo", entry.Id));
+        Assert.Null(await fixture.Store.RemoveAsync("other", entry.Id));
+        Assert.Equal(entry.Id, Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries).Id);
+        var removed = Assert.IsType<RepositoryMemoryEntry>(await fixture.Store.RemoveAsync("repo", entry.Id));
+        Assert.Equal(entry.Id, removed.Id);
+        Assert.Equal("Database snapshots remain detached", removed.Text);
+        Assert.Equal(2, removed.Revision);
         Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["snapshots"])).LexicalMatches);
-        Assert.False(await fixture.Store.RemoveAsync("repo", entry.Id));
+        Assert.Null(await fixture.Store.RemoveAsync("repo", entry.Id));
     }
 
     /// <summary>Exact retries do not renew content age or revision and cross-entry duplicates never merge.</summary>

@@ -49,6 +49,7 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         {
             MaxNumberOfRepoMemories = configuration.GetValue($"{SectionName}:MaxNumberOfRepoMemories", fallback.MaxNumberOfRepoMemories),
             MaxRepoMemoriesInContext = configuration.GetValue($"{SectionName}:MaxRepoMemoriesInContext", fallback.MaxRepoMemoriesInContext),
+            SemanticMinimum = configuration.GetValue($"{SectionName}:SemanticMinimum", fallback.SemanticMinimum),
         };
         options.Validate();
         return options;

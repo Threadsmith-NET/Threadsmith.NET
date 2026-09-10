@@ -8,9 +8,6 @@ using Threadsmith.Core;
 /// <summary>Owns one lazy, serialized CPU MiniLM session using only verified application assets.</summary>
 public sealed class LocalTextEmbeddingGenerator : ITextEmbeddingGenerator, IAsyncDisposable
 {
-    /// <summary>Fixed cosine minimum selected by the versioned MiniLM calibration fixture.</summary>
-    public const double SemanticMinimum = 0.47;
-
     /// <summary>Gets the exact number of MiniLM vector components.</summary>
     internal const int Dimensions = MiniLmEmbedderEngine.Dimensions;
 

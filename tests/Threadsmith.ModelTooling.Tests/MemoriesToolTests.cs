@@ -75,19 +75,82 @@ public static class MemoriesToolTests
         Assert.Equal("list", ((ITool)tool).GetActivityDetail(new MemoriesInput("list")));
     }
 
+    /// <summary>The pipeline sanitizes live requested text while the durable memory result names its operation and entries.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Pipeline_SanitizesRequestedMemoryTextAndProjectsMemoryOutput(bool fail)
+    {
+        var memory = new MemoryService { FailOperation = fail };
+        var tool = new MemoriesTool(memory, new Options(), TestPromptLoader.Instance);
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([tool]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+        const string secret = "sk-abcdefghijklmnop";
+
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "memories",
+            ArgumentsJson = JsonSerializer.Serialize(new { action = "add", text = "Remember " + secret }),
+            Context = Invocation(Path.GetTempPath()),
+        });
+
+        var started = Assert.IsType<ToolInvocationStarted>(observed[0]);
+        var completed = Assert.IsType<ToolInvocationCompleted>(observed[^1]);
+        var detail = Assert.IsType<string>(started.TransientActivityDetail);
+        Assert.Contains("Remember", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, detail, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Remember", DomainEventJson.Serialize(started), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, DomainEventJson.Serialize(completed), StringComparison.Ordinal);
+        Assert.Equal(!fail, result.Succeeded);
+        Assert.Equal(!fail, completed.Succeeded);
+        if (!fail)
+        {
+            var output = Assert.IsType<string>(completed.ResultJson);
+            Assert.Contains("\"Action\":\"add\"", output, StringComparison.Ordinal);
+            Assert.Contains("\"Entries\"", output, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Repository rebind uses fallback layering and rejects stale repository identities.</summary>
     [Fact]
     public static void Options_RebindAndRejectInvalidBounds()
     {
         var first = Path.Combine(Path.GetTempPath(), "memory-first");
         var next = Path.Combine(Path.GetTempPath(), "memory-next");
-        var fallback = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:MaxNumberOfRepoMemories"] = "7" }).Build();
-        var initial = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:MaxRepoMemoriesInContext"] = "2" }).Build();
+        var fallback = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:MaxNumberOfRepoMemories"] = "7",
+            ["tools:config:memories:SemanticMinimum"] = "0.35",
+        }).Build();
+        var initial = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:MaxRepoMemoriesInContext"] = "2",
+            ["tools:config:memories:SemanticMinimum"] = "0.65",
+        }).Build();
         var source = new RepositoryMemoryConfiguration(initial, fallback, first);
         Assert.Equal(2, source.Capture(RepositoryIdentity.Create(first)).MaxRepoMemoriesInContext);
+        Assert.Equal(0.65, source.Capture(RepositoryIdentity.Create(first)).SemanticMinimum);
         source.BindRepository(next, new ConfigurationBuilder().Build());
         Assert.Equal(7, source.Capture(RepositoryIdentity.Create(next)).MaxNumberOfRepoMemories);
         Assert.Equal(3, source.Capture(RepositoryIdentity.Create(next)).MaxRepoMemoriesInContext);
+        Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:SemanticMinimum"] = "1.1" }).Build()));
+        Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
         Assert.Throws<InvalidOperationException>(() => source.Capture(RepositoryIdentity.Create(first)));
         Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryConfiguration(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:MaxNumberOfRepoMemories"] = "0" }).Build(), fallback, first));
     }
@@ -294,6 +357,8 @@ public static class MemoriesToolTests
 
         public bool FailAccounting { get; init; }
 
+        public bool FailOperation { get; init; }
+
         public bool SuppressRetrieval { get; init; }
 
         public int Receipts => _runs.Count;
@@ -303,6 +368,11 @@ public static class MemoriesToolTests
         public Task<RepositoryMemoryOperationResult> ExecuteAsync(RepositoryMemoryOperationRequest request, CancellationToken cancellationToken = default)
         {
             LastOperation = request;
+            if (FailOperation)
+            {
+                return Task.FromException<RepositoryMemoryOperationResult>(new IOException("simulated memory operation failure"));
+            }
+
             Removed = request.Action == "remove" || Removed;
             return Task.FromResult(new RepositoryMemoryOperationResult(Removed ? "removed" : "listed", request.Id, null, Removed ? [] : [Entry], []));
         }

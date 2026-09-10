@@ -50,7 +50,7 @@ public sealed class RealEmbeddingQualityTests
             identities.Add(result.Entry.Id, item.GetProperty("id").GetString() ?? string.Empty);
         }
 
-        using var allRetriever = new HybridRepositoryMemoryRetriever(store, generator, -1);
+        using var allRetriever = new HybridRepositoryMemoryRetriever(store, generator);
         var examples = new List<Example>();
         foreach (var query in fixture.RootElement.GetProperty("queries").EnumerateArray())
         {
@@ -59,7 +59,7 @@ public sealed class RealEmbeddingQualityTests
                 RepositoryIdentity = "fixture",
                 CurrentInstruction = query.GetProperty("text").GetString() ?? string.Empty,
                 TaskIntent = query.TryGetProperty("taskIntent", out var intent) ? intent.GetString() : null,
-                Options = new RepositoryMemoryOptions { MaxRepoMemoriesInContext = 20 },
+                Options = new RepositoryMemoryOptions { MaxRepoMemoriesInContext = 20, SemanticMinimum = -1 },
             };
             var result = await allRetriever.RetrieveAsync(request, cancellationToken);
             var candidates = result.Selected.Select(candidate => new Candidate(
@@ -74,11 +74,11 @@ public sealed class RealEmbeddingQualityTests
         }).OrderBy(value => value.Loss).ThenBy(value => value.MissedRelevant).ThenByDescending(value => value.Threshold).ToArray();
         // Keep the already pinned threshold during the engine adaptation when it remains
         // calibration-optimal. Held-out examples evaluate it; they never choose a new value.
-        var selectedMinimum = LocalTextEmbeddingGenerator.SemanticMinimum;
+        var selectedMinimum = RepositoryMemoryOptions.DefaultSemanticMinimum;
         var retained = Assert.Single(calibration, candidate => candidate.Threshold == selectedMinimum);
         Assert.Equal(calibration[0].Loss, retained.Loss);
         Assert.Equal(calibration[0].MissedRelevant, retained.MissedRelevant);
-        using var production = new HybridRepositoryMemoryRetriever(store, generator, selectedMinimum);
+        using var production = new HybridRepositoryMemoryRetriever(store, generator);
         var outcomes = new List<object>();
         var retrievalTimings = new List<double>();
         var completeTurnTimings = new List<double>();

@@ -100,6 +100,7 @@ public static class RepoConfigTests
         Assert.NotNull(policy);
         Assert.Equal(20, policy.MaxNumberOfRepoMemories);
         Assert.Equal(3, policy.MaxRepoMemoriesInContext);
+        Assert.Equal(RepositoryMemoryOptions.DefaultSemanticMinimum, policy.SemanticMinimum);
         Assert.False(config.GetSection("context:repositoryMemory").Exists());
     }
 

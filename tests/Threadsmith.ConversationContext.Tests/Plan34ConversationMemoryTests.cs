@@ -88,6 +88,61 @@ public static class Plan34ConversationMemoryTests
         Assert.Equal(2, generator.Calls);
     }
 
+    /// <summary>A request-local cutoff reranks an unchanged query without repeating inference.</summary>
+    [Fact]
+    public static async Task Semantic_minimum_reranks_cached_query_without_reembedding()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator
+        {
+            Generate = text => text == "semantic only" ? new TextEmbeddingResult((float[])[0.6f, 0.8f, 0], 3, false) : new TextEmbeddingResult((float[])[1, 0, 0], 3, false),
+        };
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "semantic only"));
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var included = await retriever.RetrieveAsync(Query("query") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.5 } });
+        var excluded = await retriever.RetrieveAsync(Query("query") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.7 } });
+
+        Assert.Equal(saved.Id, Assert.Single(included.Selected).Entry.Id);
+        Assert.False(included.RankingCacheHit);
+        Assert.Empty(excluded.Selected);
+        Assert.True(excluded.QueryEmbeddingCacheHit);
+        Assert.False(excluded.RankingCacheHit);
+        Assert.Equal(2, generator.Calls);
+    }
+
+    /// <summary>Semantic qualification is strict while lexical qualification remains eligible.</summary>
+    [Fact]
+    public static async Task Semantic_minimum_excludes_equal_similarity_without_suppressing_lexical_matches()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var semantic = await service.ExecuteAsync(MemoryTestData.Operation("add", "semantic only"));
+        var lexical = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha lexical"));
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var belowBoundary = await retriever.RetrieveAsync(Query("alpha") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.999 } });
+        var atBoundary = await retriever.RetrieveAsync(Query("alpha") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 1 } });
+
+        Assert.Contains(belowBoundary.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.SemanticRank is not null);
+        var lexicalAtBoundary = Assert.Single(atBoundary.Selected);
+        Assert.Equal(lexical.Id, lexicalAtBoundary.Entry.Id);
+        Assert.NotNull(lexicalAtBoundary.LexicalRank);
+        Assert.Null(lexicalAtBoundary.SemanticRank);
+    }
+
+    /// <summary>Semantic cutoffs must remain finite cosine bounds.</summary>
+    [Fact]
+    public static void Semantic_minimum_rejects_nonfinite_and_out_of_range_values()
+    {
+        foreach (var value in (double[])[double.NaN, double.NegativeInfinity, double.PositiveInfinity, -1.0000001, 1.0000001])
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryOptions { SemanticMinimum = value }.Validate());
+        }
+    }
+
     /// <summary>Equal branch scores use stable IDs rather than usage, origin, or age.</summary>
     [Fact]
     public static async Task Stable_ties_ignore_usage_and_origin()
@@ -226,10 +281,11 @@ public static class Plan34ConversationMemoryTests
     {
         RepositoryIdentity = MemoryTestData.Repository,
         CurrentInstruction = text,
+        Options = new RepositoryMemoryOptions { SemanticMinimum = 0.8 },
     };
 
     private static HybridRepositoryMemoryRetriever CreateRetriever(ConversationFixture fixture, ITextEmbeddingGenerator generator) =>
-        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, 0.8);
+        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
 
     private static TestMemoryEmbeddingGenerator CreateGenerator() => new()
     {

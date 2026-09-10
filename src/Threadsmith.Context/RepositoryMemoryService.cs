@@ -42,7 +42,7 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
         if (request.Action == "remove" && request.Id is { } removeId)
         {
             var removed = await _store.RemoveAsync(request.RepositoryIdentity, removeId, cancellationToken);
-            return new RepositoryMemoryOperationResult(removed ? "removed" : "absent", removeId, null, [], []);
+            return new RepositoryMemoryOperationResult(removed is null ? "absent" : "removed", removeId, removed, [], []);
         }
 
         var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);

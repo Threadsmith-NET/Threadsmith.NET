@@ -58,7 +58,7 @@ By default, at most twenty notes are stored and zero to three relevant notes ent
 
 Memory is best-effort recall. At capacity, older/disused notes may be evicted, with the same policy for manual and model notes. Meaningful adds/corrections receive a seven-day recency window when older candidates exist; if all notes are new, the oldest can still be evicted. Put instructions that must always apply in `AGENTS.md`. Routine conversation, approvals, mutations, rollback, and completion do not automatically create notes, and repository edits do not automatically invalidate them.
 
-Configure the two limits through ordinary machine/user/repository layering:
+Configure these settings through ordinary machine, user, repository, session, CLI, and `THREADSMITH_` environment layering:
 
 ```json
 {
@@ -66,14 +66,15 @@ Configure the two limits through ordinary machine/user/repository layering:
     "config": {
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3
+        "MaxRepoMemoriesInContext": 3,
+        "SemanticMinimum": 0.47
       }
     }
   }
 }
 ```
 
-Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
+Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. `SemanticMinimum` must be a finite double in `[-1, 1]`. Raising it makes semantic retrieval more selective; lowering it permits weaker semantic matches. At `1`, no semantic candidate can pass the strict comparison, while lexical retrieval still works. Memory configuration is captured per operation and user turn when the repository is bound. Threadsmith does not watch configuration files for live reload: restart or reopen the repository after a file edit. A threshold-only change reranks cached retrieval for the next request while reusing query vectors; it does not rebuild note vectors or change `SpaceId`. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
 
 The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](conversation-context.md) for migration backups and recovery.
 
@@ -148,6 +149,7 @@ Compiled defaults:
 | `artifactThresholdCharacters` | 16,384 |
 | `tools:config:memories:MaxNumberOfRepoMemories` | 20 |
 | `tools:config:memories:MaxRepoMemoriesInContext` | 3 |
+| `tools:config:memories:SemanticMinimum` | 0.47; finite `[-1, 1]`, with strict semantic score comparison |
 | `activeTurnCompaction.summaryBudgetTokens` | 16,384 trusted-only |
 | `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
 

@@ -59,6 +59,16 @@ internal static class InteractionPresentationFormatter
         {
             new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
         };
+        if (IsBuiltInMemoryTool(started, source)
+            && GetMemoryOutput(started, completed) is { } memoryOutput)
+        {
+            lines.Add(new TuiBlockLine(
+                TuiBlockLineKind.Body,
+                memoryOutput,
+                PresentationTextRole.Muted,
+                PreserveText: true));
+        }
+
         if (ShouldInspectCodeExploreOutput(started, completed, inspectCodeExploreOutput))
         {
             lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, "Output:", PresentationTextRole.Muted));
@@ -455,6 +465,96 @@ internal static class InteractionPresentationFormatter
             : [.. lines.Select(TruncateForDisplay)];
     }
 
+    private static bool IsBuiltInMemoryTool(ToolInvocationStarted started, ToolActivitySource? source)
+    {
+        return string.Equals(started.ToolName, "memories", StringComparison.Ordinal)
+            && source is not { Kind: not ToolActivitySourceKind.BuiltIn };
+    }
+
+    private static string? GetMemoryOutput(ToolInvocationStarted started, ToolInvocationCompleted completed)
+    {
+        if (!completed.Succeeded)
+        {
+            return string.IsNullOrWhiteSpace(started.TransientActivityDetail)
+                ? null
+                : PrepareMemoryOutput("Requested memory:\n" + started.TransientActivityDetail);
+        }
+
+        if (string.IsNullOrWhiteSpace(completed.ResultJson)
+            || completed.ResultJson.Length > MaximumToolInspectionCharacters)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(completed.ResultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("Outcome", out var outcome)
+                || outcome.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("Entries", out var entries)
+                || entries.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var output = new StringBuilder();
+            output.Append("Outcome: ").AppendLine(outcome.GetString());
+            foreach (var entry in entries.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object
+                    || !entry.TryGetProperty("Id", out var id)
+                    || id.ValueKind != JsonValueKind.String
+                    || !entry.TryGetProperty("Text", out var text)
+                    || text.ValueKind != JsonValueKind.String)
+                {
+                    return null;
+                }
+
+                output.Append("Memory ").Append(id.GetString()).AppendLine(":");
+                output.AppendLine(text.GetString());
+            }
+
+            if (entries.GetArrayLength() == 0)
+            {
+                output.AppendLine("No memories returned.");
+            }
+
+            if (root.TryGetProperty("OmittedEntries", out var omitted)
+                && omitted.ValueKind == JsonValueKind.Number
+                && omitted.TryGetInt32(out var count)
+                && count > 0)
+            {
+                output.Append("Omitted memories: ").Append(count).AppendLine(". Use /memory inspect <id> for an individual note.");
+            }
+
+            return PrepareMemoryOutput(output.ToString().TrimEnd());
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string PrepareMemoryOutput(string output)
+    {
+        var encoded = TerminalControlEncoder.Encode(NormalizeInspectionLineEndings(output));
+        if (encoded.Length <= MaximumToolInspectionCharacters)
+        {
+            return encoded;
+        }
+
+        const string truncationMarker = "\n[memory output truncated by console display bound]";
+        var length = MaximumToolInspectionCharacters - truncationMarker.Length;
+        if (char.IsHighSurrogate(encoded[length - 1]))
+        {
+            length--;
+        }
+
+        return encoded[..length] + truncationMarker;
+    }
+
     private static bool ShouldInspectCodeExploreOutput(
         ToolInvocationStarted started,
         ToolInvocationCompleted completed,
@@ -692,7 +792,9 @@ internal static class InteractionPresentationFormatter
             detail.Append(source.DisplayName);
         }
 
-        var activityDetail = completed.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
+        var activityDetail = IsBuiltInMemoryTool(started, source)
+            ? started.ActivityDetail
+            : completed.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
         var resultDetail = GetBuiltInSearchResultDetail(started, completed, source);
         if (resultDetail is not null)
         {

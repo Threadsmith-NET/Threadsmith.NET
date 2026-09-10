@@ -3,6 +3,7 @@ namespace Threadsmith.App;
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Tools;
 
@@ -146,6 +147,7 @@ internal static class ConfigurationBootstrap
         {
             ["tools:config:memories:MaxNumberOfRepoMemories"] = "20",
             ["tools:config:memories:MaxRepoMemoriesInContext"] = "3",
+            ["tools:config:memories:SemanticMinimum"] = RepositoryMemoryOptions.DefaultSemanticMinimum.ToString(CultureInfo.InvariantCulture),
             ["events:subscriberCapacity"] = "256",
             ["persistence:path"] = ".threadsmith/threadsmith.db",
             ["persistence:artifactDirectory"] = ".threadsmith/artifacts",

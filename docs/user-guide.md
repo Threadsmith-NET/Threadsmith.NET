@@ -314,7 +314,9 @@ The host does not promote requirements, decisions, questions, findings, or compl
 
 Memories are concise notes saved in the current repository's ignored `.threadsmith/threadsmith.db`. They survive `/new`, `/resume`, clone, and restart for that repository, and are shared by its local sessions. They are not tracked by Git or shared with other repositories.
 
-Ask Threadsmith to remember a durable preference, correction, or project detail, and the model can call the single `memories` tool. You can also manage notes directly:
+Ask Threadsmith to remember a durable preference, correction, or project detail, and the model can call the single `memories` tool. Its console block identifies the operation (`add`, `update`, `remove`, or `list`), the actual outcome, and the returned memory IDs and text. Removed notes remain visible in that operation's output. Lists report omitted entries, and failed add/update attempts label the text as requested rather than saved. Typical notes display in full beyond the ordinary 240-character tool-detail limit; an overall display bound remains in effect. Headless tool results expose the same action, outcome, and returned text in their bounded JSON preview.
+
+You can also manage notes directly:
 
 ```text
 /memory remember <text>
@@ -330,11 +332,11 @@ New and updated text must fit 2,000 characters after sanitization and the local 
 
 Embedding upgrades preserve note IDs, text, content revisions, and usage history. On the next semantic lookup, vectors from an older embedding space are rebuilt locally against the current text. Notes that no longer fit the encoder remain inspectable and lexically searchable; shorten them with `update` to restore semantic search. The current encoder counts four boundary tokens within its 256-token limit, leaving up to 252 content tokens.
 
-By default, at most twenty notes are stored and zero to three relevant notes enter each request. Retrieval combines SQLite lexical matches and local semantic similarity, then applies mode, sensitivity, and token budgets. Unrelated notes need not appear. `/context inspect` separates selection and final budget inclusion from actual-submission receipt outcomes, and reports branch contributions, query truncation, cache reuse, and fallback. Listing or previewing context does not count as inclusion; repeated tool rounds count once per user turn/content revision.
+By default, at most twenty notes are stored and zero to three relevant notes enter each request. Retrieval combines SQLite lexical matches and local semantic similarity, then applies mode, sensitivity, and token budgets. Semantic candidates must score strictly above `SemanticMinimum`, which defaults to `0.47`; lexical matching is unaffected. Unrelated notes need not appear. `/context inspect` separates selection and final budget inclusion from actual-submission receipt outcomes, and reports branch contributions, the effective semantic threshold, query truncation, cache reuse, and fallback. Listing or previewing context does not count as inclusion; repeated tool rounds count once per user turn/content revision.
 
 Memory is best-effort recall. At capacity, older/disused notes may be evicted, with the same policy for manual and model notes. Meaningful adds/corrections receive a seven-day recency window when older candidates exist; if all notes are new, the oldest can still be evicted. Put instructions that must always apply in `AGENTS.md`. Routine conversation, approvals, mutations, rollback, and completion do not automatically create notes, and repository edits do not automatically invalidate them.
 
-Configure the two limits through ordinary machine/user/repository layering:
+Configure these memory settings through ordinary machine, user, repository, session, CLI, and `THREADSMITH_` environment layering:
 
 ```json
 {
@@ -342,14 +344,15 @@ Configure the two limits through ordinary machine/user/repository layering:
     "config": {
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3
+        "MaxRepoMemoriesInContext": 3,
+        "SemanticMinimum": 0.47
       }
     }
   }
 }
 ```
 
-Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
+Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. `SemanticMinimum` must be a finite double from `-1` through `1`; higher values are more selective, lower values allow weaker semantic matches, and `1` admits no semantic candidates because comparison is strict. Lexical candidates still qualify independently. Memory configuration is captured for each operation and user turn when a repository is bound; after editing a configuration file, restart Threadsmith or reopen the repository to apply it. Changing only this threshold reranks the cached selection for the next request while reusing compatible query vectors, so it neither rebuilds vectors nor changes the embedding space. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
 
 The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](operations/conversation-context.md) for migration backups and recovery.
 
@@ -1188,7 +1191,7 @@ Important sections include:
 | `tools` | Availability, invocation policy, allowlists, and per-tool scalar configuration. |
 | `mutation` | Approval policy and the `ReviewRisky` large-diff threshold. |
 | `context.conversation` | Default mode plus recent-turn, pressure, and artifact bounds. |
-| `tools.config.memories` | Repository memory storage/context limits, default 20/3; zero context disables retrieval. |
+| `tools.config.memories` | Repository-memory storage/context limits and semantic minimum: defaults 20/3/0.47; zero context disables retrieval. |
 | `repository` | Editable roots, prohibited paths, and lifecycle policy. |
 | `tui` | Theme and session-status configuration. |
 | `extensions` / `.threadsmith/extensions.json` | Extension runtime selection and settings. |

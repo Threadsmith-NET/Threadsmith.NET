@@ -21,25 +21,17 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
     private readonly ITextEmbeddingGenerator _generator;
     private readonly Dictionary<string, TextEmbeddingResult> _queryCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RepositoryMemoryRetrievalResult> _rankingCache = new(StringComparer.Ordinal);
-    private readonly double _semanticMinimum;
     private readonly IManagedRepositoryMemoryStore _store;
 
     /// <summary>Initializes a new instance of the <see cref="HybridRepositoryMemoryRetriever"/> class.</summary>
     public HybridRepositoryMemoryRetriever(
         IManagedRepositoryMemoryStore store,
-        ITextEmbeddingGenerator generator,
-        double semanticMinimum)
+        ITextEmbeddingGenerator generator)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(generator);
-        if (!double.IsFinite(semanticMinimum) || semanticMinimum < -1 || semanticMinimum > 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(semanticMinimum));
-        }
-
         _store = store;
         _generator = generator;
-        _semanticMinimum = semanticMinimum;
     }
 
     /// <inheritdoc />
@@ -50,6 +42,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryIdentity);
         request.Options.Validate();
+        var semanticMinimum = request.Options.SemanticMinimum;
         cancellationToken.ThrowIfCancellationRequested();
         if (request.Options.EffectiveContextMaximum == 0)
         {
@@ -75,7 +68,10 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
 
             var model = _generator.Model;
             var queryKey = model.SpaceId + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(query)));
-            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum);
+
+            // Threshold changes rerank the same query vector without mixing cached selections.
+            var minimumKey = semanticMinimum.ToString("R", CultureInfo.InvariantCulture);
+            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey);
             var degradedKey = rankKey + ":degraded:" + request.UserTurnId?.Value.ToString("D");
             if (_rankingCache.TryGetValue(rankKey, out var cached) || _rankingCache.TryGetValue(degradedKey, out cached))
             {
@@ -115,7 +111,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
                     snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
-                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum);
+                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey);
                 }
             }
 
@@ -125,7 +121,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                 ? []
                 : snapshot.Entries.Where(entry => IsCompatible(entry, model))
                     .Select(entry => (entry.Id, Similarity: Cosine(embedding.Vector.Span, entry.Embedding.Span)))
-                    .Where(match => match.Similarity > _semanticMinimum)
+                    .Where(match => match.Similarity > semanticMinimum)
                     .OrderByDescending(match => match.Similarity).ThenBy(match => match.Id.Value)
                     .Select((match, index) => (match.Id, match.Similarity, Rank: index + 1))
                     .ToDictionary(match => match.Id, match => (match.Similarity, match.Rank));
@@ -147,7 +143,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                 diagnostics.Add("The query was bounded or truncated; current instructions precede task context.");
             }
 
-            diagnostics.Add($"Memory search used embedding space {model.SpaceId}; lexical={lexical.Count}, semantic={semantic.Count}, selected={selected.Length}, elapsed={timer.Elapsed.TotalMilliseconds:F1}ms.");
+            diagnostics.Add($"Memory search used embedding space {model.SpaceId}; semanticMinimum={minimumKey}, lexical={lexical.Count}, semantic={semantic.Count}, selected={selected.Length}, elapsed={timer.Elapsed.TotalMilliseconds:F1}ms.");
             foreach (var entry in snapshot.Entries.Where(entry => !selected.Any(candidate => candidate.Entry.Id == entry.Id)).Take(32))
             {
                 diagnostics.Add($"Memory {entry.Id.Value:D}: omitted by branch qualification or configured selection limit.");
@@ -272,7 +268,8 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
             memoryNorm += (double)memory[index] * memory[index];
         }
 
-        return dot / Math.Sqrt(queryNorm * memoryNorm);
+        // Roundoff must not admit a semantic match above the configured maximum of 1.
+        return Math.Clamp(dot / Math.Sqrt(queryNorm * memoryNorm), -1, 1);
     }
 
     private static void AddRebuildDiagnostic(List<string> diagnostics, string message)

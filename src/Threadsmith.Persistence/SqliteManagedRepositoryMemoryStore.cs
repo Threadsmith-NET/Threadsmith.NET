@@ -136,20 +136,24 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
     }
 
     /// <inheritdoc />
-    public async Task<bool> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    public async Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var removed = await DeleteEntryAsync(connection, transaction, repositoryIdentity, id, cancellationToken);
-        if (removed)
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken);
+        var existing = entries.FirstOrDefault(entry => entry.Id == id);
+        if (existing is null)
         {
-            await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return null;
         }
 
+        await DeleteEntryAsync(connection, transaction, repositoryIdentity, id, cancellationToken);
+        await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return removed;
+        return existing;
     }
 
     /// <inheritdoc />

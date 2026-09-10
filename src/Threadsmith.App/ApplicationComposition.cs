@@ -25,7 +25,7 @@ internal static class ApplicationComposition
     {
         ArgumentNullException.ThrowIfNull(inputs);
         var embeddings = new LocalTextEmbeddingGenerator();
-        var memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings, LocalTextEmbeddingGenerator.SemanticMinimum);
+        var memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings);
         try
         {
             return await CreateCoreAsync(inputs, embeddings, memoryRetriever);
@@ -132,7 +132,7 @@ internal static class ApplicationComposition
         if (host.Configuration.GetSection("context:repositoryMemory").Exists())
         {
             host.LoggerFactory.CreateLogger<RepositoryMemoryService>().LogWarning(
-                "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and MaxRepoMemoriesInContext (3) instead.");
+                "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and MaxRepoMemoriesInContext (3), and SemanticMinimum (0.47) instead.");
         }
 
         var contextAssembler = new ContextAssembler(

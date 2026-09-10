@@ -18,10 +18,10 @@ public sealed record MemoryInfo(
     string? EmbeddingSpaceId);
 
 /// <summary>A bounded operation outcome with explicit list omissions.</summary>
-public sealed record MemoriesOutput(string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries);
+public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries);
 
 /// <summary>Admits explicit memory changes through the shared repository memory service.</summary>
-public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>
+public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransientToolActivityDetail
 {
     private const int MaximumListBytes = 48 * 1024;
     private readonly IManagedRepositoryMemoryService _memories;
@@ -100,8 +100,14 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>
             entries.Add(info);
         }
 
-        var output = new MemoriesOutput(result.Outcome, result.Id?.Value.ToString("D"), input.Action == "remove" ? result.Outcome == "removed" : null, entries, source.Count - entries.Count);
+        var output = new MemoriesOutput(input.Action, result.Outcome, result.Id?.Value.ToString("D"), input.Action == "remove" ? result.Outcome == "removed" : null, entries, source.Count - entries.Count);
         return new ToolExecution<MemoriesOutput>(output, [], output.OmittedEntries > 0);
+    }
+
+    /// <inheritdoc />
+    string? ITransientToolActivityDetail.GetTransientActivityDetail(object input, ToolExecutionContext context)
+    {
+        return ((MemoriesInput)input).Text;
     }
 
     /// <inheritdoc />

@@ -108,7 +108,7 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         => GetStore(repositoryIdentity).UpdateAsync(repositoryIdentity, id, expectedRevision, write, model, embedding, options, cancellationToken);
 
     /// <inheritdoc />
-    public Task<bool> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    public Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
         => GetStore(repositoryIdentity).RemoveAsync(repositoryIdentity, id, cancellationToken);
 
     /// <inheritdoc />

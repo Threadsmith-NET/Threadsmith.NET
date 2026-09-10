@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 24 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 25 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **301** | Complete deployed catalog. |
+| **Total** | **302** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,6 +94,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
+| `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
 
 #### `RequiredOutput` family
 

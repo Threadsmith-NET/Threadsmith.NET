@@ -18,6 +18,15 @@ public sealed record RepositoryMemoryOptions
     /// <remarks>Must be finite and between -1 and 1 inclusive. A value of 1 excludes the semantic branch.</remarks>
     public double SemanticMinimum { get; init; } = DefaultSemanticMinimum;
 
+    /// <summary>Enables local cross-encoder reranking after ordinary hybrid candidate qualification.</summary>
+    public bool RerankerEnabled { get; init; }
+
+    /// <summary>Maximum qualified candidates sent to the local reranker.</summary>
+    public int RerankerCandidateLimit { get; init; } = 8;
+
+    /// <summary>Optional strict raw reranker-logit admission floor; null retains the ranked top candidates.</summary>
+    public double? RerankerMinimumScore { get; init; }
+
     /// <summary>Context maximum constrained by the storage capacity.</summary>
     public int EffectiveContextMaximum => Math.Min(MaxNumberOfRepoMemories, MaxRepoMemoriesInContext);
 
@@ -33,6 +42,12 @@ public sealed record RepositoryMemoryOptions
 
         ArgumentOutOfRangeException.ThrowIfLessThan(SemanticMinimum, -1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(SemanticMinimum, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(RerankerCandidateLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(RerankerCandidateLimit, 64);
+        if (RerankerMinimumScore is { } rerankerMinimumScore && !double.IsFinite(rerankerMinimumScore))
+        {
+            throw new ArgumentOutOfRangeException(nameof(RerankerMinimumScore), "The reranker minimum score must be finite when supplied.");
+        }
     }
 }
 

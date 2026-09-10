@@ -7,7 +7,7 @@ using System.Text;
 using Threadsmith.Core;
 
 /// <summary>Small exact hybrid search with snapshot-consistent candidates and bounded turn-query caches.</summary>
-public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRetriever, IDisposable
+public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRetriever, IDisposable
 {
     private const int MaximumQueryCharacters = 8_000;
     private const int MaximumQueryTerms = 32;
@@ -19,6 +19,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ITextEmbeddingGenerator _generator;
+    private readonly ITextCrossEncoder? _crossEncoder;
     private readonly Dictionary<string, TextEmbeddingResult> _queryCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RepositoryMemoryRetrievalResult> _rankingCache = new(StringComparer.Ordinal);
     private readonly IManagedRepositoryMemoryStore _store;
@@ -26,12 +27,14 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
     /// <summary>Initializes a new instance of the <see cref="HybridRepositoryMemoryRetriever"/> class.</summary>
     public HybridRepositoryMemoryRetriever(
         IManagedRepositoryMemoryStore store,
-        ITextEmbeddingGenerator generator)
+        ITextEmbeddingGenerator generator,
+        ITextCrossEncoder? crossEncoder = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(generator);
         _store = store;
         _generator = generator;
+        _crossEncoder = crossEncoder;
     }
 
     /// <inheritdoc />
@@ -69,16 +72,21 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
             var model = _generator.Model;
             var queryKey = model.SpaceId + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(query)));
 
-            // Threshold changes rerank the same query vector without mixing cached selections.
+            // Retrieval settings affect selections, while the embedding cache remains model/query-only.
             var minimumKey = semanticMinimum.ToString("R", CultureInfo.InvariantCulture);
-            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey);
-            var degradedKey = rankKey + ":degraded:" + request.UserTurnId?.Value.ToString("D");
-            if (_rankingCache.TryGetValue(rankKey, out var cached) || _rankingCache.TryGetValue(degradedKey, out cached))
+            var diagnostics = new List<string>(snapshot.Warnings.Take(32));
+            var crossEncoderModel = request.Options.RerankerEnabled ? GetCrossEncoderModel(diagnostics) : null;
+            var rerankerKey = request.Options.RerankerEnabled
+                ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit, request.Options.RerankerMinimumScore?.ToString("R", CultureInfo.InvariantCulture) ?? "none")
+                : "disabled";
+            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey, rerankerKey);
+            var degradedKey = request.UserTurnId is { } turn ? rankKey + ":degraded:" + turn.Value.ToString("D") : null;
+            if (_rankingCache.TryGetValue(rankKey, out var cached)
+                || (degradedKey is not null && _rankingCache.TryGetValue(degradedKey, out cached)))
             {
                 return cached with { QueryEmbeddingCacheHit = _queryCache.ContainsKey(queryKey), RankingCacheHit = true };
             }
 
-            var diagnostics = new List<string>(snapshot.Warnings.Take(32));
             var queryCacheHit = _queryCache.TryGetValue(queryKey, out var embedding);
             if (!queryCacheHit)
             {
@@ -111,7 +119,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
                     snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
-                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey);
+                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey, rerankerKey);
                 }
             }
 
@@ -125,7 +133,7 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                     .OrderByDescending(match => match.Similarity).ThenBy(match => match.Id.Value)
                     .Select((match, index) => (match.Id, match.Similarity, Rank: index + 1))
                     .ToDictionary(match => match.Id, match => (match.Similarity, match.Rank));
-            var selected = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id))
+            var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id))
                 .Select(entry =>
                 {
                     int? lexicalRank = lexical.TryGetValue(entry.Id, out var rank) ? rank : null;
@@ -136,7 +144,9 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
                     return new RepositoryMemoryRetrievalCandidate(entry, score, lexicalRank, semanticRank, hasSemantic ? vectorMatch.Similarity : null);
                 })
                 .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Entry.Id.Value)
-                .Take(request.Options.EffectiveContextMaximum).ToArray();
+                .Take(Math.Max(request.Options.EffectiveContextMaximum, request.Options.RerankerEnabled ? request.Options.RerankerCandidateLimit : 0)).ToArray();
+            var (selected, rerankerDegraded) = await RerankAsync(
+                ranked, query, request.Options, crossEncoderModel, diagnostics, cancellationToken);
             var truncated = bounded || embedding?.WasTruncated == true || embedding?.InputTokenCount > model.MaxInputTokens;
             if (truncated)
             {
@@ -146,15 +156,22 @@ public sealed class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRet
             diagnostics.Add($"Memory search used embedding space {model.SpaceId}; semanticMinimum={minimumKey}, lexical={lexical.Count}, semantic={semantic.Count}, selected={selected.Length}, elapsed={timer.Elapsed.TotalMilliseconds:F1}ms.");
             foreach (var entry in snapshot.Entries.Where(entry => !selected.Any(candidate => candidate.Entry.Id == entry.Id)).Take(32))
             {
-                diagnostics.Add($"Memory {entry.Id.Value:D}: omitted by branch qualification or configured selection limit.");
+                diagnostics.Add($"Memory {entry.Id.Value:D}: omitted by branch qualification, reranking, or configured selection limit.");
             }
 
             IReadOnlyList<string> boundedDiagnostics = diagnostics.Count <= 64
                 ? diagnostics : [.. diagnostics.Take(63), $"Omitted {diagnostics.Count - 63} additional memory diagnostics."];
             var result = new RepositoryMemoryRetrievalResult(selected, boundedDiagnostics, snapshot.Revision, truncated, queryCacheHit, false);
-            var degraded = embedding is null || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
-            var cacheKey = degraded ? rankKey + ":degraded:" + request.UserTurnId?.Value.ToString("D") : rankKey;
-            AddBounded(_rankingCache, cacheKey, result);
+            var degraded = embedding is null || rerankerDegraded || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
+            if (!degraded)
+            {
+                AddBounded(_rankingCache, rankKey, result);
+            }
+            else if (request.UserTurnId is { } userTurn)
+            {
+                AddBounded(_rankingCache, rankKey + ":degraded:" + userTurn.Value.ToString("D"), result);
+            }
+
             return result;
         }
         catch (OperationCanceledException)

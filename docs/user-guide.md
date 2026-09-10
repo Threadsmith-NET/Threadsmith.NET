@@ -340,12 +340,18 @@ Configure these memory settings through ordinary machine, user, repository, sess
 
 ```json
 {
+  "reranking": {
+    "cpuThreads": 8
+  },
   "tools": {
     "config": {
       "memories": {
         "MaxNumberOfRepoMemories": 20,
         "MaxRepoMemoriesInContext": 3,
-        "SemanticMinimum": 0.47
+        "SemanticMinimum": 0.47,
+        "RerankerEnabled": false,
+        "RerankerCandidateLimit": 8,
+        "RerankerMinimumScore": null
       }
     }
   }
@@ -355,6 +361,8 @@ Configure these memory settings through ordinary machine, user, repository, sess
 Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. `SemanticMinimum` must be a finite double from `-1` through `1`; higher values are more selective, lower values allow weaker semantic matches, and `1` admits no semantic candidates because comparison is strict. Lexical candidates still qualify independently. Memory configuration is captured for each operation and user turn when a repository is bound; after editing a configuration file, restart Threadsmith or reopen the repository to apply it. Changing only this threshold reranks the cached selection for the next request while reusing compatible query vectors, so it neither rebuilds vectors nor changes the embedding space. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
 
 The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](operations/conversation-context.md) for migration backups and recovery.
+
+Optional local memory reranking is enabled with `tools:config:memories:RerankerEnabled=true`. It is disabled by default, scores up to `RerankerCandidateLimit` qualified candidates (default 8, range 1–64), and preserves hybrid retrieval if the cross-encoder is unavailable or a query-memory pair is truncated. `RerankerMinimumScore` is an optional finite raw-logit cutoff; its default `null` applies no rejection threshold. `reranking:cpuThreads` controls the startup CPU thread budget (default 8, range 1–32). Restart for CPU changes; reopen the repository or restart after editing memory settings. See [conversation context operations](operations/conversation-context.md) for staging and configuration details. Retrieved notes are introduced as **Repository memories that may be helpful**, with guidance to use them only when relevant.
 
 #### How context optimization works
 

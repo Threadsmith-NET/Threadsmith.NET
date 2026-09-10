@@ -31,6 +31,7 @@ public static class Plan103ContextAssemblyTests
         Assert.Equal(expected, retriever.Calls);
         Assert.Equal(expected, result.RepositoryMemoryInclusions?.Count);
         Assert.Equal(expected, result.Inspection.RepositoryMemoryItems.Count(item => item.Included));
+        Assert.Equal(expected > 0, result.ModelInput.Contains("Repository memories that may be helpful", StringComparison.Ordinal));
     }
 
     /// <summary>Only stable identity and escaped text enter model memory blocks, independent of usage metadata.</summary>
@@ -49,7 +50,11 @@ public static class Plan103ContextAssemblyTests
         var next = await assembler.AssembleAsync(request);
 
         var memory = Assert.Single(first.Messages ?? [], message => message.SectionId == "repository-memory").GetModelVisibleContent();
-        Assert.Equal($"<repository_memory untrusted=\"true\">\n<memory id=\"{entry.Id.Value:D}\">Use &lt;typed&gt; results &amp; cancellation.</memory>\n</repository_memory>", memory);
+        Assert.Equal(
+            TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryMemoryGuidance)
+            + $"\n<repository_memory untrusted=\"true\">\n<memory id=\"{entry.Id.Value:D}\">Use &lt;typed&gt; results &amp; cancellation.</memory>\n</repository_memory>",
+            memory);
+        Assert.Contains("Use them only when relevant to the current request.", memory, StringComparison.Ordinal);
         Assert.Equal(first.ModelInput, next.ModelInput);
         Assert.Equal(entry.Revision, Assert.Single(first.RepositoryMemoryInclusions ?? []).Revision);
         Assert.Equal(0, entry.InclusionCount);
@@ -72,6 +77,9 @@ public static class Plan103ContextAssemblyTests
         Assert.Equal(1, projection.LexicalRank);
         Assert.Equal(2, projection.SemanticRank);
         Assert.Equal(0.9, projection.CosineSimilarity);
+        Assert.Equal(7.25, projection.CrossEncoderScore);
+        var memory = Assert.Single(result.Messages ?? [], message => message.SectionId == "repository-memory").GetModelVisibleContent();
+        Assert.DoesNotContain("7.25", memory, StringComparison.Ordinal);
     }
 
     /// <summary>Imported over-budget text stays inspectable but never contributes a dispatch receipt or sensitivity.</summary>
@@ -182,7 +190,7 @@ public static class Plan103ContextAssemblyTests
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
             Request = request;
-            return Task.FromResult(new RepositoryMemoryRetrievalResult([new RepositoryMemoryRetrievalCandidate(Entry, 0.03, 1, 2, 0.9)], []));
+            return Task.FromResult(new RepositoryMemoryRetrievalResult([new RepositoryMemoryRetrievalCandidate(Entry, 0.03, 1, 2, 0.9, 7.25)], []));
         }
     }
 

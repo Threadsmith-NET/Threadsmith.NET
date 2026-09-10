@@ -94,7 +94,8 @@ public sealed record RepositoryMemoryRetrievalCandidate(
     double Score,
     int? LexicalRank,
     int? SemanticRank,
-    double? CosineSimilarity);
+    double? CosineSimilarity,
+    double? CrossEncoderScore = null);
 
 /// <summary>Detached ranking and truthful retrieval/rebuild diagnostics.</summary>
 public sealed record RepositoryMemoryRetrievalResult(

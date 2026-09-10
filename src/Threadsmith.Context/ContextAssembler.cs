@@ -950,7 +950,7 @@ public sealed class ContextAssembler : IContextAssembler
         ConversationAssemblyState conversation,
         CancellationToken cancellationToken)
     {
-        var assembly = new RepositoryMemoryAssemblyState(2_000);
+        var assembly = new RepositoryMemoryAssemblyState(2_000, _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance));
         if (_repositoryMemoryRetriever is null || !request.RepositoryMemoriesEnabled
             || conversation.Mode == ConversationContextMode.Stateless)
         {
@@ -1380,9 +1380,14 @@ public sealed class ContextAssembler : IContextAssembler
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
         private readonly int _maximumTokens;
+        private readonly string _guidance;
         private int _includedTokens;
 
-        public RepositoryMemoryAssemblyState(int maximumTokens) => _maximumTokens = maximumTokens;
+        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance)
+        {
+            _maximumTokens = maximumTokens;
+            _guidance = guidance;
+        }
 
         public bool CanReduce => _included.Count > 0;
 
@@ -1437,8 +1442,8 @@ public sealed class ContextAssembler : IContextAssembler
             return true;
         }
 
-        private static string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
-            "<repository_memory untrusted=\"true\">\n"
+        private string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
+            _guidance + "\n<repository_memory untrusted=\"true\">\n"
             + string.Join('\n', candidates.Select(candidate =>
                 $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
             + "\n</repository_memory>";
@@ -1456,6 +1461,7 @@ public sealed class ContextAssembler : IContextAssembler
             LexicalRank = candidate.LexicalRank,
             SemanticRank = candidate.SemanticRank,
             CosineSimilarity = candidate.CosineSimilarity,
+            CrossEncoderScore = candidate.CrossEncoderScore,
         };
     }
 

@@ -1,6 +1,6 @@
 # AGENTS.md — src/ (Product Source)
 
-> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 24 product projects and their dependency graph.
+> **Scope:** All `Threadsmith.*` product projects under `src/`. This doc governs how agents work with the 25 product projects and their dependency graph.
 
 ## Purpose
 
@@ -26,7 +26,7 @@ The compiled `write_file` exception writes configured text/data output folders d
 Projects are organized in dependency layers. A project may only reference projects in layers below it:
 
 - **Layer 0 (roots/deployable isolation):** `Threadsmith.Core`, `Threadsmith.Extensions.Abstractions`, `Threadsmith.Scripting.Worker` — reference no other `Threadsmith.*` project. Only the worker may reference Roslyn scripting; it communicates through bounded JSON over standard I/O.
-- **Layer 1:** `Threadsmith.Telemetry`, `Threadsmith.Models`, `Threadsmith.Embeddings.Local` — reference Core only.
+- **Layer 1:** `Threadsmith.Telemetry`, `Threadsmith.Models`, `Threadsmith.Embeddings.Local`, `Threadsmith.Reranking.Local` — reference Core only.
 - **Layer 2:** `Threadsmith.Persistence`, `Threadsmith.Context`, `Threadsmith.Models.OpenAiCompatible`, `Threadsmith.Models.OpenAiCodex` — reference Core + Layer 1. Concrete model-provider projects depend one-way on neutral Models and isolate protocol/SDK/OAuth types.
 - **Layer 3:** `Threadsmith.Tools`, `Threadsmith.DotNet`, `Threadsmith.Workspaces` — reference Core + Layer 2.
 - **Layer 4:** `Threadsmith.Validation`, `Threadsmith.Execution`, `Threadsmith.Skills`, `Threadsmith.Extensions.Runtime` — reference Core + layers 1–3. Skills may reference neutral Context/Models/Telemetry/Tools but never Execution, Workspaces, Validation, MCP, terminal adapters, or provider/persistence implementations; it returns only Core host-action proposals and checkpoints.
@@ -140,6 +140,6 @@ Projects are organized in dependency layers. A project may only reference projec
 
 Create additional per-project AGENTS.md files when a project accumulates durable conventions beyond the shared guardrails.
 
-## Local text embeddings
+## Local inference adapters
 
-Threadsmith.Embeddings.Local exclusively owns CPU ONNX Runtime, Microsoft.ML.Tokenizers, the embedded pinned MiniLM manifest, and production-reference parity. Its internal MiniLmEmbedderEngine adapts the supplied MlNetAllMiniLML12V2/MpnetEmbedderEngine pipeline and returns finished 384-component vectors; LocalTextEmbeddingGenerator owns verified asset loading, lazy admission/cancellation/disposal and forwards results without further pooling or normalization. Preserve the reference built-in BERT tokenization, including its default-tokenizer boundaries plus the engine-added pair, and count the entire input before clipping. Any transformation change requires a new embedding-space identity so persisted vectors rebuild before comparison. Core owns the model-neutral descriptor/result/interface; Context and Persistence never reference the concrete adapter or inference packages. App owns one lazily initialized generator and awaits disposal. Source setup explicitly stages checksummed assets with eng/Stage-EmbeddingAssets.ps1; ordinary builds and runtime do not download them. Releases require the complete model/vocabulary/license/native payload.
+Threadsmith.Embeddings.Local and Threadsmith.Reranking.Local isolate CPU ONNX Runtime and Microsoft.ML.Tokenizers. The embedder owns the embedded pinned MiniLM manifest and production-reference vector parity. Its internal MiniLmEmbedderEngine adapts the supplied MlNetAllMiniLML12V2/MpnetEmbedderEngine pipeline and returns finished 384-component vectors; LocalTextEmbeddingGenerator owns verified asset loading, lazy admission/cancellation/disposal and forwards results without further pooling or normalization. Preserve the reference built-in BERT tokenization, including its default-tokenizer boundaries plus the engine-added pair, and count the entire input before clipping. Any transformation change requires a new embedding-space identity so persisted vectors rebuild before comparison. Core owns the model-neutral descriptor/result/interface; Context and Persistence never reference the concrete adapter or inference packages. App owns one lazily initialized generator and awaits disposal. Source setup explicitly stages checksummed assets with eng/Stage-EmbeddingAssets.ps1; ordinary builds and runtime do not download them. Releases require the complete model/vocabulary/license/native payload. Threadsmith.Reranking.Local uses the same isolated CPU packages behind a model-neutral cross-encoder contract; it loads only the pinned MS MARCO model/vocabulary pair, returns raw logits, and never rewrites queries or memories. Stage its checksummed assets with `eng/Stage-RerankerAssets.ps1`; ordinary builds and runtime do not download them.

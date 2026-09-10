@@ -13,6 +13,29 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
+    [Fact]
+    public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()
+    {
+        var defaultConfiguration = new ConfigurationBuilder().Build();
+        Assert.Equal(8, ApplicationComposition.GetRerankerCpuThreads(defaultConfiguration));
+
+        var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["reranking:cpuThreads"] = "12",
+        }).Build();
+        Assert.Equal(12, ApplicationComposition.GetRerankerCpuThreads(configured));
+
+        foreach (var value in new[] { "0", "33" })
+        {
+            var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["reranking:cpuThreads"] = value,
+            }).Build();
+            Assert.Throws<ArgumentOutOfRangeException>(() => ApplicationComposition.GetRerankerCpuThreads(invalid));
+        }
+    }
+
     /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>
     [Fact]
     public static void ApplicationProject_PublishesScriptingWorkerDependencyManifest()

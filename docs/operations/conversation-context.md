@@ -67,7 +67,10 @@ Configure these settings through ordinary machine, user, repository, session, CL
       "memories": {
         "MaxNumberOfRepoMemories": 20,
         "MaxRepoMemoriesInContext": 3,
-        "SemanticMinimum": 0.47
+        "SemanticMinimum": 0.47,
+        "RerankerEnabled": false,
+        "RerankerCandidateLimit": 8,
+        "RerankerMinimumScore": null
       }
     }
   }
@@ -75,6 +78,12 @@ Configure these settings through ordinary machine, user, repository, session, CL
 ```
 
 Storage capacity must be positive; the context limit may be zero to disable automatic retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced at the next repository bind/configuration refresh. `SemanticMinimum` must be a finite double in `[-1, 1]`. Raising it makes semantic retrieval more selective; lowering it permits weaker semantic matches. At `1`, no semantic candidate can pass the strict comparison, while lexical retrieval still works. Memory configuration is captured per operation and user turn when the repository is bound. Threadsmith does not watch configuration files for live reload: restart or reopen the repository after a file edit. A threshold-only change reranks cached retrieval for the next request while reusing query vectors; it does not rebuild note vectors or change `SpaceId`. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
+
+Set `tools:config:memories:RerankerEnabled` to `true` to enable optional local cross-encoder reranking after hybrid lexical/semantic qualification and before the final context cap. It is disabled by default. `RerankerCandidateLimit` defaults to 8 and accepts 1–64; a smaller pool can return fewer memories than the context maximum. A successful score uses a raw relevance logit: higher ranks first, with hybrid score and stable ID breaking ties. `RerankerMinimumScore` defaults to `null` (no rejection); an explicitly supplied finite value requires a score strictly above it. This is a separate scale from cosine similarity. A repository JSON `null` clears an inherited reranker cutoff. No rejection default has been calibrated for repository memories.
+
+`reranking:cpuThreads` is a startup-only setting, default 8, range 1–32, limited to the logical processors available to the process. Restart to change it. The model is loaded lazily and reused; disabling reranking or having no candidates avoids inference. Source users run `eng/Stage-RerankerAssets.ps1` to stage the pinned model and vocabulary; releases bundle them. Runtime performs no downloads. Missing assets, inference errors, invalid scores or any truncated query-memory pair retain the original hybrid selection and produce diagnostics. Failed reranking is cached only within an identified user turn and retried later. The reranker does not rewrite the query or memories.
+
+Included memories carry the caption **Repository memories that may be helpful**, followed by guidance to use them only when relevant. They remain untrusted reference data, and the caption counts toward the memory token budget.
 
 The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, add/update fail visibly and retrieval falls back to qualified lexical matches; SQLite search failure omits memory with a diagnostic. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](conversation-context.md) for migration backups and recovery.
 
@@ -89,7 +98,7 @@ The bundled CPU encoder works locally and independently of the conversational mo
 - selected, final included, and budget-excluded repository-memory IDs/content revisions;
 - actual-submission receipt outcome and elapsed accounting time, separate from preview/assembly;
 - source message, run, and evidence identifiers;
-- lexical/semantic ranks, cosine/fusion scores, query truncation, model space, cache reuse, rebuild/fallback rationale;
+- lexical/semantic ranks, cosine/fusion scores, optional cross-encoder scores, query truncation, model space, cache reuse, rebuild/fallback rationale;
 - category token accounting and exact pressure reductions;
 - context-window pressure and the assembly pressure indication;
 - the latest active-turn pre-sampling estimate, pressure target, main-profile output reserve, configured/effective retention, candidate profile identity, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
@@ -150,6 +159,10 @@ Compiled defaults:
 | `tools:config:memories:MaxNumberOfRepoMemories` | 20 |
 | `tools:config:memories:MaxRepoMemoriesInContext` | 3 |
 | `tools:config:memories:SemanticMinimum` | 0.47; finite `[-1, 1]`, with strict semantic score comparison |
+| `tools:config:memories:RerankerEnabled` | `false` |
+| `tools:config:memories:RerankerCandidateLimit` | 8; range 1–64 |
+| `tools:config:memories:RerankerMinimumScore` | `null`; optional finite raw-logit strict minimum |
+| `reranking:cpuThreads` | 8; startup-only, range 1–32 |
 | `activeTurnCompaction.summaryBudgetTokens` | 16,384 trusted-only |
 | `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
 

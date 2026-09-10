@@ -40,6 +40,8 @@ foreach ($package in $resolved) {
 }
 $model = Get-Content -LiteralPath (Join-Path (Get-RepositoryRoot) 'src/Threadsmith.Embeddings.Local/minilm-assets.json') -Raw | ConvertFrom-Json
 [void]$notice.AppendLine('================================================================================').AppendLine("$($model.model) $($model.revision)").AppendLine('License: Apache-2.0').AppendLine("Source: $($model.source)/tree/$($model.revision)").AppendLine('Model license declaration: bundled README.md at the pinned revision.').AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'legal/licenses/Apache-2.0.txt') -Raw).Trim()).AppendLine()
+$reranker = Get-Content -LiteralPath (Join-Path (Get-RepositoryRoot) 'src/Threadsmith.Reranking.Local/crossencoder-assets.json') -Raw | ConvertFrom-Json
+[void]$notice.AppendLine('================================================================================').AppendLine("$($reranker.model) $($reranker.revision)").AppendLine('License: Apache-2.0').AppendLine("Source: $($reranker.source)/tree/$($reranker.revision)").AppendLine("Model license declaration: $($reranker.licenseEvidence).").AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'legal/licenses/Apache-2.0.txt') -Raw).Trim()).AppendLine()
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'THIRD-PARTY-NOTICES.txt'), $notice.ToString().Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
 $packages = @($resolved | ForEach-Object {
     $resolvedPackage = $_
@@ -48,5 +50,7 @@ $packages = @($resolved | ForEach-Object {
 })
 $modelArtifact = @($model.artifacts | Where-Object name -EQ 'model.onnx')[0]
 $packages += [ordered]@{ SPDXID = 'SPDXRef-Model-MiniLM-L12-v2'; name = $model.model; versionInfo = $model.revision; downloadLocation = "$($model.source)/resolve/$($model.revision)/onnx/model.onnx"; licenseDeclared = 'Apache-2.0'; licenseConcluded = 'Apache-2.0'; checksums = @([ordered]@{ algorithm = 'SHA256'; checksumValue = $modelArtifact.sha256 }) }
+$rerankerArtifact = @($reranker.artifacts | Where-Object name -EQ 'model.onnx')[0]
+$packages += [ordered]@{ SPDXID = 'SPDXRef-Model-MS-Marco-MiniLM-L6-v2'; name = $reranker.model; versionInfo = $reranker.revision; downloadLocation = "$($reranker.source)/resolve/$($reranker.revision)/$($rerankerArtifact.path)"; licenseDeclared = 'Apache-2.0'; licenseConcluded = 'Apache-2.0'; checksums = @([ordered]@{ algorithm = 'SHA256'; checksumValue = $rerankerArtifact.sha256 }) }
 $sbom = [ordered]@{ spdxVersion = 'SPDX-2.3'; dataLicense = 'CC0-1.0'; SPDXID = 'SPDXRef-DOCUMENT'; name = "Threadsmith.NET-$RuntimeIdentifier"; documentNamespace = "https://threadsmith.net/sbom/$RuntimeIdentifier/$((Get-FileHash $AssetsFile -Algorithm SHA256).Hash.ToLowerInvariant())"; creationInfo = [ordered]@{ created = '1970-01-01T00:00:00Z'; creators = @('Tool: Threadsmith.NET release engineering') }; packages = $packages }
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'sbom.spdx.json'), (($sbom | ConvertTo-Json -Depth 8) + "`n"), [Text.UTF8Encoding]::new($false))

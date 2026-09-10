@@ -136,21 +136,49 @@ public static class MemoriesToolTests
         {
             ["tools:config:memories:MaxNumberOfRepoMemories"] = "7",
             ["tools:config:memories:SemanticMinimum"] = "0.35",
+            ["tools:config:memories:RerankerEnabled"] = "true",
+            ["tools:config:memories:RerankerCandidateLimit"] = "6",
+            ["tools:config:memories:RerankerMinimumScore"] = "-2.5",
         }).Build();
         var initial = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["tools:config:memories:MaxRepoMemoriesInContext"] = "2",
             ["tools:config:memories:SemanticMinimum"] = "0.65",
+            ["tools:config:memories:RerankerEnabled"] = "false",
+            ["tools:config:memories:RerankerCandidateLimit"] = "4",
         }).Build();
         var source = new RepositoryMemoryConfiguration(initial, fallback, first);
         Assert.Equal(2, source.Capture(RepositoryIdentity.Create(first)).MaxRepoMemoriesInContext);
         Assert.Equal(0.65, source.Capture(RepositoryIdentity.Create(first)).SemanticMinimum);
+        Assert.False(source.Capture(RepositoryIdentity.Create(first)).RerankerEnabled);
+        Assert.Equal(4, source.Capture(RepositoryIdentity.Create(first)).RerankerCandidateLimit);
+        Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(first)).RerankerMinimumScore);
+        source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:RerankerEnabled"] = "false",
+            ["tools:config:memories:RerankerCandidateLimit"] = "3",
+            ["tools:config:memories:RerankerMinimumScore"] = "0.25",
+        }).Build());
+        Assert.False(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
+        Assert.Equal(3, source.Capture(RepositoryIdentity.Create(next)).RerankerCandidateLimit);
+        Assert.Equal(0.25, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
+        using var explicitNull = new MemoryStream(Encoding.UTF8.GetBytes("""
+            { "tools": { "config": { "memories": { "RerankerMinimumScore": null } } } }
+            """));
+        source.BindRepository(next, new ConfigurationBuilder().AddJsonStream(explicitNull).Build());
+        Assert.Null(source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
         source.BindRepository(next, new ConfigurationBuilder().Build());
         Assert.Equal(7, source.Capture(RepositoryIdentity.Create(next)).MaxNumberOfRepoMemories);
         Assert.Equal(3, source.Capture(RepositoryIdentity.Create(next)).MaxRepoMemoriesInContext);
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
+        Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
+        Assert.Equal(6, source.Capture(RepositoryIdentity.Create(next)).RerankerCandidateLimit);
+        Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:SemanticMinimum"] = "1.1" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerCandidateLimit"] = "65" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerMinimumScore"] = "NaN" }).Build()));
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
+        Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
         Assert.Throws<InvalidOperationException>(() => source.Capture(RepositoryIdentity.Create(first)));
         Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryConfiguration(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:MaxNumberOfRepoMemories"] = "0" }).Build(), fallback, first));
     }

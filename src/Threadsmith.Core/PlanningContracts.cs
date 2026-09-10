@@ -189,6 +189,9 @@ public sealed record RepositoryMemoryContextItemProjection
     /// <summary>Compatible-space cosine score for diagnostics only.</summary>
     public double? CosineSimilarity { get; init; }
 
+    /// <summary>Optional raw cross-encoder relevance logit for inspection only; higher is better.</summary>
+    public double? CrossEncoderScore { get; init; }
+
     /// <summary>Whether the item entered the assembled request.</summary>
     public required bool Included { get; init; }
 

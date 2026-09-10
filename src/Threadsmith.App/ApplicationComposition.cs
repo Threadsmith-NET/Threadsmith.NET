@@ -11,6 +11,7 @@ using Threadsmith.Hooks;
 using Threadsmith.Mcp;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
+using Threadsmith.Reranking.Local;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -25,14 +26,22 @@ internal static class ApplicationComposition
     {
         ArgumentNullException.ThrowIfNull(inputs);
         var embeddings = new LocalTextEmbeddingGenerator();
-        var memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings);
+        LocalTextCrossEncoder? reranker = null;
+        HybridRepositoryMemoryRetriever? memoryRetriever = null;
         try
         {
-            return await CreateCoreAsync(inputs, embeddings, memoryRetriever);
+            reranker = new LocalTextCrossEncoder(GetRerankerCpuThreads(inputs.Host.Configuration));
+            memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings, reranker);
+            return await CreateCoreAsync(inputs, embeddings, reranker, memoryRetriever);
         }
         catch
         {
-            memoryRetriever.Dispose();
+            memoryRetriever?.Dispose();
+            if (reranker is not null)
+            {
+                await reranker.DisposeAsync();
+            }
+
             await embeddings.DisposeAsync();
             throw;
         }
@@ -88,8 +97,22 @@ internal static class ApplicationComposition
         };
     }
 
+    /// <summary>Reads the restart-scoped local reranker CPU limit before any inference resource is created.</summary>
+    internal static int GetRerankerCpuThreads(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var cpuThreads = configuration.GetValue("reranking:cpuThreads", 8);
+        ArgumentOutOfRangeException.ThrowIfLessThan(cpuThreads, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(cpuThreads, 32);
+        return cpuThreads;
+    }
+
     /// <summary>Loads trusted active-turn summary bounds while keeping repository configuration excluded.</summary>
-    private static async Task<ApplicationServices> CreateCoreAsync(ApplicationCompositionInputs inputs, LocalTextEmbeddingGenerator embeddings, HybridRepositoryMemoryRetriever memoryRetriever)
+    private static async Task<ApplicationServices> CreateCoreAsync(
+        ApplicationCompositionInputs inputs,
+        LocalTextEmbeddingGenerator embeddings,
+        LocalTextCrossEncoder reranker,
+        HybridRepositoryMemoryRetriever memoryRetriever)
     {
         ArgumentNullException.ThrowIfNull(inputs);
 
@@ -753,6 +776,7 @@ internal static class ApplicationComposition
                 claudeSkillCatalog,
                 validationStages,
                 embeddings,
+                reranker,
                 memoriesTool,
                 memoryRetriever);
         }
@@ -1233,6 +1257,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
 {
     private readonly AgentRunScheduler _agentScheduler;
     private readonly LocalTextEmbeddingGenerator _embeddings;
+    private readonly LocalTextCrossEncoder _reranker;
     private readonly MemoriesTool _memoriesTool;
     private readonly HybridRepositoryMemoryRetriever _memoryRetriever;
     private readonly DelegateAgentsTool? _delegateAgentsTool;
@@ -1261,6 +1286,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         IClaudeSkillCompatibilityCatalog claudeSkillCatalog,
         IReadOnlyList<MutationValidationStage> validationStages,
         LocalTextEmbeddingGenerator embeddings,
+        LocalTextCrossEncoder reranker,
         MemoriesTool memoriesTool,
         HybridRepositoryMemoryRetriever memoryRetriever)
     {
@@ -1284,6 +1310,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         ClaudeSkillCatalog = claudeSkillCatalog;
         ValidationStages = validationStages;
         _embeddings = embeddings;
+        _reranker = reranker;
         _memoriesTool = memoriesTool;
         _memoryRetriever = memoryRetriever;
     }
@@ -1330,6 +1357,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         await _agentScheduler.DisposeAsync();
         await _mutationCoordinator.DisposeAsync();
         _memoryRetriever.Dispose();
+        await _reranker.DisposeAsync();
         await _embeddings.DisposeAsync();
     }
 }

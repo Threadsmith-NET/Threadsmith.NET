@@ -3,6 +3,7 @@ param([Parameter(Mandatory)][string] $StageDirectory, [Parameter(Mandatory)][str
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
 Assert-ReleaseRid $RuntimeIdentifier
 & (Join-Path $PSScriptRoot 'Test-EmbeddingPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Test-RerankerPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
 $suffix = if ($RuntimeIdentifier.StartsWith('win-')) { '.exe' } else { '' }
 $ripgrepRelativePath = "tools/rg$suffix"

@@ -70,7 +70,7 @@ Test-Contract 'prompt payload is complete, collision-free, byte-exact, and valid
 }
 Test-Contract 'workflow scripts are tracked' {
     $root = Get-RepositoryRoot
-    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
+    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Test-RerankerPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
         $path = "eng/release/$name"
         if (-not (Test-Path (Join-Path $root $path))) { throw "Missing $path." }
         git -C $root ls-files --error-unmatch $path 2>$null | Out-Null
@@ -175,6 +175,24 @@ Test-Contract 'embedding manifest pins source, legal evidence, and all six nativ
         $errors = $null
         [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $script), [ref]$tokens, [ref]$errors) | Out-Null
         if ($errors.Count -gt 0) { throw "Embedding script $script does not parse." }
+    }
+}
+Test-Contract 'reranker manifest is represented in generated legal evidence' {
+    $root = Get-RepositoryRoot
+    $manifest = Get-Content -LiteralPath (Join-Path $root 'src/Threadsmith.Reranking.Local/crossencoder-assets.json') -Raw | ConvertFrom-Json
+    $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-reranker-legal-$([Guid]::NewGuid().ToString('N'))"
+    $temp = [IO.Path]::GetFullPath($temp)
+    $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ([IO.Path]::GetDirectoryName($temp) -ne $expectedParent) { throw 'Reranker legal fixture escaped its temporary parent.' }
+    New-Item -ItemType Directory -Path $temp | Out-Null
+    try {
+        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory $temp -RuntimeIdentifier linux-x64
+        $notice = Get-Content (Join-Path $temp 'THIRD-PARTY-NOTICES.txt') -Raw
+        $sbom = Get-Content (Join-Path $temp 'sbom.spdx.json') -Raw | ConvertFrom-Json
+        if (-not $notice.Contains($manifest.model) -or -not @($sbom.packages | Where-Object { $_.name -eq $manifest.model -and $_.versionInfo -eq $manifest.revision }).Count) { throw 'Reranker model is absent from generated legal evidence.' }
+    } finally {
+        if ((Resolve-Path -LiteralPath $temp).Path -ne $temp -or (Get-Item -LiteralPath $temp).Name -notlike 'threadsmith-reranker-legal-*') { throw 'Refusing cleanup of an unexpected fixture root.' }
+        Remove-Item -LiteralPath $temp -Recurse -Force
     }
 }
 Test-Contract 'release PowerShell scripts parse' {

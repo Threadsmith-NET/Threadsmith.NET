@@ -101,6 +101,10 @@ public static class RepoConfigTests
         Assert.Equal(20, policy.MaxNumberOfRepoMemories);
         Assert.Equal(3, policy.MaxRepoMemoriesInContext);
         Assert.Equal(RepositoryMemoryOptions.DefaultSemanticMinimum, policy.SemanticMinimum);
+        Assert.False(policy.RerankerEnabled);
+        Assert.Equal(8, policy.RerankerCandidateLimit);
+        Assert.Null(policy.RerankerMinimumScore);
+        Assert.Equal(8, config.GetValue("reranking:cpuThreads", 0));
         Assert.False(config.GetSection("context:repositoryMemory").Exists());
     }
 

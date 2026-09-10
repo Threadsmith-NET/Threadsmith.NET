@@ -50,9 +50,19 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
             MaxNumberOfRepoMemories = configuration.GetValue($"{SectionName}:MaxNumberOfRepoMemories", fallback.MaxNumberOfRepoMemories),
             MaxRepoMemoriesInContext = configuration.GetValue($"{SectionName}:MaxRepoMemoriesInContext", fallback.MaxRepoMemoriesInContext),
             SemanticMinimum = configuration.GetValue($"{SectionName}:SemanticMinimum", fallback.SemanticMinimum),
+            RerankerEnabled = configuration.GetValue($"{SectionName}:RerankerEnabled", fallback.RerankerEnabled),
+            RerankerCandidateLimit = configuration.GetValue($"{SectionName}:RerankerCandidateLimit", fallback.RerankerCandidateLimit),
+            RerankerMinimumScore = ReadNullableDouble(configuration, $"{SectionName}:RerankerMinimumScore", fallback.RerankerMinimumScore),
         };
         options.Validate();
         return options;
+    }
+
+    private static double? ReadNullableDouble(IConfiguration configuration, string key, double? fallback)
+    {
+        var supplied = configuration.AsEnumerable()
+            .Any(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+        return supplied ? configuration.GetValue<double?>(key) : fallback;
     }
 
     private sealed record Snapshot(string Identity, RepositoryMemoryOptions Options);

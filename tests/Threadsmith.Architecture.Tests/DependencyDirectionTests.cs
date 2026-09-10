@@ -57,6 +57,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Core",
         "Threadsmith.Telemetry",
         "Threadsmith.Embeddings.Local",
+        "Threadsmith.Reranking.Local",
         "Threadsmith.Persistence",
         "Threadsmith.Models",
         "Threadsmith.Models.OpenAiCompatible",
@@ -132,17 +133,16 @@ public static class DependencyDirectionTests
             $"{projectName} references forbidden package(s): {string.Join(", ", violations)}.");
     }
 
-    /// <summary>Native inference and tokenizer packages are isolated behind the local embedding adapter.</summary>
+    /// <summary>Native inference and tokenizer packages are isolated behind local adapters.</summary>
     [Fact]
-    public static void EmbeddingPackagesAreIsolated()
+    public static void NativeInferencePackagesAreIsolated()
     {
         string[] packages = ["Microsoft.ML.OnnxRuntime", "Microsoft.ML.Tokenizers"];
+        string[] adapterProjects = ["Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local"];
         foreach (var package in packages)
         {
-            Assert.Contains(package, GetPackageReferences("Threadsmith.Embeddings.Local"));
-            Assert.All(
-                _productProjects.Where(name => name != "Threadsmith.Embeddings.Local"),
-                name => Assert.DoesNotContain(package, GetPackageReferences(name)));
+            Assert.All(adapterProjects, project => Assert.Contains(package, GetPackageReferences(project)));
+            Assert.All(_productProjects.Where(name => !adapterProjects.Contains(name, StringComparer.Ordinal)), name => Assert.DoesNotContain(package, GetPackageReferences(name)));
         }
 
         var core = File.ReadAllText(Path.Combine(RepoRoot, "src", "Threadsmith.Core", "TextEmbeddingContracts.cs"));
@@ -341,6 +341,7 @@ public static class DependencyDirectionTests
         {
             ["Threadsmith.Telemetry"] = ["Threadsmith.Core"],
             ["Threadsmith.Embeddings.Local"] = ["Threadsmith.Core"],
+            ["Threadsmith.Reranking.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Persistence"] = ["Threadsmith.Core", "Threadsmith.Telemetry"],
             ["Threadsmith.Models"] = ["Threadsmith.Core"],
             ["Threadsmith.Models.OpenAiCompatible"] = ["Threadsmith.Core", "Threadsmith.Models"],
@@ -366,7 +367,7 @@ public static class DependencyDirectionTests
         [
             "Threadsmith.Core", "Threadsmith.Telemetry", "Threadsmith.Persistence",
             "Threadsmith.Models", "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCodex",
-            "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local",
+            "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local",
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
             "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",
             "Threadsmith.Tui", "Threadsmith.Tui.TuiKit", "Threadsmith.Cli", "Threadsmith.Mcp",

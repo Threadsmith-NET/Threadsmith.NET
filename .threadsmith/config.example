@@ -304,6 +304,12 @@
     }
   },
 
+  // ── Local reranking startup ──────────────────────────────────────────────
+  // CPU inference worker count is read once during startup; restart after changing it.
+  "reranking": {
+    "cpuThreads": 8
+  },
+
   // ── Tool permissions (§21.2) ────────────────────────────────────────────
   // Per-tool allow/deny policy. Plan-08 defines the tool registry and policy
   // pipeline. Repo config can narrow (but not widen) the host's defaults.
@@ -504,7 +510,12 @@
         "MaxRepoMemoriesInContext": 3,
         // Semantic matches must score strictly above this finite cosine minimum (-1 to 1).
         // Lexical matches qualify independently; 1 excludes all semantic matches.
-        "SemanticMinimum": 0.47
+        "SemanticMinimum": 0.47,
+        // Local CPU cross-encoder reranking is opt-in. Candidate limit is 1 through 64.
+        "RerankerEnabled": false,
+        "RerankerCandidateLimit": 8,
+        // Optional strict raw-logit floor; null preserves the top ranked candidates.
+        "RerankerMinimumScore": null
       },
       "csharp_script": {
         "timeout_ms": "5000",

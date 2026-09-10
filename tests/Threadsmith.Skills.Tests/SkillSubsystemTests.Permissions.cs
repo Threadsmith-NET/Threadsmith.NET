@@ -191,7 +191,11 @@ public sealed partial class SkillSubsystemTests
     }
 
     private static ModelSkillProcedureRunner CreatePermissionRunner(
-        Func<ToolInvocationContext> context, PermissionProbeTool tool, PermissionModelProvider model, IDomainEventStream events)
+        Func<ToolInvocationContext> context,
+        PermissionProbeTool tool,
+        PermissionModelProvider model,
+        IDomainEventStream events,
+        ConfiguredModelCatalog? catalog = null)
     {
         var registry = new ToolRegistry([tool]);
         var sanitizer = new SecretOutputSanitizer();
@@ -212,7 +216,8 @@ public sealed partial class SkillSubsystemTests
                 cancellationToken.ThrowIfCancellationRequested();
                 return Task.FromResult(context());
             },
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            catalog);
     }
 
     private static ToolInvocationContext PermissionContext()

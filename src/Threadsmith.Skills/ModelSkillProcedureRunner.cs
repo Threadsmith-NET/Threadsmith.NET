@@ -119,6 +119,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         ContainsSensitiveData = plan.Request.Sensitivity == ConversationSensitivity.Sensitive,
                     },
                     ResolvedProfileId = profileId,
+                    ReasoningLevel = profile?.DefaultReasoningLevel ?? ReasoningLevel.None,
                     MaximumOutputTokens = profile?.EffectiveRequestOutputTokenReserve,
                     Tools = canonicalModelTools,
                     AllowMultipleToolCalls = false,
@@ -256,13 +257,20 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 transientState.SealRound(round, messages.ToArray());
             }
 
-            prompt += _prompts.Render(
+            var continuation = _prompts.Render(
                 PromptFileNames.SkillProcedureContinuation,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["ToolName"] = toolRequest.ToolName,
                     ["ToolResult"] = boundedResult,
                 });
+            prompt += continuation;
+            messages.Add(new ModelMessage
+            {
+                Role = ModelMessageRole.User,
+                SectionId = "skill-procedure-continuation",
+                Content = [new ModelContentPart { Content = continuation }],
+            });
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");

@@ -6,6 +6,8 @@ Threadsmith.NET loads an optional user base from `~/.threadsmith/providers.json`
 
 `/models` lists enabled bindings from the immutable effective catalog and changes the host-owned active selection used by the next request. It does not edit provider catalogs. The repository stores only `model.providerId`, `model.profileId`, and `model.reasoningLevel` in `.threadsmith/config.json` through an atomic same-directory replacement.
 
+Headless `/models` returns a JSON array. When startup uses the scripted offline model because no selectable catalog is available, it returns `[]` successfully without dispatching an active-selection command. Configured provider status and refresh remain available for diagnosis and recovery.
+
 Selection precedence is explicit session override, valid repository selection, user-catalog default, then deterministic no-default policy. Present-invalid repository intent is an error, not absence. A selected binding captures provider/profile/reasoning generation for each new request, so a switch cannot splice providers into an in-flight turn.
 
 `/reasoning` persists successful changes with the complete repository selection. A model switch preserves an exactly supported host reasoning level. Otherwise it selects `none` when supported, or the profile's validated default when reasoning cannot be disabled. The latest context-occupancy projection is invalidated on a switch until a request is assembled under the new limit; cumulative session usage remains unchanged.

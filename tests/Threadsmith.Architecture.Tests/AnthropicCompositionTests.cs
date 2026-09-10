@@ -136,7 +136,8 @@ public sealed class AnthropicCompositionTests
 
         internal Fixture()
         {
-            Directory = Path.Combine(Path.GetTempPath(), "threadsmith-anthropic-composition-" + Guid.NewGuid().ToString("N"));
+            // macOS temporary directories can traverse /var, an intentional symlink rejected by the cache.
+            Directory = Path.Combine(AppContext.BaseDirectory, "threadsmith-anthropic-composition-" + Guid.NewGuid().ToString("N"));
             System.IO.Directory.CreateDirectory(Directory);
             Paths = new ConfigurationPaths
             {

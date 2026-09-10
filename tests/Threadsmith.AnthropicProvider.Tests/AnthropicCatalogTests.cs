@@ -497,7 +497,8 @@ public sealed class AnthropicCatalogTests
     {
         internal TemporaryDirectory()
         {
-            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "threadsmith-anthropic-" + Guid.NewGuid().ToString("N"));
+            // Use the physical test output directory rather than macOS's symlinked temporary root.
+            Path = System.IO.Path.Combine(AppContext.BaseDirectory, "threadsmith-anthropic-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
         }
 

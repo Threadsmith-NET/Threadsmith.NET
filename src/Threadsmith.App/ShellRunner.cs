@@ -94,29 +94,13 @@ internal static class ShellRunner
             if (catalogArguments.Length > 0
                 && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase))
             {
-                if (catalogArguments.Length == 3 && string.Equals(catalogArguments[1], "status", StringComparison.OrdinalIgnoreCase))
-                {
-                    var status = await headlessShell.GetModelCatalogStatusAsync(catalogArguments[2], processCancellation.Token);
-                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(status));
-                    return 0;
-                }
-
-                if (catalogArguments.Length == 3 && string.Equals(catalogArguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
-                {
-                    var result = await headlessShell.RefreshModelCatalogAsync(catalogArguments[2], processCancellation.Token);
-                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(result));
-                    return result.Refreshed ? 0 : 1;
-                }
-
-                if (catalogArguments.Length == 1)
-                {
-                    var models = await headlessShell.ListActiveModelsAsync(processCancellation.Token);
-                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(models));
-                    return 0;
-                }
-
-                await Console.Error.WriteLineAsync("Usage: /models [status|refresh <provider-id>]");
-                return 2;
+                return await RunModelCatalogCommandAsync(
+                    headlessShell,
+                    catalogArguments,
+                    context.Models.ActiveModels is not null,
+                    Console.Out,
+                    Console.Error,
+                    processCancellation.Token);
             }
 
             if (context.CommandLine.RepositoryOptionsSpecified)
@@ -162,6 +146,47 @@ internal static class ShellRunner
         {
             Console.CancelKeyPress -= OnCancelKeyPress;
         }
+    }
+
+    /// <summary>Runs headless catalog commands while preserving offline listing and provider recovery.</summary>
+    internal static async Task<int> RunModelCatalogCommandAsync(
+        HeadlessShell shell,
+        IReadOnlyList<string> arguments,
+        bool activeModelsAvailable,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(error);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (arguments.Count == 3 && string.Equals(arguments[1], "status", StringComparison.OrdinalIgnoreCase))
+        {
+            var status = await shell.GetModelCatalogStatusAsync(arguments[2], cancellationToken);
+            await output.WriteLineAsync(JsonSerializer.Serialize(status).AsMemory(), cancellationToken);
+            return 0;
+        }
+
+        if (arguments.Count == 3 && string.Equals(arguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await shell.RefreshModelCatalogAsync(arguments[2], cancellationToken);
+            await output.WriteLineAsync(JsonSerializer.Serialize(result).AsMemory(), cancellationToken);
+            return result.Refreshed ? 0 : 1;
+        }
+
+        if (arguments.Count == 1)
+        {
+            var json = activeModelsAvailable
+                ? JsonSerializer.Serialize(await shell.ListActiveModelsAsync(cancellationToken))
+                : "[]";
+            await output.WriteLineAsync(json.AsMemory(), cancellationToken);
+            return 0;
+        }
+
+        await error.WriteLineAsync("Usage: /models [status|refresh <provider-id>]".AsMemory(), cancellationToken);
+        return 2;
     }
 
     /// <summary>Subscribes headless stderr delivery to completed built-in memory operations.</summary>

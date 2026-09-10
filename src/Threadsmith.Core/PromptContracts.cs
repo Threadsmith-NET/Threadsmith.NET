@@ -200,6 +200,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextActiveRunSteering prompt asset.</summary>
     public const string ContextActiveRunSteering = "Context-ActiveRun-Steering.md";
 
+    /// <summary>Gets the stable filename for the ContextExecutionOutcome prompt asset.</summary>
+    public const string ContextExecutionOutcome = "Context-ExecutionOutcome.md";
+
     /// <summary>Gets the stable filename for the ContextCurrentTurnHostAuthorizedUserUrl prompt asset.</summary>
     public const string ContextCurrentTurnHostAuthorizedUserUrl = "Context-CurrentTurn-HostAuthorizedUserUrl.md";
 
@@ -1062,6 +1065,7 @@ public static class PromptFileNames
         ContextActiveTurnSummaryUntrustedWrapper,
         ContextActiveTurnSummaryHostFileLists,
         ContextActiveRunSteering,
+        ContextExecutionOutcome,
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
@@ -1471,6 +1475,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsSteering,
             PromptFileNames.ToolDelegateAgentsTruncation,
             PromptFileNames.ContextActiveRunSteering,
+            PromptFileNames.ContextExecutionOutcome,
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
             PromptFileNames.ToolToolInvocationCompleted,
             PromptFileNames.ToolChildAgentToolInvocationCompleted,
@@ -1606,6 +1611,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper] = Set("Version", "SummaryContent"),
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
+                    [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),

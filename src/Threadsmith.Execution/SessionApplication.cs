@@ -995,6 +995,9 @@ public sealed partial class SessionApplication :
                 runId,
                 registration.Cancellation.Token);
             var succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
+
+            // Complete the archived exchange before another request can observe this run as finished.
+            await ArchiveExecutionOutcomeAsync(runId, registration, outcome, CancellationToken.None);
             await registration.Machine.TransitionAsync(
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
@@ -1034,6 +1037,76 @@ public sealed partial class SessionApplication :
                 "execution completion observation failed",
                 CancellationToken.None);
             registration.Completion.TrySetException(exception);
+        }
+    }
+
+    private async Task ArchiveExecutionOutcomeAsync(
+        RunId runId,
+        RunRegistration registration,
+        ExecutionOutcomeProjection outcome,
+        CancellationToken cancellationToken)
+    {
+        if (_conversationStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Keep the authoritative result in ordinary history. Raw diffs and full diagnostics
+            // remain in execution artifacts; transcript retention and context budgets still apply.
+            var outcomeJson = JsonSerializer.Serialize(new
+            {
+                RunId = runId.Value,
+                Request = registration.Task.Intent,
+                Status = outcome.Status.ToString(),
+                CompletedStepIds = outcome.CompletedStepIds.Select(step => step.Value),
+                UncompletedStepIds = outcome.UncompletedStepIds.Select(step => step.Value),
+                outcome.ChangedFiles,
+                LifecycleChanges = outcome.LifecycleChanges.Select(change => new
+                {
+                    Type = change.Type.ToString(),
+                    change.SourcePath,
+                    change.DestinationPath,
+                    change.IsCaseOnlyMove,
+                }),
+                LifecycleReconciliations = outcome.LifecycleReconciliations.Select(item => new
+                {
+                    State = item.State.ToString(),
+                    item.SourcePath,
+                    item.DestinationPath,
+                    item.Reason,
+                }),
+                outcome.BehaviorSummary,
+                Validation = new
+                {
+                    Status = outcome.Validation?.Gate.Status.ToString(),
+                    Reasons = outcome.Validation?.Gate.Reasons ?? [],
+                },
+                outcome.RollbackAvailable,
+                outcome.FinalDiff,
+                outcome.ResidualRisks,
+            });
+            var content = RequirePrompts().Render(
+                PromptFileNames.ContextExecutionOutcome,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["OutcomeJson"] = JsonOutputSanitizer.Sanitize(outcomeJson, _sanitizer),
+                });
+            await ArchiveVisibleMessageAsync(
+                registration.SessionId,
+                runId,
+                ConversationRole.Assistant,
+                content,
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // An archive failure cannot change the already-persisted mutation outcome.
+            _logger.LogWarning(
+                exception,
+                "Execution outcome for run {RunId} could not be archived in conversation history; the authoritative execution result is unchanged.",
+                runId.Value);
         }
     }
 

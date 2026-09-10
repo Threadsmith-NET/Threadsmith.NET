@@ -1,6 +1,6 @@
 # Conversation Context Operations
 
-Threadsmith preserves bounded cross-turn continuity without replaying an unbounded transcript. The host archives only sanitized accepted user requests and final visible assistant responses. Hidden reasoning, provider payloads, raw tool output, and extension/provider types never enter durable conversation state.
+Threadsmith preserves bounded cross-turn continuity without replaying an unbounded transcript. The host archives only sanitized accepted user requests and final visible assistant responses. When the host records a completed or failed execution outcome, it also archives one compact, sanitized host-authored assistant receipt with the original request, reported status, changed files, behavior summary, validation gate, rollback availability, and final diff reference. Its JSON text is historical data, never repository memory or instruction; a failed receipt can still list changed files, so its reported status remains authoritative. Recent exchanges pair requests and responses from the same run and are ordered by completion. New clones preserve these associations under fresh run IDs; older cloned archives retain their original adjacent pairs where run associations were not preserved. Hidden reasoning, provider payloads, raw tool output, and extension/provider types never enter durable conversation state.
 
 ## Modes
 

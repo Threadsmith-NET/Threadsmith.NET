@@ -356,7 +356,7 @@ public sealed class SqliteConversationStore : IConversationStore
         while (await reader.ReadAsync(cancellationToken))
         {
             var schemaVersion = reader.GetInt32(11);
-            if (schemaVersion != ConversationSchemaVersions.Message)
+            if (schemaVersion is < 1 or > ConversationSchemaVersions.Message)
             {
                 AddWarning(warnings, $"UnsupportedConversationMessageSchema:{schemaVersion}");
                 continue;

@@ -86,7 +86,7 @@ public static class Plan56SessionLifecycleTests
         Assert.Equal(other, await store.GetAsync(other.SessionId));
     }
 
-    /// <summary>A clone copies sanitized conversation under new identities and then diverges independently.</summary>
+    /// <summary>A clone copies sanitized conversation under new identities, preserves run grouping, and then diverges independently.</summary>
     [Fact]
     public static async Task Clone_is_atomic_has_new_identities_and_does_not_modify_source()
     {
@@ -96,17 +96,55 @@ public static class Plan56SessionLifecycleTests
         var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
         var source = CreateEntry(sourceId, "repo-a", now);
         await catalog.CreateAsync(source, new SessionDurableUsage(10, 5, false, false, true));
+        var firstSourceRunId = RunId.New();
+        var secondSourceRunId = RunId.New();
         var sourceMessage = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
         {
             Id = ConversationMessageId.New(),
             SessionId = sourceId,
-            RunId = RunId.New(),
+            RunId = firstSourceRunId,
             Sequence = 0,
             Role = ConversationRole.User,
-            Content = "sanitized visible request",
+            Content = "first cloned request",
             ContentHash = "pending",
             EstimatedTokens = 1,
             OccurredAt = now,
+        });
+        _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = sourceId,
+            RunId = secondSourceRunId,
+            Sequence = 0,
+            Role = ConversationRole.User,
+            Content = "second cloned request",
+            ContentHash = "pending",
+            EstimatedTokens = 1,
+            OccurredAt = now.AddSeconds(1),
+        });
+        _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = sourceId,
+            RunId = secondSourceRunId,
+            Sequence = 0,
+            Role = ConversationRole.Assistant,
+            Content = "second cloned outcome",
+            ContentHash = "pending",
+            EstimatedTokens = 1,
+            OccurredAt = now.AddSeconds(2),
+        });
+        _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = sourceId,
+            RunId = firstSourceRunId,
+            Sequence = 0,
+            Role = ConversationRole.Assistant,
+            Content = "first cloned outcome",
+            ContentHash = "pending",
+            EstimatedTokens = 1,
+            OccurredAt = now.AddSeconds(3),
         });
         source = await catalog.CheckpointAsync(source, new SessionDurableUsage(10, 5, false, false, true));
         var cloneId = SessionId.New();
@@ -126,10 +164,17 @@ public static class Plan56SessionLifecycleTests
             new SessionDurableUsage(0, 0, false, false, false, 10, 5));
         var cloneState = await fixture.Conversations.GetSnapshotAsync(cloneId);
         Assert.Equal(sourceId, clone.CloneSourceSessionId);
-        var clonedMessage = Assert.Single(cloneState.Messages);
-        Assert.NotEqual(sourceMessage.Id, clonedMessage.Id);
-        Assert.NotEqual(sourceMessage.RunId, clonedMessage.RunId);
-        Assert.Equal(sourceMessage.Content, clonedMessage.Content);
+        Assert.Equal(4, cloneState.Messages.Count);
+        var clonedFirstRequest = Assert.Single(cloneState.Messages, message => message.Content == sourceMessage.Content);
+        var clonedFirstOutcome = Assert.Single(cloneState.Messages, message => message.Content == "first cloned outcome");
+        var clonedSecondRequest = Assert.Single(cloneState.Messages, message => message.Content == "second cloned request");
+        var clonedSecondOutcome = Assert.Single(cloneState.Messages, message => message.Content == "second cloned outcome");
+        Assert.NotEqual(sourceMessage.Id, clonedFirstRequest.Id);
+        Assert.NotEqual(firstSourceRunId, clonedFirstRequest.RunId);
+        Assert.NotEqual(secondSourceRunId, clonedSecondRequest.RunId);
+        Assert.Equal(clonedFirstRequest.RunId, clonedFirstOutcome.RunId);
+        Assert.Equal(clonedSecondRequest.RunId, clonedSecondOutcome.RunId);
+        Assert.NotEqual(clonedFirstRequest.RunId, clonedSecondRequest.RunId);
 
         _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
         {
@@ -144,8 +189,8 @@ public static class Plan56SessionLifecycleTests
             OccurredAt = now.AddMinutes(2),
         });
         var sourceAfter = await fixture.Conversations.GetSnapshotAsync(sourceId);
-        Assert.Single(sourceAfter.Messages);
-        Assert.Equal("sanitized visible request", sourceAfter.Messages[0].Content);
+        Assert.Equal(4, sourceAfter.Messages.Count);
+        Assert.Equal("first cloned request", sourceAfter.Messages[0].Content);
         var cloneUsage = await catalog.GetUsageAsync(cloneId);
         Assert.Equal(0, cloneUsage.InputTokens);
         Assert.Equal(0, cloneUsage.OutputTokens);

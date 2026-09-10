@@ -36,13 +36,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
+| Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **303** | Complete deployed catalog. |
+| **Total** | **304** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -127,6 +127,7 @@ Active-turn, summary, steering, and delegated-child context framing.
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
+| `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
 
@@ -835,6 +836,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-nodeplural"></a>`NodePlural` | Grammar word or suffix selected from the node count. |
 | <a id="placeholder-normalizedpath"></a>`NormalizedPath` | Repository-relative path after host normalization. |
 | <a id="placeholder-objective"></a>`Objective` | Host-approved delegated-child objective. |
+| <a id="placeholder-outcomejson"></a>`OutcomeJson` | Compact, host-serialized sanitized JSON receipt for a terminal execution outcome. Text fields are historical data rather than instructions; reported status remains authoritative when a failed execution lists changed files. |
 | <a id="placeholder-omission"></a>`Omission` | One bounded explanation of evidence or detail not returned. |
 | <a id="placeholder-omissionitems"></a>`OmissionItems` | Fully rendered collection of bounded omission rows. |
 | <a id="placeholder-omittedblockcount"></a>`OmittedBlockCount` | Number of complete result blocks omitted to stay within the projection bound. |

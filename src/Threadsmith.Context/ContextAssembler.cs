@@ -916,7 +916,7 @@ public sealed class ContextAssembler : IContextAssembler
                 assembly.AddExcludedMessage(message, "Message is outside the hot recent-turn age window.");
             }
 
-            var turns = CreateCompleteTurns(priorMessages);
+            var turns = CreateCompleteTurns(priorMessages, state.Messages);
             foreach (var turn in turns
                 .TakeLast(_options.Conversation.RecentTurnCount))
             {
@@ -1041,21 +1041,51 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     private static List<IReadOnlyList<ConversationMessage>> CreateCompleteTurns(
-        IEnumerable<ConversationMessage> messages)
+        IEnumerable<ConversationMessage> messages,
+        IReadOnlyList<ConversationMessage> archive)
     {
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
-        for (var index = 0; index + 1 < ordered.Length; index++)
+        var pendingUsers = new Dictionary<RunId, ConversationMessage>();
+        foreach (var message in ordered)
         {
-            if (ordered[index].Role == ConversationRole.User
-                && ordered[index + 1].Role == ConversationRole.Assistant)
+            if (message.Role == ConversationRole.User)
             {
-                turns.Add([ordered[index], ordered[index + 1]]);
-                index++;
+                pendingUsers[message.RunId] = message;
+            }
+            else if (message.Role == ConversationRole.Assistant
+                && pendingUsers.Remove(message.RunId, out var user))
+            {
+                // Overlapping runs may finish in a different order from their requests.
+                // Pair by identity and retain complete exchanges in completion order.
+                turns.Add([user, message]);
             }
         }
 
-        return turns;
+        // Older clones assigned a different run id to every copied message. Retain their
+        // original adjacent pairs only when neither side has a counterpart anywhere in the
+        // archive; filtering the current/expired messages cannot create legacy eligibility.
+        HashSet<RunId> userRuns = [.. archive.Where(message => message.Role == ConversationRole.User)
+            .Select(message => message.RunId)];
+        HashSet<RunId> assistantRuns = [.. archive.Where(message => message.Role == ConversationRole.Assistant)
+            .Select(message => message.RunId)];
+        for (var index = 0; index + 1 < ordered.Length; index++)
+        {
+            var user = ordered[index];
+            var assistant = ordered[index + 1];
+            if (user.Role == ConversationRole.User
+                && assistant.Role == ConversationRole.Assistant
+                && assistant.Sequence == user.Sequence + 1
+                && user.SchemaVersion == 1
+                && assistant.SchemaVersion == 1
+                && !assistantRuns.Contains(user.RunId)
+                && !userRuns.Contains(assistant.RunId))
+            {
+                turns.Add([user, assistant]);
+            }
+        }
+
+        return [.. turns.OrderBy(turn => turn[1].Sequence)];
     }
 
     private static PromptAssetReference CreateAssetReference(

@@ -140,6 +140,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 101 | `plan-101-tuikit-command-palette-autocomplete.md` | TUIKit fuzzy command palette and inline slash-command completion |
 | 102 | `plan-102-code-explore-schema-help-and-tool-selection.md` | Code explore argument help and task-appropriate tool selection |
 | 103 | `plan-103-model-managed-repository-memories.md` | Model-managed repository memories with injectable local embeddings and hybrid retrieval |
+| 104 | `plan-104-anthropic-sdk-provider.md` | Native Anthropic SDK provider, API-key model discovery, thinking continuity and prompt caching |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |

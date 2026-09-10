@@ -242,9 +242,10 @@ public sealed class ActiveModelSelectionService :
         {
             var definition = _catalog.Get(profileId);
             var prior = _preferences.Capture();
-            var reasoning = definition.Profile.SupportedReasoningLevels.Contains(prior.Reasoning)
+            var reasoning = definition.Profile.SupportsReasoningLevel(prior.Reasoning)
                 ? prior.Reasoning
-                : ReasoningLevel.None;
+                : definition.Profile.ReasoningCapability.SupportsReasoningOff == false
+                    ? definition.Profile.DefaultReasoningLevel : ReasoningLevel.None;
             var reasoningPreserved = reasoning == prior.Reasoning;
             var changed = prior.ProfileId != profileId || prior.Reasoning != reasoning;
             _preferences.SetReasoning(profileId, reasoning);
@@ -274,7 +275,7 @@ public sealed class ActiveModelSelectionService :
         try
         {
             var current = Current;
-            if (!current.Profile.SupportedReasoningLevels.Contains(reasoningLevel))
+            if (!current.Profile.SupportsReasoningLevel(reasoningLevel))
             {
                 throw new InvalidOperationException(
                     $"Reasoning level '{reasoningLevel}' is not supported by model '{current.Profile.Name}'.");
@@ -325,14 +326,15 @@ public sealed class ActiveModelSelectionService :
 
             var parsed = ReasoningLevel.TryParse(selection.ReasoningLevel, out var persistedReasoning);
             var reasoning = parsed
-                && definition.Profile.SupportedReasoningLevels.Contains(persistedReasoning)
+                && definition.Profile.SupportsReasoningLevel(persistedReasoning)
                     ? persistedReasoning
-                    : ReasoningLevel.None;
+                    : definition.Profile.ReasoningCapability.SupportsReasoningOff == false
+                        ? definition.Profile.DefaultReasoningLevel : ReasoningLevel.None;
             _preferences.SetReasoning(definition.Profile.Id, reasoning);
             _source = ActiveModelSelectionSource.Explicit;
             return parsed && reasoning == persistedReasoning
                 ? null
-                : $"Reasoning '{selection.ReasoningLevel}' is no longer supported; reset to none. Use /reasoning to choose an available level.";
+                : $"Reasoning '{selection.ReasoningLevel}' is no longer supported; reset to {reasoning}. Use /reasoning to choose an available level.";
         }
         finally
         {
@@ -457,13 +459,15 @@ public sealed class ActiveModelSelectionService :
                 "Repository model provider and profile do not match. Use /models to repair them.");
         }
 
-        var reasoning = ReasoningLevel.None;
+        var fallbackReasoning = definition.Profile.ReasoningCapability.SupportsReasoningOff == false
+            ? definition.Profile.DefaultReasoningLevel : ReasoningLevel.None;
+        var reasoning = fallbackReasoning;
         var reasoningText = GetString(model, "reasoningLevel");
         if (reasoningText is not null
             && (!ReasoningLevel.TryParse(reasoningText, out reasoning)
-                || !definition.Profile.SupportedReasoningLevels.Contains(reasoning)))
+                || !definition.Profile.SupportsReasoningLevel(reasoning)))
         {
-            reasoning = ReasoningLevel.None;
+            reasoning = fallbackReasoning;
         }
 
         _preferences.SetReasoning(definition.Profile.Id, reasoning);

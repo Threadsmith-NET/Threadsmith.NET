@@ -61,6 +61,10 @@
           ],
           "transitivePackages": [
             {
+              "id": "Anthropic",
+              "resolvedVersion": "12.46.0"
+            },
+            {
               "id": "Google.Protobuf",
               "resolvedVersion": "3.30.2"
             },
@@ -1439,6 +1443,10 @@
           ],
           "transitivePackages": [
             {
+              "id": "Anthropic",
+              "resolvedVersion": "12.46.0"
+            },
+            {
               "id": "Google.Protobuf",
               "resolvedVersion": "3.30.2"
             },
@@ -2455,6 +2463,10 @@
           ],
           "transitivePackages": [
             {
+              "id": "Anthropic",
+              "resolvedVersion": "12.46.0"
+            },
+            {
               "id": "Markdig",
               "resolvedVersion": "1.3.2"
             },
@@ -2473,6 +2485,10 @@
             {
               "id": "Microsoft.Data.Sqlite.Core",
               "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.AI.Abstractions",
+              "resolvedVersion": "10.8.3"
             },
             {
               "id": "Microsoft.Extensions.Configuration",
@@ -4405,6 +4421,10 @@
           ],
           "transitivePackages": [
             {
+              "id": "Anthropic",
+              "resolvedVersion": "12.46.0"
+            },
+            {
               "id": "Markdig",
               "resolvedVersion": "1.3.2"
             },
@@ -4419,6 +4439,10 @@
             {
               "id": "Microsoft.Data.Sqlite.Core",
               "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.AI.Abstractions",
+              "resolvedVersion": "10.8.3"
             },
             {
               "id": "Microsoft.Extensions.Configuration",
@@ -6257,6 +6281,347 @@
             {
               "id": "System.Numerics.Tensors",
               "resolvedVersion": "9.0.0"
+            },
+            {
+              "id": "xunit.v3.assert",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.common",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.core.mtp-v2",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.extensibility.core",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.runner.common",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.runner.inproc.console",
+              "resolvedVersion": "3.2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/src/Threadsmith.Reranking.Local/Threadsmith.Reranking.Local.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "topLevelPackages": [
+            {
+              "id": "Microsoft.ML.OnnxRuntime",
+              "requestedVersion": "1.22.1",
+              "resolvedVersion": "1.22.1"
+            },
+            {
+              "id": "Microsoft.ML.Tokenizers",
+              "requestedVersion": "2.0.0",
+              "resolvedVersion": "2.0.0"
+            },
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Google.Protobuf",
+              "resolvedVersion": "3.30.2"
+            },
+            {
+              "id": "Microsoft.ML.OnnxRuntime.Managed",
+              "resolvedVersion": "1.22.1"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
+            },
+            {
+              "id": "System.Numerics.Tensors",
+              "resolvedVersion": "9.0.0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/tests/Threadsmith.Reranking.Local.Tests/Threadsmith.Reranking.Local.Tests.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "topLevelPackages": [
+            {
+              "id": "Microsoft.Testing.Platform.MSBuild",
+              "requestedVersion": "2.3.3",
+              "resolvedVersion": "2.3.3"
+            },
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            },
+            {
+              "id": "xunit.analyzers",
+              "requestedVersion": "1.27.0",
+              "resolvedVersion": "1.27.0"
+            },
+            {
+              "id": "xunit.v3.mtp-v2",
+              "requestedVersion": "3.2.2",
+              "resolvedVersion": "3.2.2"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Google.Protobuf",
+              "resolvedVersion": "3.30.2"
+            },
+            {
+              "id": "Microsoft.ApplicationInsights",
+              "resolvedVersion": "2.23.0"
+            },
+            {
+              "id": "Microsoft.Bcl.AsyncInterfaces",
+              "resolvedVersion": "6.0.0"
+            },
+            {
+              "id": "Microsoft.ML.OnnxRuntime",
+              "resolvedVersion": "1.22.1"
+            },
+            {
+              "id": "Microsoft.ML.OnnxRuntime.Managed",
+              "resolvedVersion": "1.22.1"
+            },
+            {
+              "id": "Microsoft.ML.Tokenizers",
+              "resolvedVersion": "2.0.0"
+            },
+            {
+              "id": "Microsoft.Testing.Extensions.Telemetry",
+              "resolvedVersion": "2.0.2"
+            },
+            {
+              "id": "Microsoft.Testing.Extensions.TrxReport.Abstractions",
+              "resolvedVersion": "2.0.2"
+            },
+            {
+              "id": "Microsoft.Testing.Platform",
+              "resolvedVersion": "2.3.3"
+            },
+            {
+              "id": "Microsoft.Win32.Registry",
+              "resolvedVersion": "5.0.0"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
+            },
+            {
+              "id": "System.Numerics.Tensors",
+              "resolvedVersion": "9.0.0"
+            },
+            {
+              "id": "xunit.v3.assert",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.common",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.core.mtp-v2",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.extensibility.core",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.runner.common",
+              "resolvedVersion": "3.2.2"
+            },
+            {
+              "id": "xunit.v3.runner.inproc.console",
+              "resolvedVersion": "3.2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/src/Threadsmith.Models.Anthropic/Threadsmith.Models.Anthropic.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "topLevelPackages": [
+            {
+              "id": "Anthropic",
+              "requestedVersion": "12.46.0",
+              "resolvedVersion": "12.46.0"
+            },
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Microsoft.Extensions.AI.Abstractions",
+              "resolvedVersion": "10.8.3"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Binder",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Primitives",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/tests/Threadsmith.AnthropicProvider.Tests/Threadsmith.AnthropicProvider.Tests.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "topLevelPackages": [
+            {
+              "id": "Microsoft.Testing.Platform.MSBuild",
+              "requestedVersion": "2.3.3",
+              "resolvedVersion": "2.3.3"
+            },
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            },
+            {
+              "id": "xunit.analyzers",
+              "requestedVersion": "1.27.0",
+              "resolvedVersion": "1.27.0"
+            },
+            {
+              "id": "xunit.v3.mtp-v2",
+              "requestedVersion": "3.2.2",
+              "resolvedVersion": "3.2.2"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Anthropic",
+              "resolvedVersion": "12.46.0"
+            },
+            {
+              "id": "Microsoft.ApplicationInsights",
+              "resolvedVersion": "2.23.0"
+            },
+            {
+              "id": "Microsoft.Bcl.AsyncInterfaces",
+              "resolvedVersion": "6.0.0"
+            },
+            {
+              "id": "Microsoft.Extensions.AI.Abstractions",
+              "resolvedVersion": "10.8.3"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Abstractions",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Configuration.Binder",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Extensions.Primitives",
+              "resolvedVersion": "10.0.10"
+            },
+            {
+              "id": "Microsoft.Testing.Extensions.Telemetry",
+              "resolvedVersion": "2.0.2"
+            },
+            {
+              "id": "Microsoft.Testing.Extensions.TrxReport.Abstractions",
+              "resolvedVersion": "2.0.2"
+            },
+            {
+              "id": "Microsoft.Testing.Platform",
+              "resolvedVersion": "2.3.3"
+            },
+            {
+              "id": "Microsoft.Win32.Registry",
+              "resolvedVersion": "5.0.0"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
             },
             {
               "id": "xunit.v3.assert",

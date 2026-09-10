@@ -74,7 +74,8 @@ internal sealed class ChildAgentPrompt
     /// <summary>Creates one normalized assistant tool-call message.</summary>
     public static ModelMessage CreateToolCallMessage(
         string toolCallId,
-        ToolRequestModelOutput request)
+        ToolRequestModelOutput request,
+        int? modelRound = null)
     {
         return new ModelMessage
         {
@@ -82,6 +83,7 @@ internal sealed class ChildAgentPrompt
             SectionId = "child-tool-call",
             ToolCallId = toolCallId,
             ToolName = request.ToolName,
+            ModelRound = modelRound,
             Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = request.ArgumentsJson }],
         };
     }
@@ -90,7 +92,9 @@ internal sealed class ChildAgentPrompt
     public static ModelMessage CreateToolResultMessage(
         string toolCallId,
         string toolName,
-        string content)
+        string content,
+        int? modelRound = null,
+        bool? isError = null)
     {
         return new ModelMessage
         {
@@ -98,6 +102,8 @@ internal sealed class ChildAgentPrompt
             SectionId = "child-tool-result",
             ToolCallId = toolCallId,
             ToolName = toolName,
+            ModelRound = modelRound,
+            IsError = isError,
             Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = content }],
         };
     }

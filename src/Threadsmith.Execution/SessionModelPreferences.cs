@@ -4,12 +4,13 @@ using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Owns the active model identity and reasoning preference for one session.</summary>
-public sealed class SessionModelPreferences
+public sealed class SessionModelPreferences : IThinkingTextPreferences
 {
     private readonly Lock _sync = new();
     private ModelProfileId? _currentProfileId;
     private ReasoningLevel _reasoning;
     private long _generation;
+    private bool _includeReasoningText;
 
     /// <summary>Initializes a new instance of the <see cref="SessionModelPreferences"/> class.</summary>
     public SessionModelPreferences()
@@ -68,12 +69,34 @@ public sealed class SessionModelPreferences
         }
     }
 
+    /// <inheritdoc />
+    public bool IncludeReasoningText
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _includeReasoningText;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public void SetIncludeReasoningText(bool include)
+    {
+        lock (_sync)
+        {
+            _includeReasoningText = include;
+        }
+    }
+
     /// <summary>
     /// Resolves the level for a model request and durably resets it when the effective profile changes.
     /// </summary>
     /// <param name="resolvedProfileId">The profile resolved for the current run, or <see langword="null"/>.</param>
+    /// <param name="fallbackReasoning">Validated default used when the resolved profile cannot disable reasoning.</param>
     /// <returns>The effective reasoning level.</returns>
-    public ReasoningLevel ResolveFor(ModelProfileId? resolvedProfileId)
+    public ReasoningLevel ResolveFor(ModelProfileId? resolvedProfileId, ReasoningLevel? fallbackReasoning = null)
     {
         lock (_sync)
         {
@@ -89,7 +112,7 @@ public sealed class SessionModelPreferences
             else if (_currentProfileId.Value != resolvedProfileId.Value)
             {
                 _currentProfileId = resolvedProfileId;
-                _reasoning = ReasoningLevel.None;
+                _reasoning = fallbackReasoning ?? ReasoningLevel.None;
                 _generation++;
             }
 
@@ -142,12 +165,12 @@ public sealed record SessionModelPreferenceSnapshot(
     long Generation)
 {
     /// <summary>Resolves request reasoning from this immutable generation without changing live session state.</summary>
-    public ReasoningLevel ResolveFor(ModelProfileId? resolvedProfileId)
+    public ReasoningLevel ResolveFor(ModelProfileId? resolvedProfileId, ReasoningLevel? fallbackReasoning = null)
     {
         return resolvedProfileId is null
             || ProfileId is null
             || ProfileId == resolvedProfileId
                 ? Reasoning
-                : ReasoningLevel.None;
+                : fallbackReasoning ?? ReasoningLevel.None;
     }
 }

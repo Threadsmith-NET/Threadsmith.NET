@@ -62,6 +62,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Models",
         "Threadsmith.Models.OpenAiCompatible",
         "Threadsmith.Models.OpenAiCodex",
+        "Threadsmith.Models.Anthropic",
         "Threadsmith.Context",
         "Threadsmith.Tools",
         "Threadsmith.DotNet",
@@ -131,6 +132,17 @@ public static class DependencyDirectionTests
         Assert.True(
             violations.Count == 0,
             $"{projectName} references forbidden package(s): {string.Join(", ", violations)}.");
+    }
+
+    /// <summary>The native Anthropic SDK is isolated behind its compiled adapter.</summary>
+    [Fact]
+    public static void AnthropicSdkPackageIsIsolated()
+    {
+        Assert.Contains("Anthropic", GetPackageReferences("Threadsmith.Models.Anthropic"));
+        foreach (var project in _productProjects.Where(name => name != "Threadsmith.Models.Anthropic"))
+        {
+            Assert.DoesNotContain(GetPackageReferences(project), name => name.StartsWith("Anthropic", StringComparison.Ordinal));
+        }
     }
 
     /// <summary>Native inference and tokenizer packages are isolated behind local adapters.</summary>
@@ -346,6 +358,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Models"] = ["Threadsmith.Core"],
             ["Threadsmith.Models.OpenAiCompatible"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Models.OpenAiCodex"] = ["Threadsmith.Core", "Threadsmith.Models"],
+            ["Threadsmith.Models.Anthropic"] = ["Threadsmith.Models"],
             ["Threadsmith.Context"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Tools"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
             ["Threadsmith.DotNet"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
@@ -367,6 +380,7 @@ public static class DependencyDirectionTests
         [
             "Threadsmith.Core", "Threadsmith.Telemetry", "Threadsmith.Persistence",
             "Threadsmith.Models", "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCodex",
+            "Threadsmith.Models.Anthropic",
             "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local",
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
             "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",

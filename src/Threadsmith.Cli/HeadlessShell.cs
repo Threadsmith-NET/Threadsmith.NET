@@ -125,6 +125,22 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
+    /// <summary>Inspects model discovery through the same command boundary as interactive selection.</summary>
+    public Task<ModelCatalogProviderStatus> GetModelCatalogStatusAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new GetModelCatalogStatusCommand(providerId), cancellationToken);
+    }
+
+    /// <summary>Refreshes provider metadata for the next application startup.</summary>
+    public Task<ModelCatalogRefreshResult> RefreshModelCatalogAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RefreshModelCatalogCommand(providerId), cancellationToken);
+    }
+
     /// <summary>Lists selectable models through the shared host command boundary.</summary>
     public Task<IReadOnlyList<SelectableModelEntry>> ListActiveModelsAsync(
         CancellationToken cancellationToken = default)

@@ -270,7 +270,7 @@ public sealed class JsonlModelExchangeLog
 }
 
 /// <summary>Wraps a model provider and records the provider-neutral exchange when explicitly enabled.</summary>
-public sealed class LoggingModelProvider : IModelProvider
+public sealed class LoggingModelProvider : IModelProvider, IModelRequestPreparationResolver
 {
     private readonly IModelProvider _inner;
     private readonly JsonlModelExchangeLog _log;
@@ -285,6 +285,9 @@ public sealed class LoggingModelProvider : IModelProvider
         _inner = inner;
         _log = log;
     }
+
+    /// <inheritdoc />
+    public ModelStreamRequest Prepare(ModelStreamRequest request) => ModelRequestPreparation.Prepare(_inner, request);
 
     /// <inheritdoc />
     public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -346,7 +349,7 @@ public sealed class LoggingModelProvider : IModelProvider
                 request.RunId,
                 request.ToolContinuationRound,
                 sequence,
-                chunk,
+                chunk.SuppressReasoningDiagnostics ? chunk with { Reasoning = null } : chunk,
                 cancellationToken).ConfigureAwait(false);
             sequence++;
             yield return chunk;

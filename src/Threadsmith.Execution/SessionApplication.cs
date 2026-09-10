@@ -1286,7 +1286,9 @@ public sealed partial class SessionApplication :
         string toolName,
         string content,
         bool isJson,
-        string? structuredContent)
+        string? structuredContent,
+        int? modelRound = null,
+        bool? isError = null)
     {
         List<ModelContentPart> contentParts = [isJson ? CreateJsonContentPart(content) : CreateTextContentPart(content)];
         if (!isJson && !string.IsNullOrWhiteSpace(structuredContent))
@@ -1301,6 +1303,8 @@ public sealed partial class SessionApplication :
             ToolCallId = toolCallId,
             ToolName = toolName,
             Content = contentParts,
+            ModelRound = modelRound,
+            IsError = isError,
         };
     }
 
@@ -1531,9 +1535,12 @@ public sealed partial class SessionApplication :
 
     private static ReasoningLevel ResolveRequestReasoning(
         SessionModelPreferenceSnapshot? preference,
-        ModelProfileId? resolvedProfileId)
+        ModelResolution? resolution)
     {
-        return preference?.ResolveFor(resolvedProfileId) ?? ReasoningLevel.None;
+        var fallback = resolution?.SupportsReasoningOff == false
+            ? resolution.DefaultReasoningLevel
+            : (ReasoningLevel?)null;
+        return preference?.ResolveFor(resolution?.ProfileId, fallback) ?? fallback ?? ReasoningLevel.None;
     }
 
     private async Task<ConversationMessage?> ArchiveVisibleMessageAsync(

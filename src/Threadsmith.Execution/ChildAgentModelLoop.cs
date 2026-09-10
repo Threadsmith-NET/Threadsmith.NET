@@ -110,6 +110,7 @@ internal sealed class ChildAgentModelLoop
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var stopwatch = Stopwatch.StartNew();
+        using var transientState = new ModelRequestTransientState();
         try
         {
             var maximumRounds = assignment.Budget.EnforceLimits
@@ -138,15 +139,19 @@ internal sealed class ChildAgentModelLoop
                     new ActiveTurnCompactionValidator(summaryPolicy, _sanitizer, _prompts),
                     summaryPolicy,
                     _prompts);
-                await history.CompactAsync(
-                    assignment,
-                    model,
-                    toolWireEstimate,
-                    round,
-                    compactor,
-                    new ChildCompactionObserver(plan.Provenance.SessionId, _sessionUsage, ledger),
-                    cancellationToken);
-                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration);
+                if (!transientState.HasResponses)
+                {
+                    await history.CompactAsync(
+                        assignment,
+                        model,
+                        toolWireEstimate,
+                        round,
+                        compactor,
+                        new ChildCompactionObserver(plan.Provenance.SessionId, _sessionUsage, ledger),
+                        cancellationToken);
+                }
+
+                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration, transientState, provider);
                 model = fitted.Model;
                 childToolContext = childToolContext with
                 {
@@ -160,6 +165,7 @@ internal sealed class ChildAgentModelLoop
                     assignment,
                     model,
                     fitted.Request,
+                    transientState,
                     cancellationToken);
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
                 cancellationToken.ThrowIfCancellationRequested();
@@ -175,6 +181,27 @@ internal sealed class ChildAgentModelLoop
                             cancellationToken);
                         if (steering.Count > 0)
                         {
+                            if (transientState.HasResponses)
+                            {
+                                var cancelledExchangeStart = messages.Count;
+                                for (var ordinal = 0; ordinal < response.ToolRequests.Count; ordinal++)
+                                {
+                                    var call = response.ToolRequests[ordinal];
+                                    var correlationId = CreateToolCallId(assignment, round, ordinal);
+                                    transientState.BindToolCall(round, ordinal, correlationId);
+                                    messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, call, round));
+                                    messages.Add(ChildAgentPrompt.CreateToolResultMessage(
+                                        correlationId,
+                                        call.ToolName,
+                                        JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
+                                        round,
+                                        isError: true));
+                                }
+
+                                transientState.SealRound(round, messages.ToArray());
+                                history.RecordExchange(cancelledExchangeStart, round, []);
+                            }
+
                             messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
                             continue;
                         }
@@ -194,9 +221,13 @@ internal sealed class ChildAgentModelLoop
                             ledger,
                             evidenceProgress,
                             round,
+                            transientState,
                             cancellationToken);
                         messages.AddRange(continuation.Messages);
-                        messages.Add(prompt.CreateEvidenceProgressMessage(continuation.Progress));
+                        var progressMessage = prompt.CreateEvidenceProgressMessage(continuation.Progress);
+                        messages.Add(transientState.HasResponses
+                            ? progressMessage with { Role = ModelMessageRole.User }
+                            : progressMessage);
                         deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
                         exchangeEvidence = continuation.DeliveredEvidenceIds;
                     }
@@ -212,7 +243,8 @@ internal sealed class ChildAgentModelLoop
                             response.ToolRequests,
                             registrationById,
                             assignment,
-                            round);
+                            round,
+                            transientState);
                     }
 
                     history.RecordExchange(exchangeStart, round, exchangeEvidence);
@@ -274,7 +306,9 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ModelToolDefinition> tools,
         ModelWireToolEstimate toolEstimate,
         int round,
-        long historyRewriteGeneration)
+        long historyRewriteGeneration,
+        ModelRequestTransientState transientState,
+        IModelProvider provider)
     {
         var attempted = new HashSet<ModelProfileId>();
         while (attempted.Add(model.ProfileId))
@@ -286,7 +320,7 @@ internal sealed class ChildAgentModelLoop
                 stablePrefixMessageCount: 0,
                 outputReserveTokens: outputTokens,
                 model.ProviderInstructions);
-            var request = new ModelStreamRequest
+            var request = ModelRequestPreparation.Prepare(provider, new ModelStreamRequest
             {
                 RunId = assignment.ChildRunId,
                 Input = assignment.Objective,
@@ -318,7 +352,9 @@ internal sealed class ChildAgentModelLoop
                 Messages = messages.ToArray(),
                 WireEstimate = estimate,
                 ProviderInstructions = model.ProviderInstructions,
-            };
+                IncludeReasoningText = false,
+                TransientState = transientState,
+            });
             var effectiveAssignment = assignment with
             {
                 Policy = assignment.Policy with { ModelSelection = model.Provenance },
@@ -326,7 +362,9 @@ internal sealed class ChildAgentModelLoop
             var selected = _selection?.SelectForRequest(effectiveAssignment, request, useProfileOutputReserve: true) ?? model;
             if (selected.ProfileId == model.ProfileId)
             {
-                if (estimate.TotalCapacityTokens > selected.ContextWindowTokens)
+                var preparedEstimate = request.WireEstimate
+                    ?? throw new InvalidOperationException("The prepared child request has no capacity estimate.");
+                if (preparedEstimate.TotalCapacityTokens > selected.ContextWindowTokens)
                 {
                     throw new InvalidOperationException("The complete child context exceeds the selected model context window.");
                 }
@@ -345,6 +383,7 @@ internal sealed class ChildAgentModelLoop
         AgentAssignment assignment,
         AgentModelSelection model,
         ModelStreamRequest request,
+        ModelRequestTransientState transientState,
         CancellationToken cancellationToken)
     {
         var maximumOutputTokens = model.MaximumOutputTokens;
@@ -367,10 +406,16 @@ internal sealed class ChildAgentModelLoop
             Guid.NewGuid());
         try
         {
+            transientState.ValidateHistory(request);
             await foreach (var chunk in provider.StreamAsync(
                 request,
                 cancellationToken))
             {
+                if (chunk.ResponseEnvelope is { } envelope)
+                {
+                    transientState.Accept(request, envelope);
+                }
+
                 if (chunk.Text is { } delta)
                 {
                     text.Append(delta);
@@ -491,6 +536,7 @@ internal sealed class ChildAgentModelLoop
         AgentBudgetLedger ledger,
         ChildAgentEvidenceProgressTracker evidenceProgress,
         int round,
+        ModelRequestTransientState transientState,
         CancellationToken cancellationToken)
     {
         ToolRegistration[] resolvedRegistrations =
@@ -562,7 +608,12 @@ internal sealed class ChildAgentModelLoop
         foreach (var result in results.OrderBy(result => result.Ordinal))
         {
             var request = requests[result.Ordinal];
-            messages.Add(ChildAgentPrompt.CreateToolCallMessage(result.CorrelationId, request));
+            if (transientState.HasResponses)
+            {
+                transientState.BindToolCall(round, result.Ordinal, result.CorrelationId);
+            }
+
+            messages.Add(ChildAgentPrompt.CreateToolCallMessage(result.CorrelationId, request, round));
             var evidence = result.Result.Succeeded && result.Result.ToolId == ChildAgentEvidenceTool.ToolId
                 ? new StoredToolEvidence(
                     new EvidenceId(((ChildAgentEvidenceInput)registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(request.ArgumentsJson)).EvidenceId),
@@ -579,7 +630,14 @@ internal sealed class ChildAgentModelLoop
             messages.Add(ChildAgentPrompt.CreateToolResultMessage(
                 result.CorrelationId,
                 result.Result.ToolId,
-                evidence.Content));
+                evidence.Content,
+                round,
+                !result.Result.Succeeded));
+        }
+
+        if (transientState.HasResponses)
+        {
+            transientState.SealRound(round, messages.ToArray());
         }
 
         return new ToolContinuation(
@@ -709,7 +767,8 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ToolRequestModelOutput> requests,
         IReadOnlyDictionary<string, ToolRegistration> registrations,
         AgentAssignment assignment,
-        int round)
+        int round,
+        ModelRequestTransientState transientState)
     {
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
         var sanitized = BoundedText.Truncate(
@@ -720,17 +779,36 @@ internal sealed class ChildAgentModelLoop
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
             var request = requests[ordinal];
-            if (!registrations.ContainsKey(request.ToolName))
+            if (!transientState.HasResponses
+                && !registrations.ContainsKey(request.ToolName))
             {
                 continue;
             }
 
             var correlationId = CreateToolCallId(assignment, round, ordinal);
-            messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, request));
-            messages.Add(ChildAgentPrompt.CreateToolResultMessage(correlationId, request.ToolName, error));
+            if (transientState.HasResponses)
+            {
+                transientState.BindToolCall(round, ordinal, correlationId);
+            }
+
+            messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, request, round));
+            messages.Add(ChildAgentPrompt.CreateToolResultMessage(
+                correlationId,
+                request.ToolName,
+                error,
+                round,
+                isError: true));
         }
 
-        messages.Add(prompt.CreateCorrectionMessage(sanitized));
+        if (transientState.HasResponses)
+        {
+            transientState.SealRound(round, messages.ToArray());
+        }
+
+        var correctionMessage = prompt.CreateCorrectionMessage(sanitized);
+        messages.Add(transientState.HasResponses
+            ? correctionMessage with { Role = ModelMessageRole.User }
+            : correctionMessage);
     }
 
     private static string CreateToolCallId(

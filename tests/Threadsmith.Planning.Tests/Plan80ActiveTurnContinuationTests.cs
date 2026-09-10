@@ -233,6 +233,79 @@ public static class Plan80ActiveTurnContinuationTests
         }
     }
 
+    /// <summary>Replay envelopes preserve duplicate tool names by ordinal across two parent continuation rounds and clear at completion.</summary>
+    [Fact]
+    public static async Task Replay_envelopes_bind_duplicate_parent_tools_by_ordinal_and_clear_on_success()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan104-main-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1)));
+            var registry = new ToolRegistry([new TestDeterministicOutputTool("tool output")]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var profile = CreateProfile();
+            var model = new ReplayTwoRoundProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                CreateAssembler(events, evidence, new ModelResolver(new ConfiguredModelCatalog([profile]), new InMemoryModelPreferenceSnapshotProvider()), sanitizer),
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 5 },
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-104-main"));
+
+            // Act
+            var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "inspect twice"));
+
+            // Assert
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Equal(3, model.Requests.Count);
+            var firstContinuation = model.Requests[1];
+            var firstCalls = firstContinuation.Messages.Where(message => message.ModelRound == 0 && message.Role == ModelMessageRole.Assistant).ToArray();
+            var firstResults = firstContinuation.Messages.Where(message => message.ModelRound == 0 && message.Role == ModelMessageRole.Tool).ToArray();
+            Assert.Equal(2, firstCalls.Length);
+            Assert.Equal(2, firstResults.Length);
+            Assert.All(firstResults, result => Assert.False(result.IsError));
+            Assert.Equal(firstCalls.Select(call => call.ToolCallId), firstResults.Select(result => result.ToolCallId));
+            Assert.All(firstCalls, call => Assert.Equal("deterministic_output", call.ToolName));
+            var secondCall = Assert.Single(model.Requests[2].Messages, message => message.ModelRound == 1 && message.Role == ModelMessageRole.Assistant);
+            var secondResult = Assert.Single(model.Requests[2].Messages, message => message.ModelRound == 1 && message.Role == ModelMessageRole.Tool);
+            Assert.Equal(secondCall.ToolCallId, secondResult.ToolCallId);
+            var transientState = model.FirstTransientState;
+            Assert.NotNull(transientState);
+            Assert.Empty(transientState.Responses);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>A managed compaction pre-hook denial prevents candidate provider I/O.</summary>
     [Fact]
     public static async Task Managed_compaction_hook_denial_blocks_candidate_provider()
@@ -345,7 +418,7 @@ public static class Plan80ActiveTurnContinuationTests
 
     /// <summary>Inline sibling results are buffered behind every sibling call and ordered by call ordinal.</summary>
     [Fact]
-    public static async Task Inline_sibling_result_does_not_interleave_assistant_calls()
+    public static async Task Inline_rejected_sibling_results_follow_their_correlated_assistant_calls()
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan80-order-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -419,18 +492,20 @@ public static class Plan80ActiveTurnContinuationTests
                 },
                 message =>
                 {
+                    Assert.Equal(ModelMessageRole.Tool, message.Role);
+                    Assert.Equal("host-tool-1-1", message.ToolCallId);
+                    Assert.True(message.IsError);
+                },
+                message =>
+                {
                     Assert.Equal(ModelMessageRole.Assistant, message.Role);
                     Assert.Equal("host-tool-1-2", message.ToolCallId);
                 },
                 message =>
                 {
                     Assert.Equal(ModelMessageRole.Tool, message.Role);
-                    Assert.Equal("host-tool-1-1", message.ToolCallId);
-                },
-                message =>
-                {
-                    Assert.Equal(ModelMessageRole.Tool, message.Role);
                     Assert.Equal("host-tool-1-2", message.ToolCallId);
+                    Assert.True(message.IsError);
                 });
         }
         finally
@@ -730,6 +805,61 @@ public static class Plan80ActiveTurnContinuationTests
                 Text = "Inspection complete.",
                 FinishReason = ModelFinishReason.Stop,
             };
+        }
+    }
+
+    private sealed class ReplayTwoRoundProvider : IModelProvider
+    {
+        public ModelRequestTransientState? FirstTransientState { get; private set; }
+
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            FirstTransientState ??= request.TransientState;
+            await Task.Yield();
+            if (request.ToolContinuationRound == 0)
+            {
+                yield return new ModelChunk { ResponseEnvelope = CreateEnvelope(request, ["wire-0", "wire-1"]) };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("deterministic_output", "{\"sequence\":1}") };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("deterministic_output", "{\"sequence\":2}") };
+                yield break;
+            }
+
+            if (request.ToolContinuationRound == 1)
+            {
+                yield return new ModelChunk { ResponseEnvelope = CreateEnvelope(request, ["wire-2"]) };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("deterministic_output", "{\"sequence\":3}") };
+                yield break;
+            }
+
+            yield return new ModelChunk { Text = "Replay sequence complete.", FinishReason = ModelFinishReason.Stop };
+        }
+
+        private static ModelResponseReplayEnvelope CreateEnvelope(
+            ModelStreamRequest request,
+            IReadOnlyList<string> wireToolIds)
+        {
+            return new ModelResponseReplayEnvelope(
+                new ModelReplayBinding
+                {
+                    ProviderId = "test",
+                    ModelId = "test",
+                    ProfileId = request.ResolvedProfileId ?? throw new InvalidOperationException("A profile is required."),
+                    RunId = request.RunId,
+                    ModelRound = request.ToolContinuationRound,
+                    CredentialGeneration = "test",
+                    ToolInventoryDigest = "test-tools",
+                    InstructionDigest = "test-instructions",
+                    NormalizedRoundDigest = "test-round",
+                },
+                [1],
+                wireToolIds,
+                retainedOutputTokens: 1);
         }
     }
 

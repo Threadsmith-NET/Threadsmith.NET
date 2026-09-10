@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Threadsmith.Core;
 
 /// <summary>Closed provider-neutral roles used by structured model requests.</summary>
@@ -66,6 +67,13 @@ public sealed record ModelMessage
 
     /// <summary>Optional stable tool name for assistant calls and tool results.</summary>
     public string? ToolName { get; init; }
+
+    /// <summary>Transient assistant response grouping used for exact protocol replay.</summary>
+    [JsonIgnore]
+    public int? ModelRound { get; init; }
+
+    /// <summary>Whether a correlated tool result reports a failure or denial.</summary>
+    public bool? IsError { get; init; }
 
     /// <summary>Returns the provider-visible content text in part order.</summary>
     public string GetModelVisibleContent()

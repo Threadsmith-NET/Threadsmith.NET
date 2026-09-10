@@ -46,6 +46,21 @@
           "retryDelayMilliseconds": 250
         }
       ]
+    },
+    {
+      "type": "anthropic",
+      "id": "anthropic",
+      "name": "Anthropic (enable in user catalog)",
+      "enabled": false,
+      "secretKeyReference": "secrets:models:anthropic",
+      "models": [],
+      "defaults": {
+        "requestOutputTokenReserve": 8192,
+        "defaultReasoningLevel": "high",
+        "timeoutSeconds": 120,
+        "retryMaxAttempts": 3,
+        "retryDelayMilliseconds": 250
+      }
     }
   ]
 }

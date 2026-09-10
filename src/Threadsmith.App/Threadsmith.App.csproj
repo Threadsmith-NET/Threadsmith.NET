@@ -24,6 +24,7 @@
     <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\Threadsmith.Models.OpenAiCompatible\Threadsmith.Models.OpenAiCompatible.csproj" />
     <ProjectReference Include="..\Threadsmith.Models.OpenAiCodex\Threadsmith.Models.OpenAiCodex.csproj" />
+    <ProjectReference Include="..\Threadsmith.Models.Anthropic\Threadsmith.Models.Anthropic.csproj" />
     <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\Threadsmith.DotNet\Threadsmith.DotNet.csproj" />

@@ -25,6 +25,9 @@ public sealed record EffectiveReasoningCapability
     /// <summary>Validated default level for selectable models.</summary>
     public ReasoningLevel? DefaultLevel { get; init; }
 
+    /// <summary>Whether thinking can be disabled; null preserves legacy support for None.</summary>
+    public bool? SupportsReasoningOff { get; init; }
+
     /// <summary>Sanitized compiled request compatibility mode.</summary>
     public string RequestMode { get; init; } = "legacy-standard";
 

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Models.Anthropic</RootNamespace>
+    <Description>Threadsmith.NET native Anthropic Messages provider.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Anthropic" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.AnthropicProvider.Tests" />
+  </ItemGroup>
+</Project>

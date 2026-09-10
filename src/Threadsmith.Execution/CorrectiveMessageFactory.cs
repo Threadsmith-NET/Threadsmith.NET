@@ -61,6 +61,7 @@ public sealed class CorrectiveMessageFactory
             SectionId = $"active-turn-correction-tool:{toolCallId}",
             ToolCallId = toolCallId,
             ToolName = toolName,
+            IsError = true,
             Content = [CreateJsonContentPart(content)],
         };
     }

@@ -31,6 +31,10 @@
 
     <!-- Model abstraction (strategy §6: host-owned facade, optionally backed by Microsoft.Extensions.AI). -->
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
+
+    <!-- Native Anthropic Messages SDK; isolated in Threadsmith.Models.Anthropic. -->
+    <PackageVersion Include="Anthropic" Version="12.46.0" />
 
     <!-- Microsoft.Extensions.* — configuration, DI, logging, options, hosting (strategy §6). -->
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.10" />

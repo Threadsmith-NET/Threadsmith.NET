@@ -96,10 +96,6 @@ The manual test plan is an executable regression catalog:
 
 `00-shared-context.md` contains durable architecture, boundary, and implementation-template guidance. It must not contain roadmap inventories, work-item status, milestone status, or historical feature-to-work-item matrices.
 
-### DOX
-
-Planning progress does not trigger changes to repository or product-subtree `AGENTS.md` files. Update DOX only when durable folder ownership, implementation guidance, workflow, or child indexes change.
-
 ## Minimal update matrix
 
 | Change | Required planning-document updates |
@@ -121,8 +117,7 @@ Before completing a planning-document change:
 rg -n "^## Scenario .*\*\(.*plan|^\*\*(Coverage status|Planned coverage):" docs\implementation-plans\acceptance-scenarios.md
 rg -n "^\*\*(Status|Baseline|Coverage status|Planned coverage):|^## MTP-.*\(M[0-9]" docs\implementation-plans\manual-test-plan.md
 rg -n "Implementation status:|implementation-complete|completion history" docs\implementation-plans\README.md
-rg -n "Plan [0-9]|plan-[0-9]" -g "AGENTS.md" .
 git diff --check
 ```
 
-The first four searches must return no prohibited bookkeeping matches. Literal repository artifact names used in valid commands are not historical attribution.
+The three searches must return no prohibited bookkeeping matches. Literal repository artifact names used in valid commands are not historical attribution.

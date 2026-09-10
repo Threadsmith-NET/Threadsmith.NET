@@ -172,6 +172,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IRepositoryInstructionResolver? _instructionResolver;
     private readonly IHybridRepositoryMemoryRetriever? _repositoryMemoryRetriever;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
+    private readonly IModelRequestPreparationResolver? _requestPreparationResolver;
     private readonly IModelResolver? _modelResolver;
     private readonly ContextAssemblerOptions _options;
     private readonly ContextPolicy _policy;
@@ -195,7 +196,8 @@ public sealed class ContextAssembler : IContextAssembler
         IConversationStore? conversationStore = null,
         IRepositoryInstructionResolver? instructionResolver = null,
         IModelProviderInstructionResolver? providerInstructionResolver = null,
-        IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null)
+        IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null,
+        IModelRequestPreparationResolver? requestPreparationResolver = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -229,6 +231,7 @@ public sealed class ContextAssembler : IContextAssembler
         _instructionResolver = instructionResolver;
         _repositoryMemoryRetriever = repositoryMemoryRetriever;
         _providerInstructionResolver = providerInstructionResolver;
+        _requestPreparationResolver = requestPreparationResolver;
     }
 
     /// <inheritdoc />
@@ -558,16 +561,45 @@ public sealed class ContextAssembler : IContextAssembler
                 outputSchema,
                 additionalMessages);
             var stablePrefixCount = Math.Min(3, currentMessages.Count);
-            var wireTokens = ModelWireEstimator.Estimate(
+            var currentEstimate = ModelWireEstimator.Estimate(
                 currentMessages,
                 canonicalTools,
                 request.ToolTransportMode,
                 stablePrefixCount,
                 modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
                 providerInstructions,
-                _prompts)
-                .WireInputTokens;
-            return Math.Max(legacyTokens, wireTokens);
+                _prompts);
+            var prepared = PrepareWire(currentModelInput, currentMessages, currentEstimate, null);
+            return Math.Max(legacyTokens, prepared.WireInputTokens);
+        }
+
+        ModelWireEstimate PrepareWire(
+            string input,
+            IReadOnlyList<ModelMessage> requestMessages,
+            ModelWireEstimate estimate,
+            ModelRequestLayout? requestLayout)
+        {
+            if (_requestPreparationResolver is null || modelResolution is null)
+            {
+                return estimate;
+            }
+
+            var candidate = _requestPreparationResolver.Prepare(new ModelStreamRequest
+            {
+                RunId = request.RunId,
+                Input = input,
+                ResolvedProfileId = modelResolution.ProfileId,
+                MaximumOutputTokens = modelResolution.EffectiveRequestOutputTokenReserve,
+                ReasoningLevel = modelResolution.DefaultReasoningLevel,
+                IncludeReasoningText = false,
+                Messages = requestMessages,
+                Tools = canonicalTools,
+                ToolTransportMode = request.ToolTransportMode,
+                ProviderInstructions = providerInstructions,
+                Layout = requestLayout,
+                WireEstimate = estimate,
+            });
+            return candidate.WireEstimate ?? estimate;
         }
 
         if (totalTokens > tokenBudget)
@@ -643,6 +675,7 @@ public sealed class ContextAssembler : IContextAssembler
             modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
             providerInstructions,
             _prompts);
+        wireEstimate = PrepareWire(modelInput, messages, wireEstimate, layout);
         if (wireEstimate.WireInputTokens > tokenBudget)
         {
             throw new InvalidOperationException(
@@ -1307,7 +1340,6 @@ public sealed class ContextAssembler : IContextAssembler
                 repositoryMemory.Content));
         }
 
-        messages.AddRange(conversation.CreateRecentMessages());
         messages.Add(CreateTextMessage(
             ModelMessageRole.Developer,
             "governed-request-state",
@@ -1325,11 +1357,14 @@ public sealed class ContextAssembler : IContextAssembler
                         : $"\n<available_tools>{toolSchemas}</available_tools>",
                     ["RequiredOutput"] = $"\n<required_output>{Escape(outputSchema)}</required_output>",
                 })));
+        var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
+        messages.AddRange(additionalPrefix);
+        messages.AddRange(conversation.CreateRecentMessages());
         messages.Add(CreateTextMessage(
             ModelMessageRole.User,
             "current-user",
             conversation.CurrentTurnContent));
-        messages.AddRange(additionalMessages);
+        messages.AddRange(additionalMessages.Skip(additionalPrefix.Length));
         return messages;
     }
 

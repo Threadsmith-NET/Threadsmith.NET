@@ -86,7 +86,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
 | `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
 | `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | System guidance for the `MutationProposal` phase. | `None` |
+| `System-Phase-MutationProposal.md` | System guidance for mutation proposals through an offered tool or final JSON schema. | `None` |
 | `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
 
 #### `RepositoryInstructions` family
@@ -102,7 +102,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
-| `System-RequiredOutput-MutationProposal.md` | Required-output guidance for `MutationProposal`. | `None` |
+| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | `None` |
 | `System-RequiredOutput-Plan.md` | Required-output guidance for `Plan`. | `None` |
 
 #### `SystemPrompt` family

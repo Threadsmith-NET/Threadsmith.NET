@@ -808,3 +808,15 @@ Record automated and physical-terminal evidence separately; unexecuted operator 
 5. Submit completed names, manually typed equivalents, and an unknown command. Verify identical shared command routing, frontend-local theme ownership, and local unknown-command rejection without model execution. A fixed command added to the shared catalog appears in both discovery views without command-specific frontend logic.
 
 **Verifies:** reversible non-executing discovery, shared command authority, input-lifetime isolation, bounded retained rendering, and intentional TUIKit-only interaction behavior.
+
+## Scenario AT — Native Anthropic Models and Signed Tool Continuations
+
+1. Configure a trusted Anthropic descriptor and user-owned API-key reference. Inspect discovery status and select an eligible model. Confirm exact IDs retain stable profile GUIDs, excluded models report reasons, unrelated providers retain their defaults, and repository connection/credential overrides cannot activate privileged routes.
+2. Refresh metadata and restart. Exercise fresh/stale cache, missing credentials, authentication rejection, bounded pagination, cancellation, and malformed responses. Confirm transient failure alone permits stale fallback and incomplete discovery never replaces a complete snapshot.
+3. Run ordinary chat, multiple same-name tools across several rounds, an approved mutation proposal, a delegated child, and a model-assisted skill. Confirm native assistant block order, exact tool IDs/results, host approval and validation, and completion-gated execution.
+4. Select reasoning effort and independently toggle summarized thinking display, including between tool continuations. Confirm disabled display preserves required signatures privately, switching does not reissue requests, and models without reasoning-off support retain a valid selectable default.
+5. Exercise cancellation, malformed/oversized streams, incomplete messages, transient failures before output, and failures after partial output. Confirm bounded sanitized failure, one retry owner, no duplicate tool effects, and disposal of private continuation state.
+6. Compare prepared capacity and native payloads containing strict tools, system blocks, replay, and cache breakpoints. Confirm requests that cannot fit fail before dispatch; reported input includes ordinary, cache-write, and cache-read tokens exactly once; output counters remain cumulative; missing usage and real cache misses remain explicit.
+7. Inspect ordinary and privileged raw logs, durable events, hooks, checkpoints, restart/resume, and context output using seeded private canaries. Confirm no native signed/redacted replay payload or credentials escape the active loop. Restart retains ordinary completed conversation boundaries only.
+
+**Verifies:** native protocol compatibility, trusted discovery, immutable selection, host-owned tools, independent effort/display controls, bounded private replay, conservative admission, honest caching/cost, transport lifetime, failure recovery, and interactive/headless parity.

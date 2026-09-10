@@ -193,6 +193,22 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(new SetActiveReasoningCommand(reasoningLevel), cancellationToken);
     }
 
+    /// <summary>Inspects secret-free model discovery status through the shared host boundary.</summary>
+    public Task<ModelCatalogProviderStatus> GetModelCatalogStatusAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new GetModelCatalogStatusCommand(providerId), cancellationToken);
+    }
+
+    /// <summary>Refreshes model metadata for the next startup through the shared host boundary.</summary>
+    public Task<ModelCatalogRefreshResult> RefreshModelCatalogAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RefreshModelCatalogCommand(providerId), cancellationToken);
+    }
+
     /// <summary>Runs a model-provider authentication operation through the shared host boundary.</summary>
     public Task<ModelProviderAuthenticationResult> ManageModelProviderAuthenticationAsync(
         string providerId,

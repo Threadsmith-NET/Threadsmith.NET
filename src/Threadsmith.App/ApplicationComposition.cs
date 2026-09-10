@@ -187,7 +187,8 @@ internal static class ApplicationComposition
             persistence.ConversationStore,
             repositoryInstructionResolver,
             providerInstructionResolver: providerInstructionResolver,
-            repositoryMemoryRetriever: memoryRetriever);
+            repositoryMemoryRetriever: memoryRetriever,
+            requestPreparationResolver: integration.Models.Provider as IModelRequestPreparationResolver);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -756,6 +757,11 @@ internal static class ApplicationComposition
                 new CodexAuthenticationApplication(host.Paths),
                 integration.McpManager,
             };
+            if (integration.Models.CatalogMaintenance is { } catalogMaintenance)
+            {
+                handlers.Add(new ModelCatalogMaintenanceApplication(catalogMaintenance));
+            }
+
             if (integration.Models.ActiveModels is { } activeModels)
             {
                 var activeModelSelection = new ActiveModelSelectionApplication(

@@ -77,22 +77,20 @@ dotnet --version
 Before changing files:
 
 1. Read the root [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
-2. Follow its DOX chain by reading every closer `AGENTS.md` that owns the files you will touch.
-3. Before writing or modifying C#, read the [portable C# guardrails](docs/guardrails/portable-csharp-guardrails.md).
-4. Review applicable architecture decisions and implementation plans from the [documentation index](docs/index.md).
+2. Before writing or modifying C#, read the [portable C# guardrails](docs/guardrails/portable-csharp-guardrails.md).
+3. Review applicable architecture decisions and implementation plans from the [documentation index](docs/index.md).
 
 Important repository conventions include:
 
 - Target .NET 10 and the repository's latest C# language version.
-- Keep nullable analysis clean; do not use null-forgiving suppression.
+- Follow G-1 for nullable analysis and the test-project null-suppression exception.
 - Treat warnings and enabled analyzer findings as errors.
 - Add external package versions to [`Directory.Packages.props`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/Directory.Packages.props), not individual project files.
 - Preserve dependency direction; architecture tests enforce subsystem boundaries.
 - Propagate cancellation through asynchronous boundaries.
-- Add XML documentation to public members.
+- Follow G-18 for XML documentation and the test/spike exemptions.
 - Prefer small, focused changes and avoid unrelated formatting or refactoring.
 - Add or update meaningful tests for externally observable behavior changes.
-- Complete the required DOX pass after meaningful changes so owning `AGENTS.md` files and child indexes remain current.
 
 The root [`.editorconfig`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.editorconfig) owns formatting and style. Check formatting without rewriting unrelated files:
 
@@ -115,7 +113,7 @@ dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
 Also run checks owned by the area you changed:
 
 - Architecture or project-reference changes: `tests/Threadsmith.Architecture.Tests`.
-- Release automation changes: follow [`eng/AGENTS.md`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/eng/AGENTS.md) and run the release contract checks.
+- Release automation changes: run the relevant release contract checks under `eng/release/`.
 - Spike changes: build `spikes/Spikes.sln` and run the affected headless-safe spike.
 - Interactive terminal changes: update automated projection tests and the maintained [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) when real-terminal behavior changes.
 
@@ -138,7 +136,7 @@ Keep commits reviewable and avoid mixing unrelated work. Conventional prefixes s
 3. Push your branch to your fork and open a pull request against `main`.
 4. Explain the problem, solution, important design choices, risks, and verification performed.
 5. Link the tracking issue when applicable (for example, `Closes #42`).
-6. Update documentation, tests, and the applicable DOX files when behavior or durable contracts change.
+6. Update documentation and tests when behavior or durable contracts change.
 7. Ensure the Windows, Linux, and macOS GitHub Actions checks pass.
 
 Maintainers may request changes to preserve host authority, repository containment, public contracts, cross-platform behavior, terminal compatibility, or test quality.

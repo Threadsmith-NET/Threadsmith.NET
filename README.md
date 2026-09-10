@@ -197,7 +197,7 @@ See [governed skills and reusable workflows](docs/user-guide.md#governed-skills-
 
 ## How to contribute
 
-Bug reports, feature proposals, code changes, and documentation improvements are welcome. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Before opening a pull request, review the repository's development setup, coding guardrails, testing expectations, DOX workflow, and submission checklist in [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports, feature proposals, code changes, and documentation improvements are welcome. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Before opening a pull request, review the repository's development setup, coding guardrails, testing expectations, and submission checklist in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Currently, I am using the fork-and-pr method of accepting contributions.
 
@@ -269,10 +269,6 @@ Threadsmith/
 ├── docs/                                  # user, architecture, operations, and planning docs
 └── .threadsmith/config.example             # annotated repository configuration schema
 ```
-
-### DOX Framework
-
-Not so much a "framework" but an addition to AGENTS.MD - this project uses the process described in https://github.com/agent0ai/dox to help provide localized (in the project) details to AI agents. I think it's been helpful, and using it is nothing more than a block on AGENTS.md - the additional, localized documentation in the sub-AGENTS.md files is useful for humans, too!
 
 ## Documentation
 

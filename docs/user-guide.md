@@ -239,7 +239,7 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/memory update <id> <text>` | Correct the same stable ID; `supersede` is a compatibility alias. |
 | `/memory forget <id>` | Delete current memory content, search state, and usage. |
 | `/memory validate` | Retired; returns migration guidance, as do old category/validity arguments. |
-| `/models` | Select and persist the active repository provider/model. |
+| `/models [status|refresh <provider-id>]` | Select the active repository model, inspect discovery, or refresh metadata for the next startup. |
 | `/new` | Checkpoint the current session and activate a fresh empty session. |
 | `/open [path]` | Open or switch repositories. |
 | `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
@@ -1024,7 +1024,7 @@ Invalid provider kinds, insecure or credential-bearing endpoints, non-secret cre
 
 Create or sign in to a Brave Search API account and generate a subscription key in the [Brave Search API dashboard](https://api.search.brave.com/app/keys). Review the plan and pricing presented by Brave before subscribing because API availability, included credits, and usage charges are provider-controlled and may change.
 
-The default logical reference is `secrets:BRAVE_SEARCH_API_KEY`. The recommended durable source is the owner-protected user store at `~/.threadsmith/secrets/config.json`:
+The default logical reference is `secrets:BRAVE_SEARCH_API_KEY`. The recommended durable source is the user store at `~/.threadsmith/secrets/config.json`:
 
 ```json
 {
@@ -1103,6 +1103,14 @@ After login, Threadsmith queries the protected Codex `/models` resource and proj
 
 Codex authorization/resource authorities, client identity, scopes, redirect URI, and credential headers are compiled policy. Browser login requires `http://localhost:1455/auth/callback`; if that port is occupied, stop the conflicting process and retry. Headless login displays an OpenAI verification URI and one-time user code. Authentication failures never fall back silently to another provider.
 
+### Anthropic API-key setup and discovery
+
+The native `anthropic` provider uses Anthropic's Messages API and discovers models through its Models API. Add an enabled descriptor to the user `~/.threadsmith/providers.json` catalog and keep its API key in the separate owner-protected `~/.threadsmith/secrets/config.json` store. Repository keys and ambient SDK authentication cannot supply this provider. The complete descriptor and secret-reference example is in [native Anthropic operations](operations/model-providers.md#native-anthropic).
+
+Use `/models status <provider-id>` to inspect discovered model IDs, profile GUIDs, eligibility, and exclusion reasons. `/models refresh <provider-id>` updates bounded credential-free metadata; restart to rebuild the immutable selectable catalog. Select a model explicitly with `/models`; discovery does not replace your default. These status and refresh commands also work headlessly.
+
+Anthropic thinking display defaults to off. `/thinking on|off` applies to the next model request, including a tool continuation, and headless requests accept `--thinking on|off`. The setting controls summarized display independently of `/reasoning` effort. It never restarts an in-flight request. Private signed blocks needed by the native protocol are retained only during the active loop and are never restored from logs or sessions. A continuation that cannot fit fails with capacity guidance instead of compacting required signed content.
+
 ### Legacy model-profile migration
 
 Legacy `model:profiles[]` remains available for a bounded compatibility period when neither dedicated catalog exists. Threadsmith adapts those profiles only in memory, preserves each profile GUID and exact endpoint/request settings, writes no configuration, and emits one deprecation warning per startup. The removal milestone is not yet selected and requires a later announced decision.
@@ -1127,7 +1135,7 @@ Use `/models` to open the keyboard selector. Choices show provider/model identit
 
 Repository selection wins over `defaultProviderId`/`defaultModelId` in the user provider catalog. Those defaults apply only when both repository selection ids are absent. Partial, malformed, mismatched, missing, or disabled repository intent fails closed with repair guidance rather than silently selecting a user default.
 
-A switch changes provider routing for the next request. In-flight work retains its captured model. An exact supported reasoning level is preserved; otherwise reasoning becomes `none` and the terminal lists valid `/reasoning` choices. `/reasoning` changes persist to the same repository selection. Opening another repository reloads its selection (or the user default when no repository selection exists) and redirects later `/models` and `/reasoning` writes to that repository. Current-context occupancy is cleared until the next request is assembled for the new context limit; cumulative provider token usage is not reset.
+A switch changes provider routing for the next request. In-flight work retains its captured model. An exact supported reasoning level is preserved; otherwise reasoning becomes `none` when supported, or the validated profile default when reasoning cannot be disabled, and the terminal lists valid `/reasoning` choices. `/reasoning` changes persist to the same repository selection. Opening another repository reloads its selection (or the user default when no repository selection exists) and redirects later `/models` and `/reasoning` writes to that repository. Current-context occupancy is cleared until the next request is assembled for the new context limit; cumulative provider token usage is not reset.
 
 The TUI and headless adapter use the same list, current-selection, select-model, and set-reasoning host commands. Headless callers therefore observe the same validation, reset, persistence, and repository-rebinding behavior.
 
@@ -1175,13 +1183,13 @@ Repository configuration cannot add/reorder providers or weaken source trust. Fo
 $env:THREADSMITH_secrets__models__example = "<credential>"
 ```
 
-Environment variables are optional rather than mandatory. The user store is edited explicitly outside Threadsmith; no command accepts a secret in normal command arguments. Owner-only modes are required on Unix, and Windows users should retain the user-profile ACL. MCP and Codex access/refresh-token caches remain lifecycle-specific and must not be copied into these static stores.
+Environment variables are optional rather than mandatory. The user store is edited explicitly outside Threadsmith; no command accepts a secret in normal command arguments. The operating system controls file access; Threadsmith does not inspect or change user-store ownership, Windows ACLs, or Unix permission bits. MCP and Codex access/refresh-token caches remain lifecycle-specific and must not be copied into these static stores.
 
 Failures report only the logical reference, component, safe attempted/skipped sources, stable classification, and remediation. Values, store/environment contents, and raw provider exceptions never enter model context, status, logs, events, persistence, diagnostics, hooks, or support bundles. See [static secret discovery](operations/secret-discovery.md) for setup, Git remediation, trust rules, and troubleshooting.
 
 ### Reasoning levels
 
-Models declare their own string names in `supportedReasoningLevels`, plus a `defaultReasoningLevel` from that list. Threadsmith has no shared allowlist of reasoning names: `["none", "low", "medium", "xhigh"]` and other model-specific choices are accepted. Custom names survive selection, saved sessions, and effort-based provider requests; `none` retains the existing disabled/reset behavior. OpenAI-compatible models may opt into versioned closed `reasoningCompatibility` modes for standard/mapped effort, compiled chat-template or fixed additions, always-on reasoning, or unsupported reasoning. `/reasoning` distinguishes selectable, always-on, and unsupported models; level changes are accepted only when selectable and advertised. Without an argument, it shows the active model, one reasoning-control summary (including selectable levels), and the current setting. Switching models resets the shared session level to `none`. Hidden reasoning is transient-only; migration 7 purges historical reasoning-event rows and new reasoning text is excluded from durable events, conversation, memory, hooks, telemetry, evidence, and diagnostics. See [model-provider operations](operations/model-providers.md).
+Models declare their own string names in `supportedReasoningLevels`, plus a `defaultReasoningLevel` from that list. Threadsmith has no shared allowlist of reasoning names: `["none", "low", "medium", "xhigh"]` and other model-specific choices are accepted. Custom names survive selection, saved sessions, and effort-based provider requests; `none` retains the existing disabled/reset behavior. OpenAI-compatible models may opt into versioned closed `reasoningCompatibility` modes for standard/mapped effort, compiled chat-template or fixed additions, always-on reasoning, or unsupported reasoning. `/reasoning` distinguishes selectable, always-on, and unsupported models; level changes are accepted only when selectable and advertised. Without an argument, it shows the active model, one reasoning-control summary (including selectable levels), and the current setting. Switching models preserves a supported level, otherwise chooses `none` when supported or the new profile default when reasoning cannot be disabled. Selectable effort does not imply that reasoning can be disabled. Hidden reasoning is transient-only; migration 7 purges historical reasoning-event rows and new reasoning text is excluded from durable events, conversation, memory, hooks, telemetry, evidence, and diagnostics. See [model-provider operations](operations/model-providers.md).
 
 Qwen3.8 profiles can explicitly select the `enableThinkingWithPreservationAndEffort` chat-template kind with a complete `levelMap` to transmit the chosen effort alongside the thinking and preservation flags. Existing compatibility modes and other model profiles retain their request formats. See the [Qwen3.8 configuration example](operations/model-providers.md#qwen38-thinking-and-effort).
 

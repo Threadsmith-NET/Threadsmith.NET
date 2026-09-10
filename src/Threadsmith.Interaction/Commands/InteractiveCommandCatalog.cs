@@ -33,7 +33,7 @@ public static class InteractiveCommandCatalog
         new("/hooks", "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Govern lifecycle hooks"),
         new("/mcp", "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]", "Manage MCP profiles and capabilities"),
         new("/memory", "/memory [remember|list|inspect|update|forget]", "Manage local repository memory"),
-        new("/models", "/models", "Select and persist the repository model"),
+        new("/models", "/models [status|refresh <provider-id>]", "Select a model or maintain discovery metadata"),
         new("/new", "/new", "Start a fresh independent session"),
         new("/open", "/open [path]", "Open a repository and choose trust"),
         new("/plan-policy", "/plan-policy [name|current|reset|revoke]", "Select or report plan approval policy"),

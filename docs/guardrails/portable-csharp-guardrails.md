@@ -1,56 +1,38 @@
 # Portable C# Guardrails
 
-> **Scope note:** Where a rule below references a logging or DI API, the *principle* is portable but the *API name* is not — substitute your project's equivalents.
+> **Scope:** Follow the repository's `Directory.Build.props` and `.editorconfig` for shared compiler settings, analyzer enforcement, and documented exceptions. Logging and DI API names in examples stand for the project's equivalents; snippets omit unrelated documentation and members.
 
 ---
 
 ## A. Nullability and null safety
 
-### G-1: Nullable reference types enabled, code is nullable-aware
-`<Nullable>enable</Nullable>` in every `.csproj`. Reference types must be annotated, null checks present where required, and no "possible null reference" warnings introduced. Do not suppress with `!`; prefer an explicit upstream null check.
+### G-1: Nullable analysis and null suppression
+Nullable analysis is enabled for every project, including tests, through `Directory.Build.props`; do not duplicate the setting in individual project files. Annotate nullable references, guard where needed, and introduce no nullable warnings. The null-forgiving operator (`!`) is prohibited outside test projects. Test projects may use it, including for invalid-input tests and fixture setup; prefer annotations or guards when practical.
 
 ```csharp
-// Compliant
-public class MyService
-{
-    private readonly ILogger _logger;
-    public MyService(ILogger logger) => _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    public string? GetName() => null; // nullable return declared
-}
+public static string? GetName() => null;
 
-// Non-compliant
-public string GetName() => null!;     // suppressing instead of being nullable-aware
-private ILogger _logger;              // CS8618: uninitialized
+// Non-compliant outside test projects
+public static string GetName() => null!;
 ```
 
-### G-2: Argument validation via static helpers, not manual if-blocks
-Prefer `ArgumentNullException.ThrowIfNull(...)`, `ArgumentException.ThrowIfNullOrWhiteSpace(...)`, or coalesce expressions (`??`) for parameter validation. Do not write manual `if (x == null) throw ...` blocks. Do not use `!` to silence a warning where an explicit guard is possible.
+### G-2: Validate arguments with static helpers
+Use `ArgumentNullException.ThrowIfNull(...)`, `ArgumentException.ThrowIfNullOrWhiteSpace(...)`, or `?? throw` for argument validation instead of manual null-check-and-throw blocks.
 
 ```csharp
-// Compliant
 private static string ConcatStrings(string a, string b)
 {
-    ArgumentNullException.ThrowIfNullOrWhiteSpace(a, nameof(a));
-    ArgumentNullException.ThrowIfNullOrWhiteSpace(b, nameof(b));
+    ArgumentException.ThrowIfNullOrWhiteSpace(a);
+    ArgumentException.ThrowIfNullOrWhiteSpace(b);
     return string.Concat(a, b);
 }
-
-// Non-compliant
-private static string ConcatStrings(string a, string b) => string.Concat(a!, b!);
 ```
 
 ### G-3: Prefer null-coalescing for fallback values
-When the intent is "first non-null value" or "initialize only if null," use `??` / `??=` rather than verbose `if/else` chains.
+Use `??` for the first non-null value and `??=` to initialize only when null.
 
 ```csharp
-// Prefer
 var displayName = user.DisplayName ?? user.UserName ?? "Unknown User";
-
-// Instead of
-string displayName;
-if (user.DisplayName != null) displayName = user.DisplayName;
-else if (user.UserName != null) displayName = user.UserName;
-else displayName = "Unknown User";
 ```
 
 ---
@@ -76,7 +58,7 @@ public class LLMNERService : INERService { /* ... */ }
 Use `init` instead of `set` for properties that should only be set during object initialization. Use `required` for mandatory properties on `record` and data types. This communicates intent and allows object-initializer syntax while preventing post-construction mutation.
 
 ```csharp
-public class FusionRequest
+public record FusionRequest
 {
     public required string Question { get; init; }
     public string? SessionId { get; init; }
@@ -84,8 +66,8 @@ public class FusionRequest
 // Non-compliant: public string Question { get; set; } = "";
 ```
 
-### G-6: Primary constructors for simple exception types only
-Use primary constructors (`ExceptionType(params) : base(...)`) only for custom exception types with minimal logic. Do not use primary constructors for service classes or classes with real behaviour.
+### G-6: Class primary constructors only for simple exceptions
+For non-record classes, use primary constructors only for custom exceptions with minimal logic. Do not use them for services or other classes with behaviour. Positional records remain valid for data types under G-4.
 
 ```csharp
 // Compliant — minimal exception
@@ -139,33 +121,33 @@ Namespace segments map to the folder path under the project root.
 
 ## D. Method and decomposition discipline
 
-### G-10: Avoid unjustified single-use abstractions
-Extract a block when it is reused by ≥2 call sites **or** when the extracted boundary materially improves readability, lifecycle ownership, or testability. Do not create trivial pass-through helpers that merely rename one expression or force navigation without clarifying responsibility.
+### G-10: Extract only useful boundaries
+Extract code when reused by at least two call sites or when a named phase materially improves readability or clarifies ordering, side effects, resource ownership, or testable policy. Keep trivial steps inline; avoid pass-through helpers that only rename an expression or fragment context.
 
 ```csharp
-// Compliant — the phase boundary makes orchestration readable and configuration independently testable.
-ConfigurationPaths paths = ConfigurationBootstrap.ResolvePaths(requestedRepository);
-IConfigurationRoot configuration = ConfigurationBootstrap.Build(args, paths);
+// Named phases clarify orchestration and make configuration testable.
+var paths = ConfigurationBootstrap.ResolvePaths(requestedRepository);
+var configuration = ConfigurationBootstrap.Build(args, paths);
 
-// Non-compliant — a trivial single-use rename adds no clarity, ownership, or test seam.
-private string FormatCommandId(Guid id) => id.ToString();
+// Non-compliant: a single-use rename adds no useful boundary.
+private static string FormatCommandId(Guid id) => id.ToString();
 ```
 
-### G-11: Methods are cohesive and appropriately sized
-Prefer cohesive methods with inline comments for nearby logical steps. Break up a long composition or workflow method when named phases clarify ordering, side effects, resource lifetime, or independently testable policy. Keep tiny implementation details inline when extraction would only fragment context.
+### G-11: Keep methods cohesive
+Keep each method focused on one responsibility; use G-10 to decide when to extract phases.
 
-### G-12: Existing patterns take precedence
-Before adding/modifying code, find how similar problems are solved elsewhere in the codebase and follow that precedent. New patterns require explicit team-review flagging. Do not introduce foreign patterns (e.g. `Result<T>`/`Optional<T>`) where the codebase uses exceptions.
+### G-12: Follow existing compliant patterns
+Before adding/modifying code, find similar solutions and follow their patterns when consistent with the applicable contracts and guardrails. New patterns require explicit team-review flagging. Do not introduce foreign patterns (e.g. `Result<T>`/`Optional<T>`) where the codebase uses exceptions.
 
 ---
 
 ## E. Async, LINQ, and expression style
 
 ### G-13: Async conventions
-- All async methods return `Task` or `Task<T>` (not `ValueTask` unless the project has adopted it).
+- Async methods return `Task`, `Task<T>`, or `IAsyncEnumerable<T>` for async streams. Use `ValueTask` only where the project has adopted it or a required contract specifies it.
 - `CancellationToken` is the last parameter, defaulting to `default`.
 - Always forward cancellation tokens.
-- No `async void` — always `async Task`.
+- No `async void`.
 - When an interface/base defines a `Task`/`Task<T>` return but the implementation performs no async work, do **not** add the `async` modifier — return `Task.CompletedTask` or `Task.FromResult(...)`.
 - `ConfigureAwait(false)` is not used in ASP.NET Core hosts (no synchronization context); apply the project's convention rather than defaulting to it.
 
@@ -187,7 +169,9 @@ Use method syntax (`.Select(...).Where(...).ToArray()`), not query syntax (`from
 ```csharp
 // Preferred
 var entityTypesEnum = entityTypes
-    .Select(e => Enum.TryParse<EntityType>(e, true, out var t) ? t : throw new NotSupportedException($"Unsupported: {e}"))
+    .Select(e => Enum.TryParse<EntityType>(e, true, out var value)
+        ? value
+        : throw new NotSupportedException($"Unsupported: {e}"))
     .ToArray();
 
 // Do not write
@@ -195,7 +179,7 @@ var result = from e in entityTypes select /*...*/;
 ```
 
 ### G-15: Prefer `var` for local variables whenever possible
-Use `var` for local variable declarations whenever the compiler can infer the type, including built-in values, object creation, generic method calls, LINQ results, and complex domain concepts. Prefer names and surrounding code that make intent clear instead of repeating the static type in the declaration. Use an explicit local type only when C# requires it or when a declaration form cannot use `var`.
+Use `var` whenever C# can infer a local variable's type. Use explicit types only when required by the declaration, including target typing for collection expressions (G-16). Choose names that make intent clear.
 
 ```csharp
 var count = 0;
@@ -205,7 +189,7 @@ var result = new ReadOnlyCollection<INamedEntity>(namedEntities);
 ```
 
 ### G-16: Collection expressions for inline initialization
-Use collection expression syntax `[a, b]` instead of `new[] { a, b }` or `new List<T> { a, b }` where the type can be inferred (C# 12+).
+Prefer collection expressions (`[a, b]`) where the target type is known and source and target types match exactly, as configured in `.editorconfig`. Preserve the collection's runtime type and behavior.
 
 ```csharp
 public EntityType[] SupportedTypes => [
@@ -228,8 +212,8 @@ public EntityType[] SupportedTypes => [
 | Test-only types within test classes | `private` (nested) |
 | Extension method classes | `public static` (or `internal static` if project-internal) |
 
-### G-18: XML doc comments on all public members
-All `public` types, constructors, methods, and properties must have `/// <summary>` comments (plus `<param>`, `<returns>`, `<exception>`, `<remarks>` for non-obvious details). Internal/private members may omit them. Comments describe intent and usage, not a restatement of code.
+### G-18: XML documentation follows build policy
+Document public product types and members with `/// <summary>` and additional XML tags for non-obvious details. Describe intent and usage, not a restatement of code. Follow configured SA1600/SA1601 requirements for other members. Tests and spikes are exempt from XML-documentation requirements under `Directory.Build.props` and `.editorconfig`.
 
 ```csharp
 /// <summary>Acquires source data, caching the parsed result for subsequent calls.</summary>
@@ -242,27 +226,18 @@ public async Task<SubmissionData> GetSourceDataAsync(CancellationToken cancellat
 ### G-19: No `#region`
 `#region` / `#endregion` blocks are not used. Do not introduce them.
 
+### G-30: Follow configured member ordering
+Follow SA1202 accessibility ordering and its `.editorconfig` exceptions. Do not insert private helpers between public method implementations. Kind ordering (SA1201) and static-before-instance ordering (SA1204) are disabled; preserve useful locality instead of imposing those orders.
+
+### G-31: Stateless members must be static
+Mark members `static` when they do not use instance state or call instance members; CA1822 is a build error. Retain instance members required by interfaces, overrides, or intentional instance contracts. Limit remediation to the relevant change.
+
 ---
 
 ## G. Exception handling
 
-### G-20: Throw at the boundary, log at the catch site
-Log exceptions at the catch site using your project's structured-logging API. Do not swallow exceptions silently. Re-throw (`throw;`) when the catch layer cannot handle the error meaningfully. Logging without re-throwing is acceptable only when there is a defined fallback path.
-
-```csharp
-try
-{
-    var result = await _pipelineProcessor.ExecuteAsync(/*...*/);
-}
-catch (Exception ex)
-{
-    _logger.LogError(ex, "Pipeline execution failed: {message}", ex.Message); // your logging API
-    throw; // re-throw if no fallback
-}
-
-// Never:
-catch (Exception ex) { /* silent swallow */ }
-```
+### G-20: Handle deliberately and log once
+Catch exceptions only to recover, translate at an owning boundary, or add necessary context. Otherwise let them propagate; use `throw;` when rethrowing to preserve the stack. Log once, with structured context, at the layer that handles or reports the failure. Do not add catch-log-rethrow blocks at every layer or silently discard failures. A handled failure must have a defined recovery or fallback. Propagate expected cancellation without logging it as an error.
 
 ---
 
@@ -279,8 +254,8 @@ public class MyService
     private readonly IProcessor _processor;
     public MyService(IProcessor processor, ILogger logger)
     {
-        _processor = processor;
-        _logger = logger;
+        _processor = processor ?? throw new ArgumentNullException(nameof(processor));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 }
 
@@ -288,29 +263,28 @@ public class MyService
 public class MyService { public ILogger Logger { get; set; } = null!; }
 ```
 
-### G-22: Inject multi-registration collections as `IEnumerable<T>`
-When a service expects a collection of implementations of an interface, inject `IEnumerable<T>` — not `List<T>` or `T[]`. Most DI containers resolve multi-registration this way; concrete collection types often fail to resolve.
+### G-22: Inject collections for multiple implementations
+Inject `IEnumerable<T>` for multiple registered implementations, rather than `List<T>` or `T[]`. When selecting one implementation, use the collection's established identifier or resolver instead of depending on a concrete member of that collection.
 
 ```csharp
-public MyService(IEnumerable<IPipelineDefinition> pipelineDefinitions, IProcessor processor, ILogger logger) { /*...*/ }
-// Not: public MyService(List<IPipelineDefinition> definitions, ...) { }
+public MyService(IEnumerable<IPipelineDefinition> pipelineDefinitions) { /* ... */ }
 ```
 
-### G-23: Prefer singletons; inject collections and select by name
-- Register components as singletons unless they are stateful/transient for a good reason.
-- Components registered as singletons should be used only as singletons (tests included).
-- When injecting components registered in collections, prefer injecting the collection and selecting the appropriate implementation by name/resolution — not a specific concrete implementation. Injecting a specific implementation from a collection usually requires extra registration.
+### G-23: Choose lifetimes by ownership
+- Choose singleton, scoped, or transient lifetimes to match state, resource ownership, and disposal needs.
+- Singletons must be safe for concurrent use and must not capture shorter-lived dependencies beyond their intended lifetime.
+- A singleton registration has one instance per service provider. Tests may create fresh providers or isolated instances rather than sharing a global fixture; tests of composition and lifetime behavior must exercise production registrations.
 
 ---
 
-## I. Unit testing (principles — frameworks/versions are project-specific). 
+## I. Unit testing
 
 ### G-24: Arrange-Act-Assert
 Always use AAA structure; mark sections with comments when non-obvious.
 
 ```csharp
 [Fact]
-public void MethodName_Scenario_ExpectedBehavior()
+public static void MethodReturnsExpectedValue()
 {
     // Arrange
     var sut = new YourClass();
@@ -322,8 +296,8 @@ public void MethodName_Scenario_ExpectedBehavior()
 }
 ```
 
-### G-25: Static factory helpers for test data
-Prefer static factory methods (`Submissions.TestSubmissionValid()`) over inline construction in each test. Static helper classes make test data reusable and readable.
+### G-25: Extract test-data factories when useful
+Prefer static factories when setup is reused or materially clearer behind a named boundary, using G-10's criteria. Keep simple, single-use test data inline.
 
 ### G-26: Dummy/stub implementations for complex interfaces
 Define minimal in-test implementations (`DummyPipelineStep`, `StubRepository`) for interfaces under test when a mock is insufficient.
@@ -331,16 +305,10 @@ Define minimal in-test implementations (`DummyPipelineStep`, `StubRepository`) f
 ### G-27: No cross-project test helpers
 Each test project is self-contained. Do not share test helpers across test projects — duplicate as needed.
 
-### G-28: Nullable-enabled test projects
-Test projects enable `<Nullable>enable</Nullable>`. `null!` initialization is acceptable **only** for fields set by a test-initialize method (e.g. `[TestInitialize]`/`[OneTimeSetUp]`), not as a general suppress.
+### G-28: Test nullability
+G-1 owns nullable analysis and the test-project exception for null suppression.
 
 ### G-29: Test class and file naming
-Test classes are named `{ClassUnderTest}_Tests` (or `{ClassUnderTest}Tests` for MSTest-style). Files follow the same convention. Dummy/stub files are `Dummy{Thing}.cs` / `Test{Thing}.cs`.
-
-### G-30: Member ordering is build-enforced
-Arrange members in the order required by StyleCop SA1202. Keep members with the same accessibility and kind together; in particular, do not place a private helper between public interface or API implementations. Reorder a member deliberately when adding it rather than relying on automated cleanup.
-
-### G-31: Stateless members must be static
-Mark a member `static` when it does not access instance state or call instance members. Treat CA1822 as a build error; use Visual Studio's **Make member static** quick action and **Fix all in Solution** when remediating existing violations. Retain an instance member only when it is required by an interface, override, or an intentional object-oriented boundary.
+Name test classes `{Subject}Tests` and files `{Subject}Tests.cs`, where the subject is the class, feature, or contract under test. Name dummy/stub files by role, such as `Dummy{Thing}.cs`, `Stub{Thing}.cs`, or `Test{Thing}.cs`.
 
 ---

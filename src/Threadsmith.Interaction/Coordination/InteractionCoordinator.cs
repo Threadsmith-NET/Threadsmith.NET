@@ -391,7 +391,7 @@ public sealed class InteractionCoordinator
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
         long? turnStartedTimestamp = null;
-        var streamThinking = false;
+        var streamThinking = _sessionPreferences?.IncludeReasoningText ?? false;
         var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
         ContextInspectionProjection? latestContextInspection = null;
         var modelAnswerCollector = new ModelAnswerCollector(_displayOptions.RenderMarkdown);
@@ -864,8 +864,9 @@ public sealed class InteractionCoordinator
                         continue;
                     }
 
+                    _sessionPreferences?.SetIncludeReasoningText(streamThinking);
                     await _surface.WriteAsync(
-                        $"Streaming thinking is {(streamThinking ? "on" : "off")}.\n",
+                        $"Streaming thinking is {(streamThinking ? "on" : "off")}. Inclusion changes on the next model request; an in-flight request continues unchanged.\n",
                         PresentationTextRole.Status,
                         lifetime.Token);
                     continue;
@@ -1058,6 +1059,40 @@ public sealed class InteractionCoordinator
                         result.Message + "\n",
                         resultRole,
                         lifetime.Token);
+                    continue;
+                }
+
+                if (commandText.StartsWith("/models ", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var arguments = commandText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        if (arguments.Length == 3 && string.Equals(arguments[1], "status", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var status = await _presenter.GetModelCatalogStatusAsync(arguments[2], lifetime.Token);
+                            await _surface.WriteAsync(status.Status + "\n", PresentationTextRole.Status, lifetime.Token);
+                        }
+                        else if (arguments.Length == 3 && string.Equals(arguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var result = await _presenter.RefreshModelCatalogAsync(arguments[2], lifetime.Token);
+                            await _surface.WriteAsync(
+                                result.Status + "\n",
+                                result.Refreshed ? PresentationTextRole.Status : PresentationTextRole.Error,
+                                lifetime.Token);
+                        }
+                        else
+                        {
+                            await _surface.WriteAsync("Usage: /models [status|refresh <provider-id>]\n", PresentationTextRole.Error, lifetime.Token);
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        await _surface.WriteAsync(
+                            FormatStatusError(exception) + Environment.NewLine,
+                            PresentationTextRole.Error,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 

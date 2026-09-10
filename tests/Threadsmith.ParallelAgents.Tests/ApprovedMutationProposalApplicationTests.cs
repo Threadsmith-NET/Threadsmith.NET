@@ -42,6 +42,7 @@ public sealed partial class ApprovedMutationProposalApplicationTests
         Assert.Equal(ReasoningLevel.Low, request.ReasoningLevel);
         Assert.True(request.RequiredCapabilities.ToolCalls);
         Assert.False(request.RequiredCapabilities.StructuredOutput);
+        Assert.Equal(0, fixture.Model.ResponseEnvelope?.ByteCount);
         Assert.Equal(fixture.Profile.EffectiveRequestOutputTokenReserve, request.MaximumOutputTokens);
         Assert.DoesNotContain(fixture.ObservedEvents, item => item is DelegationCheckpointWritten or AgentRunLifecycleObserved);
 
@@ -63,6 +64,27 @@ public sealed partial class ApprovedMutationProposalApplicationTests
             ApprovalId = staged.ApprovalId,
         });
         Assert.Equal(ChangedText, await File.ReadAllTextAsync(fixture.FilePath));
+    }
+
+    /// <summary>The non-tool mutation branch carries the explicit host-owned final JSON response format.</summary>
+    [Fact]
+    public async Task ParentProposal_NonToolPhase_RequestsCanonicalMutationResponseFormat()
+    {
+        // Arrange
+        await using var fixture = await Fixture.CreateAsync(structuredOutput: true);
+        var command = fixture.Command with { Phase = RunPhase.MutationPreparation };
+
+        // Act
+        await fixture.Application.HandleAsync(command);
+
+        // Assert
+        var request = Assert.Single(fixture.Model.Requests);
+        Assert.False(request.RequiredCapabilities.ToolCalls);
+        Assert.True(request.RequiredCapabilities.StructuredOutput);
+        Assert.Empty(request.Tools);
+        var format = Assert.IsType<ModelResponseFormat>(request.ResponseFormat);
+        Assert.Equal("threadsmith.mutation-proposal.v1", format.SchemaId);
+        Assert.Contains("mutationSet", format.JsonSchema, StringComparison.Ordinal);
     }
 
     /// <summary>A provider failure after emitting a candidate cannot stage or apply that partial output.</summary>
@@ -168,10 +190,10 @@ public sealed partial class ApprovedMutationProposalApplicationTests
         private readonly EvidenceStore _evidence;
         private readonly IAsyncDisposable _subscription;
 
-        private Fixture(string root)
+        private Fixture(string root, bool structuredOutput)
         {
             Root = root;
-            Profile = CreateProfile(structuredOutput: false);
+            Profile = CreateProfile(structuredOutput);
             _subscription = _events.Subscribe((item, _) =>
             {
                 ObservedEvents.Enqueue(item);
@@ -245,11 +267,11 @@ public sealed partial class ApprovedMutationProposalApplicationTests
 
         public ProposeMutationSetCommand Command { get; }
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(bool structuredOutput = false)
         {
             var root = Path.Combine(Path.GetTempPath(), "ThreadsmithApprovedMutationTests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            var fixture = new Fixture(root);
+            var fixture = new Fixture(root, structuredOutput);
             try
             {
                 await File.WriteAllTextAsync(fixture.FilePath, OriginalText, new UTF8Encoding(false));
@@ -290,6 +312,8 @@ public sealed partial class ApprovedMutationProposalApplicationTests
 
     private sealed class RecordingModel : IModelProvider
     {
+        public ModelResponseReplayEnvelope? ResponseEnvelope { get; private set; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public Queue<string> Outputs { get; } = new();
@@ -309,10 +333,33 @@ public sealed partial class ApprovedMutationProposalApplicationTests
             Requests.Add(request);
             await Task.CompletedTask;
             yield return new ModelChunk { Reasoning = Reasoning, Usage = new ModelUsage(11, 7) };
-            yield return new ModelChunk
+            var arguments = Outputs.TryDequeue(out var output) ? output : DefaultOutput;
+            if (request.RequiredCapabilities.ToolCalls)
             {
-                Output = new ToolRequestModelOutput("propose_mutations", Outputs.TryDequeue(out var output) ? output : DefaultOutput),
-            };
+                ResponseEnvelope = new ModelResponseReplayEnvelope(
+                    new ModelReplayBinding
+                    {
+                        ProviderId = "test",
+                        ModelId = "test",
+                        ProfileId = request.ResolvedProfileId ?? throw new InvalidOperationException("A profile is required."),
+                        RunId = request.RunId,
+                        ModelRound = request.ToolContinuationRound,
+                        CredentialGeneration = "test",
+                        ToolInventoryDigest = "test",
+                        InstructionDigest = "test",
+                        NormalizedRoundDigest = "test",
+                    },
+                    [1],
+                    ["mutation-wire"],
+                    1);
+                yield return new ModelChunk { ResponseEnvelope = ResponseEnvelope };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("propose_mutations", arguments) };
+            }
+            else
+            {
+                yield return new ModelChunk { Text = arguments };
+            }
+
             AfterOutput?.Invoke();
             if (FailAfterOutput)
             {

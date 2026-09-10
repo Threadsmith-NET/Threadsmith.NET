@@ -41,13 +41,13 @@ For a category-organized explanation of every file and a glossary defining what 
 | `System-SystemPrompt.md` | `Threadsmith.Context` | `prompts/System-SystemPrompt.md` | System framing for `SystemPrompt`. | None |
 | `System-Phase-EvidenceCollection.md` | `Threadsmith.Context` | `prompts/System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | None |
 | `System-Phase-ChangePlanning.md` | `Threadsmith.Context` | `prompts/System-Phase-ChangePlanning.md` | System guidance for the `ChangePlanning` phase. | None |
-| `System-Phase-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-Phase-MutationProposal.md` | System guidance for the `MutationProposal` phase. | None |
+| `System-Phase-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-Phase-MutationProposal.md` | System guidance for mutation proposals through an offered tool or final JSON schema. | None |
 | `System-Phase-AwaitingMutationApproval.md` | `Threadsmith.Context` | `prompts/System-Phase-AwaitingMutationApproval.md` | System guidance for the `AwaitingMutationApproval` phase. | None |
 | `System-Phase-Compilation.md` | `Threadsmith.Context` | `prompts/System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | None |
 | `System-Phase-Validation.md` | `Threadsmith.Context` | `prompts/System-Phase-Validation.md` | System guidance for the `Validation` phase. | None |
 | `System-Phase-Default.md` | `Threadsmith.Context` | `prompts/System-Phase-Default.md` | System guidance for the `Default` phase. | None |
 | `System-RequiredOutput-EvidenceCollection.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | None |
-| `System-RequiredOutput-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-MutationProposal.md` | Required-output guidance for `MutationProposal`. | None |
+| `System-RequiredOutput-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | None |
 | `System-RequiredOutput-Plan.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-Plan.md` | Required-output guidance for `Plan`. | None |
 | `System-RepositoryInstructions-None.md` | `Threadsmith.Context` | `prompts/System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | None |
 | `System-RepositoryMemoryGuidance.md` | `Threadsmith.Context` | `prompts/System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | None |

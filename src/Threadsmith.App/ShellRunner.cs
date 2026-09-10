@@ -75,6 +75,13 @@ internal static class ShellRunner
             }
 
             await using var memoryWarningSubscription = SubscribeMemoryWarnings(context.Events, Console.Error);
+            await using var thinkingSubscription = context.Events.Subscribe(async (domainEvent, token) =>
+            {
+                if (domainEvent is ModelReasoningObserved reasoning && context.Models.SessionPreferences.IncludeReasoningText)
+                {
+                    await Console.Error.WriteAsync(reasoning.Text.AsMemory(), token);
+                }
+            });
 
             var headlessShell = new HeadlessShell(
                 context.Dispatcher,
@@ -83,6 +90,35 @@ internal static class ShellRunner
                 context.WebFetchAuthorization,
                 context.Paths.RepositoryRoot);
             var request = string.Join(' ', context.CommandLine.RequestArguments);
+            var catalogArguments = request.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (catalogArguments.Length > 0
+                && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase))
+            {
+                if (catalogArguments.Length == 3 && string.Equals(catalogArguments[1], "status", StringComparison.OrdinalIgnoreCase))
+                {
+                    var status = await headlessShell.GetModelCatalogStatusAsync(catalogArguments[2], processCancellation.Token);
+                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(status));
+                    return 0;
+                }
+
+                if (catalogArguments.Length == 3 && string.Equals(catalogArguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
+                {
+                    var result = await headlessShell.RefreshModelCatalogAsync(catalogArguments[2], processCancellation.Token);
+                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(result));
+                    return result.Refreshed ? 0 : 1;
+                }
+
+                if (catalogArguments.Length == 1)
+                {
+                    var models = await headlessShell.ListActiveModelsAsync(processCancellation.Token);
+                    await Console.Out.WriteLineAsync(JsonSerializer.Serialize(models));
+                    return 0;
+                }
+
+                await Console.Error.WriteLineAsync("Usage: /models [status|refresh <provider-id>]");
+                return 2;
+            }
+
             if (context.CommandLine.RepositoryOptionsSpecified)
             {
                 if (context.CommandLine.RequestArguments.Count > 0)

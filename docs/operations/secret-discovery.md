@@ -27,15 +27,9 @@ The user store is the recommended durable personal source. It is a separate stri
 
 Each colon-delimited reference segment becomes one nested property below `secrets`. For example, `secrets:models:example` selects `secrets` → `models` → `example`. Empty strings are rejected and are safe placeholders until a value is supplied.
 
-Create/edit this file outside Threadsmith and protect it as owner-only. On Windows, Threadsmith requires current-user ownership and rejects ACL entries that grant filesystem authority to other local principals; inherited access for Local System and built-in Administrators remains eligible. On Linux/macOS:
+Create/edit this file outside Threadsmith. The operating system controls read access: Threadsmith does not inspect or change the file's owner, Windows ACL, or Unix permission bits. A readable store is eligible even when its permissions grant other principals access; an operating-system access denial prevents reading it. The `UserOwned` classification identifies the configured user source, not a filesystem-permission audit.
 
-```powershell
-New-Item -ItemType Directory -Force (Join-Path $HOME ".threadsmith/secrets") | Out-Null
-chmod 700 (Join-Path $HOME ".threadsmith/secrets")
-chmod 600 (Join-Path $HOME ".threadsmith/secrets/config.json")
-```
-
-On Windows, keep the file under the current user's profile and do not grant other users access. Threadsmith rejects unsafe group/other Unix modes. The initial release intentionally has no `/secrets set` command because accepting values as normal command arguments would expose them to shell history and process inspection.
+The initial release intentionally has no `/secrets set` command because accepting values as normal command arguments would expose them to shell history and process inspection.
 
 ## Consumer trust and policy claims
 
@@ -44,6 +38,7 @@ Provider precedence applies only among sources eligible for the consumer's minim
 | Consumer | Static-secret behavior | Minimum source trust |
 |---|---|---|
 | OpenAI-compatible configured model | Optional provider `secretKeyReference` | `RepositoryOwned` |
+| Native Anthropic model discovery and Messages | Required provider `secretKeyReference`; fixed direct API endpoint | `UserOwned` |
 | Brave `web_search` | Required API-key reference | `UserOwned` |
 | MCP stdio | Every profile `secretScope` entry becomes one child environment variable | `UserOwned` |
 | MCP HTTP/SSE | Header values beginning with `secrets:` and optional OAuth client secret | `UserOwned` |
@@ -82,7 +77,7 @@ The final `git ls-files` command must report no match. Do not commit the removal
 
 ## Failure behavior
 
-Resolution fails closed for malformed references/stores, empty or non-string values, case-insensitive duplicate keys, excessive size/depth/count, non-regular files, unsafe paths/permissions, tracked or unignored repository files, unavailable/indeterminate Git state, missing eligible providers, source-trust rejection, bootstrap cycles, caller cancellation, and per-provider timeout. A timeout cancels the provider token; repository Git proofs wait asynchronously and terminate their process tree when cancelled. Errors contain the logical name, component, stable safe provider outcomes, and remediation—never the value, raw provider exception, file contents, or environment contents.
+Resolution fails closed for malformed references/stores, empty or non-string values, case-insensitive duplicate keys, excessive size/depth/count, non-regular files, unsafe paths, operating-system access denial, tracked or unignored repository files, unavailable/indeterminate Git state, missing eligible providers, source-trust rejection, bootstrap cycles, caller cancellation, and per-provider timeout. A timeout cancels the provider token; repository Git proofs wait asynchronously and terminate their process tree when cancelled. Errors contain the logical name, component, stable safe provider outcomes, and remediation—never the value, raw provider exception, file contents, or environment contents.
 
 A plain string containing `secrets:example` does not trigger discovery. Provider catalogs and typed profiles retain the logical reference. Repository configuration cannot add/reorder providers, lower minimum trust, or use a repository value to bootstrap user/managed policy.
 

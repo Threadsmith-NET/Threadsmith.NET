@@ -137,6 +137,10 @@ public sealed class ModelResolver : IModelResolver
             applied,
             ignored,
             selection.Rationale,
-            selectedProfile.EffectiveRequestOutputTokenReserve);
+            selectedProfile.EffectiveRequestOutputTokenReserve)
+        {
+            DefaultReasoningLevel = selectedProfile.DefaultReasoningLevel,
+            SupportsReasoningOff = selectedProfile.ReasoningCapability.SupportsReasoningOff,
+        };
     }
 }

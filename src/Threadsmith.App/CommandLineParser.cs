@@ -20,6 +20,7 @@ internal static class CommandLineParser
         string? codexAuthenticationAction = null;
         string? mcpAction = null;
         string? rawModelLogPath = null;
+        bool? includeReasoningText = null;
         var mcpConfirmed = false;
         var mcpAllowLocalCleanup = false;
         var mcpRevokeCurrentIdentity = false;
@@ -87,6 +88,19 @@ internal static class CommandLineParser
             if (string.Equals(args[index], "--codex-logout", StringComparison.OrdinalIgnoreCase))
             {
                 codexAuthenticationAction = "logout";
+                continue;
+            }
+
+            if (string.Equals(args[index], "--thinking", StringComparison.OrdinalIgnoreCase))
+            {
+                if (includeReasoningText is not null || !TryReadValue(args, ref index, out var thinking)
+                    || (!string.Equals(thinking, "on", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(thinking, "off", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return CommandLineParseResult.Failure("Use --thinking on|off once.");
+                }
+
+                includeReasoningText = string.Equals(thinking, "on", StringComparison.OrdinalIgnoreCase);
                 continue;
             }
 
@@ -203,6 +217,7 @@ internal static class CommandLineParser
             McpAllowLocalCleanup = mcpAllowLocalCleanup,
             McpRevokeCurrentIdentity = mcpRevokeCurrentIdentity,
             RawModelLogPath = rawModelLogPath,
+            IncludeReasoningText = includeReasoningText ?? false,
             RequestArguments = requestArguments,
         });
     }
@@ -302,6 +317,9 @@ internal static class CommandLineParser
 /// <summary>Immutable command-line options used by later startup phases.</summary>
 internal sealed record CommandLineOptions
 {
+    /// <summary>Gets the transient inclusion choice for displayable reasoning; defaults off.</summary>
+    internal bool IncludeReasoningText { get; init; }
+
     /// <summary>Gets the selected frontend; bare --tui selects TUIKit.</summary>
     internal InteractiveFrontendKind InteractiveFrontend { get; init; }
 

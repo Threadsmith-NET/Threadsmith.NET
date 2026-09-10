@@ -49,7 +49,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M27 | Complete | Low-friction URL-only MCP OAuth onboarding with dynamic client registration. | [Details](milestones/milestone-27-low-friction-mcp-oauth-dynamic-registration.md) |
 | M28 | Active | Roslyn-backed task-sufficient code exploration with source, flow, ranking, safe deduplication, and associated artifacts. | [Details](milestones/milestone-28-roslyn-backed-code-exploration.md) |
 | M29 | Active | Deployable Markdown prompts, descriptions, corrections, and provider instructions with cached loading and bounded customization. | [Details](milestones/milestone-29-deployable-prompt-customization.md) |
-| M30 | Planned | Native Anthropic API-key model discovery, governed tools, private thinking continuity and prompt caching. | [Details](milestones/milestone-30-native-anthropic-model-provider.md) |
+| M30 | Complete | Native Anthropic API-key model discovery, governed tools, private thinking continuity and prompt caching. | [Details](milestones/milestone-30-native-anthropic-model-provider.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

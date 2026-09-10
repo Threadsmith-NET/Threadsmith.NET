@@ -161,6 +161,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemRepositoryInstructionsNone prompt asset.</summary>
     public const string SystemRepositoryInstructionsNone = "System-RepositoryInstructions-None.md";
 
+    /// <summary>Gets the relevance caveat preceding optional repository memory references.</summary>
+    public const string SystemRepositoryMemoryGuidance = "System-RepositoryMemoryGuidance.md";
+
     /// <summary>Gets the stable filename for the SystemGovernedRequestState prompt asset.</summary>
     public const string SystemGovernedRequestState = "System-GovernedRequestState.md";
 
@@ -203,7 +206,10 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolReadFileDescription prompt asset.</summary>
     public const string ToolReadFileDescription = "Tool-read_file-Description.md";
 
-    /// <summary>Gets the stable filename for the direct artifact-writing tool description.</summary>
+    /// <summary>Gets the stable filename for the explicit repository-memory tool description.</summary>
+    public const string ToolMemoriesDescription = "Tool-memories-Description.md";
+
+    /// <summary>Gets the stable filename for the write-file description.</summary>
     public const string ToolWriteFileDescription = "Tool-write_file-Description.md";
 
     /// <summary>Gets the stable filename for the ToolSearchDescription prompt asset.</summary>
@@ -1040,6 +1046,7 @@ public static class PromptFileNames
         SystemRequiredOutputMutationProposal,
         SystemRequiredOutputPlan,
         SystemRepositoryInstructionsNone,
+        SystemRepositoryMemoryGuidance,
         SystemGovernedRequestState,
         SystemLegacyRequestEnvelope,
         SystemToolInventoryTextFallback,
@@ -1055,6 +1062,7 @@ public static class PromptFileNames
         ToolListFilesDescription,
         ToolReadFileDescription,
         ToolWriteFileDescription,
+        ToolMemoriesDescription,
         ToolSearchDescription,
         ToolGitStatusDescription,
         ToolFindSymbolDescription,
@@ -1367,6 +1375,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemRequiredOutputMutationProposal,
             PromptFileNames.SystemRequiredOutputPlan,
             PromptFileNames.SystemRepositoryInstructionsNone,
+            PromptFileNames.SystemRepositoryMemoryGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
             PromptFileNames.ContextActiveTurnCompactionSystem,

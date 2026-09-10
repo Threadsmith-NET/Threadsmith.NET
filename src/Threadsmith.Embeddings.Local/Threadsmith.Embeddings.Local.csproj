@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Embeddings.Local</RootNamespace>
+    <Description>Isolated CPU MiniLM text embeddings with verified deployed assets.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="minilm-assets.json" />
+    <InternalsVisibleTo Include="Threadsmith.Embeddings.Local.Tests" />
+  </ItemGroup>
+</Project>

@@ -44,3 +44,9 @@ No child AGENTS.md files yet.
 ## TUIKit supplemental notices
 
 TUIKit 0.10.1 is a bundled package. Canonical evidence records its exact digest, MIT package declaration, and supplemental font notices. Notice generation includes every listed supplemental file; verification rejects missing files. SPDX preserves MIT as declared and the recorded aggregate conclusion without relabeling the embedded font inventory. Keep the existing runtime-version evidence independent of this dependency addition.
+
+## Local inference assets
+
+`Stage-EmbeddingAssets.ps1` explicitly downloads immutable official MiniLM artifacts into ignored `artifacts/embedding-assets`, verifies sizes/SHA-256 before publishing each file, and stages the full Apache license and manifest. `Stage-RerankerAssets.ps1` does the same for the pinned cross-encoder into `artifacts/reranker-assets`, with only its model, vocabulary, manifest, and full Apache license. App build/publish copies both payloads; runtime has no downloader. `Publish-Release.ps1` stages before publish, and `release/Test-EmbeddingPayload.ps1` plus `release/Test-RerankerPayload.ps1` require the closed assets and matching ONNX native library. The pinned ONNX package retains all six supported native RIDs; preserve package license and supplemental native notices in release evidence.
+
+Ripgrep manifest schema 2 pins both license-file digests per RID. The verified Windows archives contain CRLF license files; verified Linux/macOS archives contain LF files. Staging preserves and hashes exact archive bytes, without normalization. `Test-RipgrepPayload.ps1` binds SOURCE metadata and both license files to the selected repository-pinned RID; compliance invokes it for staged and extracted artifacts.

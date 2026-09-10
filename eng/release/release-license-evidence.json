@@ -12,7 +12,8 @@
     "custom-approved",
     "platform-terms-approved",
     "not-bundled",
-    "WTFPL"
+    "WTFPL",
+    "BSD-3-Clause"
   ],
   "windowsSelfContainedDecision": {
     "status": "approved",
@@ -487,7 +488,7 @@
       "licenseText": "legal/licenses/MIT.txt",
       "noticeTreatment": "full license text",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Spectre.Console.Ansi (Patrik Svensson, Phil Scott, Nils Andresen, C\u00e9dric Luthi)"
+      "copyrightText": "Copyright holders and contributors of Spectre.Console.Ansi (Patrik Svensson, Phil Scott, Nils Andresen, Cédric Luthi)"
     },
     {
       "id": "Spectre.Console",
@@ -499,7 +500,7 @@
       "licenseText": "legal/licenses/MIT.txt",
       "noticeTreatment": "full license text",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Spectre.Console (Patrik Svensson, Phil Scott, Nils Andresen, C\u00e9dric Luthi)"
+      "copyrightText": "Copyright holders and contributors of Spectre.Console (Patrik Svensson, Phil Scott, Nils Andresen, Cédric Luthi)"
     },
     {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
@@ -777,6 +778,80 @@
       "copyrightText": "Copyright (c) 2026 Joel Christner; embedded font authors are identified in the accompanying headers and attribution.",
       "supplementalLicenseExpressions": [
         "WTFPL"
+      ]
+    },
+    {
+      "id": "Google.Protobuf",
+      "version": "3.30.2",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/Google.Protobuf/3.30.2",
+      "packageSha512": "Y2aOVLIt75yeeEWigg9V9YnjsEm53sADtLGq0gLhwaXpk3iu8tYSoauolyhenagA2sWno2TQ2WujI0HQd6s1Vw==",
+      "licenseExpression": "BSD-3-Clause",
+      "licenseText": "legal/Google.Protobuf-3.30.2-LICENSE.txt",
+      "noticeTreatment": "full license text and bundled supplemental notices",
+      "reviewState": "approved",
+      "copyrightText": "Copyright 2015 Google Inc. and contributors",
+      "reviewNotes": "Plan 103: exact restored NuGet digest, package license, source revision, and bundled notice files inspected."
+    },
+    {
+      "id": "Microsoft.ML.OnnxRuntime",
+      "version": "1.22.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.22.1",
+      "packageSha512": "oKRyzajMIB18Z9gmC9CyDPgyo5Yu/ZYZ/w3mF6NwqC0YHOZisGytdAaK3fvUFLZ5XDRZTDzzr+Nqx/clRtdCcA==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/ONNXRuntime-1.22.1-LICENSE.txt",
+      "noticeTreatment": "full license text and bundled supplemental notices",
+      "reviewState": "approved",
+      "copyrightText": "Copyright Microsoft Corporation and contributors",
+      "reviewNotes": "Plan 103: exact restored NuGet digest, package license, source revision, and bundled notice files inspected.",
+      "additionalNotices": [
+        "legal/ONNXRuntime-1.22.1-NOTICES.txt"
+      ]
+    },
+    {
+      "id": "Microsoft.ML.OnnxRuntime.Managed",
+      "version": "1.22.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.Managed/1.22.1",
+      "packageSha512": "hYGYf0BaHiTfb623kD36pYpFN0rh2Znk3QS+ZWWxnTV6iDzl1KUJYaxf7/stz28r1w6HOqUqgWcT1nOYXuf8ew==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/ONNXRuntime-1.22.1-LICENSE.txt",
+      "noticeTreatment": "full license text and bundled supplemental notices",
+      "reviewState": "approved",
+      "copyrightText": "Copyright Microsoft Corporation and contributors",
+      "reviewNotes": "Plan 103: exact restored NuGet digest, package license, source revision, and bundled notice files inspected.",
+      "additionalNotices": [
+        "legal/ONNXRuntime-1.22.1-NOTICES.txt"
+      ]
+    },
+    {
+      "id": "Microsoft.ML.Tokenizers",
+      "version": "2.0.0",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/Microsoft.ML.Tokenizers/2.0.0",
+      "packageSha512": "+b8lT4cLLO/sBR2hjvE/qG6qrZG15h7/PBvnIrzTh4xDaAxdHUY6449rC+1pHzQUsBiCHZVbj+VMn+xS0sL7TA==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/licenses/MIT.txt",
+      "noticeTreatment": "full license text and bundled supplemental notices",
+      "reviewState": "approved",
+      "copyrightText": "Copyright Microsoft Corporation and contributors",
+      "reviewNotes": "Plan 103: exact restored NuGet digest, package license, source revision, and bundled notice files inspected."
+    },
+    {
+      "id": "System.Numerics.Tensors",
+      "version": "9.0.0",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/System.Numerics.Tensors/9.0.0",
+      "packageSha512": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/licenses/MIT.txt",
+      "noticeTreatment": "full license text and bundled supplemental notices",
+      "reviewState": "approved",
+      "copyrightText": "Copyright Microsoft Corporation and contributors",
+      "reviewNotes": "Plan 103: exact restored NuGet digest, package license, source revision, and bundled notice files inspected.",
+      "additionalNotices": [
+        "legal/System.Numerics.Tensors-9.0.0-NOTICES.txt"
       ]
     }
   ]

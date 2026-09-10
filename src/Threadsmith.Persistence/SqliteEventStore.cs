@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
 /// <summary>Durable SQLite event store using stable allow-listed event names.</summary>
-public sealed class SqliteEventStore
+public sealed partial class SqliteEventStore
 {
     private readonly string _connectionString;
 

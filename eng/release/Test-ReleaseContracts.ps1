@@ -70,7 +70,7 @@ Test-Contract 'prompt payload is complete, collision-free, byte-exact, and valid
 }
 Test-Contract 'workflow scripts are tracked' {
     $root = Get-RepositoryRoot
-    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
+    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Test-RerankerPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
         $path = "eng/release/$name"
         if (-not (Test-Path (Join-Path $root $path))) { throw "Missing $path." }
         git -C $root ls-files --error-unmatch $path 2>$null | Out-Null
@@ -127,19 +127,22 @@ Test-Contract 'runtime legal staging binds exact RID and rejects omissions' {
 Test-Contract 'ripgrep assets are official, licensed, hashed, and complete' {
     $root = Get-RepositoryRoot
     $manifest = Get-Content -LiteralPath (Join-Path $root 'eng/release/ripgrep-assets.json') -Raw | ConvertFrom-Json
-    if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'ripgrep' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Ripgrep manifest identity is invalid.' }
+    if ($manifest.schemaVersion -ne 2 -or $manifest.product -ne 'ripgrep' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Ripgrep manifest identity is invalid.' }
     if ($manifest.sourceRepository -ne 'https://github.com/BurntSushi/ripgrep') { throw 'Ripgrep source repository is not the official upstream repository.' }
     if ($manifest.licenseExpression -ne 'MIT OR Unlicense' -or $manifest.selectedLicense -ne 'MIT') { throw 'Ripgrep licensing metadata is not the approved permissive contract.' }
-    if ($manifest.licenseFiles.'LICENSE-MIT' -notmatch '^[0-9a-f]{64}$' -or $manifest.licenseFiles.UNLICENSE -notmatch '^[0-9a-f]{64}$') { throw 'Ripgrep license-file digests are not pinned.' }
     $expected = @('linux-arm64', 'linux-x64', 'osx-arm64', 'osx-x64', 'win-arm64', 'win-x64')
     $actual = @($manifest.assets.PSObject.Properties.Name | Sort-Object)
     if ([string]::Join(',', $actual) -ne [string]::Join(',', $expected)) { throw 'Ripgrep assets do not cover exactly the supported RID matrix.' }
     foreach ($rid in $expected) {
         $asset = $manifest.assets.PSObject.Properties[$rid].Value
+        if ($asset.licenseFiles.'LICENSE-MIT' -notmatch '^[0-9a-f]{64}$' -or $asset.licenseFiles.UNLICENSE -notmatch '^[0-9a-f]{64}$') { throw "Ripgrep license-file digests are not pinned for $rid." }
         if ($asset.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Ripgrep asset $rid does not have a pinned SHA-256 digest." }
         if ($asset.archive -notmatch "^ripgrep-$([regex]::Escape($manifest.version))-") { throw "Ripgrep asset $rid does not pin the approved version." }
         if ($asset.executable -ne $(if ($rid.StartsWith('win-')) { 'rg.exe' } else { 'rg' })) { throw "Ripgrep asset $rid has the wrong executable name." }
     }
+}
+Test-Contract 'ripgrep per-RID license and provenance validation is fail-closed' {
+    & (Join-Path $PSScriptRoot 'Test-RipgrepLicenseContracts.ps1') | Out-Null
 }
 Test-Contract 'ripgrep staging rejects archive digest mismatch before extraction' {
     $root = Get-RepositoryRoot
@@ -155,6 +158,42 @@ Test-Contract 'ripgrep staging rejects archive digest mismatch before extraction
             if ($_.Exception.Message -eq 'Changed ripgrep archive was accepted.' -or $_.Exception.Message -notmatch 'did not match') { throw }
         }
     } finally { Remove-Item $temp -Recurse -Force }
+}
+Test-Contract 'embedding manifest pins source, legal evidence, and all six native runtimes' {
+    $root = Get-RepositoryRoot
+    $manifest = Get-Content -LiteralPath (Join-Path $root 'src/Threadsmith.Embeddings.Local/minilm-assets.json') -Raw | ConvertFrom-Json
+    if ($manifest.source -ne 'https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2' -or $manifest.revision -notmatch '^[0-9a-f]{40}$' -or $manifest.license -ne 'Apache-2.0' -or $manifest.dimensions -ne 384 -or $manifest.maxInputTokens -ne 256) { throw 'Embedding manifest identity or model behavior is invalid.' }
+    foreach ($rid in @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')) {
+        $native = $manifest.nativeAssets.PSObject.Properties[$rid].Value
+        if ($native.sha256 -notmatch '^[0-9a-f]{64}$' -or $native.bytes -le 0) { throw "Embedding native asset is unpinned for $rid." }
+    }
+    foreach ($asset in $manifest.artifacts) {
+        if ($asset.sha256 -notmatch '^[0-9a-f]{64}$' -or $asset.bytes -le 0) { throw 'Embedding model artifact is unpinned.' }
+    }
+    foreach ($script in @('eng/Stage-EmbeddingAssets.ps1', 'eng/release/Test-EmbeddingPayload.ps1')) {
+        $tokens = $null
+        $errors = $null
+        [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $script), [ref]$tokens, [ref]$errors) | Out-Null
+        if ($errors.Count -gt 0) { throw "Embedding script $script does not parse." }
+    }
+}
+Test-Contract 'reranker manifest is represented in generated legal evidence' {
+    $root = Get-RepositoryRoot
+    $manifest = Get-Content -LiteralPath (Join-Path $root 'src/Threadsmith.Reranking.Local/crossencoder-assets.json') -Raw | ConvertFrom-Json
+    $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-reranker-legal-$([Guid]::NewGuid().ToString('N'))"
+    $temp = [IO.Path]::GetFullPath($temp)
+    $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ([IO.Path]::GetDirectoryName($temp) -ne $expectedParent) { throw 'Reranker legal fixture escaped its temporary parent.' }
+    New-Item -ItemType Directory -Path $temp | Out-Null
+    try {
+        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory $temp -RuntimeIdentifier linux-x64
+        $notice = Get-Content (Join-Path $temp 'THIRD-PARTY-NOTICES.txt') -Raw
+        $sbom = Get-Content (Join-Path $temp 'sbom.spdx.json') -Raw | ConvertFrom-Json
+        if (-not $notice.Contains($manifest.model) -or -not @($sbom.packages | Where-Object { $_.name -eq $manifest.model -and $_.versionInfo -eq $manifest.revision }).Count) { throw 'Reranker model is absent from generated legal evidence.' }
+    } finally {
+        if ((Resolve-Path -LiteralPath $temp).Path -ne $temp -or (Get-Item -LiteralPath $temp).Name -notlike 'threadsmith-reranker-legal-*') { throw 'Refusing cleanup of an unexpected fixture root.' }
+        Remove-Item -LiteralPath $temp -Recurse -Force
+    }
 }
 Test-Contract 'release PowerShell scripts parse' {
     $root = Get-RepositoryRoot

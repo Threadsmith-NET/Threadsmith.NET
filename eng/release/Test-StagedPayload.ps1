@@ -2,6 +2,8 @@
 param([Parameter(Mandatory)][string] $StageDirectory, [Parameter(Mandatory)][string] $RuntimeIdentifier)
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
 Assert-ReleaseRid $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Test-EmbeddingPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Test-RerankerPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
 $suffix = if ($RuntimeIdentifier.StartsWith('win-')) { '.exe' } else { '' }
 $ripgrepRelativePath = "tools/rg$suffix"
@@ -11,14 +13,6 @@ foreach ($name in @("Threadsmith.App$suffix", "Threadsmith.Scripting.Worker$suff
 & (Join-Path $PSScriptRoot 'Test-PackagedDocumentation.ps1') -StageDirectory $stage | Out-Null
 & (Join-Path $PSScriptRoot 'Test-ReleaseCompliance.ps1') -StageDirectory $stage -RuntimeIdentifier $RuntimeIdentifier | Out-Null
 $ripgrepSource = Get-Content -LiteralPath (Join-Path $stage 'third-party/ripgrep/SOURCE.json') -Raw | ConvertFrom-Json
-if ($ripgrepSource.product -ne 'ripgrep' -or $ripgrepSource.version -notmatch '^\d+\.\d+\.\d+$' -or $ripgrepSource.selectedLicense -ne 'MIT') {
-    throw 'Staged ripgrep provenance or licensing metadata is invalid.'
-}
-$stagedMitHash = (Get-FileHash -LiteralPath (Join-Path $stage 'third-party/ripgrep/LICENSE-MIT') -Algorithm SHA256).Hash.ToLowerInvariant()
-$stagedUnlicenseHash = (Get-FileHash -LiteralPath (Join-Path $stage 'third-party/ripgrep/UNLICENSE') -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($stagedMitHash -ne $ripgrepSource.licenseFiles.'LICENSE-MIT' -or $stagedUnlicenseHash -ne $ripgrepSource.licenseFiles.UNLICENSE) {
-    throw 'Staged ripgrep license-file digests do not match their provenance metadata.'
-}
 $hostRid = if ($IsWindows) { 'win-' } elseif ($IsMacOS) { 'osx-' } else { 'linux-' }
 $hostArch = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant().Replace('x64', 'x64').Replace('arm64', 'arm64')
 if ($RuntimeIdentifier -eq "$hostRid$hostArch") {

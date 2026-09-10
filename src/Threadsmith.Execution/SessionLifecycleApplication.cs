@@ -142,8 +142,46 @@ public sealed class SessionLifecycleApplication :
     }
 
     /// <summary>Rebinds lifecycle creation and selection to a newly opened repository.</summary>
-    public async Task BindRepositoryAsync(
+    public Task BindRepositoryAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        => BindRepositoryCoreAsync(repositoryPath, null, cancellationToken);
+
+    /// <summary>Commits prepared repository services after lifecycle preparation and before activating the new session.</summary>
+    /// <param name="repositoryPath">The host-selected repository root.</param>
+    /// <param name="commitRepositoryBinding">The last fallible binding step; it must not throw after committing destructive changes.</param>
+    /// <param name="cancellationToken">Cancels preparation and the final binding operation.</param>
+    public Task BindRepositoryAsync(
         string repositoryPath,
+        Func<CancellationToken, Task> commitRepositoryBinding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(commitRepositoryBinding);
+        return BindRepositoryCoreAsync(repositoryPath, commitRepositoryBinding, cancellationToken);
+    }
+
+    /// <summary>Persists current usage and selector metadata after a terminal turn boundary.</summary>
+    public async Task CheckpointCompletedTurnAsync(
+        SessionId sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        await _transitionGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_active is not { } active || active.SessionId != sessionId)
+            {
+                return;
+            }
+
+            _active = await CheckpointAsync(active, active.State, cancellationToken);
+        }
+        finally
+        {
+            _transitionGate.Release();
+        }
+    }
+
+    private async Task BindRepositoryCoreAsync(
+        string repositoryPath,
+        Func<CancellationToken, Task>? commitRepositoryBinding,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
@@ -151,7 +189,8 @@ public sealed class SessionLifecycleApplication :
         await _transitionGate.WaitAsync(cancellationToken);
         try
         {
-            if (string.Equals(nextIdentity, _repositoryIdentity, StringComparison.Ordinal))
+            var sameRepository = string.Equals(nextIdentity, _repositoryIdentity, StringComparison.Ordinal);
+            if (sameRepository && commitRepositoryBinding is null)
             {
                 return;
             }
@@ -160,6 +199,16 @@ public sealed class SessionLifecycleApplication :
             {
                 throw new InvalidOperationException(
                     "Repository rebinding requires a complete safe boundary. Cancel or finish active work first.");
+            }
+
+            if (sameRepository)
+            {
+                if (commitRepositoryBinding is not null)
+                {
+                    await commitRepositoryBinding(cancellationToken);
+                }
+
+                return;
             }
 
             var previousIdentity = _repositoryIdentity;
@@ -178,44 +227,31 @@ public sealed class SessionLifecycleApplication :
 
                 _repositoryIdentity = nextIdentity;
                 _repositoryDisplayName = nextDisplayName;
-                _ = await CreateNewAsync(source, cancellationToken);
+                _ = await CreateNewAsync(source, commitRepositoryBinding, cancellationToken);
             }
-            catch
+            catch (Exception bindingFailure)
             {
+                _active = source;
                 _repositoryIdentity = previousIdentity;
                 _repositoryDisplayName = previousDisplayName;
                 if (source is not null)
                 {
-                    _active = await CheckpointAsync(
-                        source,
-                        SessionLifecycleState.Active,
-                        CancellationToken.None,
-                        preserveModelSelection: true);
+                    try
+                    {
+                        _active = await CheckpointAsync(
+                            source,
+                            SessionLifecycleState.Active,
+                            CancellationToken.None,
+                            preserveModelSelection: true);
+                    }
+                    catch (Exception rollbackFailure)
+                    {
+                        throw new AggregateException("Repository binding failed and its source session checkpoint could not be restored.", bindingFailure, rollbackFailure);
+                    }
                 }
 
                 throw;
             }
-        }
-        finally
-        {
-            _transitionGate.Release();
-        }
-    }
-
-    /// <summary>Persists current usage and selector metadata after a terminal turn boundary.</summary>
-    public async Task CheckpointCompletedTurnAsync(
-        SessionId sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        await _transitionGate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_active is not { } active || active.SessionId != sessionId)
-            {
-                return;
-            }
-
-            _active = await CheckpointAsync(active, active.State, cancellationToken);
         }
         finally
         {
@@ -300,8 +336,12 @@ public sealed class SessionLifecycleApplication :
         }
     }
 
+    private Task<SessionTransitionResult> CreateNewAsync(SessionCatalogEntry? source, CancellationToken cancellationToken)
+        => CreateNewAsync(source, null, cancellationToken);
+
     private async Task<SessionTransitionResult> CreateNewAsync(
         SessionCatalogEntry? source,
+        Func<CancellationToken, Task>? commitRepositoryBinding,
         CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
@@ -322,7 +362,37 @@ public sealed class SessionLifecycleApplication :
             new SessionDurableUsage(0, 0, false, false, false),
             cancellationToken);
         await SeedRepositoryProjectionAsync(source?.SessionId, entry.SessionId, false, cancellationToken);
-        Publish(entry);
+        _contextAssembler.InvalidateInspections();
+        _projections.InvalidateContextInspections();
+        if (commitRepositoryBinding is not null)
+        {
+            try
+            {
+                await commitRepositoryBinding(cancellationToken);
+            }
+            catch (Exception bindingFailure)
+            {
+                _sessions.UnregisterPreparedSession(entry.SessionId);
+                try
+                {
+                    await _lifecycleStore.CheckpointAsync(
+                        entry with { State = SessionLifecycleState.Unavailable, IsWritable = false },
+                        new SessionDurableUsage(0, 0, false, false, false),
+                        CancellationToken.None);
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException(
+                        "Repository binding failed; the prepared session was revoked but its durable state could not be marked unavailable.",
+                        bindingFailure,
+                        cleanupFailure);
+                }
+
+                throw;
+            }
+        }
+
+        _active = entry;
         return CreateResult(
             SessionTransitionKind.New,
             entry,

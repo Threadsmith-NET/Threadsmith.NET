@@ -1,10 +1,10 @@
 # Implementation Plan 103: Model-Managed Repository Memories with Hybrid Retrieval
 
-**Status:** Planned.
+**Status:** Complete.
 **Delivery track:** Maintenance - replacement of automatic memory creation and retrieval.
 **Prerequisites:** The existing repository-local SQLite persistence and memory commands described in [Plan 78](plan-78-repository-scoped-cross-session-memory.md), the deployed prompt assets in [Plan 90](plan-90-deployable-prompt-assets.md), and the current parent-run execution and context contracts in [ADR-57](../architecture/adr-57-model-requested-delegation-only.md) and [ADR-58](../architecture/adr-58-current-mutation-baselines-and-text-anchors.md).
 **Related contracts:** [Planning governance](planning-governance.md), [shared implementation context](00-shared-context.md), [ADR-50](../architecture/adr-50-repository-scoped-cross-session-memory.md), [tool operations](../operations/tools.md), and [prompt operations](../operations/prompts.md).
-**Execution boundary:** This document authorizes planning only. Implementation starts in a subsequent conversation on a new Git branch. The existing rollback checkpoint is `c0a044b`; no implementation is included in this plan's publication.
+**Execution boundary:** The planning-only publication is complete. Implementation is authorized on `plan-103-model-managed-memories`, created directly in the active checkout from locally current `main` at `f2b3679`. The earlier Git rollback checkpoint is `c0a044b`; SQLite backup restoration remains separate from Git rollback.
 
 ## 1. Objective
 
@@ -37,7 +37,7 @@ Conversation transcripts, current task state, approved plans, exact evidence, an
 - Model-assigned importance scores, memory categories, permanent pinning, authority tiers, or automatic semantic merging/deletion of similar notes.
 - Changes to code-mutation approval, ordinary conversation compaction, or unrelated source/evidence invalidation.
 
-## 5. Current State
+## 5. State Before Implementation
 
 - `SessionApplication` calls `PromoteHostObservedMemoryAsync` at workflow boundaries. That method feeds both conversation and repository memory. `CreateRepositoryMemoryCandidates` maps approved decisions to architecture decisions and completed work to workflow facts. Intake also promotes user requirements into structured conversation memory.
 - `RepositoryMemoryGovernor`, `RepositoryMemoryInvalidator`, `RepositoryMemoryApplication`, `SqliteRepositoryMemoryStore`, and the old Core contracts implement categorized, invalidatable memory and supersession/audit state.
@@ -227,7 +227,7 @@ Compare tokenizer IDs, attention masks, and normalized vectors with the pinned m
 
 Measure cold model load separately from warm add/update and per-turn query embedding, plus SQLite lookup/fusion and inclusion-update overhead. Record hardware, input token lengths, thread settings, model identity, p50/p95, and query-cache hits. Establish a numeric warm-turn latency budget from the reference implementation measurements and record it before completion; no latency claim is accepted without measurement. Verify terminal responsiveness and cancellation under a cold start and concurrent activity.
 
-Run the solution build and affected persistence/conversation-context/context-caching/tooling/runtime suites during implementation. Run architecture and release checks because a project and native/model assets are added. This planning-only publication requires Markdown/governance checks, not another application test run.
+Run the solution build and affected persistence/conversation-context/context-caching/tooling/runtime suites during implementation. Run architecture and release checks because a project and native/model assets are added. Section 17 records implementation and verification evidence.
 
 ## 11. Security/Permissions
 
@@ -281,21 +281,121 @@ During implementation, add the superseding ADR; update [Scenario AM](acceptance-
 
 Update source/test/release DOX and dependency inventories only where the new embedding project, package assets, or ownership changes require it. Refresh model/native third-party attribution through existing release mechanisms. Leave completed milestone details and historical ADRs unchanged.
 
-For this planning-only change, add this document and its README navigation row. Leave implemented user documentation, acceptance/manual procedures, milestone status, and DOX contracts unchanged until implementation changes their owned behavior.
+The initial publication added this document and its README navigation row. Implementation now updates the owned user documentation, acceptance/manual procedures, and DOX contracts; completed milestone details and historical ADRs remain unchanged.
 
-## 17. Open Decisions and Implementation Evidence
+## 17. Implementation Evidence
 
-The architectural choices are fixed for the first implementation: one model-managed tool, repo-only SQLite, twenty stored/three retrieved defaults, MiniLM-L12-v2 local CPU embeddings, an injectable model-neutral interface, exact managed vector comparison plus FTS5/BM25 fusion, bundled verified model assets, and the stated eviction algorithm.
+Implementation and verification completed on 2026-09-09 in the authorized active checkout and branch. The evidence below records the model, retrieval, dispatch, migration, packaging, and adversarial-review results. This section records checkpoint `cbd7125f95140985afce96c36a323542b4c02885`, including its original `v1` embedding pipeline. The subsequent production-reference adaptation and `v2` space are described in the [ADR refinement](../architecture/adr-59-model-managed-repository-memories.md#production-embedding-reference-refinement) and [maintained embedding fixtures](../../tests/Threadsmith.Embeddings.Local.Tests/Fixtures/README.md); the checkpoint measurements below remain historical evidence.
 
-Resolve and record these bounded engineering details during implementation without expanding the feature scope:
+### 17.1 Pinned assets and runtime behavior
 
-- Pin compatible stable ONNX Runtime/tokenizer packages, the exact model/vocabulary revision and hashes, and supported native release assets. Verify dynamic-shape support and special-token behavior of those exact versions.
-- Calibrate and record the MiniLM semantic minimum and a measured warm-turn latency budget using section 10; keep the public configuration limited to the two requested bounds.
-- Select the next available ADR/manual-case IDs and the smallest existing event/dispatch hook for idempotent inclusion accounting. Reuse current host scheduling and diagnostics where possible.
+The model is `sentence-transformers/all-MiniLM-L12-v2` at immutable revision `9bc18616990647530c139b95df1d1aa30cd115b7`. The source-controlled [asset manifest](../../src/Threadsmith.Embeddings.Local/minilm-assets.json) owns exact file sizes, hashes, source paths, package versions, and native RID hashes. The model space is `minilm-l12-v2:9bc18616990647530c139b95df1d1aa30cd115b7:bert-uncased:mean-mask:l2:256:v1`.
+
+| Pinned artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `config.json` | 615 | `bc451f333af67312ba0de5018ef1c9ba663cb18549443e568f0bd35262dc1c48` |
+| `model.onnx` | 133,126,567 | `84c56795d395593cbee215e2d635a8f0ad3199ae99f99299c44cf1eaecff3ad4` |
+| Model card `README.md` | 10,515 | `1df133530765d5aa5155a1b0ca7e0d3048b4da12381546f86763b3753c028ed3` |
+| `tokenizer_config.json` | 352 | `fba7637034542f691ef4b1ad735d664971e8d9723012a1973d4ee985742e8e72` |
+| `tokenizer.json` | 466,247 | `be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037` |
+| `vocab.txt` | 231,508 | `07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3` |
+
+NuGet dependencies are `Microsoft.ML.OnnxRuntime` 1.22.1 and `Microsoft.ML.Tokenizers` 2.0.0. ONNX Runtime 1.22.1 contains native assets for all six existing release RIDs: `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`. The inspected 1.24.4 package lacks `osx-x64`, so it was not selected. Each native asset's exact digest and size is pinned in the manifest. Non-host package assets were inspected; this is not evidence of execution on foreign operating systems or architectures.
+
+[Explicit asset staging](../../eng/Stage-EmbeddingAssets.ps1) downloads only the pinned official artifacts, verifies their size and hash, and includes the full Apache-2.0 license and model card. Release staging invokes this step before publishing. The application and ordinary test discovery have no model downloader. Release payload verification checks the manifest, all model files, full license, and matching-RID native hash.
+
+The adapter emits 384-component, L2-normalized, attention-mask mean-pooled vectors. The complete input limit is 256 tokens including exactly one pair of boundary tokens. The actual ONNX graph accepts dynamic sequence lengths; complete token counts are retained before truncation. New memory writes reject truncation, while query truncation is observable. Native work is CPU-only, lazy, serialized to one inference, and offloaded from the caller; intra-op threads are 2, inter-op threads are 1, execution is sequential, and spinning is disabled. Cancellation terminates an active ONNX run. Cancelled cold initialization retains its admission gate until the work ends; disposal cancels admitted and waiting work, with a ten-second backstop and eventual worker-owned disposal.
+
+[Offline reference generation](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/cbd7125f95140985afce96c36a323542b4c02885/tests/Threadsmith.Embeddings.Local.Tests/Fixtures/generate-reference.py) used ONNX Runtime 1.22.1, Rust `tokenizers` 0.22.2, and NumPy 2.4.6. Reference IDs, attention masks, and vectors cover empty input, casing, accents, CJK/emoji, literal special tokens, whitespace, and exact/overflow boundaries. Comparison revealed that default Microsoft BERT normalization removed symbols/emoji and joined newline/tab-separated words. Internal normalization/pretokenization corrections retain Microsoft WordPiece while matching the pinned reference. Vector error tolerance is 0.00005; dynamic versus 256-token padding had maximum difference 0 on this CPU. Tests also verify detached returned vectors remain unchanged after subsequent inference and cancellation permits a queued following inference.
+
+### 17.2 Calibration and held-out relevance
+
+The versioned [retrieval fixture](../../tests/Threadsmith.Embeddings.Local.Tests/Fixtures/retrieval-fixture.json) has 8 concise repository notes, 9 calibration requests, and 11 held-out requests. Calibration minimizes `2 * falseInclusions + missedRelevant` for semantic-only retrieval; ties prefer fewer misses, then the larger threshold. Held-out examples do not select the threshold. The selected fixed qualification is **cosine similarity strictly greater than 0.47**, exposed by `LocalTextEmbeddingGenerator.SemanticMinimum`; calibration gives 0 false inclusions and 1 missed relevant memory.
+
+| Held-out retrieval | False inclusions | Missed relevant memories |
+|---|---:|---:|
+| BM25-only | 1 | 2 |
+| Semantic-only | 1 | 1 |
+| Production hybrid | 1 | 0 |
+
+All three held-out no-match requests return no memories. The remaining false inclusion is a private-notes restriction returned for a hosted-model/public-documentation request. This fixture demonstrates that similarity can confuse qualified or opposing preferences; it does not establish universal semantic accuracy. The production hybrid results use the real safely parameterized SQLite FTS5 qualification and equal reciprocal-rank fusion, rather than an independent approximation of lexical matching.
+
+### 17.3 Measured latency and cache behavior
+
+Measurements were taken on a Windows x64 development host with an Intel Core i9-13980HX (24 physical/32 logical cores), 68,413,153,280 bytes installed RAM, .NET 10.0.11, and OS report `Microsoft Windows 10.0.26200`. Thread settings are those above; concurrent development work can affect timings. Sampled ordinary memory/query inputs contain 5–29 tokens including special tokens. SQLite uses a real local file, pooling disabled, default durability, and 8 memory rows.
+
+| Operation | Samples | p50 ms | p95 ms |
+|---|---:|---:|---:|
+| Warm memory add/update embedding | 68 | 12.2128 | 16.0809 |
+| Warm uncached query embedding | 60 | 7.1994 | 9.5138 |
+| Uncached hybrid retrieval | 20 | 8.8065 | 13.7519 |
+| Complete retrieval + inclusion receipt | 20 | 12.0796 | 18.3984 |
+| Real SQLite lexical snapshot | 200 | 1.9172 | 2.9054 |
+| Cached production retrieval | 200 | 1.3988 | 2.3872 |
+| New inclusion receipt | 200 | 3.8395 | 5.5448 |
+| Duplicate receipt | 200 | 4.2793 | 5.9374 |
+
+Cold native session construction took 311.6283 ms; the complete first call took 594.6139 ms including asset verification, tokenizer initialization, native loading, JIT, and inference. The reference Python cold native session took 327.2795 ms. Query and ranking caches hit on 20 of 20 immediate repeated requests without new embedding calls.
+
+The measured **warm-turn retrieval plus inclusion-receipt budget is 25 ms p95 on this reference fixture**. Observed p95 was 18.3984 ms and maximum was 18.6179 ms. This budget excludes cold initialization and model-provider transport and is not a universal or maximum-256-token latency guarantee. The table's memory row measures embedding alone, not a complete storage transaction. The complete retrieval/receipt row directly measures the combined operation; it is not a sum of independently measured percentiles.
+
+### 17.4 Reproduction and dispatch
+
+The scoped embedding project built with zero warnings/errors and all 8 tests passed, including reference parity, native cancellation, the fixed threshold of 0.47, and held-out hybrid assertions of zero misses and at most one false inclusion. A final real-model repeat confirmed those quality results, with complete uncached retrieval plus inclusion receipt at 13.1703 ms p50 and 16.7383 ms p95 (maximum 17.9343 ms), within the 25 ms reference budget. Cold native session construction was 432.6493 ms and the full first call 1061.8731 ms in that repeat; concurrent host work and cold initialization remain outside the warm-turn budget. Without the explicit integration flag, ordinary discovery runs 5 deterministic tests and skips 3 real-model integrations. Tests never download artifacts.
+
+From the repository root, explicitly stage assets and run the real model suite with a local JSON report:
+
+```powershell
+pwsh -File eng/Stage-EmbeddingAssets.ps1
+dotnet build tests/Threadsmith.Embeddings.Local.Tests/Threadsmith.Embeddings.Local.Tests.csproj
+$env:THREADSMITH_EMBEDDING_INTEGRATION = '1'
+$env:THREADSMITH_EMBEDDING_REPORT = Join-Path ([IO.Path]::GetTempPath()) 'threadsmith-embedding-measurements.json'
+& tests/Threadsmith.Embeddings.Local.Tests/bin/Debug/net10.0/Threadsmith.Embeddings.Local.Tests.exe
+Remove-Item Env:THREADSMITH_EMBEDDING_INTEGRATION
+Remove-Item Env:THREADSMITH_EMBEDDING_REPORT
+```
+
+On Unix, invoke the built test DLL with `dotnet` instead of the Windows `.exe`. The report includes model/runtime identity, the full threshold comparison, per-query expected/actual IDs and branch scores, cache observations, and timing samples summarized above. The original measurements were captured in the implementation task's `work/embedding-measurements.json`; the versioned fixture and reproduction command allow a fresh report without relying on that task directory.
+
+The superseding decision is [ADR-59](../architecture/adr-59-model-managed-repository-memories.md). The maintained new manual procedures are [MTP-260](manual-test-plan.md#mtp-260--explicit-memory-operations-and-complete-input-bounds), [MTP-261](manual-test-plan.md#mtp-261--hybrid-retrieval-final-inclusions-and-continuation), and [MTP-262](manual-test-plan.md#mtp-262--capacity-migration-and-embedding-fallback). Scenario AM and affected conversation/lifecycle scenarios, user and operations documentation, and both 301-entry prompt catalogs have been updated with the replacement behavior.
+
+Actual submission accounting uses the existing model-request boundary with a nonserialized submission observer. HTTP adapters notify after transport submission begins, following validation and cancellation checks; injected providers fall back to the first returned response chunk. Final budget-admitted ID/revision receipts are recorded once per user turn/revision, with diagnostic outcomes distinct from assembly preview. Receipt failure is isolated from provider execution and must not retry the provider call. No new generative phase or per-turn narration was added.
+
+### 17.5 Final verification
+
+`dotnet build src/Threadsmith.sln -v:q -m:1` completed with **0 warnings and 0 errors**. The affected suites below completed with **2,129 passed, 12 skipped, and 0 failed**. The skips are existing Windows filesystem limitations and opt-in live-model/isolated-script integrations; the real embedding suite was explicitly enabled and passed all eight tests.
+
+| Suite | Passed | Skipped |
+|---|---:|---:|
+| Architecture | 196 | 1 |
+| CodexProvider | 27 | 0 |
+| ContextCaching | 48 | 3 |
+| ConversationContext | 100 | 0 |
+| CoreRuntime | 423 | 0 |
+| Embeddings.Local | 8 | 0 |
+| ExecutionOrchestration | 24 | 0 |
+| ModelTooling | 600 | 8 |
+| Mutations | 79 | 0 |
+| NativeTools | 165 | 0 |
+| ParallelAgents | 229 | 0 |
+| PersistenceMcpHardening | 76 | 0 |
+| Planning | 104 | 0 |
+| RepositoryLifecycle | 34 | 0 |
+| SessionStatus | 16 | 0 |
+
+The focused memory regressions cover the actual provider schema and dispatch boundary, denied operations, unavailable embeddings, exact bounds and duplicates, migration backup/import/cap, update conflicts, FTS/vector consistency, mode/budget/sensitivity exclusions, continuation invalidation, custom persistence paths, A-to-B-to-A repository switching, cross-repository run-retention receipts, and bounded retries when a foreign database is unavailable. Retention tests retain failed routes for later repair and continue past more than one page of failed targets to healthy repositories.
+
+`pwsh -File eng/release/Test-ReleaseContracts.ps1` passed all contracts. Full self-contained application and worker publishes and `Test-StagedPayload.ps1` passed for **win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, and osx-arm64**. Every payload passed prompt-catalog, packaged-documentation, model/native-asset, license/SBOM/provenance, and compliance checks. Windows x64 additionally passed native application and ripgrep smoke execution. Other targets received cross-publish structural validation on this Windows x64 host; native execution, platform installers/signing, and manual TUI procedures on those platforms were not performed.
+
+Cross-platform staging exposed an existing ripgrep license pin mismatch: official Windows archives use CRLF license bytes while Linux/macOS use LF bytes. All six archives were independently verified against their unchanged archive pins. The manifest now pins exact license bytes per RID, and payload verification binds SOURCE metadata to those pins. Regression checks reject altered files, coordinated file/SOURCE digest changes, wrong-RID provenance, and missing licenses without normalizing production input.
+
+Independent adversarial runtime and storage/embedding reviews were repeated after fixing valid findings, and both returned clean. A separate final review of the ripgrep correction also returned clean after independently rehashing all six archives and their embedded licenses. No actionable review findings remain.
+
+The final DOX and whitespace checks passed. Owned source/test/release contracts, user/operations documentation, ADR-59, prompt catalogs, package inventory, acceptance scenarios, and maintained manual procedures reflect the implementation. Completed milestone details, historical ADRs, and unrelated planning documents were intentionally left unchanged.
 
 Reference documentation:
 
-- [MiniLM-L12-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2) and [tokenizer configuration](https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2/blob/main/tokenizer_config.json).
+- [MiniLM-L12-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2) and [pinned tokenizer configuration](https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2/blob/9bc18616990647530c139b95df1d1aa30cd115b7/tokenizer_config.json).
 - [SQLite FTS5 and BM25](https://www.sqlite.org/fts5.html).
 - [Sentence Transformers semantic search](https://www.sbert.net/examples/sentence_transformer/applications/semantic-search/README.html).
 - [Hybrid ranking and reciprocal rank fusion](https://www.elastic.co/docs/solutions/search/hybrid-search).

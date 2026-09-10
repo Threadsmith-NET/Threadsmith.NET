@@ -30,6 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Context\Threadsmith.Context.csproj" />

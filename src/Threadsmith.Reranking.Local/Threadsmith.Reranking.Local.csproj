@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Reranking.Local</RootNamespace>
+    <Description>Isolated CPU MS MARCO MiniLM cross-encoder reranking with verified deployed assets.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="crossencoder-assets.json" />
+    <InternalsVisibleTo Include="Threadsmith.Reranking.Local.Tests" />
+  </ItemGroup>
+</Project>

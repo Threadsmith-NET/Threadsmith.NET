@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Embeddings.Local.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <PackageReference Include="xunit.analyzers" />
+    <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    <ProjectReference Include="..\..\src\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Context\Threadsmith.Context.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\artifacts\embedding-assets\embeddings\all-MiniLM-L12-v2\*"
+          Link="embeddings/all-MiniLM-L12-v2/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

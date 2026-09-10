@@ -16,6 +16,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
+    <ProjectReference Include="..\Threadsmith.Reranking.Local\Threadsmith.Reranking.Local.csproj" />
     <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
     <ProjectReference Include="..\Threadsmith.Skills\Threadsmith.Skills.csproj" />
@@ -130,6 +132,22 @@
           CopyToPublishDirectory="PreserveNewest" />
     <None Include="$(ThreadsmithDevelopmentRipgrepStage)/third-party/ripgrep/SOURCE.json"
           Link="third-party/ripgrep/SOURCE.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Assets are staged explicitly during source setup and by Publish-Release before publish.
+       Ordinary builds and first turns never download model files. -->
+  <ItemGroup Condition="Exists('..\..\artifacts\embedding-assets\embeddings\all-MiniLM-L12-v2\model.onnx')">
+    <ThreadsmithEmbeddingAssetName Include="model.onnx;vocab.txt;tokenizer.json;tokenizer_config.json;config.json;README.md;minilm-assets.json;LICENSE.txt" />
+    <None Include="@(ThreadsmithEmbeddingAssetName->'..\..\artifacts\embedding-assets\embeddings\all-MiniLM-L12-v2\%(Identity)')"
+          Link="embeddings/all-MiniLM-L12-v2/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\..\artifacts\reranker-assets\crossencoders\ms-marco-MiniLM-L6-v2\model.onnx')">
+    <ThreadsmithCrossEncoderAssetName Include="model.onnx;vocab.txt;crossencoder-assets.json;LICENSE.txt" />
+    <None Include="@(ThreadsmithCrossEncoderAssetName->'..\..\artifacts\reranker-assets\crossencoders\ms-marco-MiniLM-L6-v2\%(Identity)')"
+          Link="crossencoders/ms-marco-MiniLM-L6-v2/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

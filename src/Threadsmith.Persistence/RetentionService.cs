@@ -98,6 +98,12 @@ public sealed class RetentionService
         var now = _timeProvider.GetUtcNow();
         var cutoff = now - _options.SessionAge;
         var messageBodyCutoff = now - _options.ConversationMessageBodyAge;
+        var memoryRetentionWarnings = await _eventStore.PruneExpiredMemoryInclusionsAsync(cutoff, cancellationToken);
+        foreach (var warning in memoryRetentionWarnings)
+        {
+            _logger.LogWarning("{MemoryRetentionDiagnostic}", warning);
+        }
+
         var removedSessions = await _eventStore.DeleteSessionsOlderThanAsync(cutoff, cancellationToken);
         var removedMessageBodies = _conversationStore is not null
             && (!_options.RetainConversationBodies || _options.MetadataOnly)

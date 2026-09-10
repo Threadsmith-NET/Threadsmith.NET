@@ -1,0 +1,25 @@
+{
+  "provenance": {
+    "referenceSource": "AI.Inference.ML.NET.Common/CrossEncoders/ms-marco-MiniLM-L6-v2/MsMarcoMiniLML6V2.cs",
+    "referenceSourceSha256": "cc1400f995f2237124e7326b3e4dae0e95f33c71d4d457a1c0c516207a36c078",
+    "modelSha256": "5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a",
+    "vocabSha256": "c153dbfbd5aa35119ce3da5e5d7446dcc1731a721096919f5b7d64b80ca56a8d",
+    "referencePackages": {
+      "Microsoft.ML": "5.0.0-preview.1.25127.4",
+      "Microsoft.ML.OnnxTransformer": "4.0.2",
+      "Microsoft.ML.OnnxRuntime": "1.23.0",
+      "Microsoft.ML.Tokenizers": "2.0.0-preview.1.25127.4"
+    }
+  },
+  "query": "Which checks should I run after a tiny bug fix?",
+  "samples": [
+    { "document": "For a small code fix, run the affected test suite first; broad solution tests are needed only when the change crosses project boundaries.", "score": -3.737709 },
+    { "document": "Leave completed changes uncommitted for review. Stage, commit, or push Git changes only when the user explicitly requests it.", "score": -11.251389 },
+    { "document": "Use FindSymbolAsync for C# symbol discovery; plain text search misses overloads and inherited members.", "score": -11.386043 },
+    { "document": "Correction: release deadlines use America/New_York local time, not UTC.", "score": -11.28658 },
+    { "document": "Keep code comments concise and explain the reason for surprising behavior, without repeating what the next line does.", "score": -11.321302 },
+    { "document": "On Windows, use PowerShell LiteralPath when handling filenames containing brackets or wildcard characters.", "score": -11.377881 },
+    { "document": "Keep confidential repository notes on the local machine; do not send them to external hosted model services.", "score": -11.318633 },
+    { "document": "Public documentation drafts may use hosted models. The restriction on cloud processing applies to confidential repository notes.", "score": -11.420742 }
+  ]
+}

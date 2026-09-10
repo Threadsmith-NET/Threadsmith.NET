@@ -293,39 +293,21 @@
     "conversation": {
       "mode": "conversationAware",
       "recentTurnTokens": 8000,
-      "summaryTokens": 4000,
-      "retrievedMemoryTokens": 4000,
       "recentTurnCount": 12,
       "recentTurnMaximumAge": "7.00:00:00",
-      "compactionPressurePercent": 75,
-      "maximumRetrievedItems": 24,
-      "artifactThresholdCharacters": 16384,
-      "compaction": {
-        "archivedTokenThreshold": 8000,
-        "archivedMessageThreshold": 12,
-        "maximumActiveMemoryItems": 128,
-        "maximumCandidateItems": 64,
-        "maximumItemCharacters": 2000,
-        "maximumSourceMessages": 100,
-        "maximumProviderRetries": 1,
-        "maximumProviderCalls": 2,
-        "maximumInputTokens": 16000
-      }
-    },
-    // Local repository-scoped cross-session memory retrieval (plan-78). Items
-    // remain in the ignored .threadsmith/threadsmith.db repository database and
-    // are treated as untrusted prompt data when selected.
-    "repositoryMemory": {
-      "maximumItems": 12,
-      "maximumTokens": 2000,
-      "minimumRelevanceScore": 0.2,
-      "automaticMemoryMaximumAge": "2.00:00:00"
+      "compactionPressurePercent": 75
     },
     // Phase-specific evidence inclusion toggles (plan-09 §14).
     "phases": {
       "RepositoryDiscovery": { "includeSemanticFacts": true },
       "ChangePlanning": { "includeEvidence": true, "includeDiagnostics": false }
     }
+  },
+
+  // ── Local reranking startup ──────────────────────────────────────────────
+  // CPU inference worker count is read once during startup; restart after changing it.
+  "reranking": {
+    "cpuThreads": 8
   },
 
   // ── Tool permissions (§21.2) ────────────────────────────────────────────
@@ -336,9 +318,9 @@
   "tools": {
     // Plan-27 availability state. When enabled is present, non-essential tools must
     // be listed explicitly; disabled wins over enabled. Essential tools remain on.
-    "enabled": [ "list_files", "read_file", "write_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
+    "enabled": [ "list_files", "read_file", "write_file", "memories", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
     "disabled": [ "csharp_script", "example_optional_tool" ],
-    "allow": [ "list_files", "read_file", "write_file", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "csharp_script", "invoke_skill" ],
+    "allow": [ "list_files", "read_file", "write_file", "memories", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "csharp_script", "invoke_skill" ],
     "deny": [ "shell" ],
     // web_search is default-disabled. Repository entries request availability but
     // cannot grant outbound consent; the user must confirm through /tools.
@@ -521,6 +503,20 @@
     // Plan-28 arbitrary per-tool scalar configuration. csharp_script runs in a
     // fresh tracked worker, is disabled by default, and rejects file/network/process APIs.
     "config": {
+      // Explicit repository memories share these bounds regardless of origin.
+      // Zero context entries disables retrieval; stored capacity must be positive.
+      "memories": {
+        "MaxNumberOfRepoMemories": 20,
+        "MaxRepoMemoriesInContext": 3,
+        // Semantic matches must score strictly above this finite cosine minimum (-1 to 1).
+        // Lexical matches qualify independently; 1 excludes all semantic matches.
+        "SemanticMinimum": 0.47,
+        // Local CPU cross-encoder reranking is opt-in. Candidate limit is 1 through 64.
+        "RerankerEnabled": false,
+        "RerankerCandidateLimit": 8,
+        // Optional strict raw-logit floor; null preserves the top ranked candidates.
+        "RerankerMinimumScore": null
+      },
       "csharp_script": {
         "timeout_ms": "5000",
         "max_output_bytes": "65536",

@@ -36,7 +36,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SecretOutputSanitizer sanitizer,
         SqliteRepositoryFactsStore repositoryFacts,
         SqliteConversationStore conversationStore,
-        SqliteRepositoryMemoryStore repositoryMemoryStore,
+        RepositoryBoundMemoryStore repositoryMemoryStore,
         SqliteSessionLifecycleStore sessionLifecycleStore,
         SessionRestorer sessionRestorer,
         ArtifactStore artifactStore,
@@ -124,6 +124,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Disposes event observers in reverse dependency order before closing the event stream.</summary>
     async ValueTask IAsyncDisposable.DisposeAsync()
     {
+        RepositoryMemoryStore.Dispose();
         WebFetchAuthorization.RevokeAll();
         await _webFetchLifecycleSubscription.DisposeAsync();
         DirectFetchApprovalPrompt.Dispose();
@@ -161,7 +162,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     internal SqliteConversationStore ConversationStore { get; }
 
     /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
-    internal SqliteRepositoryMemoryStore RepositoryMemoryStore { get; }
+    internal RepositoryBoundMemoryStore RepositoryMemoryStore { get; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal SqliteSessionLifecycleStore SessionLifecycleStore { get; }
@@ -333,9 +334,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             var promptAppendLoader = new PromptAppendLoader(sanitizer);
             contextLifecycle = new ContextLifecycleObserver(
                 evidenceStore,
-                promptAppendLoader,
-                new ConversationMemoryInvalidator(persistence.ConversationStore, events: events),
-                new RepositoryMemoryInvalidator(persistence.RepositoryMemoryStore, events: events));
+                promptAppendLoader);
             contextSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                     ? Task.CompletedTask
@@ -654,7 +653,16 @@ internal sealed class HostFoundation : IAsyncDisposable
             ?? throw new InvalidOperationException("The persistence path has no parent directory."));
         var eventStore = new SqliteEventStore($"Data Source={databasePath}");
         await eventStore.InitializeAsync();
-        await new MigrationRunner($"Data Source={databasePath}", DefaultMigrations.All).RunAsync();
+        var memoryOptions = configuration.GetSection(RepositoryMemoryConfiguration.SectionName).Get<RepositoryMemoryOptions>() ?? new RepositoryMemoryOptions();
+        memoryOptions.Validate();
+        var migrations = new MigrationRunner($"Data Source={databasePath}", DefaultMigrations.ForRepositoryMemoryCapacity(memoryOptions.MaxNumberOfRepoMemories));
+        await migrations.RunAsync();
+        if (migrations.LastBackupPath is { } backupPath)
+        {
+            loggerFactory.CreateLogger<MigrationRunner>().LogInformation(
+                "Repository memory migration completed. Verified pre-migration SQLite backup: {BackupPath}.", backupPath);
+        }
+
         var artifactDirectory = Path.GetFullPath(
             configuration.GetValue<string>("persistence:artifactDirectory") ?? ".threadsmith/artifacts",
             paths.RepositoryRoot);
@@ -682,7 +690,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             sanitizer,
             events,
             configuration.GetValue("context:conversation:artifactThresholdCharacters", 16_384));
-        var repositoryMemoryStore = new SqliteRepositoryMemoryStore(connectionString, sanitizer);
+        var repositoryMemoryStore = new RepositoryBoundMemoryStore(connectionString, paths.RepositoryRoot, retentionOwner: eventStore);
         var sessionLifecycleStore = new SqliteSessionLifecycleStore(connectionString);
         var sessionRestorer = new SessionRestorer(
             eventStore,
@@ -996,7 +1004,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     private sealed record PersistenceServices(
         SqliteEventStore EventStore,
         SqliteConversationStore ConversationStore,
-        SqliteRepositoryMemoryStore RepositoryMemoryStore,
+        RepositoryBoundMemoryStore RepositoryMemoryStore,
         SqliteSessionLifecycleStore SessionLifecycleStore,
         SessionRestorer SessionRestorer,
         ArtifactStore ArtifactStore,

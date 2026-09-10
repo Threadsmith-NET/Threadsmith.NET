@@ -3,6 +3,8 @@ namespace Threadsmith.Execution;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Models;
@@ -160,6 +162,10 @@ public sealed class MutationProposalApplication :
     private readonly ExecutionLimits _limits;
     private readonly IDomainEventStream _events;
     private readonly IModelProvider _model;
+    private readonly IManagedRepositoryMemoryService? _repositoryMemories;
+    private readonly IRepositoryMemoryOptionsProvider? _repositoryMemoryOptions;
+    private readonly Func<SessionId, RunId, CancellationToken, Task<bool>>? _repositoryMemoriesEnabled;
+    private readonly ILogger<MutationProposalApplication> _logger;
     private readonly IPreMutationAnalyzer? _preMutationAnalyzer;
     private readonly ISemanticMutationEngine? _semanticMutations;
     private readonly IOutputSanitizer _sanitizer;
@@ -185,7 +191,11 @@ public sealed class MutationProposalApplication :
         ISemanticMutationEngine? semanticMutations = null,
         IPreMutationAnalyzer? preMutationAnalyzer = null,
         CorrectiveMessageFactory? correctiveMessages = null,
-        IPromptLoader? prompts = null)
+        IPromptLoader? prompts = null,
+        IManagedRepositoryMemoryService? repositoryMemories = null,
+        IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
+        Func<SessionId, RunId, CancellationToken, Task<bool>>? repositoryMemoriesEnabled = null,
+        ILogger<MutationProposalApplication>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(contextAssembler);
@@ -196,6 +206,10 @@ public sealed class MutationProposalApplication :
         ArgumentNullException.ThrowIfNull(correctiveMessages);
         ArgumentNullException.ThrowIfNull(prompts);
         _model = model;
+        _repositoryMemories = repositoryMemories;
+        _repositoryMemoryOptions = repositoryMemoryOptions;
+        _repositoryMemoriesEnabled = repositoryMemoriesEnabled;
+        _logger = logger ?? NullLogger<MutationProposalApplication>.Instance;
         _semanticMutations = semanticMutations;
         _preMutationAnalyzer = preMutationAnalyzer;
         _contextAssembler = contextAssembler;
@@ -385,7 +399,7 @@ public sealed class MutationProposalApplication :
         ModelUsage? reportedUsage = null;
         try
         {
-            await foreach (var chunk in _model.StreamAsync(modelRequest, cancellationToken))
+            await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, modelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
             {
                 if (chunk.Reasoning is not null)
                 {
@@ -644,6 +658,9 @@ public sealed class MutationProposalApplication :
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requiresToolCall = command.Phase is RunPhase.ImplementationModelTurn or RunPhase.CorrectionModelTurn;
+        var memoryIdentity = RepositoryIdentity.Create(baseline.RepositoryPath);
+        var memoriesEnabled = _repositoryMemoriesEnabled is not null
+            && await _repositoryMemoriesEnabled(command.SessionId, command.RunId, cancellationToken);
         var context = await _contextAssembler.AssembleAsync(
             new ContextAssemblyRequest
             {
@@ -652,6 +669,8 @@ public sealed class MutationProposalApplication :
                 Phase = command.Phase,
                 Task = command.Task,
                 RepositoryPath = baseline.RepositoryPath,
+                RepositoryMemoriesEnabled = memoriesEnabled,
+                RepositoryMemoryOptions = _repositoryMemoryOptions?.Capture(memoryIdentity),
                 WorkingScope = RepositoryWorkingScope.Resolve(
                     baseline.RepositoryPath,
                     command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
@@ -682,6 +701,9 @@ public sealed class MutationProposalApplication :
         {
             RunId = command.RunId,
             Input = context.ModelInput,
+            MemorySubmission = context.RepositoryMemoryInclusions is { Count: > 0 } inclusions
+                ? new RepositoryMemorySubmission(command.SessionId, memoryIdentity, inclusions)
+                : null,
 
             // Preserve deterministic scripted-provider chunking and reproducible proposal tests.
             Seed = 42,

@@ -10,6 +10,7 @@ using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Context;
+using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Tools;
 using Xunit;
@@ -89,16 +90,22 @@ public static class RepoConfigTests
         Assert.Equal("src/Threadsmith.sln", config["solution:path"]);
     }
 
-    /// <summary>Repository-memory relevance and recency settings bind from the reference configuration.</summary>
+    /// <summary>Repository-memory storage and retrieval bounds bind from the sole tool configuration namespace.</summary>
     [Fact]
     public static void RepositoryMemoryAdmissionSettingsBind()
     {
         var config = LoadConfigExample();
-        var policy = config.GetSection("context:repositoryMemory").Get<RepositoryMemoryContextPolicy>();
+        var policy = config.GetSection("tools:config:memories").Get<RepositoryMemoryOptions>();
 
         Assert.NotNull(policy);
-        Assert.Equal(0.2d, policy.MinimumRelevanceScore);
-        Assert.Equal(TimeSpan.FromDays(2), policy.AutomaticMemoryMaximumAge);
+        Assert.Equal(20, policy.MaxNumberOfRepoMemories);
+        Assert.Equal(3, policy.MaxRepoMemoriesInContext);
+        Assert.Equal(RepositoryMemoryOptions.DefaultSemanticMinimum, policy.SemanticMinimum);
+        Assert.False(policy.RerankerEnabled);
+        Assert.Equal(8, policy.RerankerCandidateLimit);
+        Assert.Null(policy.RerankerMinimumScore);
+        Assert.Equal(8, config.GetValue("reranking:cpuThreads", 0));
+        Assert.False(config.GetSection("context:repositoryMemory").Exists());
     }
 
     /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>

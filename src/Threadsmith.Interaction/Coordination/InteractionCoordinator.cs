@@ -65,6 +65,10 @@ internal enum InteractiveDecisionResult
 /// </summary>
 public sealed class InteractionCoordinator
 {
+    private const string RetiredConversationCompactionGuidance =
+        "Automatic conversation fact promotion has been retired. Model-generated active-turn compaction still runs when needed; "
+        + "use /memory remember <text> for explicit repository recall.\n";
+
     private const string StartupBanner = """
          _____ _                        _               _ _   _
         |_   _| |__  _ __ ___  __ _  __| |___ _ __ ___ (_) |_| |__
@@ -3032,7 +3036,7 @@ public sealed class InteractionCoordinator
         }
 
         var repositoryIdentity = RepositoryIdentity.Create(repositoryPath);
-        var argument = commandText.Length == 7 ? "list repo" : commandText[7..].Trim();
+        var argument = commandText.Length == 7 ? "list" : commandText[7..].Trim();
         var separator = argument.IndexOf(' ');
         var operation = separator < 0 ? argument : argument[..separator];
         var remainder = separator < 0 ? string.Empty : argument[(separator + 1)..].Trim();
@@ -3043,11 +3047,11 @@ public sealed class InteractionCoordinator
                 case "remember":
                     var rememberText = remainder.StartsWith("repo ", StringComparison.OrdinalIgnoreCase)
                         ? remainder[5..].Trim()
-                        : string.Empty;
+                        : remainder;
                     if (string.IsNullOrWhiteSpace(rememberText))
                     {
                         await _surface.WriteAsync(
-                            "Usage: /memory remember repo <text>\n",
+                            "Usage: /memory remember <text>\n",
                             PresentationTextRole.Warning,
                             cancellationToken);
                         return;
@@ -3057,7 +3061,6 @@ public sealed class InteractionCoordinator
                         sessionId,
                         repositoryIdentity,
                         rememberText,
-                        RepositoryMemoryKind.WorkflowFact,
                         cancellationToken);
                     await _surface.WriteAsync(
                         $"Remembered repository memory {remembered.Id.Value:D}.\n",
@@ -3066,29 +3069,14 @@ public sealed class InteractionCoordinator
                     return;
 
                 case "list":
-                    if (!remainder.StartsWith("repo", StringComparison.OrdinalIgnoreCase))
+                    if (remainder.Length > 0 && !string.Equals(remainder, "repo", StringComparison.OrdinalIgnoreCase))
                     {
-                        await _surface.WriteAsync(
-                            "Usage: /memory list repo [active|stale|superseded|forgotten|rejected|all]\n",
-                            PresentationTextRole.Warning,
-                            cancellationToken);
-                        return;
-                    }
-
-                    var filterText = remainder.Length == 4 ? string.Empty : remainder[4..].Trim();
-                    if (!TryParseRepositoryMemoryValidity(filterText, out var validity))
-                    {
-                        await _surface.WriteAsync(
-                            $"Unknown repository-memory validity '{filterText}'.\n",
-                            PresentationTextRole.Warning,
-                            cancellationToken);
-                        return;
+                        throw new InvalidOperationException("Memory category and validity filters have been retired. Use /memory list.");
                     }
 
                     var listed = await _presenter.ListRepositoryMemoryAsync(
                         sessionId,
                         repositoryIdentity,
-                        validity,
                         cancellationToken);
                     await _surface.WriteAsync(
                         FormatRepositoryMemorySnapshot(listed),
@@ -3117,6 +3105,7 @@ public sealed class InteractionCoordinator
                         cancellationToken);
                     return;
 
+                case "update":
                 case "supersede":
                     var supersedeSeparator = remainder.IndexOf(' ');
                     if (supersedeSeparator < 0
@@ -3124,20 +3113,20 @@ public sealed class InteractionCoordinator
                         || string.IsNullOrWhiteSpace(remainder[(supersedeSeparator + 1)..]))
                     {
                         await _surface.WriteAsync(
-                            "Usage: /memory supersede <memory-id> <replacement-text>\n",
+                            "Usage: /memory update <memory-id> <replacement-text>\n",
                             PresentationTextRole.Warning,
                             cancellationToken);
                         return;
                     }
 
-                    var replacement = await _presenter.SupersedeRepositoryMemoryAsync(
+                    var replacement = await _presenter.UpdateRepositoryMemoryAsync(
                         sessionId,
                         repositoryIdentity,
                         supersedeId,
                         remainder[(supersedeSeparator + 1)..].Trim(),
                         cancellationToken);
                     await _surface.WriteAsync(
-                        $"Superseded repository memory with {replacement.Id.Value:D}.\n",
+                        $"Updated repository memory {replacement.Id.Value:D}.\n",
                         PresentationTextRole.Status,
                         cancellationToken);
                     return;
@@ -3164,28 +3153,11 @@ public sealed class InteractionCoordinator
                     return;
 
                 case "validate":
-                    if (!string.Equals(remainder, "repo", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await _surface.WriteAsync(
-                            "Usage: /memory validate repo\n",
-                            PresentationTextRole.Warning,
-                            cancellationToken);
-                        return;
-                    }
-
-                    var validated = await _presenter.ValidateRepositoryMemoryAsync(
-                        sessionId,
-                        repositoryIdentity,
-                        cancellationToken);
-                    await _surface.WriteAsync(
-                        FormatRepositoryMemorySnapshot(validated),
-                        PresentationTextRole.Status,
-                        cancellationToken);
-                    return;
+                    throw new InvalidOperationException("Memory validation has been retired. Use /memory inspect <id> and /memory update <id> <text> to correct an entry.");
 
                 default:
                     await _surface.WriteAsync(
-                        "Usage: /memory [remember repo <text>|list repo [filter]|inspect <id>|supersede <id> <text>|forget <id>|validate repo]\n",
+                        "Usage: /memory [remember <text>|list|inspect <id>|update <id> <text>|forget <id>]\n",
                         PresentationTextRole.Warning,
                         cancellationToken);
                     return;
@@ -3273,6 +3245,9 @@ public sealed class InteractionCoordinator
                 + $"mode {FormatConversationMode(inspection.ConversationMode)} ({inspection.ConversationModeSource}); "
                 + $"pressure {inspection.ContextPressurePercent:F1}%\n"
                 + activeTurnOutput
+                + (inspection.RepositoryMemoryDispatch is { } dispatch
+                    ? $"  memory submission: {dispatch.Outcome}; {dispatch.Inclusions.Count} revision receipts; {dispatch.ElapsedMilliseconds:F1} ms\n"
+                    : string.Empty)
                 + string.Join(
                     string.Empty,
                     inspection.ConversationItems.Select(item =>
@@ -3280,7 +3255,7 @@ public sealed class InteractionCoordinator
                 + string.Join(
                     string.Empty,
                     inspection.RepositoryMemoryItems.Select(item =>
-                        $"  {(item.Included ? "included" : "omitted")} repository-memory {item.Kind} {item.Id.Value:D}: {item.Rationale}\n"))
+                        $"  {(item.Included ? "included" : "omitted")} repository-memory {item.Origin} {item.Id.Value:D}: {item.Rationale}\n"))
                 + string.Join(
                     string.Empty,
                     inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
@@ -3290,18 +3265,15 @@ public sealed class InteractionCoordinator
 
         if (string.Equals(argument, "compact", StringComparison.OrdinalIgnoreCase))
         {
-            var compacted = await _presenter.CompactConversationAsync(sessionId, cancellationToken);
             await _surface.WriteAsync(
-                compacted
-                    ? "Conversation compaction completed or was already current.\n"
-                    : "Conversation compaction failed; the prior snapshot remains active.\n",
-                compacted ? PresentationTextRole.Status : PresentationTextRole.Warning,
+                RetiredConversationCompactionGuidance,
+                PresentationTextRole.Warning,
                 cancellationToken);
             return;
         }
 
         await _surface.WriteAsync(
-            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|compact]\n",
+            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|compact (retired)]\n",
             PresentationTextRole.Warning,
             cancellationToken);
     }
@@ -3787,35 +3759,25 @@ public sealed class InteractionCoordinator
             + (selection.FallbackReason is null ? string.Empty : $"    fallback: {selection.FallbackReason}\n");
     }
 
-    private static string FormatRepositoryMemorySnapshot(RepositoryMemorySnapshot snapshot)
+    private static string FormatRepositoryMemorySnapshot(RepositoryMemoryReadSnapshot snapshot)
     {
-        var warnings = snapshot.Warnings.Count == 0
-            ? string.Empty
-            : string.Join(string.Empty, snapshot.Warnings.Select(warning => $"  warning: {warning}\n"));
-        var items = snapshot.Items.Count == 0
-            ? "  no repository memory items\n"
-            : string.Join(string.Empty, snapshot.Items.Select(FormatRepositoryMemorySummary));
-        return $"Repository memory ({snapshot.Items.Count} item(s)):\n" + warnings + items;
+        var warnings = string.Join(string.Empty, snapshot.Warnings.Select(warning => $"  warning: {warning}\n"));
+        var items = snapshot.Entries.Count == 0
+            ? "  no repository memory entries\n"
+            : string.Join(string.Empty, snapshot.Entries.Select(FormatRepositoryMemorySummary));
+        return $"Repository memory ({snapshot.Entries.Count} entries; best-effort recall):\n" + warnings + items;
     }
 
-    private static string FormatRepositoryMemoryItem(RepositoryMemoryItem item)
+    private static string FormatRepositoryMemoryItem(RepositoryMemoryEntry item)
     {
-        var sources = item.Sources.Count == 0
-            ? "  sources: none\n"
-            : string.Join(string.Empty, item.Sources.Select(source =>
-                $"  source {source.Kind}: {source.SourceId} {source.Description}\n"));
         return FormatRepositoryMemorySummary(item)
-            + $"  content: {item.Content}\n"
-            + $"  sensitivity: {item.Sensitivity}\n"
-            + $"  hash: {item.ContentHash}\n"
-            + sources;
+            + $"  created: {item.CreatedAt:O}\n  updated: {item.UpdatedAt:O}\n"
+            + $"  inclusions: {item.InclusionCount}; last included: {item.LastIncludedAt:O}\n"
+            + $"  embedding: {(item.Embedding.IsEmpty ? "unavailable" : item.EmbeddingSpaceId)}\n";
     }
 
-    private static string FormatRepositoryMemorySummary(RepositoryMemoryItem item)
-    {
-        var reason = string.IsNullOrWhiteSpace(item.StateReason) ? string.Empty : $" — {item.StateReason}";
-        return $"  {item.Id.Value:D} [{item.Validity}] {item.Kind}/{item.Authority}: {item.Content}{reason}\n";
-    }
+    private static string FormatRepositoryMemorySummary(RepositoryMemoryEntry item)
+        => $"  {item.Id.Value:D} [{item.Origin.ToString().ToLowerInvariant()}]: {item.Text}\n";
 
     private static bool TryParseRepositoryMemoryId(string value, out RepositoryMemoryId memoryId)
     {
@@ -3826,28 +3788,6 @@ public sealed class InteractionCoordinator
         }
 
         memoryId = default;
-        return false;
-    }
-
-    private static bool TryParseRepositoryMemoryValidity(
-        string value,
-        out RepositoryMemoryValidity? validity)
-    {
-        if (string.IsNullOrWhiteSpace(value)
-            || string.Equals(value, "all", StringComparison.OrdinalIgnoreCase))
-        {
-            validity = null;
-            return true;
-        }
-
-        if (Enum.TryParse(value, ignoreCase: true, out RepositoryMemoryValidity parsed)
-            && Enum.IsDefined(parsed))
-        {
-            validity = parsed;
-            return true;
-        }
-
-        validity = null;
         return false;
     }
 

@@ -11,7 +11,7 @@ Assert-ReleaseRid $RuntimeIdentifier
 
 $manifestPath = Join-Path $PSScriptRoot 'ripgrep-assets.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'ripgrep') {
+if ($manifest.schemaVersion -ne 2 -or $manifest.product -ne 'ripgrep') {
     throw 'The pinned ripgrep asset manifest is invalid.'
 }
 if ($manifest.sourceRepository -ne 'https://github.com/BurntSushi/ripgrep' -or
@@ -23,6 +23,11 @@ if ($manifest.sourceRepository -ne 'https://github.com/BurntSushi/ripgrep' -or
 $assetProperty = $manifest.assets.PSObject.Properties[$RuntimeIdentifier]
 if ($null -eq $assetProperty) { throw "No pinned ripgrep asset exists for $RuntimeIdentifier." }
 $asset = $assetProperty.Value
+foreach ($name in @('LICENSE-MIT', 'UNLICENSE')) {
+    if ([string]$asset.licenseFiles.PSObject.Properties[$name].Value -notmatch '^[0-9a-f]{64}$') {
+        throw "The pinned ripgrep $name license digest for $RuntimeIdentifier is invalid."
+    }
+}
 $archiveName = [string]$asset.archive
 $expectedHash = ([string]$asset.sha256).ToLowerInvariant()
 if ($archiveName -notmatch "^ripgrep-$([regex]::Escape($manifest.version))-[0-9A-Za-z_-]+\.(zip|tar\.gz)$" -or
@@ -86,8 +91,8 @@ foreach ($required in @($sourceExecutable, $sourceMitLicense, $sourceUnlicense))
 }
 $actualMitHash = (Get-FileHash -LiteralPath $sourceMitLicense -Algorithm SHA256).Hash.ToLowerInvariant()
 $actualUnlicenseHash = (Get-FileHash -LiteralPath $sourceUnlicense -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualMitHash -ne $manifest.licenseFiles.'LICENSE-MIT' -or
-    $actualUnlicenseHash -ne $manifest.licenseFiles.UNLICENSE) {
+if ($actualMitHash -ne $asset.licenseFiles.'LICENSE-MIT' -or
+    $actualUnlicenseHash -ne $asset.licenseFiles.UNLICENSE) {
     throw 'The ripgrep license files do not match the repository-reviewed digests.'
 }
 
@@ -99,6 +104,8 @@ Copy-Item -LiteralPath $sourceExecutable -Destination $stagedExecutable
 Copy-Item -LiteralPath $sourceMitLicense -Destination (Join-Path $noticeDirectory 'LICENSE-MIT')
 Copy-Item -LiteralPath $sourceUnlicense -Destination (Join-Path $noticeDirectory 'UNLICENSE')
 [ordered]@{
+    schemaVersion = 1
+    runtimeIdentifier = $RuntimeIdentifier
     product = 'ripgrep'
     version = [string]$manifest.version
     sourceRepository = [string]$manifest.sourceRepository

@@ -267,6 +267,119 @@ public static class Plan56SessionLifecycleTests
         Assert.Equal(active.SessionId, Assert.Single(listed).SessionId);
     }
 
+    /// <summary>A failed final repository commit never activates its prepared session or changes the source binding.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Repository_commit_failure_restores_source_and_revokes_prepared_session(bool hasSource)
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
+        var source = hasSource ? (await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand())).ActiveSession : null;
+        var expected = new InvalidOperationException("Memory commit failed before mutation.");
+
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Lifecycle.BindRepositoryAsync(
+            "repo-b",
+            _ => Task.FromException(expected)));
+
+        Assert.Same(expected, actual);
+        if (source is null)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Lifecycle.HandleAsync(new GetActiveSessionCommand()));
+        }
+        else
+        {
+            var active = await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand());
+            Assert.Equal(source.SessionId, active.SessionId);
+            Assert.Equal(source.RepositoryIdentity, active.RepositoryIdentity);
+            Assert.Equal(SessionLifecycleState.Active, active.State);
+        }
+
+        var abandoned = Assert.Single(await catalog.ListAsync(RepositoryIdentity.Create("repo-b"), 10));
+        Assert.Equal(SessionLifecycleState.Unavailable, abandoned.State);
+        Assert.False(abandoned.IsWritable);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Sessions.HandleAsync(new SubmitRequestCommand(abandoned.SessionId, "must not execute")));
+        await harness.Lifecycle.BindRepositoryAsync("repo-b");
+        Assert.Equal("repo-b", (await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand())).RepositoryDisplayName);
+    }
+
+    /// <summary>Cleanup failure preserves the original commit error and revokes the prepared session's admission.</summary>
+    [Fact]
+    public static async Task Repository_commit_and_cleanup_failures_are_reported_together()
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var faults = new FaultingUsageLifecycleStore(catalog) { FailUnavailableCheckpoint = true };
+        await using var harness = LifecycleHarness.Create("repo-a", faults, fixture.Conversations);
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var expected = new InvalidOperationException("Memory commit failed before mutation.");
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => harness.Lifecycle.BindRepositoryAsync(
+            "repo-b",
+            _ => Task.FromException(expected)));
+
+        Assert.Same(expected, failure.InnerExceptions[0]);
+        Assert.IsType<IOException>(failure.InnerExceptions[1]);
+        Assert.Contains("durable state could not be marked unavailable", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(source.ActiveSession.SessionId, (await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand())).SessionId);
+        var abandoned = Assert.Single(await catalog.ListAsync(RepositoryIdentity.Create("repo-b"), 10));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Sessions.HandleAsync(new SubmitRequestCommand(abandoned.SessionId, "must not execute")));
+    }
+
+    /// <summary>Legacy no-op binds remain safe during active work while mutation callbacks require an idle boundary.</summary>
+    [Theory]
+    [InlineData("repo-a")]
+    [InlineData("repo-b")]
+    public static async Task Repository_commit_is_fenced_during_active_work(string target)
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var model = new GatedModelProvider();
+        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations, modelProvider: model);
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var run = await harness.Sessions.HandleAsync(new SubmitRequestCommand(source.ActiveSession.SessionId, "wait at the model boundary"));
+        var committed = false;
+        try
+        {
+            await model.Entered.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(harness.Sessions.HasActiveWork);
+            await harness.Lifecycle.BindRepositoryAsync("repo-a");
+            await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Lifecycle.BindRepositoryAsync(target, _ =>
+            {
+                committed = true;
+                return Task.CompletedTask;
+            }));
+            Assert.False(committed);
+            Assert.Equal(source.ActiveSession.SessionId, (await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand())).SessionId);
+        }
+        finally
+        {
+            model.Release();
+            await harness.Sessions.HandleAsync(new WaitForRunCommand(run)).WaitAsync(TimeSpan.FromSeconds(3));
+        }
+    }
+
+    /// <summary>A same-repository refresh still performs its final commit without replacing the active session.</summary>
+    [Fact]
+    public static async Task Repository_refresh_commits_without_replacing_session()
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
+        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
+        var committed = false;
+
+        await harness.Lifecycle.BindRepositoryAsync("repo-a", _ =>
+        {
+            committed = true;
+            return Task.CompletedTask;
+        });
+
+        Assert.True(committed);
+        Assert.Equal(source.ActiveSession.SessionId, (await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand())).SessionId);
+    }
+
     /// <summary>Completed-turn checkpoints persist current usage, message count, and preview immediately.</summary>
     [Fact]
     public static async Task Completed_turn_checkpoint_refreshes_catalog_metadata()
@@ -377,6 +490,61 @@ public static class Plan56SessionLifecycleTests
         Assert.Empty(destinationState.Messages);
     }
 
+    /// <summary>Historical automatic-memory corruption cannot reappear in current snapshots or prevent transcript cloning.</summary>
+    [Fact]
+    public static async Task Clone_preserves_messages_and_ignores_malformed_legacy_memory_rows()
+    {
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var source = CreateEntry(SessionId.New(), "repo-a", DateTimeOffset.UtcNow);
+        await catalog.CreateAsync(source, EmptyUsage());
+        await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = source.SessionId,
+            RunId = RunId.New(),
+            Sequence = 0,
+            Role = ConversationRole.User,
+            Content = "Visible transcript survives",
+            ContentHash = "pending",
+            EstimatedTokens = 5,
+            OccurredAt = source.CreatedAt,
+        });
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await using var legacy = connection.CreateCommand();
+        legacy.CommandText = """
+            INSERT INTO conversation_memory(memory_id, session_id, kind, content, repository_dependent,
+                validity, created_at, updated_at, schema_version)
+            VALUES('not-a-guid', $source, 0, 'retired automatic item', 0, 0, 'bad timestamp', 'bad timestamp', 1);
+            INSERT INTO conversation_memory_sources(memory_id, source_kind, source_id, ordinal)
+            VALUES('not-a-guid', 'message', 'bad-source-guid', 0);
+            INSERT INTO conversation_summaries(session_id, version, through_message_sequence, memory_index_json, created_at, schema_version)
+            VALUES($source, 1, 1, 'malformed old JSON', 'bad timestamp', 1);
+            """;
+        legacy.Parameters.AddWithValue("$source", source.SessionId.Value.ToString("D"));
+        await legacy.ExecuteNonQueryAsync();
+        var snapshot = await fixture.Conversations.GetSnapshotAsync(source.SessionId);
+        Assert.Empty(snapshot.MemoryItems);
+        Assert.Null(snapshot.Summary);
+        Assert.Equal("Visible transcript survives", Assert.Single(snapshot.Messages).Content);
+        var destination = source with { SessionId = SessionId.New(), CloneSourceSessionId = source.SessionId };
+        await catalog.CloneAsync(source.SessionId, destination, EmptyUsage());
+        var cloned = await fixture.Conversations.GetSnapshotAsync(destination.SessionId);
+        Assert.Equal("Visible transcript survives", Assert.Single(cloned.Messages).Content);
+        Assert.Empty(cloned.MemoryItems);
+        Assert.Null(cloned.Summary);
+        await using var rows = connection.CreateCommand();
+        rows.CommandText = """
+            SELECT (SELECT count(*) FROM conversation_memory WHERE session_id = $destination)
+                + (SELECT count(*) FROM conversation_summaries WHERE session_id = $destination);
+            """;
+        rows.Parameters.AddWithValue("$destination", destination.SessionId.Value.ToString("D"));
+        Assert.Equal(0L, await rows.ExecuteScalarAsync());
+        rows.CommandText = "SELECT count(*) FROM conversation_memory;";
+        Assert.Equal(1L, await rows.ExecuteScalarAsync());
+    }
+
     private static SessionCatalogEntry CreateEntry(SessionId sessionId, string repository, DateTimeOffset timestamp)
     {
         return new SessionCatalogEntry
@@ -448,12 +616,14 @@ public static class Plan56SessionLifecycleTests
             DomainEventStream events,
             EvidenceStore evidence,
             SessionUsageProjection usage,
-            SessionLifecycleApplication lifecycle)
+            SessionLifecycleApplication lifecycle,
+            SessionApplication sessions)
         {
             _events = events;
             Evidence = evidence;
             Usage = usage;
             Lifecycle = lifecycle;
+            Sessions = sessions;
         }
 
         internal EvidenceStore Evidence { get; }
@@ -464,6 +634,8 @@ public static class Plan56SessionLifecycleTests
 
         internal SessionUsageProjection Usage { get; }
 
+        internal SessionApplication Sessions { get; }
+
         public ValueTask DisposeAsync()
         {
             return _events.DisposeAsync();
@@ -473,7 +645,8 @@ public static class Plan56SessionLifecycleTests
             string repositoryPath,
             ISessionLifecycleStore store,
             IConversationStore conversations,
-            ActiveModelSelectionService? activeModels = null)
+            ActiveModelSelectionService? activeModels = null,
+            IModelProvider? modelProvider = null)
         {
             var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -483,7 +656,7 @@ public static class Plan56SessionLifecycleTests
             var usage = new SessionUsageProjection();
             var sessions = new SessionApplication(
                 events,
-                new UnusedModelProvider(),
+                modelProvider ?? new UnusedModelProvider(),
                 UnboundedBudget.Instance,
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
@@ -502,7 +675,7 @@ public static class Plan56SessionLifecycleTests
                 new UnusedContextAssembler(),
                 usage,
                 activeModels);
-            return new LifecycleHarness(events, evidence, usage, lifecycle);
+            return new LifecycleHarness(events, evidence, usage, lifecycle, sessions);
         }
     }
 
@@ -560,12 +733,16 @@ public static class Plan56SessionLifecycleTests
 
         internal SessionId? FailUsageFor { get; set; }
 
+        internal bool FailUnavailableCheckpoint { get; set; }
+
         public Task<SessionCatalogEntry> CheckpointAsync(
             SessionCatalogEntry entry,
             SessionDurableUsage usage,
             CancellationToken cancellationToken = default)
         {
-            return _inner.CheckpointAsync(entry, usage, cancellationToken);
+            return FailUnavailableCheckpoint && entry.State == SessionLifecycleState.Unavailable
+                ? Task.FromException<SessionCatalogEntry>(new IOException("Injected cleanup failure."))
+                : _inner.CheckpointAsync(entry, usage, cancellationToken);
         }
 
         public Task<SessionCatalogEntry> CloneAsync(
@@ -666,6 +843,25 @@ public static class Plan56SessionLifecycleTests
         public void InvalidateInspections()
         {
         }
+    }
+
+    private sealed class GatedModelProvider : IModelProvider
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task Entered => _entered.Task;
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _entered.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+            yield return new ModelChunk { Text = "The gated request is complete." };
+        }
+
+        internal void Release() => _release.TrySetResult();
     }
 
     private sealed class UnusedModelProvider : IModelProvider

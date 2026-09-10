@@ -77,7 +77,7 @@ Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (
 
 | Child | Scope |
 |---|---|
-| `src/AGENTS.md` | 23 product projects, dependency layers, adding new projects |
+| `src/AGENTS.md` | 25 product projects, dependency layers, adding new projects |
 | `tests/AGENTS.md` | Architecture and scope-focused verification suites |
 | `docs/AGENTS.md` | User guide, operations, ADRs, guardrails, testing docs, and implementation plans |
 | `eng/AGENTS.md` | Repository build, development-tool staging, and release automation |

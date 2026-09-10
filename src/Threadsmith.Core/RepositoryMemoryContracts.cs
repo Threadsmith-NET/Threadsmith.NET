@@ -179,165 +179,30 @@ public sealed record RepositoryMemoryItem
     public int SchemaVersion { get; init; } = RepositoryMemorySchemaVersions.Item;
 }
 
-/// <summary>A detached repository-memory snapshot restored from local repository persistence.</summary>
-public sealed record RepositoryMemorySnapshot
-{
-    /// <summary>Repository identity represented by this snapshot.</summary>
-    public required string RepositoryIdentity { get; init; }
+/// <summary>Creates an explicit manual repository memory.</summary>
+public sealed record RememberRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, string Text)
+    : ICommand<RepositoryMemoryEntry>;
 
-    /// <summary>All repository memory, including stale, superseded, rejected, and forgotten audit items.</summary>
-    public IReadOnlyList<RepositoryMemoryItem> Items { get; init; } = [];
+/// <summary>Lists current repository memories.</summary>
+public sealed record ListRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity)
+    : ICommand<RepositoryMemoryReadSnapshot>;
 
-    /// <summary>Bounded restoration warnings for unsupported or malformed state.</summary>
-    public IReadOnlyList<string> Warnings { get; init; } = [];
-}
+/// <summary>Inspects one current memory including usage and embedding availability.</summary>
+public sealed record InspectRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId)
+    : ICommand<RepositoryMemoryEntry?>;
 
-/// <summary>Describes one durable repository-memory state update performed by a governor operation.</summary>
-public sealed record RepositoryMemoryStateUpdate(
-    RepositoryMemoryId MemoryId,
-    RepositoryMemoryValidity PreviousValidity,
-    RepositoryMemoryValidity Validity,
-    string Reason);
+/// <summary>Corrects an existing entry in place, preserving its stable ID.</summary>
+public sealed record UpdateRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText)
+    : ICommand<RepositoryMemoryEntry>;
 
-/// <summary>Reports whether remember inserted an item and any capacity demotions it required.</summary>
-public sealed record RepositoryMemoryRememberResult(
-    RepositoryMemoryItem Item,
-    bool WasInserted,
-    IReadOnlyList<RepositoryMemoryStateUpdate> StateUpdates);
+/// <summary>Compatibility alias for an in-place update; no supersession record is created.</summary>
+public sealed record SupersedeRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText)
+    : ICommand<RepositoryMemoryEntry>;
 
-/// <summary>Describes one host-observed repository-memory candidate from an authoritative run boundary.</summary>
-public sealed record HostObservedRepositoryMemoryPromotion(
-    SessionId SessionId,
-    RunId RunId,
-    string RepositoryIdentity,
-    RepositoryMemoryKind Kind,
-    string Content);
+/// <summary>Deletes a repository memory and its current search and usage rows.</summary>
+public sealed record ForgetRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId)
+    : ICommand<bool>;
 
-/// <summary>Reports a replacement item and any capacity demotions required before it became active.</summary>
-public sealed record RepositoryMemorySupersedeResult(
-    RepositoryMemoryItem Item,
-    IReadOnlyList<RepositoryMemoryStateUpdate> StateUpdates);
-
-/// <summary>Reports the post-validation snapshot and the durable validity updates that produced it.</summary>
-public sealed record RepositoryMemoryValidationResult(
-    RepositoryMemorySnapshot Snapshot,
-    IReadOnlyList<RepositoryMemoryStateUpdate> StateUpdates);
-
-/// <summary>Persists local repository-scoped memory inside the repository database boundary.</summary>
-public interface IRepositoryMemoryStore
-{
-    /// <summary>Inserts or updates one repository-memory item and its provenance.</summary>
-    Task<RepositoryMemoryItem> UpsertAsync(
-        RepositoryMemoryItem item,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Atomically applies capacity state changes and inserts or updates one repository-memory item.</summary>
-    Task<RepositoryMemoryItem> UpsertWithStateUpdatesAsync(
-        RepositoryMemoryItem item,
-        IReadOnlyList<RepositoryMemoryStateUpdate> stateUpdates,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Atomically inserts one item and demotes overflow under the supplied active-item bound.</summary>
-    Task<RepositoryMemoryRememberResult> InsertBoundedAsync(
-        RepositoryMemoryItem item,
-        int maximumActiveItems,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Atomically inserts a replacement item and marks the superseded item inactive.</summary>
-    Task<RepositoryMemoryItem> SupersedeAsync(
-        string repositoryIdentity,
-        RepositoryMemoryId supersededId,
-        RepositoryMemoryItem replacement,
-        IReadOnlyList<RepositoryMemoryStateUpdate> stateUpdates,
-        string reason,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Updates one item validity without deleting its audit metadata.</summary>
-    Task<bool> UpdateValidityAsync(
-        string repositoryIdentity,
-        RepositoryMemoryId memoryId,
-        RepositoryMemoryValidity validity,
-        string reason,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Gets detached repository-memory state with tolerant schema handling.</summary>
-    Task<RepositoryMemorySnapshot> GetSnapshotAsync(
-        string repositoryIdentity,
-        CancellationToken cancellationToken = default);
-}
-
-/// <summary>Applies host-owned policy to repository-scoped memory commands.</summary>
-public interface IRepositoryMemoryGovernor
-{
-    /// <summary>Creates an explicit user-authored repository-memory item.</summary>
-    Task<RepositoryMemoryRememberResult> RememberAsync(
-        RememberRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Promotes one host-observed run outcome through the same bounded policy as explicit memory.</summary>
-    Task<RepositoryMemoryRememberResult> PromoteHostObservedAsync(
-        HostObservedRepositoryMemoryPromotion promotion,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Lists repository memory using host-owned filters.</summary>
-    Task<RepositoryMemorySnapshot> ListAsync(
-        ListRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Inspects one repository memory item.</summary>
-    Task<RepositoryMemoryItem?> InspectAsync(
-        InspectRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Corrects a repository memory item by superseding it with replacement text.</summary>
-    Task<RepositoryMemorySupersedeResult> SupersedeAsync(
-        SupersedeRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Forgets one repository memory item without deleting its audit metadata.</summary>
-    Task<bool> ForgetAsync(
-        ForgetRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Revalidates repository-dependent memory at an explicit host boundary.</summary>
-    Task<RepositoryMemoryValidationResult> ValidateAsync(
-        ValidateRepositoryMemoryCommand command,
-        CancellationToken cancellationToken = default);
-}
-
-/// <summary>Creates an explicit repository-scoped memory item.</summary>
-public sealed record RememberRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity,
-    string Text,
-    RepositoryMemoryKind Kind) : ICommand<RepositoryMemoryItem>;
-
-/// <summary>Lists repository-scoped memory using a host-owned filter.</summary>
-public sealed record ListRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity,
-    RepositoryMemoryValidity? Validity = null) : ICommand<RepositoryMemorySnapshot>;
-
-/// <summary>Inspects one repository-scoped memory item and its provenance.</summary>
-public sealed record InspectRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity,
-    RepositoryMemoryId MemoryId) : ICommand<RepositoryMemoryItem?>;
-
-/// <summary>Supersedes one repository-scoped memory item with replacement text.</summary>
-public sealed record SupersedeRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity,
-    RepositoryMemoryId MemoryId,
-    string ReplacementText) : ICommand<RepositoryMemoryItem>;
-
-/// <summary>Forgets one repository-scoped memory item without deleting audit metadata.</summary>
-public sealed record ForgetRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity,
-    RepositoryMemoryId MemoryId) : ICommand<bool>;
-
-/// <summary>Requests host-owned revalidation of repository-dependent memory.</summary>
-public sealed record ValidateRepositoryMemoryCommand(
-    SessionId SessionId,
-    string RepositoryIdentity) : ICommand<RepositoryMemorySnapshot>;
+/// <summary>Retired command retained solely to return an actionable migration message.</summary>
+public sealed record ValidateRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity)
+    : ICommand<RepositoryMemoryReadSnapshot>;

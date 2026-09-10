@@ -13,6 +13,29 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
+    [Fact]
+    public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()
+    {
+        var defaultConfiguration = new ConfigurationBuilder().Build();
+        Assert.Equal(8, ApplicationComposition.GetRerankerCpuThreads(defaultConfiguration));
+
+        var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["reranking:cpuThreads"] = "12",
+        }).Build();
+        Assert.Equal(12, ApplicationComposition.GetRerankerCpuThreads(configured));
+
+        foreach (var value in new[] { "0", "33" })
+        {
+            var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["reranking:cpuThreads"] = value,
+            }).Build();
+            Assert.Throws<ArgumentOutOfRangeException>(() => ApplicationComposition.GetRerankerCpuThreads(invalid));
+        }
+    }
+
     /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>
     [Fact]
     public static void ApplicationProject_PublishesScriptingWorkerDependencyManifest()
@@ -244,6 +267,24 @@ public static class AppBootstrapTests
 
         Assert.True(layered.GetValue("tui:showOperationDurations", false));
         Assert.True(defaults.GetValue("tui:showOperationDurations", false));
+    }
+
+    /// <summary>Rebuilding the active repository preserves CLI/session precedence for memory capacity.</summary>
+    [Fact]
+    public static void ConfigurationBootstrap_MemoryRebind_PreservesEffectiveLayers()
+    {
+        using var temporary = new TemporaryDirectory("memory-layering");
+        var paths = CreatePaths(temporary.Root);
+        Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
+        File.WriteAllText(paths.RepositoryConfiguration, "{\"tools\":{\"config\":{\"memories\":{\"MaxNumberOfRepoMemories\":2}}}}");
+        File.WriteAllText(paths.SessionConfiguration, "{\"tools\":{\"config\":{\"memories\":{\"MaxNumberOfRepoMemories\":7}}}}");
+        var arguments = new[] { "--set:tools:config:memories:MaxNumberOfRepoMemories=50" };
+        var initial = ConfigurationBootstrap.Build(arguments, paths);
+        var rebound = ConfigurationBootstrap.Build(arguments, paths);
+        Assert.Equal(50, initial.GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
+        Assert.Equal(initial["tools:config:memories:MaxNumberOfRepoMemories"], rebound["tools:config:memories:MaxNumberOfRepoMemories"]);
+        Assert.Equal(7, ConfigurationBootstrap.Build([], paths).GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
+        Assert.Equal(3, rebound.GetValue<int>("tools:config:memories:MaxRepoMemoriesInContext"));
     }
 
     /// <summary>Repository configuration cannot enter trusted credential or command-execution settings.</summary>

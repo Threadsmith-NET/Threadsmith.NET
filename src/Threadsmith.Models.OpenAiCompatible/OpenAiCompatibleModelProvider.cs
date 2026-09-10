@@ -196,10 +196,13 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 "application/json");
             try
             {
-                response = await _httpClient.SendAsync(
+                requestCancellation.Token.ThrowIfCancellationRequested();
+                var pendingResponse = _httpClient.SendAsync(
                     message,
                     HttpCompletionOption.ResponseHeadersRead,
                     requestCancellation.Token);
+                request.SubmissionObserver?.Invoke();
+                response = await pendingResponse.ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {

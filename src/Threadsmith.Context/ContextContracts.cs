@@ -185,6 +185,15 @@ public sealed record ContextAssemblyRequest
     /// <summary>Stable repository identity used for repository-scoped local memory.</summary>
     public string? RepositoryIdentity { get; init; }
 
+    /// <summary>Whether host tool enable/deny policy permits automatic memory injection.</summary>
+    public bool RepositoryMemoriesEnabled { get; init; } = true;
+
+    /// <summary>Immutable effective memory limits for the current turn.</summary>
+    public RepositoryMemoryOptions? RepositoryMemoryOptions { get; init; }
+
+    /// <summary>Current user request including steering, when more recent than the archived user message.</summary>
+    public string? RepositoryMemoryCurrentInstruction { get; init; }
+
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 
@@ -247,7 +256,8 @@ public sealed record ContextAssemblyResult(
     ModelWireEstimate? WireEstimate = null,
     string? ToolInventoryDigest = null,
     string? InstructionBundleDigest = null,
-    ModelProviderInstructions? ProviderInstructions = null);
+    ModelProviderInstructions? ProviderInstructions = null,
+    IReadOnlyList<RepositoryMemoryInclusion>? RepositoryMemoryInclusions = null);
 
 /// <summary>Assembles model input from explicit state rather than transcript replay.</summary>
 public interface IContextAssembler
@@ -276,6 +286,17 @@ public interface IContextAssembler
         SessionId sessionId,
         RunId runId,
         VisibleSourceFrontierInspectionProjection visibleSourceFrontier,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Records the receipt outcome only after a provider submission has proceeded.</summary>
+    Task UpdateRepositoryMemoryDispatchInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        RepositoryMemoryDispatchInspection dispatch,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

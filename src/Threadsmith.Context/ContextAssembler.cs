@@ -92,40 +92,6 @@ public sealed class ContextPolicy
     }
 }
 
-/// <summary>Validated repository-memory retrieval budgets.</summary>
-public sealed record RepositoryMemoryContextPolicy
-{
-    /// <summary>Maximum repository-memory items considered for prompt assembly.</summary>
-    public int MaximumItems { get; init; } = 12;
-
-    /// <summary>Maximum estimated tokens used by repository memory.</summary>
-    public int MaximumTokens { get; init; } = 2_000;
-
-    /// <summary>Minimum lexical relevance required for automatic repository memory.</summary>
-    public double MinimumRelevanceScore { get; init; } = 0.2d;
-
-    /// <summary>Maximum prompt age for memory that was not explicitly authored by the user.</summary>
-    public TimeSpan AutomaticMemoryMaximumAge { get; init; } = TimeSpan.FromDays(2);
-
-    /// <summary>Validates hard bounds before request assembly.</summary>
-    public void Validate()
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumItems);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTokens);
-        if (double.IsNaN(MinimumRelevanceScore)
-            || MinimumRelevanceScore < 0
-            || MinimumRelevanceScore > 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(MinimumRelevanceScore));
-        }
-
-        if (AutomaticMemoryMaximumAge <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(AutomaticMemoryMaximumAge));
-        }
-    }
-}
-
 /// <summary>Validated conversation context budgets and pressure policy.</summary>
 public sealed record ConversationContextPolicy
 {
@@ -134,12 +100,6 @@ public sealed record ConversationContextPolicy
 
     /// <summary>Maximum tokens used by recent complete turns.</summary>
     public int RecentTurnTokens { get; init; } = 8_000;
-
-    /// <summary>Maximum tokens used by active structured memory.</summary>
-    public int SummaryTokens { get; init; } = 4_000;
-
-    /// <summary>Maximum tokens used by retrieved older memory.</summary>
-    public int RetrievedMemoryTokens { get; init; } = 4_000;
 
     /// <summary>Maximum complete prior user/assistant turns considered.</summary>
     public int RecentTurnCount { get; init; } = 12;
@@ -150,9 +110,6 @@ public sealed record ConversationContextPolicy
     /// <summary>Context utilization that recommends next-boundary compaction.</summary>
     public int CompactionPressurePercent { get; init; } = 75;
 
-    /// <summary>Maximum retrieved older items.</summary>
-    public int MaximumRetrievedItems { get; init; } = 24;
-
     /// <summary>Validates hard bounds before request assembly.</summary>
     public void Validate()
     {
@@ -162,8 +119,6 @@ public sealed record ConversationContextPolicy
         }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RecentTurnTokens);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SummaryTokens);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RetrievedMemoryTokens);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RecentTurnCount);
         if (RecentTurnMaximumAge <= TimeSpan.Zero)
         {
@@ -172,7 +127,6 @@ public sealed record ConversationContextPolicy
 
         ArgumentOutOfRangeException.ThrowIfLessThan(CompactionPressurePercent, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(CompactionPressurePercent, 100);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumRetrievedItems);
     }
 }
 
@@ -190,9 +144,6 @@ public sealed record ContextAssemblerOptions
 
     /// <summary>Conversation mode, selection, retrieval, and pressure budgets.</summary>
     public ConversationContextPolicy Conversation { get; init; } = new();
-
-    /// <summary>Repository-scoped memory retrieval budgets.</summary>
-    public RepositoryMemoryContextPolicy RepositoryMemory { get; init; } = new();
 }
 
 /// <summary>Default governed context assembler with reduction, telemetry, and execution records.</summary>
@@ -211,15 +162,6 @@ public sealed class ContextAssembler : IContextAssembler
     private static readonly Counter<long> _reductions = _meter.CreateCounter<long>(
         "threadsmith.context.reductions");
 
-    private static readonly HashSet<string> RepositoryMemoryStopTerms = new(
-        [
-            "AND", "ARE", "COMPLETED", "EXPLAIN", "FOR", "FROM", "HOW", "INTO", "REQUEST",
-            "THAT", "THE", "THIS", "THROUGH", "USE", "USED", "USING", "WHAT", "WHEN", "WHERE",
-            "WHICH", "WHO", "WHY", "WITH",
-        ],
-        StringComparer.Ordinal);
-
-    private readonly IConversationMemoryRetriever? _conversationRetriever;
     private readonly IConversationStore? _conversationStore;
     private readonly IEvidenceStore _evidence;
     private readonly IDomainEventStream _events;
@@ -228,7 +170,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly Dictionary<RunId, LinkedListNode<RunId>> _inspectionNodes = [];
     private readonly LinkedList<RunId> _inspectionOrder = [];
     private readonly IRepositoryInstructionResolver? _instructionResolver;
-    private readonly IRepositoryMemoryStore? _repositoryMemoryStore;
+    private readonly IHybridRepositoryMemoryRetriever? _repositoryMemoryRetriever;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
     private readonly IModelResolver? _modelResolver;
     private readonly ContextAssemblerOptions _options;
@@ -237,7 +179,6 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
     private readonly string _stableSystemPolicy;
-    private readonly TimeProvider _timeProvider;
     private readonly TokenEstimator _tokenEstimator;
 
     /// <summary>Initializes a new instance of the <see cref="ContextAssembler"/> class.</summary>
@@ -252,11 +193,9 @@ public sealed class ContextAssembler : IContextAssembler
         ContextAssemblerOptions? options = null,
         IModelResolver? modelResolver = null,
         IConversationStore? conversationStore = null,
-        IConversationMemoryRetriever? conversationRetriever = null,
         IRepositoryInstructionResolver? instructionResolver = null,
-        IRepositoryMemoryStore? repositoryMemoryStore = null,
-        TimeProvider? timeProvider = null,
-        IModelProviderInstructionResolver? providerInstructionResolver = null)
+        IModelProviderInstructionResolver? providerInstructionResolver = null,
+        IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -267,7 +206,6 @@ public sealed class ContextAssembler : IContextAssembler
         ArgumentNullException.ThrowIfNull(prompts);
         _options = options ?? new ContextAssemblerOptions();
         _options.Conversation.Validate();
-        _options.RepositoryMemory.Validate();
         if (_options.MaximumTokens <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -288,10 +226,8 @@ public sealed class ContextAssembler : IContextAssembler
         _events = events;
         _modelResolver = modelResolver;
         _conversationStore = conversationStore;
-        _conversationRetriever = conversationRetriever;
         _instructionResolver = instructionResolver;
-        _repositoryMemoryStore = repositoryMemoryStore;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _repositoryMemoryRetriever = repositoryMemoryRetriever;
         _providerInstructionResolver = providerInstructionResolver;
     }
 
@@ -360,6 +296,7 @@ public sealed class ContextAssembler : IContextAssembler
         var repositoryMemory = await CreateRepositoryMemoryStateAsync(
             request,
             sanitizedTask,
+            conversation,
             cancellationToken);
         var affectedPaths = request.ApprovedPlan?.Steps
             .SelectMany(step => step.GetAffectedPaths())
@@ -419,8 +356,8 @@ public sealed class ContextAssembler : IContextAssembler
             ["task"] = TokenEstimator.Estimate(taskJson),
             ["currentTurn"] = TokenEstimator.Estimate(conversation.CurrentTurnContent),
             ["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent),
-            ["conversationSummary"] = TokenEstimator.Estimate(conversation.SummaryContent),
-            ["retrievedMemory"] = TokenEstimator.Estimate(conversation.RetrievedContent),
+            ["conversationSummary"] = TokenEstimator.Estimate(string.Empty),
+            ["retrievedMemory"] = TokenEstimator.Estimate(string.Empty),
             ["repositoryMemory"] = TokenEstimator.Estimate(repositoryMemory.Content),
             ["governedState"] = TokenEstimator.Estimate(governedState),
             ["additionalMessages"] = TokenEstimator.Estimate(additionalMessageContent),
@@ -642,8 +579,8 @@ public sealed class ContextAssembler : IContextAssembler
 
         tokensByCategory["currentTurn"] = TokenEstimator.Estimate(conversation.CurrentTurnContent);
         tokensByCategory["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent);
-        tokensByCategory["conversationSummary"] = TokenEstimator.Estimate(conversation.SummaryContent);
-        tokensByCategory["retrievedMemory"] = TokenEstimator.Estimate(conversation.RetrievedContent);
+        tokensByCategory["conversationSummary"] = TokenEstimator.Estimate(string.Empty);
+        tokensByCategory["retrievedMemory"] = TokenEstimator.Estimate(string.Empty);
         tokensByCategory["repositoryMemory"] = TokenEstimator.Estimate(repositoryMemory.Content);
         tokensByCategory["evidence"] = TokenEstimator.Estimate(evidenceContent);
         tokensByCategory["assemblyOverhead"] = Math.Max(
@@ -737,8 +674,8 @@ public sealed class ContextAssembler : IContextAssembler
             ConversationMode = conversation.Mode,
             ConversationModeSource = conversation.ModeSource,
             CurrentMessageId = request.CurrentMessageId,
-            ConversationSummaryVersion = conversation.SummaryVersion,
-            CompactedThroughMessageSequence = conversation.CompactedThroughSequence,
+            ConversationSummaryVersion = null,
+            CompactedThroughMessageSequence = null,
             ConversationItems = conversation.CreateProjections(),
             RepositoryMemoryItems = repositoryMemory.CreateProjections(),
             ContextPressurePercent = contextPressurePercent,
@@ -812,7 +749,8 @@ public sealed class ContextAssembler : IContextAssembler
             wireEstimate,
             toolInventoryDigest,
             instructionBundle.Digest,
-            providerInstructions);
+            providerInstructions,
+            repositoryMemory.CreateInclusions());
     }
 
     /// <inheritdoc />
@@ -881,6 +819,21 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     /// <inheritdoc />
+    public Task UpdateRepositoryMemoryDispatchInspectionAsync(
+        SessionId sessionId,
+        RunId runId,
+        RepositoryMemoryDispatchInspection dispatch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dispatch);
+        return UpdateInspectionAsync(
+            sessionId,
+            runId,
+            inspection => inspection with { RepositoryMemoryDispatch = dispatch with { Inclusions = dispatch.Inclusions.ToArray() } },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public void InvalidateInspections()
     {
         lock (_gate)
@@ -942,20 +895,11 @@ public sealed class ContextAssembler : IContextAssembler
             ? state.Messages.FirstOrDefault(message => message.Id == currentId)
             : null;
         var currentContent = _sanitizer.Sanitize(current?.Content ?? task.Intent);
-        HashSet<ConversationMessageId> sensitiveMessageIds =
-        [
-            .. state.Messages
-                .Where(message => message.Sensitivity == ConversationSensitivity.Sensitive)
-                .Select(message => message.Id),
-        ];
         var assembly = new ConversationAssemblyState(
             mode,
             modeSource,
             currentContent,
-            current?.Sensitivity == ConversationSensitivity.Sensitive,
-            sensitiveMessageIds,
-            state.Summary?.Version,
-            state.Summary?.ThroughMessageSequence);
+            current?.Sensitivity == ConversationSensitivity.Sensitive);
         var recentCutoff = DateTimeOffset.UtcNow - _options.Conversation.RecentTurnMaximumAge;
         ConversationMessage[] allPriorMessages =
         [
@@ -995,151 +939,49 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
-        if (mode != ConversationContextMode.Stateless)
-        {
-            ConversationMemoryItem[] active =
-            [
-                .. state.MemoryItems
-                    .Where(item => item.Validity == MemoryValidity.Active)
-                    .OrderBy(item => MemoryPreservationOrder(item.Kind))
-                    .ThenBy(item => item.CreatedAt)
-                    .ThenBy(item => item.Id.Value),
-            ];
-            foreach (var item in active)
-            {
-                assembly.AddSummaryItem(item);
-                if (TokenEstimator.Estimate(assembly.SummaryContent) > _options.Conversation.SummaryTokens
-                    && MemoryPreservationOrder(item.Kind) >= 4)
-                {
-                    assembly.RemoveSummaryItem(
-                        item.Id,
-                        "Omitted lower-priority structured memory to fit the summary budget.");
-                }
-            }
-
-            if (_conversationRetriever is not null)
-            {
-                string[] queryParts =
-                [
-                    task.Intent,
-                    .. task.AcceptanceCriteria.Select(item => item.Description),
-                    .. task.UserConstraints ?? [],
-                ];
-                var query = string.Join(' ', queryParts);
-                var retrieval = await _conversationRetriever.RetrieveAsync(
-                    new ConversationRetrievalRequest
-                    {
-                        SessionId = request.SessionId,
-                        Query = query,
-                        Phase = MapRetrievalPhase(request.Phase),
-                        MaximumItems = _options.Conversation.MaximumRetrievedItems,
-                        MaximumTokens = _options.Conversation.RetrievedMemoryTokens,
-                    },
-                    cancellationToken);
-                var recentOrSummaryIds = assembly.IncludedSummaryIds;
-                foreach (var item in retrieval.Selected)
-                {
-                    if (!recentOrSummaryIds.Contains(item.Item.Id))
-                    {
-                        assembly.AddRetrievedItem(item);
-                    }
-                }
-            }
-        }
-        else
-        {
-            foreach (var item in state.MemoryItems)
-            {
-                assembly.AddExcludedMemory(item, "Governed prior memory is excluded by Stateless mode.");
-            }
-        }
-
-        var ineligibleMemory = state.MemoryItems.Where(item =>
-            item.Validity != MemoryValidity.Active);
-        foreach (var item in ineligibleMemory)
-        {
-            var reason = item.Validity == MemoryValidity.Stale
-                ? "Repository-dependent memory is stale."
-                : $"Memory is {item.Validity}.";
-            assembly.AddExcludedMemory(item, reason);
-        }
-
+        // Historical automatic snapshots are archive metadata, never a current prompt source.
+        // Model-generated active-turn compaction remains owned by ActiveTurnCompaction.
         return assembly;
     }
 
     private async Task<RepositoryMemoryAssemblyState> CreateRepositoryMemoryStateAsync(
         ContextAssemblyRequest request,
         TaskSpecification task,
+        ConversationAssemblyState conversation,
         CancellationToken cancellationToken)
     {
-        var assembly = new RepositoryMemoryAssemblyState(_options.RepositoryMemory.MaximumTokens);
-        if (_repositoryMemoryStore is null)
+        var assembly = new RepositoryMemoryAssemblyState(2_000, _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance));
+        if (_repositoryMemoryRetriever is null || !request.RepositoryMemoriesEnabled
+            || conversation.Mode == ConversationContextMode.Stateless)
         {
             return assembly;
         }
 
         var repositoryIdentity = string.IsNullOrWhiteSpace(request.RepositoryIdentity)
-            ? RepositoryIdentity.Create(request.RepositoryPath)
-            : request.RepositoryIdentity;
-        var snapshot = await _repositoryMemoryStore.GetSnapshotAsync(repositoryIdentity, cancellationToken);
-        foreach (var item in snapshot.Items.Where(item => item.Validity != RepositoryMemoryValidity.Active))
-        {
-            var reason = item.Validity == RepositoryMemoryValidity.Stale
-                ? "Repository-scoped memory is stale and excluded until validation reactivates it."
-                : $"Repository-scoped memory is {item.Validity}.";
-            assembly.AddExcluded(item, reason, TokenEstimator.Estimate(item.Content));
-        }
-
-        var taskTerms = CreateTaskTerms(task);
-        var now = _timeProvider.GetUtcNow();
-        var relevant = snapshot.Items
-            .Where(item => item.Validity == RepositoryMemoryValidity.Active)
-            .Select(item => EvaluateRepositoryMemory(item, taskTerms, now))
-            .ToArray();
-        foreach (var excluded in relevant.Where(item => item.ExclusionReason is not null))
-        {
-            assembly.AddExcluded(
-                excluded.Item,
-                excluded.ExclusionReason ?? string.Empty,
-                TokenEstimator.Estimate(excluded.Item.Content),
-                excluded.Score);
-        }
-
-        foreach (var scored in relevant
-            .Where(item => item.ExclusionReason is null)
-            .OrderBy(item => item.Item.Authority == RepositoryMemoryAuthority.UserAuthored ? 0 : 1)
-            .ThenByDescending(item => item.Score)
-            .ThenBy(item => RepositoryMemoryPreservationOrder(item.Item.Authority, item.Item.Kind))
-            .ThenByDescending(item => item.Item.UpdatedAt)
-            .ThenBy(item => item.Item.Id.Value))
+            ? RepositoryIdentity.Create(request.RepositoryPath) : request.RepositoryIdentity;
+        var retrieval = await _repositoryMemoryRetriever.RetrieveAsync(
+            new RepositoryMemoryRetrievalRequest
+            {
+                RepositoryIdentity = repositoryIdentity,
+                UserTurnId = request.RunId,
+                CurrentInstruction = _sanitizer.Sanitize(request.RepositoryMemoryCurrentInstruction ?? conversation.CurrentTurnContent),
+                TaskIntent = task.Intent,
+                Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
+            },
+            cancellationToken);
+        foreach (var candidate in retrieval.Selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var tokens = assembly.EstimateAddition(scored.Item, scored.Score);
-            if (assembly.IncludedCount >= _options.RepositoryMemory.MaximumItems)
+            var sanitized = candidate with { Entry = candidate.Entry with { Text = _sanitizer.Sanitize(candidate.Entry.Text) } };
+            var tokens = assembly.EstimateAddition(sanitized);
+            if (!assembly.TryAdd(sanitized, tokens))
             {
-                assembly.AddExcluded(
-                    scored.Item,
-                    "Omitted because the repository-memory item budget was reached.",
-                    tokens,
-                    scored.Score);
-                continue;
-            }
-
-            if (!assembly.TryAdd(scored.Item, tokens, scored.Score))
-            {
-                assembly.AddExcluded(
-                    scored.Item,
-                    "Omitted to fit the repository-memory token budget.",
-                    tokens,
-                    scored.Score);
+                assembly.AddExcluded(sanitized, "Omitted to fit the repository-memory token budget.", tokens);
             }
         }
 
-        foreach (var warning in snapshot.Warnings)
-        {
-            assembly.Reductions.Add($"Repository memory restoration warning: {warning}");
-        }
-
+        assembly.Reductions.AddRange(retrieval.Diagnostics);
+        assembly.Reductions.Add($"Memory query cache reused: {retrieval.QueryEmbeddingCacheHit}; ranking cache reused: {retrieval.RankingCacheHit}.");
         return assembly;
     }
 
@@ -1207,160 +1049,6 @@ public sealed class ContextAssembler : IContextAssembler
         return turns;
     }
 
-    private static ConversationRetrievalPhase MapRetrievalPhase(RunPhase phase)
-    {
-        return phase switch
-        {
-            RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval => ConversationRetrievalPhase.Planning,
-            RunPhase.MutationPreparation
-                or RunPhase.ImplementationPreparing
-                or RunPhase.ImplementationModelTurn
-                or RunPhase.MutationProposed
-                or RunPhase.MutationStaged
-                or RunPhase.AwaitingMutationApproval
-                or RunPhase.Mutation
-                or RunPhase.CorrectionPending
-                or RunPhase.CorrectionModelTurn =>
-                ConversationRetrievalPhase.CodeEdit,
-            RunPhase.Compilation or RunPhase.Testing or RunPhase.Verification =>
-                ConversationRetrievalPhase.Validation,
-            _ => ConversationRetrievalPhase.General,
-        };
-    }
-
-    private static int MemoryPreservationOrder(ConversationMemoryKind kind)
-    {
-        return kind switch
-        {
-            ConversationMemoryKind.UserRequirement => 0,
-            ConversationMemoryKind.Decision => 1,
-            ConversationMemoryKind.Constraint => 2,
-            ConversationMemoryKind.UnresolvedQuestion => 3,
-            ConversationMemoryKind.RepositoryFinding => 4,
-            ConversationMemoryKind.CompletedWork => 5,
-            ConversationMemoryKind.RejectedOrSuperseded => 6,
-            _ => 7,
-        };
-    }
-
-    private static IReadOnlySet<string> CreateTaskTerms(TaskSpecification task)
-    {
-        var content = string.Join(
-            ' ',
-            new[]
-            {
-                task.Intent,
-                string.Join(' ', task.AcceptanceCriteria.Select(item => item.Description)),
-                string.Join(' ', task.UserConstraints ?? []),
-            });
-        return CreateRepositoryMemoryTerms(content);
-    }
-
-    private static int RepositoryMemoryPreservationOrder(
-        RepositoryMemoryAuthority authority,
-        RepositoryMemoryKind kind)
-    {
-        var authorityOrder = authority switch
-        {
-            RepositoryMemoryAuthority.UserAuthored => 0,
-            RepositoryMemoryAuthority.HostObserved => 1,
-            RepositoryMemoryAuthority.EvidenceBacked => 2,
-            RepositoryMemoryAuthority.ModelProposedValidated => 3,
-            _ => 4,
-        };
-        var kindOrder = kind switch
-        {
-            RepositoryMemoryKind.UserConstraint => 0,
-            RepositoryMemoryKind.UserPreference => 1,
-            RepositoryMemoryKind.ArchitectureDecision => 2,
-            RepositoryMemoryKind.RepositoryConvention => 3,
-            RepositoryMemoryKind.WorkflowFact => 4,
-            RepositoryMemoryKind.KnownFailure => 5,
-            RepositoryMemoryKind.UnresolvedQuestion => 6,
-            RepositoryMemoryKind.EvidenceBackedRepositoryFact => 7,
-            _ => 8,
-        };
-        return (authorityOrder * 16) + kindOrder;
-    }
-
-    private RepositoryMemoryRelevance EvaluateRepositoryMemory(
-        RepositoryMemoryItem item,
-        IReadOnlySet<string> taskTerms,
-        DateTimeOffset now)
-    {
-        var score = ScoreRepositoryMemory(item, taskTerms);
-        if (item.Authority == RepositoryMemoryAuthority.UserAuthored)
-        {
-            return new RepositoryMemoryRelevance(item, score, null);
-        }
-
-        if (now - item.CreatedAt > _options.RepositoryMemory.AutomaticMemoryMaximumAge)
-        {
-            return new RepositoryMemoryRelevance(
-                item,
-                score,
-                "Automatic repository memory exceeded its maximum prompt age.");
-        }
-
-        return score < _options.RepositoryMemory.MinimumRelevanceScore
-            ? new RepositoryMemoryRelevance(
-                item,
-                score,
-                "Repository memory relevance score was below the configured minimum.")
-            : new RepositoryMemoryRelevance(item, score, null);
-    }
-
-    private static double ScoreRepositoryMemory(
-        RepositoryMemoryItem item,
-        IReadOnlySet<string> taskTerms)
-    {
-        var searchableTerms = CreateRepositoryMemoryTerms(string.Join(
-            ' ',
-            [
-                item.Content,
-                .. item.Scope.Paths,
-                .. item.Scope.Symbols,
-                .. item.Scope.Projects,
-            ]));
-        var hits = taskTerms.Count(searchableTerms.Contains);
-        return taskTerms.Count == 0
-            ? 0
-            : (double)hits / taskTerms.Count;
-    }
-
-    private static IReadOnlySet<string> CreateRepositoryMemoryTerms(string content)
-    {
-        var terms = new HashSet<string>(StringComparer.Ordinal);
-        var term = new StringBuilder();
-        foreach (var character in content)
-        {
-            if (char.IsLetterOrDigit(character) || character == '_')
-            {
-                _ = term.Append(char.ToUpperInvariant(character));
-                continue;
-            }
-
-            AddTerm();
-        }
-
-        AddTerm();
-        return terms;
-
-        void AddTerm()
-        {
-            if (term.Length >= 3)
-            {
-                var value = term.ToString();
-                if (!RepositoryMemoryStopTerms.Contains(value))
-                {
-                    _ = terms.Add(value);
-                }
-            }
-
-            _ = term.Clear();
-        }
-    }
-
     private static PromptAssetReference CreateAssetReference(
         string id,
         string source,
@@ -1370,11 +1058,6 @@ public sealed class ContextAssembler : IContextAssembler
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
         return new PromptAssetReference(id, $"sha256:{hash}", source, position, content.Length);
     }
-
-    private sealed record RepositoryMemoryRelevance(
-        RepositoryMemoryItem Item,
-        double Score,
-        string? ExclusionReason);
 
     private static string BuildEvidenceContent(IReadOnlyList<Evidence> selected)
     {
@@ -1577,17 +1260,12 @@ public sealed class ContextAssembler : IContextAssembler
                 "repository-instructions",
                 repositoryInstructions),
         };
-        if (!string.IsNullOrWhiteSpace(conversation.SummaryContent)
-            || !string.IsNullOrWhiteSpace(conversation.RetrievedContent)
-            || !string.IsNullOrWhiteSpace(repositoryMemory.Content))
+        if (!string.IsNullOrWhiteSpace(repositoryMemory.Content))
         {
             messages.Add(CreateTextMessage(
                 ModelMessageRole.Developer,
-                "conversation-summary",
-                string.Join(
-                    "\n",
-                    new[] { conversation.SummaryContent, conversation.RetrievedContent, repositoryMemory.Content }
-                        .Where(content => !string.IsNullOrWhiteSpace(content)))));
+                "repository-memory",
+                repositoryMemory.Content));
         }
 
         messages.AddRange(conversation.CreateRecentMessages());
@@ -1678,8 +1356,8 @@ public sealed class ContextAssembler : IContextAssembler
                     $"<current_turn untrusted=\"true\">{Escape(conversation.CurrentTurnContent)}</current_turn>"),
                 ["AdditionalMessages"] = PrefixLegacySection(additionalMessageContent),
                 ["RecentTurns"] = PrefixLegacySection(conversation.RecentTurnsContent),
-                ["ConversationSummary"] = PrefixLegacySection(conversation.SummaryContent),
-                ["RetrievedMemory"] = PrefixLegacySection(conversation.RetrievedContent),
+                ["ConversationSummary"] = PrefixLegacySection(string.Empty),
+                ["RetrievedMemory"] = PrefixLegacySection(string.Empty),
                 ["RepositoryMemory"] = PrefixLegacySection(repositoryMemory.Content),
                 ["GovernedState"] = PrefixLegacySection(
                     $"<governed_state>{Escape(governedState)}</governed_state>"),
@@ -1699,70 +1377,51 @@ public sealed class ContextAssembler : IContextAssembler
 
     private sealed class RepositoryMemoryAssemblyState
     {
-        private readonly List<(RepositoryMemoryItem Item, int Tokens, double Score)> _included = [];
+        private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
         private readonly int _maximumTokens;
+        private readonly string _guidance;
         private int _includedTokens;
 
-        public RepositoryMemoryAssemblyState(int maximumTokens)
+        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance)
         {
             _maximumTokens = maximumTokens;
+            _guidance = guidance;
         }
 
         public bool CanReduce => _included.Count > 0;
 
-        public bool ContainsSensitiveData => _included.Any(item =>
-            item.Item.Sensitivity == ConversationSensitivity.Sensitive);
+        public bool ContainsSensitiveData => _included.Any(item => item.Candidate.Entry.Sensitivity == ConversationSensitivity.Sensitive);
 
-        public string Content => _included.Count == 0
-            ? string.Empty
-            : Render(_included.Select(item => (item.Item, item.Score)));
-
-        public int IncludedCount => _included.Count;
+        public string Content => _included.Count == 0 ? string.Empty : Render(_included.Select(item => item.Candidate));
 
         public List<string> Reductions { get; } = [];
 
-        public void AddExcluded(
-            RepositoryMemoryItem item,
-            string reason,
-            int tokens,
-            double? score = null)
+        public void AddExcluded(RepositoryMemoryRetrievalCandidate candidate, string reason, int tokens)
         {
-            if (_excluded.Any(projection => projection.Id == item.Id))
+            if (!_excluded.Any(item => item.Id == candidate.Entry.Id))
             {
-                return;
+                _excluded.Add(CreateProjection(candidate, false, reason, tokens));
             }
-
-            _excluded.Add(CreateProjection(item, included: false, reason, tokens, score));
         }
 
-        public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections()
-        {
-            var included = _included.Select(item => CreateProjection(
-                item.Item,
-                included: true,
-                "Included by repository-memory relevance, authority, validity, and budget policy.",
-                item.Tokens,
-                item.Score));
-            return [.. included, .. _excluded];
-        }
+        public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions() =>
+            [.. _included.Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
 
-        public int EstimateAddition(RepositoryMemoryItem item, double score)
-        {
-            var candidate = Render(
-                _included.Select(included => (included.Item, included.Score))
-                    .Append((item, score)));
-            return TokenEstimator.Estimate(candidate) - _includedTokens;
-        }
+        public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections() =>
+            [.. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
 
-        public bool TryAdd(RepositoryMemoryItem item, int tokens, double score)
+        public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate) =>
+            TokenEstimator.Estimate(Render(_included.Select(item => item.Candidate).Append(candidate))) - _includedTokens;
+
+        public bool TryAdd(RepositoryMemoryRetrievalCandidate candidate, int tokens)
         {
             if (_includedTokens + tokens > _maximumTokens)
             {
                 return false;
             }
 
-            _included.Add((item, tokens, score));
+            _included.Add((candidate, tokens));
             _includedTokens += tokens;
             return true;
         }
@@ -1778,184 +1437,88 @@ public sealed class ContextAssembler : IContextAssembler
             _included.RemoveAt(_included.Count - 1);
             _includedTokens -= removed.Tokens;
             const string reason = "Omitted lowest-ranked repository memory during final context reduction.";
-            AddExcluded(removed.Item, reason, removed.Tokens, removed.Score);
+            AddExcluded(removed.Candidate, reason, removed.Tokens);
             Reductions.Add(reason);
             return true;
         }
 
-        private static string Render(IEnumerable<(RepositoryMemoryItem Item, double Score)> items)
-        {
-            return "<repository_memory>\n"
-                + string.Join(
-                    '\n',
-                    items.Select(item =>
-                        $"<memory id=\"{item.Item.Id.Value:D}\" kind=\"{item.Item.Kind}\" "
-                        + $"authority=\"{item.Item.Authority}\" score=\"{item.Score.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}\" untrusted=\"true\">"
-                        + $"{Escape(item.Item.Content)}</memory>"))
-                + "\n</repository_memory>";
-        }
+        private string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
+            _guidance + "\n<repository_memory untrusted=\"true\">\n"
+            + string.Join('\n', candidates.Select(candidate =>
+                $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
+            + "\n</repository_memory>";
 
         private static RepositoryMemoryContextItemProjection CreateProjection(
-            RepositoryMemoryItem item,
-            bool included,
-            string reason,
-            int tokens,
-            double? score)
+            RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens) => new()
         {
-            return new RepositoryMemoryContextItemProjection
-            {
-                Id = item.Id,
-                Kind = item.Kind,
-                Authority = item.Authority,
-                Validity = item.Validity,
-                Included = included,
-                Rationale = reason,
-                EstimatedTokens = tokens,
-                Score = score,
-            };
-        }
+            Id = candidate.Entry.Id,
+            Origin = candidate.Entry.Origin,
+            Revision = candidate.Entry.Revision,
+            Included = included,
+            Rationale = reason,
+            EstimatedTokens = tokens,
+            Score = candidate.Score,
+            LexicalRank = candidate.LexicalRank,
+            SemanticRank = candidate.SemanticRank,
+            CosineSimilarity = candidate.CosineSimilarity,
+            CrossEncoderScore = candidate.CrossEncoderScore,
+        };
     }
 
     private sealed class ConversationAssemblyState
     {
         private readonly List<ConversationContextItemProjection> _excluded = [];
         private readonly List<IReadOnlyList<ConversationMessage>> _recentTurns = [];
-        private readonly List<ConversationMemoryItem> _summary = [];
-        private readonly List<ConversationRetrievedMemory> _retrieved = [];
-        private readonly IReadOnlySet<ConversationMessageId> _sensitiveMessageIds;
 
         public ConversationAssemblyState(
             ConversationContextMode mode,
             string modeSource,
             string currentTurnContent,
-            bool currentTurnIsSensitive,
-            IReadOnlySet<ConversationMessageId> sensitiveMessageIds,
-            long? summaryVersion,
-            long? compactedThroughSequence)
+            bool currentTurnIsSensitive)
         {
             Mode = mode;
             ModeSource = modeSource;
             CurrentTurnContent = currentTurnContent;
             CurrentTurnIsSensitive = currentTurnIsSensitive;
-            _sensitiveMessageIds = sensitiveMessageIds;
-            SummaryVersion = summaryVersion;
-            CompactedThroughSequence = compactedThroughSequence;
         }
 
-        public long? CompactedThroughSequence { get; }
-
-        public bool CanReduce => _recentTurns.Count > 0
-            || _retrieved.Count > 0
-            || _summary.Any(item => MemoryPreservationOrder(item.Kind) >= 4);
+        public bool CanReduce => _recentTurns.Count > 0;
 
         public string CurrentTurnContent { get; }
 
         public bool ContainsSensitiveData => CurrentTurnIsSensitive
-            || _recentTurns.SelectMany(turn => turn).Any(IsSensitive)
-            || _summary.Any(IsSensitive)
-            || _retrieved.Any(item => IsSensitive(item.Item));
-
-        public HashSet<ConversationMemoryId> IncludedSummaryIds =>
-            [.. _summary.Select(item => item.Id)];
+            || _recentTurns.SelectMany(turn => turn).Any(message => message.Sensitivity == ConversationSensitivity.Sensitive);
 
         public ConversationContextMode Mode { get; }
 
         public string ModeSource { get; }
 
-        public string RecentTurnsContent => string.Join(
-            '\n',
-            _recentTurns.SelectMany(turn => turn).Select(message =>
-                $"<conversation_message id=\"{message.Id.Value:D}\" role=\"{message.Role}\" untrusted=\"true\">"
-                + $"{Escape(message.Content ?? string.Empty)}</conversation_message>")) is { Length: > 0 } content
-                ? $"<recent_conversation>\n{content}\n</recent_conversation>"
-                : string.Empty;
+        public string RecentTurnsContent => string.Join('\n', _recentTurns.SelectMany(turn => turn).Select(message =>
+            $"<conversation_message id=\"{message.Id.Value:D}\" role=\"{message.Role}\" untrusted=\"true\">"
+            + $"{Escape(message.Content ?? string.Empty)}</conversation_message>")) is { Length: > 0 } content
+            ? $"<recent_conversation>\n{content}\n</recent_conversation>" : string.Empty;
 
         public List<string> Reductions { get; } = [];
 
-        public string RetrievedContent => _retrieved.Count == 0
-            ? string.Empty
-            : "<retrieved_memory>\n"
-                + string.Join(
-                    '\n',
-                    _retrieved.Select(item =>
-                        $"<memory id=\"{item.Item.Id.Value:D}\" kind=\"{item.Item.Kind}\" score=\"{item.Rationale.Score.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}\" untrusted=\"true\">"
-                        + $"{Escape(item.Item.Content)}</memory>"))
-                + "\n</retrieved_memory>";
-
-        public string SummaryContent => _summary.Count == 0
-            ? string.Empty
-            : "<conversation_summary>\n"
-                + string.Join(
-                    '\n',
-                    _summary.Select(item =>
-                        $"<memory id=\"{item.Id.Value:D}\" kind=\"{item.Kind}\" untrusted=\"true\">"
-                        + $"{Escape(item.Content)}</memory>"))
-                + "\n</conversation_summary>";
-
-        public long? SummaryVersion { get; }
-
-        public void AddExcludedMemory(ConversationMemoryItem item, string reason)
-        {
-            if (_excluded.Any(projection => projection.Id == item.Id.Value.ToString("D")))
-            {
-                return;
-            }
-
-            _excluded.Add(CreateMemoryProjection(item, included: false, reason));
-        }
-
         public void AddExcludedMessage(ConversationMessage message, string reason)
         {
-            if (_excluded.Any(projection => projection.Id == message.Id.Value.ToString("D")))
+            if (!_excluded.Any(projection => projection.Id == message.Id.Value.ToString("D")))
             {
-                return;
+                _excluded.Add(CreateMessageProjection(message, false, reason));
             }
-
-            _excluded.Add(CreateMessageProjection(message, included: false, reason));
         }
 
-        public void AddRecentTurn(IReadOnlyList<ConversationMessage> turn)
-        {
-            _recentTurns.Add(turn);
-        }
+        public void AddRecentTurn(IReadOnlyList<ConversationMessage> turn) => _recentTurns.Add(turn);
 
-        public void AddRetrievedItem(ConversationRetrievedMemory item)
-        {
-            _retrieved.Add(item);
-        }
+        public IReadOnlyList<ModelMessage> CreateRecentMessages() =>
+            [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateTextMessage(
+                message.Role == ConversationRole.User ? ModelMessageRole.User : ModelMessageRole.Assistant,
+                message.Role == ConversationRole.User ? "recent-user" : "recent-assistant",
+                message.Content ?? string.Empty))];
 
-        public void AddSummaryItem(ConversationMemoryItem item)
-        {
-            _summary.Add(item);
-        }
-
-        public IReadOnlyList<ModelMessage> CreateRecentMessages()
-        {
-            return [.. _recentTurns.SelectMany(turn => turn).Select(message =>
-                CreateTextMessage(
-                    ToModelRole(message.Role),
-                    ToSectionId(message.Role),
-                    message.Content ?? string.Empty))];
-        }
-
-        public IReadOnlyList<ConversationContextItemProjection> CreateProjections()
-        {
-            var recent = _recentTurns
-                .SelectMany(turn => turn)
-                .Select(message => CreateMessageProjection(
-                    message,
-                    included: true,
-                    "Included as a bounded complete recent turn."));
-            var summary = _summary.Select(item =>
-                CreateMemoryProjection(item, included: true, "Included from the active structured summary."));
-            var retrieved = _retrieved.Select(item =>
-                CreateMemoryProjection(
-                    item.Item,
-                    included: true,
-                    $"Retrieved with rationale {item.Rationale.Code}.",
-                    item.Rationale.Score));
-            return [.. recent, .. summary, .. retrieved, .. _excluded];
-        }
+        public IReadOnlyList<ConversationContextItemProjection> CreateProjections() =>
+            [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateMessageProjection(
+                message, true, "Included as a bounded complete recent turn.")), .. _excluded];
 
         public bool RemoveOldestRecentTurn(string reason)
         {
@@ -1975,110 +1538,20 @@ public sealed class ContextAssembler : IContextAssembler
             return true;
         }
 
-        public void RemoveSummaryItem(ConversationMemoryId id, string reason)
-        {
-            var index = _summary.FindIndex(item => item.Id == id);
-            if (index < 0)
-            {
-                return;
-            }
-
-            var removed = _summary[index];
-            _summary.RemoveAt(index);
-            AddExcludedMemory(removed, reason);
-            Reductions.Add(reason);
-        }
-
-        public bool TryReduce()
-        {
-            if (RemoveOldestRecentTurn("Omitted oldest complete turn during final context-pressure reduction."))
-            {
-                return true;
-            }
-
-            if (_retrieved.Count > 0)
-            {
-                var removed = _retrieved[^1];
-                _retrieved.RemoveAt(_retrieved.Count - 1);
-                const string reason = "Omitted lower-ranked retrieved memory during final context-pressure reduction.";
-                AddExcludedMemory(removed.Item, reason);
-                Reductions.Add(reason);
-                return true;
-            }
-
-            var summaryIndex = _summary.FindLastIndex(item => MemoryPreservationOrder(item.Kind) >= 4);
-            if (summaryIndex >= 0)
-            {
-                var removed = _summary[summaryIndex];
-                _summary.RemoveAt(summaryIndex);
-                const string reason = "Omitted repository finding or completed-work memory before explicit user memory.";
-                AddExcludedMemory(removed, reason);
-                Reductions.Add(reason);
-                return true;
-            }
-
-            return false;
-        }
+        public bool TryReduce() => RemoveOldestRecentTurn("Omitted oldest complete turn during final context-pressure reduction.");
 
         private bool CurrentTurnIsSensitive { get; }
 
-        private static ModelMessageRole ToModelRole(ConversationRole role)
-        {
-            return role == ConversationRole.User
-                ? ModelMessageRole.User
-                : ModelMessageRole.Assistant;
-        }
-
-        private static string ToSectionId(ConversationRole role)
-        {
-            return role == ConversationRole.User ? "recent-user" : "recent-assistant";
-        }
-
-        private bool IsSensitive(ConversationMessage message)
-        {
-            return message.Sensitivity == ConversationSensitivity.Sensitive;
-        }
-
-        private bool IsSensitive(ConversationMemoryItem item)
-        {
-            return item.SourceMessageIds.Any(_sensitiveMessageIds.Contains);
-        }
-
-        private static ConversationContextItemProjection CreateMemoryProjection(
-            ConversationMemoryItem item,
-            bool included,
-            string rationale,
-            double? score = null)
-        {
-            return new ConversationContextItemProjection
-            {
-                Id = item.Id.Value.ToString("D"),
-                Kind = item.Kind.ToString(),
-                Included = included,
-                Rationale = rationale,
-                EstimatedTokens = TokenEstimator.Estimate(item.Content),
-                SourceMessageIds = item.SourceMessageIds.ToArray(),
-                SourceRunIds = item.SourceRunIds.ToArray(),
-                SourceEvidenceIds = item.SourceEvidenceIds.ToArray(),
-                Score = score,
-            };
-        }
-
         private static ConversationContextItemProjection CreateMessageProjection(
-            ConversationMessage message,
-            bool included,
-            string rationale)
+            ConversationMessage message, bool included, string rationale) => new()
         {
-            return new ConversationContextItemProjection
-            {
-                Id = message.Id.Value.ToString("D"),
-                Kind = message.Role.ToString(),
-                Included = included,
-                Rationale = rationale,
-                EstimatedTokens = message.EstimatedTokens,
-                SourceMessageIds = [message.Id],
-                SourceRunIds = [message.RunId],
-            };
-        }
+            Id = message.Id.Value.ToString("D"),
+            Kind = message.Role.ToString(),
+            Included = included,
+            Rationale = rationale,
+            EstimatedTokens = message.EstimatedTokens,
+            SourceMessageIds = [message.Id],
+            SourceRunIds = [message.RunId],
+        };
     }
 }

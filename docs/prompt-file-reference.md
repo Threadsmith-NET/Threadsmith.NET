@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 24 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 25 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 193 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **300** | Complete deployed catalog. |
+| **Total** | **302** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,6 +94,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
+| `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
 
 #### `RequiredOutput` family
 
@@ -617,6 +618,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Tool-memories-Description.md` | Advertised description for `memories`. | `None` |
 | `Tool-nuget_health-Description.md` | Advertised description for `nuget_health`. | `None` |
 
 #### `propose_mutations` family
@@ -771,7 +773,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-confidence"></a>`Confidence` | Host- or child-reported confidence attached to a finding or semantic result. |
 | <a id="placeholder-containingsymbol"></a>`ContainingSymbol` | Symbol that contains the reported diagnostic location. |
 | <a id="placeholder-containingsymbolblock"></a>`ContainingSymbolBlock` | Already-rendered optional containing-symbol block inserted into a diagnostic item. |
-| <a id="placeholder-conversationsummary"></a>`ConversationSummary` | Compacted summary of earlier conversation history included in the request. |
+| <a id="placeholder-conversationsummary"></a>`ConversationSummary` | Empty compatibility field; retired automatic conversation snapshots are not included. Model-generated active-turn summaries have their own message framing. |
 | <a id="placeholder-count"></a>`Count` | Host-computed count whose specific subject is identified by the surrounding prompt file. |
 | <a id="placeholder-currentturn"></a>`CurrentTurn` | Current untrusted user/turn content placed in the request envelope. |
 | <a id="placeholder-cursor"></a>`Cursor` | Opaque host-issued continuation or retry cursor shown for a bounded follow-up. |
@@ -858,10 +860,10 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-relationshipplural"></a>`RelationshipPlural` | Grammar word or suffix selected from the relationship count. |
 | <a id="placeholder-relativepath"></a>`RelativePath` | Repository-relative path after confinement and normalization. |
 | <a id="placeholder-repositoryinstructions"></a>`RepositoryInstructions` | Repository instruction bundle supplied below host policy. |
-| <a id="placeholder-repositorymemory"></a>`RepositoryMemory` | Bounded repository-scoped memory recalled for the request. |
+| <a id="placeholder-repositorymemory"></a>`RepositoryMemory` | Bounded explicit repository-memory reference blocks containing only stable IDs and escaped text; usage, scores, timestamps, and provenance remain in diagnostics. |
 | <a id="placeholder-requiredoutput"></a>`RequiredOutput` | Phase-specific output contract supplied to the model. |
 | <a id="placeholder-resolvedpath"></a>`ResolvedPath` | Concrete repository-relative path produced by host resolution. |
-| <a id="placeholder-retrievedmemory"></a>`RetrievedMemory` | Bounded conversation-memory entries retrieved for the request. |
+| <a id="placeholder-retrievedmemory"></a>`RetrievedMemory` | Empty compatibility field; retired automatic conversation-memory retrieval is not used. |
 | <a id="placeholder-returnedcallers"></a>`ReturnedCallers` | Number of caller entries actually returned after bounds. |
 | <a id="placeholder-returnedimplementations"></a>`ReturnedImplementations` | Number of implementation entries actually returned after bounds. |
 | <a id="placeholder-returnedprojects"></a>`ReturnedProjects` | Number of project entries actually returned after bounds. |

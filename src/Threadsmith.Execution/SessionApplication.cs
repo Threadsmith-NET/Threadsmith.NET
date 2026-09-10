@@ -80,9 +80,9 @@ public sealed partial class SessionApplication :
 
     private readonly Func<IBudget> _budgetFactory;
     private readonly IContextAssembler? _contextAssembler;
-    private readonly IConversationCompactor? _conversationCompactor;
-    private readonly IConversationMemoryGovernor? _conversationGovernor;
     private readonly IConversationStore? _conversationStore;
+    private readonly IManagedRepositoryMemoryService? _repositoryMemories;
+    private readonly IRepositoryMemoryOptionsProvider? _repositoryMemoryOptions;
     private readonly IConversationToolSnapshotStore? _conversationToolSnapshots;
     private readonly CorrectiveMessageFactory _correctiveMessages;
     private readonly IPromptLoader _prompts;
@@ -93,7 +93,6 @@ public sealed partial class SessionApplication :
     private readonly IHookCoordinator? _hooks;
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IPlanSanityChecker? _planSanityChecker;
-    private readonly IRepositoryMemoryGovernor? _repositoryMemoryGovernor;
     private readonly ISemanticRefreshCoordinator? _semanticRefreshCoordinator;
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
@@ -208,9 +207,7 @@ public sealed partial class SessionApplication :
         SessionModelPreferences? sessionPreferences = null,
         SessionUsageProjection? sessionUsage = null,
         IConversationStore? conversationStore = null,
-        IConversationMemoryGovernor? conversationGovernor = null,
         ConversationContextMode defaultConversationMode = ConversationContextMode.ConversationAware,
-        IConversationCompactor? conversationCompactor = null,
         IExecutionOrchestrator? executionOrchestrator = null,
         Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
             executionRequestFactory = null,
@@ -222,7 +219,6 @@ public sealed partial class SessionApplication :
         IPlanApprovalPolicy? planApprovalPolicy = null,
         Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
             planSanityRequestFactory = null,
-        IRepositoryMemoryGovernor? repositoryMemoryGovernor = null,
         IActiveTurnCompactor? activeTurnCompactor = null,
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
         ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
@@ -231,7 +227,9 @@ public sealed partial class SessionApplication :
         RunSteeringCoordinator? steering = null,
         CorrectiveMessageFactory? correctiveMessages = null,
         IPromptLoader? prompts = null,
-        ISemanticRefreshCoordinator? semanticRefreshCoordinator = null)
+        ISemanticRefreshCoordinator? semanticRefreshCoordinator = null,
+        IManagedRepositoryMemoryService? repositoryMemories = null,
+        IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -269,7 +267,6 @@ public sealed partial class SessionApplication :
         _planSanityChecker = planSanityChecker;
         _planApprovalPolicy = planApprovalPolicy;
         _planSanityRequestFactory = planSanityRequestFactory;
-        _repositoryMemoryGovernor = repositoryMemoryGovernor;
         _activeTurnCompactor = activeTurnCompactor;
         _activeTurnCompactionPolicy = activeTurnCompactionPolicy ?? new ActiveTurnCompactionPolicy();
         _activeTurnCompactionPolicy.Validate();
@@ -282,8 +279,8 @@ public sealed partial class SessionApplication :
         _sessionUsage = sessionUsage;
         _selectActiveModel = selectActiveModel;
         _conversationStore = conversationStore;
-        _conversationGovernor = conversationGovernor;
-        _conversationCompactor = conversationCompactor;
+        _repositoryMemories = repositoryMemories;
+        _repositoryMemoryOptions = repositoryMemoryOptions;
         _conversationToolSnapshots = conversationToolSnapshots;
         _steering = steering ?? new RunSteeringCoordinator();
         _correctiveMessages = correctiveMessages;
@@ -620,7 +617,6 @@ public sealed partial class SessionApplication :
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, command.RunId, false),
                 cancellationToken);
-            await CompactAtTurnBoundaryAsync(command.SessionId, cancellationToken);
             registration.Completion.TrySetResult(false);
             return true;
         }
@@ -759,6 +755,9 @@ public sealed partial class SessionApplication :
                 cancellationToken);
     }
 
+    /// <summary>Revokes admission for a newly created session whose repository binding failed.</summary>
+    internal void UnregisterPreparedSession(SessionId sessionId) => _sessions.TryRemove(sessionId, out _);
+
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
         return _correctiveMessages;
@@ -879,23 +878,6 @@ public sealed partial class SessionApplication :
                 ];
             }
 
-            if (userMessage is not null && _conversationGovernor is not null)
-            {
-                await _conversationGovernor.PromoteAsync(
-                    new ConversationPromotionRequest
-                    {
-                        SessionId = command.SessionId,
-                        SourceMessage = userMessage,
-                        UserRequirements =
-                        [
-                            registration.Task.Intent,
-                            .. registration.Task.AcceptanceCriteria.Select(item => item.Description),
-                        ],
-                        Constraints = registration.Task.UserConstraints ?? [],
-                    },
-                    registration.Cancellation.Token);
-            }
-
             if (_conversationStore is not null)
             {
                 var conversationState = await _conversationStore.GetSnapshotAsync(
@@ -953,16 +935,8 @@ public sealed partial class SessionApplication :
                 RunPhase.Completion,
                 "scripted activity completed",
                 registration.Cancellation.Token);
-            await PromoteHostObservedMemoryAsync(
-                runId,
-                registration,
-                completedWork: [$"Completed request: {registration.Task.Intent}"],
-                cancellationToken: registration.Cancellation.Token);
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, true),
-                registration.Cancellation.Token);
-            await CompactAtTurnBoundaryAsync(
-                command.SessionId,
                 registration.Cancellation.Token);
             registration.Completion.TrySetResult(true);
         }
@@ -1025,15 +999,6 @@ public sealed partial class SessionApplication :
                 succeeded ? RunPhase.Completion : RunPhase.Failed,
                 "authoritative execution outcome recorded",
                 CancellationToken.None);
-            if (succeeded)
-            {
-                await PromoteHostObservedMemoryAsync(
-                    runId,
-                    registration,
-                    completedWork: [$"Completed approved execution: {registration.Task.Intent}"],
-                    cancellationToken: CancellationToken.None);
-            }
-
             await _events.PublishAsync(
                 new RunCompleted(
                     registration.SessionId,
@@ -1041,7 +1006,6 @@ public sealed partial class SessionApplication :
                     runId,
                     succeeded),
                 CancellationToken.None);
-            await CompactAtTurnBoundaryAsync(registration.SessionId, CancellationToken.None);
             registration.Completion.TrySetResult(succeeded);
         }
         catch (OperationCanceledException)
@@ -1071,166 +1035,6 @@ public sealed partial class SessionApplication :
                 CancellationToken.None);
             registration.Completion.TrySetException(exception);
         }
-    }
-
-    private async Task CompactAtTurnBoundaryAsync(
-        SessionId sessionId,
-        CancellationToken cancellationToken)
-    {
-        if (_conversationCompactor is null || _evidenceStore is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var result = await _conversationCompactor.CompactAtTurnBoundaryAsync(
-                sessionId,
-                _evidenceStore.Snapshot(sessionId),
-                force: false,
-                cancellationToken);
-            if (result.Outcome is ConversationCompactionOutcomeKind.MalformedOutput
-                or ConversationCompactionOutcomeKind.UnsupportedProvenance
-                or ConversationCompactionOutcomeKind.ProviderFailure
-                or ConversationCompactionOutcomeKind.PersistenceFailure)
-            {
-                _logger.LogWarning(
-                    "Conversation compaction ended with {Outcome} for session {SessionId}; prior memory remains active.",
-                    result.Outcome,
-                    sessionId.Value);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                exception,
-                "Conversation compaction failed for session {SessionId}; ordinary conversation continues with prior memory.",
-                sessionId.Value);
-        }
-    }
-
-    private async Task PromoteHostObservedMemoryAsync(
-        RunId runId,
-        RunRegistration registration,
-        IReadOnlyList<string>? decisions = null,
-        IReadOnlyList<string>? unresolvedQuestions = null,
-        IReadOnlyList<string>? completedWork = null,
-        CancellationToken cancellationToken = default)
-    {
-        var repositoryEvidence = _evidenceStore?.Snapshot(registration.SessionId) ?? [];
-        if (_conversationGovernor is not null && registration.SourceMessage is { } sourceMessage)
-        {
-            await _conversationGovernor.PromoteAsync(
-                new ConversationPromotionRequest
-                {
-                    SessionId = registration.SessionId,
-                    SourceMessage = sourceMessage,
-                    Decisions = decisions ?? [],
-                    UnresolvedQuestions = unresolvedQuestions ?? [],
-                    CompletedWork = completedWork ?? [],
-                    RepositoryEvidence = repositoryEvidence,
-                },
-                cancellationToken);
-        }
-
-        try
-        {
-            await PromoteHostObservedRepositoryMemoryAsync(
-                runId,
-                registration,
-                decisions ?? [],
-                unresolvedQuestions ?? [],
-                completedWork ?? [],
-                cancellationToken);
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                exception,
-                "Repository-memory promotion failed for run {RunId}; the authoritative run outcome is unchanged.",
-                runId.Value);
-        }
-    }
-
-    private async Task PromoteHostObservedRepositoryMemoryAsync(
-        RunId runId,
-        RunRegistration registration,
-        IReadOnlyList<string> decisions,
-        IReadOnlyList<string> unresolvedQuestions,
-        IReadOnlyList<string> completedWork,
-        CancellationToken cancellationToken)
-    {
-        if (_repositoryMemoryGovernor is null
-            || string.IsNullOrWhiteSpace(registration.RepositoryIdentity))
-        {
-            return;
-        }
-
-        var repositoryIdentity = RepositoryIdentity.Create(registration.RepositoryIdentity);
-        foreach (var (kind, content) in CreateRepositoryMemoryCandidates(
-            decisions,
-            unresolvedQuestions,
-            completedWork))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                continue;
-            }
-
-            var result = await _repositoryMemoryGovernor.PromoteHostObservedAsync(
-                new HostObservedRepositoryMemoryPromotion(
-                    registration.SessionId,
-                    runId,
-                    repositoryIdentity,
-                    kind,
-                    content),
-                cancellationToken);
-            foreach (var change in result.StateUpdates.Where(change => change.PreviousValidity != change.Validity))
-            {
-                await _events.PublishAsync(
-                    new RepositoryMemoryValidityChanged(
-                        registration.SessionId,
-                        DateTimeOffset.UtcNow,
-                        repositoryIdentity,
-                        change.MemoryId,
-                        change.Validity,
-                        change.Reason),
-                    cancellationToken);
-            }
-
-            if (!result.WasInserted)
-            {
-                continue;
-            }
-
-            await _events.PublishAsync(
-                new RepositoryMemoryRemembered(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    repositoryIdentity,
-                    result.Item.Id,
-                    result.Item.Kind,
-                    result.Item.Authority),
-                cancellationToken);
-        }
-    }
-
-    private static IReadOnlyList<(RepositoryMemoryKind Kind, string Content)> CreateRepositoryMemoryCandidates(
-        IReadOnlyList<string> decisions,
-        IReadOnlyList<string> unresolvedQuestions,
-        IReadOnlyList<string> completedWork)
-    {
-        return
-        [
-            .. decisions.Select(content => (RepositoryMemoryKind.ArchitectureDecision, content)),
-            .. unresolvedQuestions.Select(content => (RepositoryMemoryKind.UnresolvedQuestion, content)),
-            .. completedWork.Select(content => (RepositoryMemoryKind.WorkflowFact, content)),
-        ];
     }
 
     private static void AccrueUnchargedWallClockOrThrow(
@@ -1905,12 +1709,6 @@ public sealed partial class SessionApplication :
                     startRequest,
                     registration.Cancellation.Token);
                 _ = CompleteExecutionAsync(runId, registration);
-                await PromoteHostObservedMemoryAsync(
-                    runId,
-                    registration,
-                    decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
-                    unresolvedQuestions: approvedPlan.OutstandingQuestions,
-                    cancellationToken: cancellationToken);
                 return true;
             }
             catch (Exception exception)
@@ -1958,17 +1756,9 @@ public sealed partial class SessionApplication :
             RunPhase.Completion,
             "plan approved in compatibility planning mode",
             cancellationToken);
-        await PromoteHostObservedMemoryAsync(
-            runId,
-            registration,
-            decisions: [$"Approved implementation plan: {approvedPlan.Summary}"],
-            unresolvedQuestions: approvedPlan.OutstandingQuestions,
-            completedWork: [$"Completed implementation-plan approval: {approvedPlan.Summary}"],
-            cancellationToken);
         await _events.PublishAsync(
             new RunCompleted(registration.SessionId, DateTimeOffset.UtcNow, runId, true),
             cancellationToken);
-        await CompactAtTurnBoundaryAsync(registration.SessionId, cancellationToken);
         registration.Completion.TrySetResult(true);
         return true;
     }
@@ -2126,6 +1916,10 @@ public sealed partial class SessionApplication :
         public RepositoryTrustLevel? PendingSanityTrust { get; set; }
 
         public string? RepositoryIdentity { get; set; }
+
+        public RepositoryMemoryOptions? MemoryOptions { get; set; }
+
+        public string? MemoryCurrentInstruction { get; set; }
 
         public SessionId SessionId { get; }
 

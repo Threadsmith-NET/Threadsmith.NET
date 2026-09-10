@@ -1922,7 +1922,7 @@ public static class Milestone1Tests
             "/help",
             "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]",
             "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]",
-            "/memory [remember|list|inspect|supersede|forget|validate]",
+            "/memory [remember|list|inspect|update|forget]",
             "/models",
             "/new",
             "/open [path]",

@@ -1,553 +1,297 @@
 namespace Threadsmith.ConversationContext.Tests;
 
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Data.Sqlite;
 using Threadsmith.Context;
 using Threadsmith.Core;
-using Threadsmith.Execution;
-using Threadsmith.Models;
-using Threadsmith.Telemetry;
-using Threadsmith.Tools;
+using Threadsmith.Persistence;
 using Xunit;
 
-/// <summary>Plan 34 promotion, compaction, validation, retrieval, and invalidation tests.</summary>
+/// <summary>Plan 103 retrieval contracts replacing automatic conversation-fact promotion and overlap scoring.</summary>
 public static class Plan34ConversationMemoryTests
 {
-    /// <summary>Direct promotion bounds item bodies and active-item count before later assembly.</summary>
+    /// <summary>Both qualified branches fuse while unrelated memories never fill the requested maximum.</summary>
     [Fact]
-    public static async Task Promotion_bounds_content_and_active_memory()
+    public static async Task Hybrid_preserves_lexical_and_semantic_only_positives()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "remember bounded requirements");
-        ConversationCompactionPolicy policy = new()
-        {
-            MaximumActiveMemoryItems = 2,
-            MaximumItemCharacters = 20,
-        };
-        var governor = new ConversationMemoryGovernor(
-            fixture.Store,
-            new SecretOutputSanitizer(),
-            policy);
+        var generator = CreateGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var both = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta shared"));
+        var lexical = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta lexical"));
+        var semantic = await service.ExecuteAsync(MemoryTestData.Operation("add", "paraphrase"));
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "unrelated"));
+        using var retriever = CreateRetriever(fixture, generator);
 
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = message,
-            UserRequirements =
-            [
-                new string('a', 100),
-                new string('b', 100),
-                new string('c', 100),
-            ],
-        });
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
+        var result = await retriever.RetrieveAsync(Query("alpha beta"));
 
-        Assert.Equal(3, state.MemoryItems.Count);
-        Assert.Equal(2, state.MemoryItems.Count(item => item.Validity == MemoryValidity.Active));
-        Assert.Single(state.MemoryItems, item => item.Validity == MemoryValidity.Invalid);
-        Assert.All(state.MemoryItems, item => Assert.True(item.Content.Length <= 20));
+        Assert.Equal(3, result.Selected.Count);
+        Assert.Equal(both.Id, result.Selected[0].Entry.Id);
+        Assert.Contains(result.Selected, candidate => candidate.Entry.Id == lexical.Id && candidate.LexicalRank is not null && candidate.SemanticRank is null);
+        Assert.Contains(result.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.LexicalRank is null && candidate.SemanticRank is not null);
+        Assert.DoesNotContain(result.Selected, candidate => candidate.Entry.Text == "unrelated");
     }
 
-    /// <summary>A successfully completed host run promotes completed work with user-message provenance.</summary>
-    [Fact]
-    public static async Task Successful_host_run_promotes_completed_work()
+    /// <summary>Lexical fallback applies exact minimum-term qualification, including Unicode and FTS punctuation.</summary>
+    [Theory]
+    [InlineData("alpha beta", 1)]
+    [InlineData("alpha", 2)]
+    [InlineData("\"alpha\" OR (beta*)", 1)]
+    [InlineData("café dépôt", 1)]
+    [InlineData("東京", 1)]
+    [InlineData("the and with", 0)]
+    [InlineData("*** : ()", 0)]
+    [InlineData("", 0)]
+    public static async Task Lexical_fallback_qualifies_safe_terms(string query, int expected)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
-        await using var events = new DomainEventStream();
-        var governor = new ConversationMemoryGovernor(fixture.Store, new SecretOutputSanitizer());
-        var application = new SessionApplication(
-            events,
-            new FakeModelProvider(new ScriptedSession
-            {
-                Turns = [new ScriptedTurn { Text = "Done." }],
-            }),
-            new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1))),
-            new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance,
-            conversationStore: fixture.Store,
-            conversationGovernor: governor,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance);
-        var sessionId = await application.HandleAsync(new CreateSessionCommand("memory-test"));
+        var generator = CreateGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta"));
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha alone"));
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "cafe depot 東京"));
+        generator.Generate = _ => throw new InvalidOperationException("offline");
+        using var retriever = CreateRetriever(fixture, generator);
 
-        var runId = await application.HandleAsync(new SubmitRequestCommand(sessionId, "Explain the repository."));
-        var succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
+        var result = await retriever.RetrieveAsync(Query(query));
 
-        Assert.True(succeeded);
-        var completed = Assert.Single(
-            state.MemoryItems,
-            item => item.Kind == ConversationMemoryKind.CompletedWork);
-        Assert.Contains("Explain the repository.", completed.Content, StringComparison.Ordinal);
-        Assert.NotEmpty(completed.SourceMessageIds);
-        Assert.All(
-            state.Messages,
-            message => Assert.Equal(ConversationSensitivity.Sensitive, message.Sensitivity));
-    }
-
-    /// <summary>Transient current-message URL references never enter promoted conversation memory.</summary>
-    [Fact]
-    public static async Task Current_message_url_reference_is_not_promoted_to_memory()
-    {
-        // Arrange
-        await using var fixture = await ConversationFixture.CreateAsync();
-        await using var events = new DomainEventStream();
-        var governor = new ConversationMemoryGovernor(fixture.Store, new SecretOutputSanitizer());
-        const string userUrlId = "user-url-transient-reference";
-        var application = new SessionApplication(
-            events,
-            new FakeModelProvider(new ScriptedSession
-            {
-                Turns = [new ScriptedTurn { Text = "Fetched documentation." }],
-            }),
-            new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1))),
-            new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance,
-            conversationStore: fixture.Store,
-            conversationGovernor: governor,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance,
-            userUrlIntake: (sessionId, runId, messageId, _, _) => Task.FromResult<IReadOnlyList<UserUrlReference>>(
-            [
-                new UserUrlReference
-                {
-                    Id = userUrlId,
-                    Ordinal = 1,
-                    UrlDigest = new string('a', 64),
-                    MessageId = messageId,
-                    SessionId = sessionId,
-                    RunId = runId,
-                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
-                },
-            ]));
-        var sessionId = await application.HandleAsync(new CreateSessionCommand("transient-url-memory"));
-
-        // Act
-        var runId = await application.HandleAsync(
-            new SubmitRequestCommand(sessionId, "Read https://example.com/docs."));
-        var succeeded = await application.HandleAsync(new WaitForRunCommand(runId));
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        // Assert
-        Assert.True(succeeded);
-        Assert.DoesNotContain(state.MemoryItems, item => item.Content.Contains(userUrlId, StringComparison.Ordinal));
-    }
-
-    /// <summary>An explicit user correction supersedes prior memory while preserving both items.</summary>
-    [Fact]
-    public static async Task Explicit_user_correction_supersedes_without_deletion()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var governor = new ConversationMemoryGovernor(fixture.Store, new SecretOutputSanitizer());
-        var firstMessage = await ArchiveUserAsync(fixture, sessionId, "Use tabs.");
-        var first = await governor.PromoteAsync(new ConversationPromotionRequest
+        Assert.Equal(expected, result.Selected.Count);
+        Assert.All(result.Selected, candidate => Assert.Null(candidate.SemanticRank));
+        if (query.Length > 0)
         {
-            SessionId = sessionId,
-            SourceMessage = firstMessage,
-            Constraints = ["Use tabs."],
-        });
-        var oldId = Assert.Single(first.MemoryIdsByKind[ConversationMemoryKind.Constraint]);
-        var correction = await ArchiveUserAsync(fixture, sessionId, "Correction: use spaces.");
-
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = correction,
-            Constraints = ["Use spaces."],
-            SupersedesId = oldId,
-        });
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Equal(2, state.MemoryItems.Count);
-        Assert.Equal(MemoryValidity.Superseded, state.MemoryItems.Single(item => item.Id == oldId).Validity);
-        var replacement = state.MemoryItems.Single(item => item.Id != oldId);
-        Assert.Equal(oldId, replacement.SupersedesId);
-        Assert.Equal(MemoryValidity.Active, replacement.Validity);
-    }
-
-    /// <summary>Repository findings are promoted only from current evidence carrying revision provenance.</summary>
-    [Fact]
-    public static async Task Repository_finding_requires_current_governed_evidence()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "What framework is used?");
-        var valid = CreateEvidence(sessionId, "The project targets net10.0.", "revision-a");
-        var stale = CreateEvidence(sessionId, "Unsupported stale claim.", "revision-a") with { IsStale = true };
-        var governor = new ConversationMemoryGovernor(fixture.Store, new SecretOutputSanitizer());
-
-        await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = message,
-            RepositoryEvidence = [valid, stale],
-        });
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        var finding = Assert.Single(state.MemoryItems);
-        Assert.Equal(valid.EvidenceId, Assert.Single(finding.SourceEvidenceIds));
-        Assert.True(finding.RepositoryDependent);
-        Assert.Equal("revision-a", finding.RepositoryRevision);
-    }
-
-    /// <summary>Unsupported completion claims, missing provenance, secrets, and cycles are rejected.</summary>
-    [Fact]
-    public static async Task Validator_rejects_adversarial_candidate()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "Please inspect the build.");
-        var request = new ConversationCompactionRequest
-        {
-            SessionId = sessionId,
-            Messages = [message],
-            ExistingMemory = [],
-        };
-        var id = ConversationMemoryId.New();
-        var candidate = new ConversationSummaryCandidate
-        {
-            ThroughMessageSequence = message.Sequence,
-            Items =
-            [
-                new ConversationMemoryCandidate
-                {
-                    Id = id,
-                    Kind = ConversationMemoryKind.CompletedWork,
-                    Content = "Build completed token=secret-value.",
-                    TrustClass = ConversationMemoryTrustClass.AssistantProposed,
-                    SourceMessageIds = [ConversationMessageId.New()],
-                    SupersedesId = id,
-                },
-            ],
-        };
-        var validator = new ConversationSummaryValidator(
-            new ConversationCompactionPolicy(),
-            new SecretOutputSanitizer());
-
-        var result = validator.Validate(request, candidate);
-
-        Assert.False(result.IsValid);
-        Assert.Equal(ConversationCompactionOutcomeKind.UnsupportedProvenance, result.FailureKind);
-        Assert.Contains(result.Errors, error => error.Contains("provenance", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.Errors, error => error.Contains("unsanitized", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.Errors, error => error.Contains("cycle", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>Provider failure preserves the active snapshot and obeys bounded retries.</summary>
-    [Fact]
-    public static async Task Provider_failure_preserves_prior_snapshot_and_budget()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "Keep this decision.");
-        var governor = new ConversationMemoryGovernor(fixture.Store, new SecretOutputSanitizer());
-        var prior = await governor.PromoteAsync(new ConversationPromotionRequest
-        {
-            SessionId = sessionId,
-            SourceMessage = message,
-            Decisions = ["Keep this decision."],
-        });
-        await ArchiveUserAsync(fixture, sessionId, "New turn to compact.");
-        var provider = new ThrowingCandidateProvider();
-        ConversationCompactionPolicy policy = new()
-        {
-            ArchivedMessageThreshold = 1,
-            MaximumProviderRetries = 1,
-            MaximumProviderCalls = 2,
-        };
-        var compactor = new ConversationCompactor(
-            fixture.Store,
-            provider,
-            new ConversationSummaryValidator(policy, new SecretOutputSanitizer()),
-            policy);
-
-        var result = await compactor.CompactAtTurnBoundaryAsync(sessionId, [], force: true);
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Equal(ConversationCompactionOutcomeKind.ProviderFailure, result.Outcome);
-        Assert.Equal(2, provider.Calls);
-        Assert.Equal(prior.Version, state.Summary?.Version);
-    }
-
-    /// <summary>An oversize oldest source is never skipped or silently marked compacted.</summary>
-    [Fact]
-    public static async Task Oversize_oldest_source_preserves_prior_range()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, new string('x', 200));
-        var provider = new FixedCandidateProvider(request => new ConversationSummaryCandidate
-        {
-            ThroughMessageSequence = request.Messages.Max(item => item.Sequence),
-        });
-        ConversationCompactionPolicy policy = new()
-        {
-            ArchivedMessageThreshold = 1,
-            MaximumInputTokens = 1,
-        };
-        var compactor = new ConversationCompactor(
-            fixture.Store,
-            provider,
-            new ConversationSummaryValidator(policy, new SecretOutputSanitizer()),
-            policy);
-
-        var result = await compactor.CompactAtTurnBoundaryAsync(
-            sessionId,
-            [],
-            force: true);
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Equal(ConversationCompactionOutcomeKind.MalformedOutput, result.Outcome);
-        Assert.Equal(0, provider.Calls);
-        Assert.Null(state.Summary);
-        Assert.Equal(message.Id, Assert.Single(state.Messages).Id);
-    }
-
-    /// <summary>Concurrent trigger requests produce one compaction and one idempotent no-op.</summary>
-    [Fact]
-    public static async Task Compaction_is_once_per_session_and_idempotent()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "Remember alpha decision.");
-        var provider = new FixedCandidateProvider(request => new ConversationSummaryCandidate
-        {
-            ThroughMessageSequence = request.Messages.Max(item => item.Sequence),
-            Items =
-            [
-                new ConversationMemoryCandidate
-                {
-                    Id = ConversationMemoryId.New(),
-                    Kind = ConversationMemoryKind.Decision,
-                    Content = "Remember alpha decision.",
-                    TrustClass = ConversationMemoryTrustClass.ExplicitUser,
-                    SourceMessageIds = [message.Id],
-                    SourceRunIds = [message.RunId],
-                },
-            ],
-        });
-        ConversationCompactionPolicy policy = new() { ArchivedMessageThreshold = 1 };
-        var compactor = new ConversationCompactor(
-            fixture.Store,
-            provider,
-            new ConversationSummaryValidator(policy, new SecretOutputSanitizer()),
-            policy);
-
-        var results = await Task.WhenAll(
-            compactor.CompactAtTurnBoundaryAsync(sessionId, [], force: true),
-            compactor.CompactAtTurnBoundaryAsync(sessionId, [], force: true));
-
-        Assert.Single(results, result => result.Outcome == ConversationCompactionOutcomeKind.Completed);
-        Assert.Single(results, result => result.Outcome == ConversationCompactionOutcomeKind.AlreadyCompacted);
-        Assert.Equal(1, provider.Calls);
-    }
-
-    /// <summary>Retrieval ordering is deterministic, phase-aware, and excludes stale/superseded items.</summary>
-    [Fact]
-    public static async Task Retrieval_is_stable_and_excludes_ineligible_memory()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "alpha build choice");
-        var now = DateTimeOffset.UtcNow;
-        var decision = CreateMemory(
-            sessionId,
-            message,
-            ConversationMemoryKind.Decision,
-            "alpha build choice",
-            now);
-        var finding = CreateMemory(
-            sessionId,
-            message,
-            ConversationMemoryKind.RepositoryFinding,
-            "alpha build output",
-            now) with
-        {
-            RepositoryDependent = true,
-            RepositoryRevision = "r1",
-            SourceEvidenceIds = [EvidenceId.New()],
-        };
-        var stale = CreateMemory(
-            sessionId,
-            message,
-            ConversationMemoryKind.Constraint,
-            "alpha stale",
-            now) with
-        {
-            Validity = MemoryValidity.Stale,
-        };
-        ConversationMemoryItem[] items = [decision, finding, stale];
-        await fixture.Store.ReplaceSummaryAsync(sessionId, items, CreateSummary(sessionId, message.Sequence, items, now));
-        var retriever = new ConversationMemoryRetriever(fixture.Store);
-        var request = new ConversationRetrievalRequest
-        {
-            SessionId = sessionId,
-            Query = "alpha build",
-            Phase = ConversationRetrievalPhase.Planning,
-        };
-
-        var first = await retriever.RetrieveAsync(request);
-        var second = await retriever.RetrieveAsync(request);
-
-        Assert.Equal(first.Selected.Select(item => item.Item.Id), second.Selected.Select(item => item.Item.Id));
-        Assert.DoesNotContain(first.Selected, item => item.Item.Id == stale.Id);
-        Assert.Equal(1, first.ExcludedStaleOrSupersededCount);
-        Assert.All(first.Selected, item => Assert.NotEmpty(item.Item.SourceMessageIds));
-    }
-
-    /// <summary>Repository invalidation stales dependent findings but preserves user constraints.</summary>
-    [Fact]
-    public static async Task Repository_invalidation_does_not_stale_user_constraint()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var message = await ArchiveUserAsync(fixture, sessionId, "alpha");
-        var now = DateTimeOffset.UtcNow;
-        var finding = CreateMemory(
-            sessionId,
-            message,
-            ConversationMemoryKind.RepositoryFinding,
-            "repository alpha",
-            now) with
-        {
-            RepositoryDependent = true,
-            RepositoryRevision = "old",
-            SourceEvidenceIds = [EvidenceId.New()],
-        };
-        var constraint = CreateMemory(
-            sessionId,
-            message,
-            ConversationMemoryKind.Constraint,
-            "always alpha",
-            now);
-        ConversationMemoryItem[] items = [finding, constraint];
-        await fixture.Store.ReplaceSummaryAsync(sessionId, items, CreateSummary(sessionId, message.Sequence, items, now));
-        var invalidator = new ConversationMemoryInvalidator(fixture.Store);
-
-        var result = await invalidator.InvalidateAtTurnBoundaryAsync(
-            sessionId,
-            ["repository"],
-            "new");
-        var state = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Equal(1, result.InvalidatedCount);
-        Assert.Equal(MemoryValidity.Stale, state.MemoryItems.Single(item => item.Id == finding.Id).Validity);
-        Assert.Equal(MemoryValidity.Active, state.MemoryItems.Single(item => item.Id == constraint.Id).Validity);
-    }
-
-    private static async Task<ConversationMessage> ArchiveUserAsync(
-        ConversationFixture fixture,
-        SessionId sessionId,
-        string content)
-    {
-        return await fixture.Store.ArchiveMessageAsync(new ConversationMessage
-        {
-            Id = ConversationMessageId.New(),
-            SessionId = sessionId,
-            RunId = RunId.New(),
-            Sequence = 0,
-            Role = ConversationRole.User,
-            Content = content,
-            ContentHash = "pending",
-            EstimatedTokens = 1,
-            OccurredAt = DateTimeOffset.UtcNow,
-        });
-    }
-
-    private static Evidence CreateEvidence(SessionId sessionId, string content, string revision)
-    {
-        return new Evidence
-        {
-            EvidenceId = EvidenceId.New(),
-            SessionId = sessionId,
-            Kind = EvidenceKind.SemanticFact,
-            Content = content,
-            Provenance = new EvidenceProvenance
-            {
-                Source = "semantic:test",
-                RepositoryRevision = revision,
-                SemanticConfidence = SemanticConfidenceLevel.FullSemantic,
-            },
-            CollectedAt = DateTimeOffset.UtcNow,
-            Relevance = 1,
-            EstimatedTokens = 10,
-            InvalidationKeys = ["repository"],
-        };
-    }
-
-    private static ConversationMemoryItem CreateMemory(
-        SessionId sessionId,
-        ConversationMessage message,
-        ConversationMemoryKind kind,
-        string content,
-        DateTimeOffset now)
-    {
-        return new ConversationMemoryItem
-        {
-            Id = ConversationMemoryId.New(),
-            SessionId = sessionId,
-            Kind = kind,
-            Content = content,
-            SourceMessageIds = [message.Id],
-            SourceRunIds = [message.RunId],
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-    }
-
-    private static ConversationSummarySnapshot CreateSummary(
-        SessionId sessionId,
-        long sequence,
-        IReadOnlyList<ConversationMemoryItem> items,
-        DateTimeOffset now)
-    {
-        return new ConversationSummarySnapshot
-        {
-            SessionId = sessionId,
-            Version = 1,
-            ThroughMessageSequence = sequence,
-            MemoryIdsByKind = items
-                .Where(item => item.Validity == MemoryValidity.Active)
-                .GroupBy(item => item.Kind)
-                .ToDictionary(
-                    group => group.Key,
-                    group => (IReadOnlyList<ConversationMemoryId>)[.. group.Select(item => item.Id)]),
-            CreatedAt = now,
-        };
-    }
-
-    private sealed class ThrowingCandidateProvider : IConversationSummaryCandidateProvider
-    {
-        public int Calls { get; private set; }
-
-        public Task<ConversationSummaryCandidate> CreateCandidateAsync(
-            ConversationCompactionRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            Calls++;
-            throw new TimeoutException("simulated transient failure");
+            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("lexical matches only", StringComparison.Ordinal));
         }
     }
 
-    private sealed class FixedCandidateProvider : IConversationSummaryCandidateProvider
+    /// <summary>Unchanged rounds reuse query embeddings and rankings, while writes invalidate only ranking.</summary>
+    [Fact]
+    public static async Task Cache_reuses_query_but_mutations_refresh_rankings()
     {
-        private readonly Func<ConversationCompactionRequest, ConversationSummaryCandidate> _factory;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = CreateGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta shared"));
+        using var retriever = CreateRetriever(fixture, generator);
+        var first = await retriever.RetrieveAsync(Query("alpha beta"));
+        var cached = await retriever.RetrieveAsync(Query("alpha beta"));
+        var entry = Assert.Single(first.Selected).Entry;
+        await service.RecordInclusionsAsync(MemoryTestData.Repository, RunId.New(), [new RepositoryMemoryInclusion(entry.Id, entry.Revision)]);
+        var afterUsage = await retriever.RetrieveAsync(Query("alpha beta"));
+        await service.ExecuteAsync(MemoryTestData.Operation("remove", id: saved.Id));
+        var afterDelete = await retriever.RetrieveAsync(Query("alpha beta"));
 
-        public FixedCandidateProvider(Func<ConversationCompactionRequest, ConversationSummaryCandidate> factory)
+        Assert.True(cached.QueryEmbeddingCacheHit);
+        Assert.True(cached.RankingCacheHit);
+        Assert.True(afterUsage.RankingCacheHit);
+        Assert.False(afterDelete.RankingCacheHit);
+
+        Assert.Empty(afterDelete.Selected);
+        Assert.Equal(2, generator.Calls);
+    }
+
+    /// <summary>A request-local cutoff reranks an unchanged query without repeating inference.</summary>
+    [Fact]
+    public static async Task Semantic_minimum_reranks_cached_query_without_reembedding()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator
         {
-            _factory = factory;
-        }
+            Generate = text => text == "semantic only" ? new TextEmbeddingResult((float[])[0.6f, 0.8f, 0], 3, false) : new TextEmbeddingResult((float[])[1, 0, 0], 3, false),
+        };
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "semantic only"));
+        using var retriever = CreateRetriever(fixture, generator);
 
-        public int Calls { get; private set; }
+        var included = await retriever.RetrieveAsync(Query("query") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.5 } });
+        var excluded = await retriever.RetrieveAsync(Query("query") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.7 } });
 
-        public Task<ConversationSummaryCandidate> CreateCandidateAsync(
-            ConversationCompactionRequest request,
-            CancellationToken cancellationToken = default)
+        Assert.Equal(saved.Id, Assert.Single(included.Selected).Entry.Id);
+        Assert.False(included.RankingCacheHit);
+        Assert.Empty(excluded.Selected);
+        Assert.True(excluded.QueryEmbeddingCacheHit);
+        Assert.False(excluded.RankingCacheHit);
+        Assert.Equal(2, generator.Calls);
+    }
+
+    /// <summary>Semantic qualification is strict while lexical qualification remains eligible.</summary>
+    [Fact]
+    public static async Task Semantic_minimum_excludes_equal_similarity_without_suppressing_lexical_matches()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var semantic = await service.ExecuteAsync(MemoryTestData.Operation("add", "semantic only"));
+        var lexical = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha lexical"));
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var belowBoundary = await retriever.RetrieveAsync(Query("alpha") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 0.999 } });
+        var atBoundary = await retriever.RetrieveAsync(Query("alpha") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 1 } });
+
+        Assert.Contains(belowBoundary.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.SemanticRank is not null);
+        var lexicalAtBoundary = Assert.Single(atBoundary.Selected);
+        Assert.Equal(lexical.Id, lexicalAtBoundary.Entry.Id);
+        Assert.NotNull(lexicalAtBoundary.LexicalRank);
+        Assert.Null(lexicalAtBoundary.SemanticRank);
+    }
+
+    /// <summary>Semantic cutoffs must remain finite cosine bounds.</summary>
+    [Fact]
+    public static void Semantic_minimum_rejects_nonfinite_and_out_of_range_values()
+    {
+        foreach (var value in (double[])[double.NaN, double.NegativeInfinity, double.PositiveInfinity, -1.0000001, 1.0000001])
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            Calls++;
-            return Task.FromResult(_factory(request));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryOptions { SemanticMinimum = value }.Validate());
         }
     }
+
+    /// <summary>Equal branch scores use stable IDs rather than usage, origin, or age.</summary>
+    [Fact]
+    public static async Task Stable_ties_ignore_usage_and_origin()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var first = await service.ExecuteAsync(MemoryTestData.Operation("add", "first paraphrase"));
+        var second = await service.ExecuteAsync(MemoryTestData.Operation("add", "second paraphrase") with { Origin = RepositoryMemoryOrigin.Model });
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var result = await retriever.RetrieveAsync(Query("unmatched exact query"));
+
+        Assert.Equal(new[] { first.Id, second.Id }.OrderBy(id => id?.Value), result.Selected.Select(candidate => (RepositoryMemoryId?)candidate.Entry.Id));
+        Assert.All(result.Selected, candidate => Assert.Null(candidate.LexicalRank));
+    }
+
+    /// <summary>Query truncation is inspectable and accepted only for queries, never persisted content.</summary>
+    [Fact]
+    public static async Task Query_truncation_is_visible_and_current_instruction_has_priority()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "stored note"));
+        string? observed = null;
+        generator.Generate = text =>
+        {
+            observed = text;
+            return new TextEmbeddingResult(new float[] { 1, 0, 0 }, 1_000, true);
+        };
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var result = await retriever.RetrieveAsync(Query("current steering") with { TaskIntent = new string('x', 10_000) });
+
+        Assert.True(result.QueryTruncated);
+        Assert.StartsWith("current steering\n", observed, StringComparison.Ordinal);
+        Assert.Equal(8_000, observed?.Length);
+    }
+
+    /// <summary>Embedding-space changes rebuild complete vectors, while unsupported rebuilds remain lexical-only.</summary>
+    [Fact]
+    public static async Task Incompatible_space_rebuild_failure_never_mixes_vectors()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta saved"));
+        generator.Model = new TextEmbeddingModelDescriptor("new-space", 3, 256);
+        generator.Generate = text => text == "alpha beta saved"
+            ? throw new InvalidOperationException("cannot rebuild")
+            : new TextEmbeddingResult(new float[] { 1, 0, 0 }, 3, false);
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var result = await retriever.RetrieveAsync(Query("alpha beta"));
+
+        Assert.Null(Assert.Single(result.Selected).SemanticRank);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("rebuild failed", StringComparison.Ordinal));
+    }
+
+    /// <summary>Cancellation during inference propagates and leaves no poisoned ranking cache.</summary>
+    [Fact]
+    public static async Task Cancellation_propagates_and_retry_can_complete()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "saved note"));
+        generator.Generate = _ => throw new OperationCanceledException();
+        using var retriever = CreateRetriever(fixture, generator);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => retriever.RetrieveAsync(Query("query")));
+        generator.Generate = _ => new TextEmbeddingResult(new float[] { 1, 0, 0 }, 3, false);
+        var retried = await retriever.RetrieveAsync(Query("query"));
+
+        Assert.Single(retried.Selected);
+        Assert.False(retried.RankingCacheHit);
+    }
+
+    /// <summary>A failed SQLite search omits memories without aborting the main conversation.</summary>
+    [Fact]
+    public static async Task Store_failure_omits_memory_with_diagnostic()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DROP TABLE managed_memory_repositories;";
+        await command.ExecuteNonQueryAsync();
+        using var retriever = CreateRetriever(fixture, new TestMemoryEmbeddingGenerator());
+
+        var result = await retriever.RetrieveAsync(Query("query"));
+
+        Assert.Empty(result.Selected);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("search failed", StringComparison.Ordinal));
+    }
+
+    /// <summary>Unavailable semantics are cached only for the same turn and recover on a later turn.</summary>
+    [Fact]
+    public static async Task Degraded_result_reuses_same_turn_and_recovers_next_turn()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta saved"));
+        generator.Generate = _ => throw new InvalidOperationException("offline");
+        using var retriever = CreateRetriever(fixture, generator);
+        var query = Query("alpha beta") with { UserTurnId = RunId.New() };
+        var degraded = await retriever.RetrieveAsync(query);
+        generator.Generate = _ => new TextEmbeddingResult(new float[] { 1, 0, 0 }, 3, false);
+
+        var sameTurn = await retriever.RetrieveAsync(query);
+        var recovered = await retriever.RetrieveAsync(query with { UserTurnId = RunId.New() });
+
+        Assert.Null(Assert.Single(degraded.Selected).SemanticRank);
+        Assert.True(sameTurn.RankingCacheHit);
+        Assert.NotNull(Assert.Single(recovered.Selected).SemanticRank);
+        Assert.Equal(3, generator.Calls);
+    }
+
+    /// <summary>An empty repository does not load or invoke local inference.</summary>
+    [Fact]
+    public static async Task Empty_repository_avoids_embedding_work()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator { Generate = _ => throw new InvalidOperationException("offline") };
+        using var retriever = CreateRetriever(fixture, generator);
+
+        var result = await retriever.RetrieveAsync(Query("current request"));
+
+        Assert.Empty(result.Selected);
+        Assert.Equal(0, generator.Calls);
+    }
+
+    private static RepositoryMemoryRetrievalRequest Query(string text) => new()
+    {
+        RepositoryIdentity = MemoryTestData.Repository,
+        CurrentInstruction = text,
+        Options = new RepositoryMemoryOptions { SemanticMinimum = 0.8 },
+    };
+
+    private static HybridRepositoryMemoryRetriever CreateRetriever(ConversationFixture fixture, ITextEmbeddingGenerator generator) =>
+        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
+
+    private static TestMemoryEmbeddingGenerator CreateGenerator() => new()
+    {
+        Generate = text => new TextEmbeddingResult(
+            text is "paraphrase" or "alpha beta shared" or "alpha beta" ? (float[])[1, 0, 0] : (float[])[0, 1, 0],
+            4,
+            false),
+    };
 }

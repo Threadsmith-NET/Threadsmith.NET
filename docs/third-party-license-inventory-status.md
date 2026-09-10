@@ -2,7 +2,7 @@
 
 ## Status
 
-**Current addition (2026-09-04): TUIKit 0.10.1 is integrated with exact package evidence and supplemental notices.** The historical inventory below predates the implemented ADR-49 release automation; canonical current authority is `eng/release/release-license-evidence.json` plus exact per-RID generated artifact validation. Existing SDK/runtime review scope is unchanged by this addition.
+**Current addition (2026-09-09): local repository-memory embeddings add ONNX Runtime 1.22.1, Microsoft.ML.Tokenizers 2.0.0 and the pinned Apache-2.0 MiniLM model assets.** Exact NuGet package hashes, licenses and supplemental native notices are recorded in eng/release/release-license-evidence.json; the immutable model revision, artifact hashes and six native RID hashes are in src/Threadsmith.Embeddings.Local/minilm-assets.json. Release staging verifies this closed asset set and includes the source model card and full license; generated notices and SPDX identify the model alongside the runtime package closure. The refreshed dotnet-package-graph.json records 48 restored projects. The historical assessment below predates the implemented ADR-49 release automation; canonical current authority is the reviewed evidence and exact per-RID generated artifact validation. Existing SDK/runtime review scope is unchanged.
 
 ### Historical inventory baseline
 
@@ -28,7 +28,7 @@ before the first public binary release.
 | Evidence | What was checked |
 |---|---|
 | `Directory.Packages.props` | Central Package Management and transitive pinning are enabled; declared versions are centrally pinned. |
-| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | Restored dependency graph for the 45-project solution. The machine-readable snapshot is retained beside this report as `dotnet-package-graph.json`. |
+| `dotnet list src/Threadsmith.sln package --include-transitive --format json` | The original assessment covered 45 projects; the refreshed 2026-09-09 machine-readable snapshot now covers 48 restored projects and is retained beside this report as `dotnet-package-graph.json`. |
 | `obj/project.assets.json` and cached `.nuspec` metadata | Resolved package scope and license expressions. |
 | `eng/release/ripgrep-assets.json` and `Stage-Ripgrep.ps1` | Ripgrep source, hash, license selection, and staged legal material. |
 | `.NET runtime` package legal files | `microsoft.netcore.app.runtime.win-x64/10.0.10/LICENSE.TXT` and `THIRD-PARTY-NOTICES.TXT`. |

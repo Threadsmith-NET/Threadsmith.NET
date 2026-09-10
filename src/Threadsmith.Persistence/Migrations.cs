@@ -1,5 +1,6 @@
 namespace Threadsmith.Persistence;
 
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 /// <summary>One ordered, idempotent, transactional schema migration (strategy §19.5).</summary>
@@ -57,6 +58,9 @@ public sealed class MigrationRunner
     /// <summary>Gets the registered migrations in order.</summary>
     public IReadOnlyList<IDatabaseMigration> Migrations => _migrations;
 
+    /// <summary>Verified SQLite-consistent backup created before the managed-memory migration, when file-backed.</summary>
+    public string? LastBackupPath { get; private set; }
+
     /// <summary>Applies every pending migration transactionally and returns the resulting schema version.</summary>
     /// <param name="cancellationToken">A token that cancels the run.</param>
     /// <returns>The final schema version.</returns>
@@ -66,14 +70,29 @@ public sealed class MigrationRunner
         await connection.OpenAsync(cancellationToken);
         await EnsureSchemaVersionTableAsync(connection, cancellationToken);
         var current = await ReadCurrentVersionAsync(connection, cancellationToken);
+        var originalVersion = current;
         foreach (var migration in _migrations.Where(m => m.Version > current))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (migration.Version == 10 && originalVersion > 0)
+            {
+                LastBackupPath = await CreateVerifiedMemoryBackupAsync(connection, cancellationToken);
+            }
+
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
                 cancellationToken);
             try
             {
                 await migration.ApplyAsync(connection, cancellationToken);
+                if (migration.Version == 10 && LastBackupPath is { } backupPath)
+                {
+                    await using var backupRecord = connection.CreateCommand();
+                    backupRecord.Transaction = transaction;
+                    backupRecord.CommandText = "UPDATE managed_memory_migration SET backup_path = $path WHERE version = 10;";
+                    backupRecord.Parameters.AddWithValue("$path", backupPath);
+                    await backupRecord.ExecuteNonQueryAsync(cancellationToken);
+                }
+
                 await WriteVersionAsync(connection, transaction, migration.Version, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 current = migration.Version;
@@ -101,6 +120,36 @@ public sealed class MigrationRunner
         return await ReadCurrentVersionAsync(connection, cancellationToken);
     }
 
+    private static async Task<string?> CreateVerifiedMemoryBackupAsync(
+        SqliteConnection source,
+        CancellationToken cancellationToken)
+    {
+        var sourcePath = source.DataSource;
+        if (string.IsNullOrWhiteSpace(sourcePath) || sourcePath == ":memory:")
+        {
+            return null;
+        }
+
+        // SQLite's backup API includes committed WAL contents and never overwrites the source.
+        // A unique sibling preserves earlier backups when a migration is retried after failure.
+        var backupPath = Path.GetFullPath(sourcePath) + ".pre-managed-memory-v10."
+            + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
+            + "." + Guid.NewGuid().ToString("N") + ".backup";
+        var options = new SqliteConnectionStringBuilder { DataSource = backupPath, Pooling = false };
+        await using var backup = new SqliteConnection(options.ToString());
+        await backup.OpenAsync(cancellationToken);
+        await Task.Run(() => source.BackupDatabase(backup), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await using var verify = backup.CreateCommand();
+        verify.CommandText = "PRAGMA quick_check;";
+        if (!string.Equals(await verify.ExecuteScalarAsync(cancellationToken) as string, "ok", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Managed-memory migration requires a verified SQLite-consistent backup.");
+        }
+
+        return backupPath;
+    }
+
     private static async Task EnsureSchemaVersionTableAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -122,7 +171,7 @@ public sealed class MigrationRunner
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT MAX(version) FROM schema_version;";
         var result = await command.ExecuteScalarAsync(cancellationToken);
-        return result is int version ? version : 0;
+        return result is null or DBNull ? 0 : Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
     private static async Task WriteVersionAsync(

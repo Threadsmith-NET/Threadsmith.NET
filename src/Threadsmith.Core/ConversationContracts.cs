@@ -220,10 +220,10 @@ public sealed record ConversationStateSnapshot
     /// <summary>Ordered archived message metadata and retained bodies.</summary>
     public IReadOnlyList<ConversationMessage> Messages { get; init; } = [];
 
-    /// <summary>All governed memory including stale and superseded items.</summary>
+    /// <summary>Historical automatic memory DTOs; current archive readers return an empty collection.</summary>
     public IReadOnlyList<ConversationMemoryItem> MemoryItems { get; init; } = [];
 
-    /// <summary>Current active summary snapshot.</summary>
+    /// <summary>Historical automatic memory index; current archive readers return null.</summary>
     public ConversationSummarySnapshot? Summary { get; init; }
 
     /// <summary>Bounded restoration warnings.</summary>
@@ -242,18 +242,6 @@ public interface IConversationStore
     Task SetModeAsync(
         SessionId sessionId,
         ConversationContextMode mode,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Writes memory items and replaces the active snapshot atomically.</summary>
-    Task ReplaceSummaryAsync(
-        SessionId sessionId,
-        IReadOnlyList<ConversationMemoryItem> items,
-        ConversationSummarySnapshot snapshot,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Updates an existing memory item's validity while preserving audit history.</summary>
-    Task UpdateMemoryAsync(
-        ConversationMemoryItem item,
         CancellationToken cancellationToken = default);
 
     /// <summary>Gets detached state with tolerant schema handling.</summary>

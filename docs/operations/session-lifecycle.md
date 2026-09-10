@@ -7,7 +7,7 @@ Threadsmith stores repository-bound session metadata in the configured SQLite da
 - `/new` checkpoints the current session and activates an empty independent session. Repository trust, solution, configuration, tools, and mutation policy remain effective.
 - `/resume <session-id>` restores an exact session for the open repository.
 - `/resume` opens a newest-first numbered repository session selector. The current session is marked; selecting it is idempotent.
-- `/clone` checkpoints the current session and atomically copies its sanitized reconstructible conversation and governed memory into a new top-level session. The confirmation prints `/resume <source-session-id>` on a copyable line.
+- `/clone` checkpoints the current session and atomically copies its sanitized reconstructible conversation and governed evidence into a new top-level session. The confirmation prints `/resume <source-session-id>` on a copyable line.
 
 Transitions require a complete safe boundary. Finish or cancel active model, tool, mutation, validation, skill, hook, or delegated work before retrying.
 
@@ -21,7 +21,7 @@ Context inspections and process-local provider continuation/cache handles are in
 
 The selector lists only sessions whose host-derived canonical repository identity matches the currently opened repository. An exact ID from another repository reports the repository display name but never changes working directory, trust, or solution. Picker previews are sanitized and bounded.
 
-A clone receives new message, memory, run, and session identities. It does not duplicate active execution checkpoints, approvals, mutation transactions, worker leases, hook invocations, cancellation sources, or opaque provider continuation handles. Source and clone diverge independently.
+A clone receives new message, run, and session identities. It does not duplicate active execution checkpoints, approvals, mutation transactions, worker leases, hook invocations, cancellation sources, or opaque provider continuation handles. Source and clone diverge independently.
 
 ## Troubleshooting
 
@@ -32,3 +32,5 @@ A clone receives new message, memory, run, and session identities. It does not d
 - **Model unavailable:** use `/models`, then `/reasoning` if needed.
 
 Migration 8 is additive and transactional. A migration failure leaves the prior schema version readable.
+
+Explicit repository memories are shared by sessions in the same canonical repository and survive `/new`, resume, clone, and restart. They do not copy as session-owned facts or cross repository boundaries. Retired automatic memory snapshots never reenter model context through restoration; Stateless still omits all prior memory.

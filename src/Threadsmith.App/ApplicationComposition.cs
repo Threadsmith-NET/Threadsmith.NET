@@ -369,7 +369,6 @@ internal static class ApplicationComposition
             integration.McpManager,
             persistence.RepositoryMemoryStore,
             memoryOptions,
-            memoryService,
             repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)));
         mutationCoordinator = new TransactionalWorkspaceCoordinator(
             host.Events,
@@ -1051,7 +1050,6 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly ToolStateManager _toolState;
     private readonly RepositoryBoundMemoryStore? _memoryStore;
     private readonly RepositoryMemoryConfiguration? _memoryOptions;
-    private readonly IManagedRepositoryMemoryService? _memories;
     private readonly Func<string, IConfigurationRoot>? _memoryConfigurationLoader;
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
@@ -1070,7 +1068,6 @@ internal sealed class RepositoryScopedBindingCoordinator
         IMcpManager mcpManager,
         RepositoryBoundMemoryStore? memoryStore = null,
         RepositoryMemoryConfiguration? memoryOptions = null,
-        IManagedRepositoryMemoryService? memories = null,
         Func<string, IConfigurationRoot>? memoryConfigurationLoader = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
@@ -1088,7 +1085,6 @@ internal sealed class RepositoryScopedBindingCoordinator
         _mcpManager = mcpManager;
         _memoryStore = memoryStore;
         _memoryOptions = memoryOptions;
-        _memories = memories;
         _memoryConfigurationLoader = memoryConfigurationLoader;
     }
 
@@ -1136,7 +1132,6 @@ internal sealed class RepositoryScopedBindingCoordinator
                     await _activeModels.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 }
 
-                await BindMemoryRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _toolState.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _approvalPolicy.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 await _planApprovalPolicy.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
@@ -1159,7 +1154,14 @@ internal sealed class RepositoryScopedBindingCoordinator
 
                 if (_sessionLifecycle is not null)
                 {
-                    await _sessionLifecycle.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
+                    await _sessionLifecycle.BindRepositoryAsync(
+                        nextRepositoryRoot,
+                        token => BindMemoryRepositoryAsync(nextRepositoryRoot, token),
+                        cancellationToken);
+                }
+                else
+                {
+                    await BindMemoryRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 }
 
                 _currentRepositoryRoot = nextRepositoryRoot;
@@ -1186,7 +1188,7 @@ internal sealed class RepositoryScopedBindingCoordinator
 
     private async Task BindMemoryRepositoryAsync(string repositoryRoot, CancellationToken cancellationToken)
     {
-        if (_memoryStore is null || _memoryOptions is null || _memories is null)
+        if (_memoryStore is null || _memoryOptions is null)
         {
             return;
         }
@@ -1194,12 +1196,9 @@ internal sealed class RepositoryScopedBindingCoordinator
         var configuration = (_memoryConfigurationLoader
             ?? throw new InvalidOperationException("Repository memory configuration rebinding was not composed."))(repositoryRoot);
         using var configurationLifetime = configuration as IDisposable;
-        var options = configuration.GetSection(RepositoryMemoryConfiguration.SectionName).Get<RepositoryMemoryOptions>() ?? new RepositoryMemoryOptions();
-        options.Validate();
+        var options = _memoryOptions.ReadRepositoryOptions(configuration);
         await _memoryStore.BindRepositoryAsync(repositoryRoot, options.MaxNumberOfRepoMemories, cancellationToken);
-        _memoryOptions.BindRepository(repositoryRoot, configuration);
-        var identity = RepositoryIdentity.Create(repositoryRoot);
-        await _memories.EnforceCapacityAsync(identity, _memoryOptions.Capture(identity), cancellationToken);
+        _memoryOptions.BindRepository(repositoryRoot, options);
     }
 
     private async Task<Exception?> RollBackAsync(string repositoryRoot)
@@ -1234,7 +1233,6 @@ internal sealed class RepositoryScopedBindingCoordinator
 
         await RestoreAsync(() => _approvalPolicy.BindRepositoryAsync(repositoryRoot));
         await RestoreAsync(() => _planApprovalPolicy.BindRepositoryAsync(repositoryRoot));
-        await RestoreAsync(() => BindMemoryRepositoryAsync(repositoryRoot, CancellationToken.None));
         await RestoreAsync(() => _toolState.BindRepositoryAsync(repositoryRoot));
         _repositorySecretProvider.BindRepository(repositoryRoot);
         await RestoreAsync(() => _mcpManager.RebindRepositoryAsync());

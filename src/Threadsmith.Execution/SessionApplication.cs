@@ -755,6 +755,9 @@ public sealed partial class SessionApplication :
                 cancellationToken);
     }
 
+    /// <summary>Revokes admission for a newly created session whose repository binding failed.</summary>
+    internal void UnregisterPreparedSession(SessionId sessionId) => _sessions.TryRemove(sessionId, out _);
+
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
         return _correctiveMessages;

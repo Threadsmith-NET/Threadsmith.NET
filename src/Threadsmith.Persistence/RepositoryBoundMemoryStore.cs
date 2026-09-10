@@ -66,13 +66,21 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
             var connectionString = new SqliteConnectionStringBuilder { DataSource = path }.ToString();
             await new SqliteEventStore(connectionString).InitializeAsync(cancellationToken);
             var migrations = new MigrationRunner(connectionString, DefaultMigrations.ForRepositoryMemoryCapacity(maximumMemoryCount));
+            var previousVersion = await migrations.ReadCurrentVersionAsync(cancellationToken);
+            var store = new SqliteManagedRepositoryMemoryStore(connectionString, _timeProvider);
             await migrations.RunAsync(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (previousVersion >= 10)
+            {
+                await store.EnforceCapacityAsync(identity, new RepositoryMemoryOptions { MaxNumberOfRepoMemories = maximumMemoryCount }, cancellationToken);
+            }
+
+            // Version 10 applies capacity within its migration transaction. Once either
+            // migration or eviction commits, publish without another cancellable operation.
             Volatile.Write(ref _binding, new Binding(
                 identity,
                 Path.GetFullPath(repositoryRoot),
                 path,
-                new SqliteManagedRepositoryMemoryStore(connectionString, _timeProvider),
+                store,
                 migrations.LastBackupPath));
         }
         finally

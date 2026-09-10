@@ -85,9 +85,16 @@ public sealed class RepositoryMemoryApplication :
                 Options = _options.Capture(repositoryIdentity),
             },
             cancellationToken);
-        if (action == "update" && result.Outcome == "duplicate")
+        if (action == "update")
         {
-            throw new InvalidOperationException($"That text already belongs to memory {result.Id}. The requested memory was not changed.");
+            return result.Outcome switch
+            {
+                "updated" or "unchanged" => result.Entry ?? throw new InvalidOperationException($"Memory operation returned {result.Outcome} without an entry."),
+                "duplicate" => throw new InvalidOperationException($"That text already belongs to memory {result.Id}. The requested memory was not changed."),
+                "notfound" => throw new InvalidOperationException("That memory no longer exists. List repository memories and retry the update."),
+                "conflict" => throw new InvalidOperationException($"Memory {id} changed while this update was being prepared. Inspect it and retry the update."),
+                _ => throw new InvalidOperationException($"Memory operation returned {result.Outcome}."),
+            };
         }
 
         return result.Entry ?? throw new InvalidOperationException($"Memory operation returned {result.Outcome}.");

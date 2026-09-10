@@ -43,6 +43,22 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         Volatile.Write(ref _current, new Snapshot(identity, options));
     }
 
+    /// <summary>Validates effective options without changing the active repository snapshot.</summary>
+    public RepositoryMemoryOptions ReadRepositoryOptions(IConfiguration repositoryConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(repositoryConfiguration);
+        return Read(repositoryConfiguration, _fallback);
+    }
+
+    /// <summary>Publishes a previously prepared immutable snapshot after repository persistence commits.</summary>
+    public void BindRepository(string repositoryPath, RepositoryMemoryOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+        var identity = RepositoryIdentity.Create(repositoryPath);
+        Volatile.Write(ref _current, new Snapshot(identity, options));
+    }
+
     private static RepositoryMemoryOptions Read(IConfiguration configuration, RepositoryMemoryOptions fallback)
     {
         var options = new RepositoryMemoryOptions

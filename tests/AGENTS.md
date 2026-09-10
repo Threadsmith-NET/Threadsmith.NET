@@ -136,3 +136,7 @@ Tests that start `TuiApplication`, including retained command-input and coordina
 ## Local reranker verification
 
 `Threadsmith.Reranking.Local.Tests` owns pair framing/input bounds, missing-asset/disposal behavior, the frozen production raw-logit fixture and its provenance. After `eng/Stage-RerankerAssets.ps1`, set `THREADSMITH_RERANKING_INTEGRATION=1` and run `tests/Threadsmith.Reranking.Local.Tests/bin/Debug/net10.0/Threadsmith.Reranking.Local.Tests.exe` for offline source parity, batch/order, truncation, and cancellation/reuse. Ordinary runs skip native inference and never download assets. `MemoryRerankingTests` in ConversationContext owns candidate qualification, selection/cutoff, config/model cache identity and fallback regressions.
+
+## Repository memory binding verification
+
+`RepositoryMemoryBindingTests` exercises failed repository opens and successful retries against real current and legacy SQLite memory stores. `Plan56SessionLifecycleTests` covers final-commit ordering, failed prepared-session admission, source restoration with or without an active session, and combined commit/cleanup failures. Keep these regressions independent of native inference and preserve target rows and schema on failed opens.

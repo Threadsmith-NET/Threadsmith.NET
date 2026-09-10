@@ -26,7 +26,7 @@ public static class InteractiveCommandCatalog
         new("/clone", "/clone", "Clone governed context into an independent session"),
         new("/code_explore_inspect", "/code_explore_inspect {on|off}", "Show future code_explore outputs in the tool block for this session"),
         new("/code_explore_output", "/code_explore_output {structured|markdown}", "Set code_explore output format for this session"),
-        new("/context", "/context [mode|inspect|compact]", "Inspect or control bounded conversation context"),
+        new("/context", "/context [mode|inspect|compact]", "Inspect context; compact shows retirement guidance"),
         new("/extensions", "/extensions", "Browse, load, and unload extensions (Up/Down, Enter)"),
         new("/fetch-authorize", "/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
         new("/help", "/help", "Show commands"),

@@ -65,6 +65,10 @@ internal enum InteractiveDecisionResult
 /// </summary>
 public sealed class InteractionCoordinator
 {
+    private const string RetiredConversationCompactionGuidance =
+        "Automatic conversation fact promotion has been retired. Model-generated active-turn compaction still runs when needed; "
+        + "use /memory remember <text> for explicit repository recall.\n";
+
     private const string StartupBanner = """
          _____ _                        _               _ _   _
         |_   _| |__  _ __ ___  __ _  __| |___ _ __ ___ (_) |_| |__
@@ -3261,18 +3265,15 @@ public sealed class InteractionCoordinator
 
         if (string.Equals(argument, "compact", StringComparison.OrdinalIgnoreCase))
         {
-            var compacted = await _presenter.CompactConversationAsync(sessionId, cancellationToken);
             await _surface.WriteAsync(
-                compacted
-                    ? "Conversation compaction completed or was already current.\n"
-                    : "Conversation compaction failed; the prior snapshot remains active.\n",
-                compacted ? PresentationTextRole.Status : PresentationTextRole.Warning,
+                RetiredConversationCompactionGuidance,
+                PresentationTextRole.Warning,
                 cancellationToken);
             return;
         }
 
         await _surface.WriteAsync(
-            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|compact]\n",
+            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|compact (retired)]\n",
             PresentationTextRole.Warning,
             cancellationToken);
     }

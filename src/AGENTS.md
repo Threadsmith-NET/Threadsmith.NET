@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Host the 24 Threadsmith.NET product projects implementing a .NET-native coding harness. The solution file is `src/Threadsmith.sln`; all test projects are grouped under its `Tests` solution folder.
+Host the 25 Threadsmith.NET product projects implementing a .NET-native coding harness. The solution file is `src/Threadsmith.sln`; all test projects are grouped under its `Tests` solution folder.
 
 ## Ownership
 

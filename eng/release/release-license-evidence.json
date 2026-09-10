@@ -34,6 +34,18 @@
   },
   "components": [
     {
+      "id": "Anthropic",
+      "version": "12.46.0",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/Anthropic/12.46.0",
+      "packageSha512": "hrkgGKtNgw+p0WUgpOtwd2ayQcOpj/9/W4vnJ6bFvzfj+DHXF47O/i37/59J4DexpUPtJVePZVa5Tzbx1odBvg==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/licenses/Anthropic-12.46.0.txt",
+      "noticeTreatment": "full exact-source MIT license text; NuGet repository revision dc0218f18b084b11975a8b62c748750af6640c7a",
+      "reviewState": "approved",
+      "copyrightText": "Copyright 2023 Anthropic, PBC.; NuGet package copyright 2026 Anthropic"
+    },
+    {
       "id": "Humanizer.Core",
       "version": "2.14.1",
       "scope": "bundled-package",

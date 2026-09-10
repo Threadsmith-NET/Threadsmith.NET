@@ -59,6 +59,21 @@ public sealed record ModelStreamRequest
     [JsonIgnore]
     public Action? SubmissionObserver { get; init; }
 
+    /// <summary>Host preference for displayable reasoning on this request; null retains legacy behavior.</summary>
+    [JsonIgnore]
+    public bool? IncludeReasoningText { get; init; }
+
+    /// <summary>Private active-loop protocol state; never serialized or used as an instruction.</summary>
+    [JsonIgnore]
+    public ModelRequestTransientState? TransientState { get; init; }
+
+    /// <summary>Safe provider projection metadata captured before capacity admission.</summary>
+    [JsonIgnore]
+    public ModelRequestPreparationResult? Preparation { get; init; }
+
+    /// <summary>Explicit final-response schema only for workflows requiring a JSON body.</summary>
+    public ModelResponseFormat? ResponseFormat { get; init; }
+
     /// <summary>Deterministic seed when supported.</summary>
     public int Seed { get; init; }
 
@@ -165,6 +180,14 @@ public sealed record ModelChunk
 
     /// <summary>Reasoning text delta, separate from <see cref="Text"/>.</summary>
     public string? Reasoning { get; init; }
+
+    /// <summary>Private completed-response replay metadata emitted before normalized tool calls.</summary>
+    [JsonIgnore]
+    public ModelResponseReplayEnvelope? ResponseEnvelope { get; init; }
+
+    /// <summary>Excludes transient displayable reasoning from explicit raw exchange diagnostics.</summary>
+    [JsonIgnore]
+    public bool SuppressReasoningDiagnostics { get; init; }
 }
 
 /// <summary>Host-owned model provider facade.</summary>

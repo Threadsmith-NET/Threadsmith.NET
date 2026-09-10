@@ -14,6 +14,9 @@ public sealed record RepositoryMemoryOptions
     /// <summary>Maximum number of relevant entries injected into automatic context.</summary>
     public int MaxRepoMemoriesInContext { get; init; } = 3;
 
+    /// <summary>Committed standing-preference count at which callers may warn about accumulating durable guidance.</summary>
+    public int StandingPreferenceWarningThreshold { get; init; } = 3;
+
     /// <summary>Strict minimum cosine similarity for semantic matches; lexical matches qualify independently.</summary>
     /// <remarks>Must be finite and between -1 and 1 inclusive. A value of 1 excludes the semantic branch.</remarks>
     public double SemanticMinimum { get; init; } = DefaultSemanticMinimum;
@@ -35,6 +38,7 @@ public sealed record RepositoryMemoryOptions
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxNumberOfRepoMemories);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRepoMemoriesInContext);
+        ArgumentOutOfRangeException.ThrowIfNegative(StandingPreferenceWarningThreshold);
         if (!double.IsFinite(SemanticMinimum))
         {
             throw new ArgumentOutOfRangeException(nameof(SemanticMinimum), "The semantic minimum must be a finite cosine similarity between -1 and 1.");
@@ -61,6 +65,16 @@ public enum RepositoryMemoryOrigin
     Manual,
 }
 
+/// <summary>Controls whether a memory is retrieved from the current task or supplied as durable repository guidance.</summary>
+public enum RepositoryMemoryType
+{
+    /// <summary>A task-specific memory eligible for ordinary hybrid retrieval.</summary>
+    Situational = 0,
+
+    /// <summary>A durable preference supplied separately from task-specific retrieval.</summary>
+    StandingPreference = 1,
+}
+
 /// <summary>Detached repository memory content, usage and compatible embedding metadata.</summary>
 public sealed record RepositoryMemoryEntry
 {
@@ -81,6 +95,9 @@ public sealed record RepositoryMemoryEntry
 
     /// <summary>Explicit origin of the most recent meaningful content write.</summary>
     public required RepositoryMemoryOrigin Origin { get; init; }
+
+    /// <summary>Selection behavior for this memory.</summary>
+    public RepositoryMemoryType MemoryType { get; init; } = RepositoryMemoryType.Situational;
 
     /// <summary>Provider-routing sensitivity of the complete text.</summary>
     public ConversationSensitivity Sensitivity { get; init; } = ConversationSensitivity.Sensitive;
@@ -132,6 +149,9 @@ public sealed record RepositoryMemoryWrite
     /// <summary>Host-authorized source of the write.</summary>
     public required RepositoryMemoryOrigin Origin { get; init; }
 
+    /// <summary>Selection behavior for the committed memory.</summary>
+    public RepositoryMemoryType MemoryType { get; init; } = RepositoryMemoryType.Situational;
+
     /// <summary>Sensitivity after sanitization.</summary>
     public ConversationSensitivity Sensitivity { get; init; } = ConversationSensitivity.Sensitive;
 
@@ -171,7 +191,11 @@ public enum RepositoryMemoryWriteStatus
 public sealed record RepositoryMemoryWriteResult(
     RepositoryMemoryWriteStatus Status,
     RepositoryMemoryEntry? Entry,
-    IReadOnlyList<RepositoryMemoryId> EvictedIds);
+    IReadOnlyList<RepositoryMemoryId> EvictedIds)
+{
+    /// <summary>Standing-preference count in the same committed write transaction, when a mutation was committed.</summary>
+    public int? StandingPreferenceCount { get; init; }
+}
 
 /// <summary>Qualified SQLite lexical candidate; lower BM25 values rank ahead of higher ones.</summary>
 public sealed record RepositoryMemoryLexicalMatch(RepositoryMemoryId Id, double Bm25);
@@ -211,8 +235,8 @@ public interface IManagedRepositoryMemoryStore
         RepositoryMemoryId id,
         long expectedRevision,
         RepositoryMemoryWrite write,
-        TextEmbeddingModelDescriptor model,
-        TextEmbeddingResult embedding,
+        TextEmbeddingModelDescriptor? model,
+        TextEmbeddingResult? embedding,
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default);
 

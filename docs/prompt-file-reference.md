@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 25 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 16 | Active-turn, summary, steering, and delegated-child context framing. |
+| System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **302** | Complete deployed catalog. |
+| **Total** | **304** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -86,7 +86,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
 | `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
 | `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | System guidance for the `MutationProposal` phase. | `None` |
+| `System-Phase-MutationProposal.md` | System guidance for mutation proposals through an offered tool or final JSON schema. | `None` |
 | `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
 
 #### `RepositoryInstructions` family
@@ -95,13 +95,14 @@ System policy, governed phase instructions, request envelopes, and required-outp
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
+| `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
-| `System-RequiredOutput-MutationProposal.md` | Required-output guidance for `MutationProposal`. | `None` |
+| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | `None` |
 | `System-RequiredOutput-Plan.md` | Required-output guidance for `Plan`. | `None` |
 
 #### `SystemPrompt` family
@@ -126,6 +127,7 @@ Active-turn, summary, steering, and delegated-child context framing.
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
+| `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
 
@@ -703,7 +705,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Procedure-Continuation.md` | Skill procedure guidance for `Procedure-Continuation`. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
+| `Skill-Procedure-Continuation.md` | Skill continuation guidance, appended as a user message after each native tool result and retained in the legacy input projection. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
 | `Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 
@@ -834,6 +836,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-nodeplural"></a>`NodePlural` | Grammar word or suffix selected from the node count. |
 | <a id="placeholder-normalizedpath"></a>`NormalizedPath` | Repository-relative path after host normalization. |
 | <a id="placeholder-objective"></a>`Objective` | Host-approved delegated-child objective. |
+| <a id="placeholder-outcomejson"></a>`OutcomeJson` | Compact, host-serialized sanitized JSON receipt for a terminal execution outcome. Text fields are historical data rather than instructions; reported status remains authoritative when a failed execution lists changed files. |
 | <a id="placeholder-omission"></a>`Omission` | One bounded explanation of evidence or detail not returned. |
 | <a id="placeholder-omissionitems"></a>`OmissionItems` | Fully rendered collection of bounded omission rows. |
 | <a id="placeholder-omittedblockcount"></a>`OmittedBlockCount` | Number of complete result blocks omitted to stay within the projection bound. |

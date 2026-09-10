@@ -48,15 +48,31 @@ public sealed record ModelCapabilitySet
 /// <summary>Per-million-token prices used for conservative cost accounting.</summary>
 public sealed record ModelCostMetadata
 {
+    /// <summary>Whether reviewed ordinary token rates are available; legacy profiles default to available.</summary>
+    public bool PricesAvailable { get; init; } = true;
+
+    /// <summary>Optional reviewed cache-category rates.</summary>
+    public ModelCachePricing? CachePricing { get; init; }
+
     /// <summary>Cost per million input tokens.</summary>
     public decimal InputPerMillionTokens { get; init; }
 
     /// <summary>Cost per million output tokens.</summary>
     public decimal OutputPerMillionTokens { get; init; }
 
+    /// <summary>Combined selection rate including a cold cache write; unavailable rates remain unknown.</summary>
+    public decimal? AdmissionCombinedPerMillionTokens => PricesAvailable && CachePricing is not { PricesAvailable: false }
+        ? Math.Max(InputPerMillionTokens, CachePricing?.WritePerMillionTokens ?? InputPerMillionTokens) + OutputPerMillionTokens
+        : null;
+
     /// <summary>Calculates cost for the supplied usage.</summary>
     public decimal Calculate(long inputTokens, long outputTokens)
     {
+        if (!PricesAvailable)
+        {
+            throw new ModelProviderException("Reviewed model pricing is unavailable for usage accounting.");
+        }
+
         if (inputTokens < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(inputTokens));
@@ -70,6 +86,66 @@ public sealed record ModelCostMetadata
         return ((inputTokens * InputPerMillionTokens)
             + (outputTokens * OutputPerMillionTokens)) / 1_000_000m;
     }
+
+    /// <summary>Conservatively reserves a cold cache write and the complete admitted output ceiling.</summary>
+    public decimal CalculateAdmission(long inputTokens, long outputTokens, bool cachingEnabled = true)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(inputTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(outputTokens);
+        if (!PricesAvailable || (cachingEnabled && CachePricing is { PricesAvailable: false }))
+        {
+            throw new ModelProviderException("Reviewed model pricing is unavailable for cost admission.");
+        }
+
+        var inputRate = cachingEnabled && CachePricing is { } cache
+            ? Math.Max(InputPerMillionTokens, cache.WritePerMillionTokens)
+            : InputPerMillionTokens;
+        return ((inputTokens * inputRate) + (outputTokens * OutputPerMillionTokens)) / 1_000_000m;
+    }
+
+    /// <summary>Prices normalized total input once, retaining conservative accounting for absent cache counters.</summary>
+    public decimal CalculateUsage(ModelUsage usage)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        ArgumentOutOfRangeException.ThrowIfNegative(usage.InputTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(usage.OutputTokens);
+        if (CachePricing is not { } prices)
+        {
+            return Calculate(usage.InputTokens, usage.OutputTokens);
+        }
+
+        if (!PricesAvailable || !prices.PricesAvailable
+            || usage.Cache is not { CacheReadTokens: { } reads, CacheWriteTokens: { } writes,
+                ReadInputSemantics: CacheReadInputSemantics.IncludedInInput })
+        {
+            return CalculateAdmission(usage.InputTokens, usage.OutputTokens);
+        }
+
+        if (reads < 0 || writes < 0 || reads > usage.InputTokens || writes > usage.InputTokens - reads)
+        {
+            throw new ModelProviderException("Provider cache counters exceed normalized input usage.");
+        }
+
+        var uncached = usage.InputTokens - reads - writes;
+        return ((uncached * InputPerMillionTokens) + (writes * prices.WritePerMillionTokens)
+            + (reads * prices.ReadPerMillionTokens) + (usage.OutputTokens * OutputPerMillionTokens)) / 1_000_000m;
+    }
+}
+
+/// <summary>Reviewed per-million-token prices for explicit cache categories.</summary>
+public sealed record ModelCachePricing
+{
+    /// <summary>Whether reviewed rates are available.</summary>
+    public bool PricesAvailable { get; init; } = true;
+
+    /// <summary>Cost per million cache-write tokens.</summary>
+    public decimal WritePerMillionTokens { get; init; }
+
+    /// <summary>Cost per million cache-read tokens.</summary>
+    public decimal ReadPerMillionTokens { get; init; }
+
+    /// <summary>Date of the authoritative price review.</summary>
+    public required string SourceDate { get; init; }
 }
 
 /// <summary>Bounded retry settings for a model endpoint.</summary>
@@ -141,7 +217,7 @@ public sealed record ModelProfile
 
     /// <summary>
     /// Reasoning levels this profile supports; defaults to only <see cref="ReasoningLevel.None"/>.
-    /// Always includes <see cref="ReasoningLevel.None"/>.
+    /// Includes <see cref="ReasoningLevel.None"/> unless reasoning-off support is explicitly disabled.
     /// </summary>
     public IReadOnlyList<ReasoningLevel> SupportedReasoningLevels { get; init; } = [ReasoningLevel.None];
 
@@ -151,7 +227,8 @@ public sealed record ModelProfile
     /// <summary>Returns <see langword="true"/> when the profile supports the given reasoning level.</summary>
     public bool SupportsReasoningLevel(ReasoningLevel level)
     {
-        return SupportedReasoningLevels.Contains(level);
+        return (level != ReasoningLevel.None || ReasoningCapability.SupportsReasoningOff != false)
+            && SupportedReasoningLevels.Contains(level);
     }
 
     /// <summary>Optional sampling temperature.</summary>
@@ -290,7 +367,14 @@ public sealed class ConfiguredModelCatalog
                 || profile.SupportedReasoningLevels.Count == 0
                 || profile.SupportedReasoningLevels.Distinct().Count()
                     != profile.SupportedReasoningLevels.Count
-                || !profile.SupportedReasoningLevels.Contains(ReasoningLevel.None)
+                || (profile.ReasoningCapability.SupportsReasoningOff != false
+                    && !profile.SupportedReasoningLevels.Contains(ReasoningLevel.None))
+                || (profile.ReasoningCapability.SupportsReasoningOff == false
+                    && (profile.SupportedReasoningLevels.Contains(ReasoningLevel.None)
+                        || profile.ReasoningCapability.Controllability == ReasoningControllability.Unsupported))
+                || (profile.Cost.CachePricing is { } cachePricing
+                    && (cachePricing.WritePerMillionTokens < 0 || cachePricing.ReadPerMillionTokens < 0
+                        || string.IsNullOrWhiteSpace(cachePricing.SourceDate)))
                 || !profile.SupportedReasoningLevels.Contains(profile.DefaultReasoningLevel))
             {
                 throw new ArgumentException(
@@ -345,7 +429,7 @@ public sealed class ConfiguredModelCatalog
 }
 
 /// <summary>Selects and creates a configured provider for each model request.</summary>
-public sealed class ConfiguredModelProvider : IModelProvider
+public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPreparationResolver
 {
     private readonly ConfiguredModelCatalog _catalog;
     private readonly EffectiveModelProviderCatalog _effectiveCatalog;
@@ -419,6 +503,13 @@ public sealed class ConfiguredModelProvider : IModelProvider
         }
 
         var profile = _catalog.Get(selection.ProfileId);
+        var admittedPreparation = request.Preparation;
+        request = _effectiveCatalog.Prepare(request with { ResolvedProfileId = selection.ProfileId });
+        if (admittedPreparation is not null && request.Preparation?.WireDigest != admittedPreparation.WireDigest)
+        {
+            throw new ModelProviderException("The prepared model request changed after admission; reassemble it before dispatch.");
+        }
+
         if (request.WireEstimate is { } wireEstimate
             && wireEstimate.TotalCapacityTokens > profile.ContextWindow)
         {
@@ -451,6 +542,13 @@ public sealed class ConfiguredModelProvider : IModelProvider
         {
             yield return chunk;
         }
+    }
+
+    /// <inheritdoc />
+    public ModelStreamRequest Prepare(ModelStreamRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return request.ResolvedProfileId is null ? request : _effectiveCatalog.Prepare(request);
     }
 }
 
@@ -648,12 +746,13 @@ public static class ModelCapabilityNegotiator
                 + request.Constraints.MinimumContextWindow);
         }
 
-        var combinedCost = profile.Cost.InputPerMillionTokens
-            + profile.Cost.OutputPerMillionTokens;
+        var combinedCost = profile.Cost.AdmissionCombinedPerMillionTokens;
         if (request.Constraints.MaximumCombinedCostPerMillionTokens is { } costCeiling
-            && combinedCost > costCeiling)
+            && (combinedCost is null || combinedCost > costCeiling))
         {
-            reasons.Add($"combined token cost {combinedCost} exceeds ceiling {costCeiling}");
+            reasons.Add(combinedCost is null
+                ? "reviewed pricing is unavailable for the request cost ceiling"
+                : $"combined token cost {combinedCost} exceeds ceiling {costCeiling}");
         }
 
         if (request.Constraints.ContainsSensitiveData
@@ -738,8 +837,7 @@ public sealed class DefaultModelSelectionPolicy : IModelSelectionPolicy
         }
 
         selected ??= compatible
-            .OrderBy(profile => profile.Cost.InputPerMillionTokens
-                + profile.Cost.OutputPerMillionTokens)
+            .OrderBy(profile => profile.Cost.AdmissionCombinedPerMillionTokens ?? decimal.MaxValue)
             .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .First();
         if (!rationale.Any(item => item.StartsWith("Selected", StringComparison.Ordinal)

@@ -74,8 +74,8 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
                 await store.EnforceCapacityAsync(identity, new RepositoryMemoryOptions { MaxNumberOfRepoMemories = maximumMemoryCount }, cancellationToken);
             }
 
-            // Version 10 applies capacity within its migration transaction. Once either
-            // migration or eviction commits, publish without another cancellable operation.
+            // Version 10 and every pending successor commit as one migration transaction; a
+            // later capacity reduction is separately transactional before publication.
             Volatile.Write(ref _binding, new Binding(
                 identity,
                 Path.GetFullPath(repositoryRoot),
@@ -109,8 +109,8 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         RepositoryMemoryId id,
         long expectedRevision,
         RepositoryMemoryWrite write,
-        TextEmbeddingModelDescriptor model,
-        TextEmbeddingResult embedding,
+        TextEmbeddingModelDescriptor? model,
+        TextEmbeddingResult? embedding,
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default)
         => GetStore(repositoryIdentity).UpdateAsync(repositoryIdentity, id, expectedRevision, write, model, embedding, options, cancellationToken);

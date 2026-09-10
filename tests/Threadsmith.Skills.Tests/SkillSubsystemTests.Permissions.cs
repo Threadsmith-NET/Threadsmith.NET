@@ -11,6 +11,22 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>The host rejects a multiple-call response before executing any skill tool.</summary>
+    [Fact]
+    public async Task SkillProcedure_MultipleCalls_RejectsEntireResponseBeforeEffects()
+    {
+        var context = PermissionContext();
+        var tool = new PermissionProbeTool();
+        var model = new PermissionModelProvider { DuplicateToolCall = true };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(() => context, tool, model, events);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}"));
+
+        Assert.Equal(0, tool.Executions);
+        Assert.Single(model.Requests);
+    }
+
     /// <summary>Verifies declared tools cannot replace host allow, deny, or deny-all policy.</summary>
     [Theory]
     [InlineData(null, false, false, true)]
@@ -175,7 +191,11 @@ public sealed partial class SkillSubsystemTests
     }
 
     private static ModelSkillProcedureRunner CreatePermissionRunner(
-        Func<ToolInvocationContext> context, PermissionProbeTool tool, PermissionModelProvider model, IDomainEventStream events)
+        Func<ToolInvocationContext> context,
+        PermissionProbeTool tool,
+        PermissionModelProvider model,
+        IDomainEventStream events,
+        ConfiguredModelCatalog? catalog = null)
     {
         var registry = new ToolRegistry([tool]);
         var sanitizer = new SecretOutputSanitizer();
@@ -196,7 +216,8 @@ public sealed partial class SkillSubsystemTests
                 cancellationToken.ThrowIfCancellationRequested();
                 return Task.FromResult(context());
             },
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            catalog);
     }
 
     private static ToolInvocationContext PermissionContext()
@@ -246,6 +267,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class PermissionModelProvider : IModelProvider
     {
+        public bool DuplicateToolCall { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public Action? BeforeToolRequest { get; init; }
@@ -261,6 +284,10 @@ public sealed partial class SkillSubsystemTests
             {
                 BeforeToolRequest?.Invoke();
                 yield return new ModelChunk { Output = new ToolRequestModelOutput("permission_probe", "{}") };
+                if (DuplicateToolCall)
+                {
+                    yield return new ModelChunk { Output = new ToolRequestModelOutput("permission_probe", "{}") };
+                }
             }
             else
             {

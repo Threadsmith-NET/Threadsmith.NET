@@ -6,16 +6,8 @@
 
 ## Authoring C# in this repo
 
-- Follow `docs/guardrails/portable-csharp-guardrails.md` (G-1 … G-29) — it is authoritative.
-- Nullable enabled solution-wide. No `!` null-suppression (G-2); prefer an explicit upstream null check.
-- Argument validation via `ArgumentNullException.ThrowIfNull(...)` / `ArgumentException.ThrowIfNullOrWhiteSpace(...)` (G-1).
-- `record` for data / DTOs / value objects; `class` for services and behaviour (G-4).
-- Async methods end in `Async`; `CancellationToken` is the last parameter (default `default`); no `async void` (G-13).
-- XML doc comments (`/// <summary>`) on all public members (G-18).
-- Throw at the boundary; log at the catch site. Never swallow exceptions silently (G-20).
-- Constructor injection only — no property injection (G-21).
-- Inject multi-registration collections as `IEnumerable<T>`, not `List<T>`/`T[]` (G-22).
-- No single-use abstractions (G-10). Existing patterns take precedence (G-12).
+- Follow `docs/guardrails/portable-csharp-guardrails.md`, the authoritative C# rules, including null safety, async streams, documentation exceptions, error handling, dependency injection, and test conventions.
+- Follow `Directory.Build.props` and `.editorconfig` for shared compiler settings, analyzer enforcement, and documented exceptions.
 
 ## Dependency direction (§8.1)
 

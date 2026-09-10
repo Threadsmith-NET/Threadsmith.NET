@@ -10,7 +10,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 {
     /// <summary>Reads detached rows in the caller transaction for CRUD, migration and retrieval.</summary>
     internal static async Task<List<RepositoryMemoryEntry>> ReadEntriesAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, bool includesMemoryType = true, CancellationToken cancellationToken = default)
     {
         await using var command = connection.CreateCommand();
         if (transaction is not null)
@@ -19,13 +19,21 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         }
 
         command.Parameters.AddWithValue("$repo", repositoryIdentity);
-        command.CommandText = """
-            SELECT memory_id, text, content_hash, content_revision, origin, sensitivity,
-                created_at, updated_at, inclusion_count, last_included_at,
-                source_session_id, source_run_id, source_invocation_id,
-                embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision
-            FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
-            """;
+        command.CommandText = includesMemoryType
+            ? """
+                SELECT memory_id, text, content_hash, content_revision, origin, memory_type, sensitivity,
+                    created_at, updated_at, inclusion_count, last_included_at,
+                    source_session_id, source_run_id, source_invocation_id,
+                    embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision
+                FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
+                """
+            : """
+                SELECT memory_id, text, content_hash, content_revision, origin, sensitivity,
+                    created_at, updated_at, inclusion_count, last_included_at,
+                    source_session_id, source_run_id, source_invocation_id,
+                    embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision
+                FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
+                """;
         var entries = new List<RepositoryMemoryEntry>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -39,11 +47,12 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 continue;
             }
 
-            var dimensions = await reader.IsDBNullAsync(15, cancellationToken) ? 0 : reader.GetInt32(15);
-            var vectorHash = NullableString(reader, 16);
-            var vectorRevision = await reader.IsDBNullAsync(17, cancellationToken) ? (long?)null : reader.GetInt64(17);
-            var space = NullableString(reader, 14);
-            var vector = await reader.IsDBNullAsync(13, cancellationToken) ? [] : DecodeVector((byte[])reader[13], dimensions);
+            var typeOffset = includesMemoryType ? 1 : 0;
+            var dimensions = await reader.IsDBNullAsync(15 + typeOffset, cancellationToken) ? 0 : reader.GetInt32(15 + typeOffset);
+            var vectorHash = NullableString(reader, 16 + typeOffset);
+            var vectorRevision = await reader.IsDBNullAsync(17 + typeOffset, cancellationToken) ? (long?)null : reader.GetInt64(17 + typeOffset);
+            var space = NullableString(reader, 14 + typeOffset);
+            var vector = await reader.IsDBNullAsync(13 + typeOffset, cancellationToken) ? [] : DecodeVector((byte[])reader[13 + typeOffset], dimensions);
             if (string.IsNullOrWhiteSpace(space) || vectorHash != hash || vectorRevision != revision
                 || !IsValidVector(vector, dimensions))
             {
@@ -63,7 +72,8 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 AddWarning(warnings, $"Imported memory {idText} exceeds current write bounds; inspect and correct it manually.");
             }
 
-            var sensitivity = (ConversationSensitivity)reader.GetInt32(5);
+            var memoryType = includesMemoryType ? (RepositoryMemoryType)reader.GetInt32(5) : RepositoryMemoryType.Situational;
+            var sensitivity = (ConversationSensitivity)reader.GetInt32(5 + typeOffset);
             entries.Add(new RepositoryMemoryEntry
             {
                 Id = new RepositoryMemoryId(id),
@@ -72,14 +82,15 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 ContentHash = hash,
                 Revision = revision,
                 Origin = reader.GetString(4) == "manual" ? RepositoryMemoryOrigin.Manual : RepositoryMemoryOrigin.Model,
+                MemoryType = Enum.IsDefined(memoryType) ? memoryType : RepositoryMemoryType.Situational,
                 Sensitivity = Enum.IsDefined(sensitivity) ? sensitivity : ConversationSensitivity.Sensitive,
-                CreatedAt = ParseTimestamp(reader.GetString(6)),
-                UpdatedAt = ParseTimestamp(reader.GetString(7)),
-                InclusionCount = Math.Max(0, reader.GetInt64(8)),
-                LastIncludedAt = await reader.IsDBNullAsync(9, cancellationToken) ? null : ParseTimestamp(reader.GetString(9)),
-                SourceSessionId = NullableString(reader, 10),
-                SourceRunId = NullableString(reader, 11),
-                SourceInvocationId = NullableString(reader, 12),
+                CreatedAt = ParseTimestamp(reader.GetString(6 + typeOffset)),
+                UpdatedAt = ParseTimestamp(reader.GetString(7 + typeOffset)),
+                InclusionCount = Math.Max(0, reader.GetInt64(8 + typeOffset)),
+                LastIncludedAt = await reader.IsDBNullAsync(9 + typeOffset, cancellationToken) ? null : ParseTimestamp(reader.GetString(9 + typeOffset)),
+                SourceSessionId = NullableString(reader, 10 + typeOffset),
+                SourceRunId = NullableString(reader, 11 + typeOffset),
+                SourceInvocationId = NullableString(reader, 12 + typeOffset),
                 Embedding = vector,
                 EmbeddingSpaceId = space,
                 EmbeddingDimensions = dimensions,
@@ -114,7 +125,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 
     /// <summary>Inserts content and its complete vector within a caller-owned transaction.</summary>
     internal static async Task InsertEntryAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, RepositoryMemoryEntry entry, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction? transaction, RepositoryMemoryEntry entry, bool includesMemoryType = true, CancellationToken cancellationToken = default)
     {
         await using var command = connection.CreateCommand();
         if (transaction is not null)
@@ -123,14 +134,23 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         }
 
         command.Parameters.AddWithValue("$repo", entry.RepositoryIdentity);
-        command.CommandText = """
-            INSERT INTO managed_memories(memory_id, repository_identity, text, content_hash, content_revision,
-                origin, sensitivity, created_at, updated_at, source_session_id, source_run_id, source_invocation_id,
-                inclusion_count, last_included_at, embedding, embedding_space_id, embedding_dimensions,
-                embedding_content_hash, embedding_revision)
-            VALUES($id, $repo, $text, $hash, $revision, $origin, $sensitivity, $created, $updated,
-                $session, $run, $invocation, 0, NULL, $embedding, $space, $dimensions, $vectorHash, $vectorRevision);
-            """;
+        command.CommandText = includesMemoryType
+            ? """
+                INSERT INTO managed_memories(memory_id, repository_identity, text, content_hash, content_revision,
+                    origin, memory_type, sensitivity, created_at, updated_at, source_session_id, source_run_id, source_invocation_id,
+                    inclusion_count, last_included_at, embedding, embedding_space_id, embedding_dimensions,
+                    embedding_content_hash, embedding_revision)
+                VALUES($id, $repo, $text, $hash, $revision, $origin, $memoryType, $sensitivity, $created, $updated,
+                    $session, $run, $invocation, 0, NULL, $embedding, $space, $dimensions, $vectorHash, $vectorRevision);
+                """
+            : """
+                INSERT INTO managed_memories(memory_id, repository_identity, text, content_hash, content_revision,
+                    origin, sensitivity, created_at, updated_at, source_session_id, source_run_id, source_invocation_id,
+                    inclusion_count, last_included_at, embedding, embedding_space_id, embedding_dimensions,
+                    embedding_content_hash, embedding_revision)
+                VALUES($id, $repo, $text, $hash, $revision, $origin, $sensitivity, $created, $updated,
+                    $session, $run, $invocation, 0, NULL, $embedding, $space, $dimensions, $vectorHash, $vectorRevision);
+                """;
         AddEntryParameters(command, entry);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -187,9 +207,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             termCommand.CommandText = """
                 SELECT m.memory_id FROM managed_memories_fts
                 JOIN managed_memories m ON m.rowid = managed_memories_fts.rowid
-                WHERE managed_memories_fts MATCH $query AND m.repository_identity = $repo;
+                WHERE managed_memories_fts MATCH $query AND m.repository_identity = $repo AND m.memory_type = $situational;
                 """;
             termCommand.Parameters.AddWithValue("$query", QuoteTerm(term));
+            termCommand.Parameters.AddWithValue("$situational", (int)RepositoryMemoryType.Situational);
             await using var reader = await termCommand.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -210,10 +231,11 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         command.CommandText = """
             SELECT m.memory_id, bm25(managed_memories_fts) FROM managed_memories_fts
             JOIN managed_memories m ON m.rowid = managed_memories_fts.rowid
-            WHERE managed_memories_fts MATCH $query AND m.repository_identity = $repo
+            WHERE managed_memories_fts MATCH $query AND m.repository_identity = $repo AND m.memory_type = $situational
             ORDER BY bm25(managed_memories_fts), m.memory_id;
             """;
         command.Parameters.AddWithValue("$query", string.Join(" OR ", terms.Select(QuoteTerm)));
+        command.Parameters.AddWithValue("$situational", (int)RepositoryMemoryType.Situational);
         var matches = new List<RepositoryMemoryLexicalMatch>();
         await using var result = await command.ExecuteReaderAsync(cancellationToken);
         while (await result.ReadAsync(cancellationToken))
@@ -235,6 +257,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         command.Parameters.AddWithValue("$hash", entry.ContentHash);
         command.Parameters.AddWithValue("$revision", entry.Revision);
         command.Parameters.AddWithValue("$origin", entry.Origin == RepositoryMemoryOrigin.Manual ? "manual" : "model");
+        command.Parameters.AddWithValue("$memoryType", (int)entry.MemoryType);
         command.Parameters.AddWithValue("$sensitivity", (int)entry.Sensitivity);
         command.Parameters.AddWithValue("$created", entry.CreatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$updated", entry.UpdatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));

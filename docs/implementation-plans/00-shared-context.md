@@ -154,7 +154,7 @@ Historical implementation documents are records and need no metadata backfill.
 
 **Binding implementing-agent instructions:**
 
-- Read `planning-governance.md` and the applicable DOX chain.
+- Read `planning-governance.md` and the root `AGENTS.md`.
 - Inspect existing code before proposing new abstractions.
 - Preserve dependency direction and host-owned authority.
 - Avoid adding a framework when a small host-owned abstraction suffices.
@@ -164,7 +164,7 @@ Historical implementation documents are records and need no metadata backfill.
 - Add meaningful tests before declaring behavior complete.
 - Update acceptance scenarios only when observable behavior or durable acceptance invariants change.
 - Update the manual test plan only when an executable user/operator verification procedure changes.
-- Update user, operator, architecture, or DOX documents only when their durable owned contracts change.
+- Update user, operator, or architecture documents only when their durable owned contracts change.
 - Record completion in the active implementation document; do not synchronize completion prose into README, scenarios, manual procedures, milestone details, dependency views, or AGENTS files.
 - Route later behavior-preserving remediation through the Maintenance track instead of reopening completed milestone details.
 - **Do not stage, commit, push, or perform destructive Git operations unless explicitly requested.**

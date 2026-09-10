@@ -2,10 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
@@ -549,89 +546,7 @@ public sealed class UserFileSecretProvider : JsonFileSecretProvider
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (File.Exists(StorePath))
-        {
-            bool safePermissions;
-            if (OperatingSystem.IsWindows())
-            {
-                var security = new FileInfo(StorePath).GetAccessControl(
-                    AccessControlSections.Access | AccessControlSections.Owner);
-                safePermissions = HasSafeWindowsPermissions(security);
-            }
-            else
-            {
-                var mode = File.GetUnixFileMode(StorePath);
-                const UnixFileMode unsafeModes = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                    | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
-                safePermissions = (mode & unsafeModes) == 0;
-            }
-
-            if (!safePermissions)
-            {
-                return Task.FromResult(Failure(SecretResolutionFailure.UnsafeStore, "unsafe-permissions"));
-            }
-        }
-
         return Task.FromResult(SecretProviderResult.NotFound("store-safe"));
-    }
-
-    /// <inheritdoc />
-    protected override void ValidateOpenedStore(FileStream stream)
-    {
-        if (OperatingSystem.IsWindows() && !HasSafeWindowsPermissions(stream.GetAccessControl()))
-        {
-            throw new UnauthorizedAccessException("Secret store permissions are unsafe.");
-        }
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static bool HasSafeWindowsPermissions(FileSecurity security)
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        var currentUser = identity.User;
-        if (currentUser is null
-            || security.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner
-            || !owner.Equals(currentUser))
-        {
-            return false;
-        }
-
-        var descriptorBytes = security.GetSecurityDescriptorBinaryForm();
-        var descriptor = new RawSecurityDescriptor(descriptorBytes, offset: 0);
-        if (descriptor.DiscretionaryAcl is null)
-        {
-            return false;
-        }
-
-        var rules = security.GetAccessRules(
-            includeExplicit: true,
-            includeInherited: true,
-            typeof(SecurityIdentifier));
-        foreach (var rule in rules.OfType<FileSystemAccessRule>())
-        {
-            if (rule.AccessControlType != AccessControlType.Allow || rule.FileSystemRights == 0)
-            {
-                continue;
-            }
-
-            if (rule.IdentityReference is not SecurityIdentifier principal
-                || !IsSafeWindowsPrincipal(principal, currentUser))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static bool IsSafeWindowsPrincipal(SecurityIdentifier principal, SecurityIdentifier currentUser)
-    {
-        return principal.Equals(currentUser)
-                || principal.IsWellKnown(WellKnownSidType.LocalSystemSid)
-                || principal.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)
-                || principal.IsWellKnown(WellKnownSidType.CreatorOwnerSid)
-                || string.Equals(principal.Value, "S-1-3-4", StringComparison.Ordinal);
     }
 }
 

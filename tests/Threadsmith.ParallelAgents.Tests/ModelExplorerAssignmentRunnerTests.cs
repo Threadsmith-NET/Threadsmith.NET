@@ -123,6 +123,48 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Null(tool.LastInvocationContext.VisibleSourceFrontier);
     }
 
+    /// <summary>Private replay envelopes bind an otherwise identical child tool request by ordinal and retain its error metadata boundary.</summary>
+    [Fact]
+    public async Task RunAsync_ReplayEnvelope_UsesOrdinalBoundTaggedToolHistory()
+    {
+        // Arrange
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var tool = new InspectMetadataTool();
+        var registry = new ToolRegistry([tool]);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var provider = new ToolThenFindingProvider(tool.Definition.Id, emitReplayEnvelope: true);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        // Act
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        // Assert
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(2, provider.Requests.Count);
+        var continuation = provider.Requests[1];
+        var call = Assert.Single(continuation.Messages, message => message.SectionId == "child-tool-call");
+        var result = Assert.Single(continuation.Messages, message => message.SectionId == "child-tool-result");
+        Assert.Equal(0, call.ModelRound);
+        Assert.Equal(call.ModelRound, result.ModelRound);
+        Assert.False(result.IsError);
+        Assert.Equal(call.ToolCallId, result.ToolCallId);
+        Assert.False(continuation.IncludeReasoningText);
+        Assert.DoesNotContain(
+            continuation.Messages.SkipWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer),
+            message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer);
+    }
+
     /// <summary>Structured child tool output is embedded as JSON instead of an escaped JSON string.</summary>
     [Fact]
     public async Task RunAsync_JsonToolResult_EmbedsStructuredContentWithoutNestedSerialization()
@@ -1469,7 +1511,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
     }
 
-    private sealed class ToolThenFindingProvider(string toolId, bool retrieveEvidence = false) : IModelProvider
+    private sealed class ToolThenFindingProvider(
+        string toolId,
+        bool retrieveEvidence = false,
+        bool emitReplayEnvelope = false) : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1482,6 +1527,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             await Task.Yield();
             if (Requests.Count == 1)
             {
+                if (emitReplayEnvelope)
+                {
+                    yield return new ModelChunk
+                    {
+                        ResponseEnvelope = CreateEnvelope(request),
+                    };
+                }
+
                 yield return new ModelChunk
                 {
                     Output = new ToolRequestModelOutput(toolId, "{}"),
@@ -1509,6 +1562,26 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 Output = new TextModelOutput(CreateFindingJson(evidenceId, "Tool-backed finding.")),
                 Usage = new ModelUsage(30, 15),
             };
+        }
+
+        private static ModelResponseReplayEnvelope CreateEnvelope(ModelStreamRequest request)
+        {
+            return new ModelResponseReplayEnvelope(
+                new ModelReplayBinding
+                {
+                    ProviderId = "test",
+                    ModelId = "test",
+                    ProfileId = request.ResolvedProfileId ?? throw new InvalidOperationException("Profile is required."),
+                    RunId = request.RunId,
+                    ModelRound = request.ToolContinuationRound,
+                    CredentialGeneration = "test",
+                    ToolInventoryDigest = "test-tools",
+                    InstructionDigest = "test-instructions",
+                    NormalizedRoundDigest = "test-round",
+                },
+                [1],
+                ["wire-0"],
+                retainedOutputTokens: 1);
         }
     }
 

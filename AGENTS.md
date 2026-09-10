@@ -1,6 +1,6 @@
 # AGENTS.md — Threadsmith.NET
 
-> **DOX root rail.** This is the behavioral contract for AI coding agents working in this repo. Child `AGENTS.md` files own domain subtrees. A closer doc controls local details, but **no child weakens a parent**. After any meaningful change, perform a DOX pass: review the applicable contracts and update them only when durable implementation details, guidance, ownership, or child indexes changed.
+This file defines repository-wide rules for AI coding agents.
 
 ## Product
 
@@ -12,10 +12,10 @@ The host owns control flow; the model is a pluggable reasoning engine, not an au
 ## Baseline
 
 - **Runtime:** .NET 10 LTS, C# (`<LangVersion>latest</LangVersion>`). ADR-1.
-- **Nullable** is enabled solution-wide (`<Nullable>enable</Nullable>`). No `!` suppression (guardrail G-2).
+- **Nullable:** enabled solution-wide by `Directory.Build.props`; G-1 owns null safety and test-project exceptions.
 - **Central Package Management:** all external package versions are pinned in `Directory.Packages.props`. Add packages there, not with inline versions.
 - **Solution:** `src/Threadsmith.sln` (classic `.sln` format). Product projects live under `src/`; tests under `tests/`; throwaway spikes under `spikes/`.
-- **EditorConfig:** the root `.editorconfig` owns repository-wide formatting, naming, modern C# preferences, and analyzer severities; `Directory.Build.props` enables build-time code-style enforcement, disables Roslyn shared compilation, and mirrors intentionally disabled StyleCop rules in `NoWarn` so clean parallel builds cannot fall back to analyzer defaults when analyzer-config severity data is missed; documented path-specific overrides may relax only rules that do not weaken the C# guardrails.
+- **Build and style:** `Directory.Build.props` owns shared compiler settings and build enforcement; `.editorconfig` owns formatting, naming, code-style preferences, and analyzer severities, including documented path-specific exceptions.
 - **Contributor workflow:** root `CONTRIBUTING.md` owns public setup, Code of Conduct linkage, coding, testing, commit, and pull-request guidance and must remain consistent with this contract, CI, licensing, and the current repository layout.
 
 ## Architectural and planning sources
@@ -26,7 +26,7 @@ The host owns control flow; the model is a pluggable reasoning engine, not an au
 
 ## C# guardrails — READ BEFORE WRITING C#
 
-**Before writing or modifying any C#, read and follow `docs/guardrails/portable-csharp-guardrails.md` (G-1…G-31).** The guardrails file is authoritative.
+**Before writing or modifying any C#, read and follow `docs/guardrails/portable-csharp-guardrails.md`.** The guardrails file is authoritative.
 
 ## Binding working rules
 
@@ -57,29 +57,8 @@ Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (
 - Static secret stores stay outside ordinary configuration and resolve only at explicit privileged boundaries.
 - Prompt append files are untrusted input: sanitized and bounded, never executed, never allowed to override host policy or guardrails, and referenced by id+version in execution records.
 - Threadsmith-owned model-facing prose is a deployed application asset: code declares the complete flat filename/token catalog, startup loads it once into an immutable cache, and publish/release validation keeps every payload synchronized. Assets control wording only; schemas, roles, ordering, capacity admission, trust, tool/mutation/delegation authority, and validation remain code-owned. Preserve shipped prompt text and whitespace exactly when moving it between code and assets. Any prompt filename, purpose, token contract, or call-site token meaning change must update `docs/operations/prompts.md` and `docs/prompt-file-reference.md` in the same change.
-- `.threadsmith/AGENTS.md` owns detailed repository-configuration and prompt-append contracts.
 
 ## Licensing
 
 - Threadsmith.NET is licensed under the Apache License 2.0.
 - The root `LICENSE` file is the authoritative license text; keep the README and contributor guidance consistent with it.
-
-## DOX workflow
-
-- AGENTS.md files are binding work contracts for their subtrees. Root rules apply everywhere; closer child docs add local detail and control local conflicts, but no child may weaken a parent.
-- Before editing, re-read the applicable DOX chain in the current session: root `AGENTS.md`, then every child `AGENTS.md` along each target path.
-- Work products must remain understandable from the nearest applicable `AGENTS.md` plus its parents.
-- After meaningful changes, do a DOX pass: update the nearest owning `AGENTS.md` and affected parent/child indexes only when durable purpose, ownership, structure, workflow, rules, constraints, artifacts, or child indexes changed.
-- Keep DOX concise and operational: document stable contracts, not diary entries or planning progress; delete stale or contradictory text.
-- Closeout: re-check changed paths against the DOX chain, run relevant verification, and report docs intentionally left unchanged.
-
-## Child DOX Index
-
-| Child | Scope |
-|---|---|
-| `src/AGENTS.md` | 25 product projects, dependency layers, adding new projects |
-| `tests/AGENTS.md` | Architecture and scope-focused verification suites |
-| `docs/AGENTS.md` | User guide, operations, ADRs, guardrails, testing docs, and implementation plans |
-| `eng/AGENTS.md` | Repository build, development-tool staging, and release automation |
-| `spikes/AGENTS.md` | Throwaway technology spikes, spike results |
-| `.threadsmith/AGENTS.md` | Repository configuration, prompt-append files |

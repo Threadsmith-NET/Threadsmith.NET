@@ -64,25 +64,15 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             return new RepositoryMemoryOperationResult("notFound", request.Id, null, [], []);
         }
 
+        var memoryType = request.MemoryType
+            ?? existing?.MemoryType
+            ?? RepositoryMemoryType.Situational;
         var duplicate = snapshot.Entries.FirstOrDefault(entry => string.Equals(entry.Text, text, StringComparison.Ordinal));
-        if (duplicate is not null)
+        if (duplicate is not null
+            && (duplicate.Id != request.Id || duplicate.MemoryType == memoryType))
         {
             return new RepositoryMemoryOperationResult(
                 duplicate.Id == request.Id ? "unchanged" : "duplicate", duplicate.Id, duplicate, [], []);
-        }
-
-        var model = _generator.Model;
-        var embedding = await _generator.GenerateAsync(text, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (embedding.WasTruncated || embedding.InputTokenCount > model.MaxInputTokens)
-        {
-            throw new ArgumentException(
-                $"Memory uses {embedding.InputTokenCount} tokens; the embedding limit is {model.MaxInputTokens} including boundary tokens. Shorten the memory and retry.");
-        }
-
-        if (!EmbeddingValidation.IsValid(model, embedding))
-        {
-            throw new InvalidOperationException("Embedding generation returned an invalid vector. No memory was changed; retry after fixing local embeddings.");
         }
 
         var write = new RepositoryMemoryWrite
@@ -93,13 +83,41 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             SourceSessionId = request.SourceSessionId,
             SourceRunId = request.SourceRunId,
             SourceInvocationId = request.SourceInvocationId,
+            MemoryType = memoryType,
         };
-        var result = existing is null
-            ? await _store.AddAsync(request.RepositoryIdentity, write, model, embedding, request.Options, cancellationToken)
-            : await _store.UpdateAsync(request.RepositoryIdentity, existing.Id, existing.Revision, write, model, embedding, request.Options, cancellationToken);
+        RepositoryMemoryWriteResult result;
+        if (existing is not null && existing.Text == text)
+        {
+            // A metadata-only change retains the complete stored vector without running inference.
+            result = await _store.UpdateAsync(request.RepositoryIdentity, existing.Id, existing.Revision, write, null, null, request.Options, cancellationToken);
+        }
+        else
+        {
+            var model = _generator.Model;
+            var embedding = await _generator.GenerateAsync(text, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (embedding.WasTruncated || embedding.InputTokenCount > model.MaxInputTokens)
+            {
+                throw new ArgumentException(
+                    $"Memory uses {embedding.InputTokenCount} tokens; the embedding limit is {model.MaxInputTokens} including boundary tokens. Shorten the memory and retry.");
+            }
+
+            if (!EmbeddingValidation.IsValid(model, embedding))
+            {
+                throw new InvalidOperationException("Embedding generation returned an invalid vector. No memory was changed; retry after fixing local embeddings.");
+            }
+
+            result = existing is null
+                ? await _store.AddAsync(request.RepositoryIdentity, write, model, embedding, request.Options, cancellationToken)
+                : await _store.UpdateAsync(request.RepositoryIdentity, existing.Id, existing.Revision, write, model, embedding, request.Options, cancellationToken);
+        }
+
         LogEvictions(result.EvictedIds);
         return new RepositoryMemoryOperationResult(
-            result.Status.ToString().ToLowerInvariant(), result.Entry?.Id ?? request.Id, result.Entry, [], result.EvictedIds);
+            result.Status.ToString().ToLowerInvariant(), result.Entry?.Id ?? request.Id, result.Entry, [], result.EvictedIds)
+        {
+            StandingPreferenceCount = result.StandingPreferenceCount,
+        };
     }
 
     /// <inheritdoc />
@@ -143,12 +161,13 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 
     private static void ValidateArguments(RepositoryMemoryOperationRequest request)
     {
+        var validType = request.MemoryType is null || Enum.IsDefined(request.MemoryType.Value);
         var valid = request.Action switch
         {
-            "add" => request.Id is null && request.Text is not null,
-            "update" => request.Id is not null && request.Text is not null,
-            "remove" => request.Id is not null && request.Text is null,
-            "list" => request.Id is null && request.Text is null,
+            "add" => request.Id is null && request.Text is not null && validType,
+            "update" => request.Id is not null && request.Text is not null && validType,
+            "remove" => request.Id is not null && request.Text is null && request.MemoryType is null,
+            "list" => request.Id is null && request.Text is null && request.MemoryType is null,
             _ => false,
         };
         if (!valid)

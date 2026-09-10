@@ -15,6 +15,9 @@ public sealed record RepositoryMemoryOperationRequest
     /// <summary>Complete text for add or update.</summary>
     public string? Text { get; init; }
 
+    /// <summary>Optional selection behavior for add or update; an omitted update preserves the current type.</summary>
+    public RepositoryMemoryType? MemoryType { get; init; }
+
     /// <summary>Host-owned source of the explicit operation.</summary>
     public RepositoryMemoryOrigin Origin { get; init; }
 
@@ -40,7 +43,11 @@ public sealed record RepositoryMemoryOperationResult(
     RepositoryMemoryId? Id,
     RepositoryMemoryEntry? Entry,
     IReadOnlyList<RepositoryMemoryEntry> Entries,
-    IReadOnlyList<RepositoryMemoryId> EvictedIds);
+    IReadOnlyList<RepositoryMemoryId> EvictedIds)
+{
+    /// <summary>Standing-preference count after a committed write, when supplied by the store.</summary>
+    public int? StandingPreferenceCount { get; init; }
+}
 
 /// <summary>Shared authority boundary for manual and model-requested repository memories.</summary>
 public interface IManagedRepositoryMemoryService
@@ -104,7 +111,11 @@ public sealed record RepositoryMemoryRetrievalResult(
     long? MemorySetRevision = null,
     bool QueryTruncated = false,
     bool QueryEmbeddingCacheHit = false,
-    bool RankingCacheHit = false);
+    bool RankingCacheHit = false)
+{
+    /// <summary>Current standing preferences from the same snapshot; they are not hybrid retrieval candidates.</summary>
+    public IReadOnlyList<RepositoryMemoryEntry> StandingPreferences { get; init; } = [];
+}
 
 /// <summary>Combines snapshot-consistent SQLite lexical matches and compatible local semantic vectors.</summary>
 public interface IHybridRepositoryMemoryRetriever

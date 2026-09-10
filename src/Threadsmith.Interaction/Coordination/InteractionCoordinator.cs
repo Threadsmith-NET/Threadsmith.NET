@@ -99,6 +99,8 @@ public sealed class InteractionCoordinator
     private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IToolStateManager? _toolStateManager;
     private readonly CodeExploreOutputOptions _codeExploreOutputOptions;
+    private readonly int _standingPreferenceWarningThreshold;
+    private readonly Func<string, int>? _standingPreferenceWarningThresholdProvider;
     private readonly IGitQueryService? _gitQueries;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
@@ -129,6 +131,8 @@ public sealed class InteractionCoordinator
     /// <param name="frontendCommands">Fixed presentation-local command contribution.</param>
     /// <param name="validationStages">Resolved post-apply validation stages.</param>
     /// <param name="codeExploreOutputOptions">Per-session code-explore output state.</param>
+    /// <param name="standingPreferenceWarningThreshold">Fallback count above which saved preference advice is shown.</param>
+    /// <param name="standingPreferenceWarningThresholdProvider">Live repository-specific preference warning threshold.</param>
     public InteractionCoordinator(
         InteractionPresenter presenter,
         IDomainEventStream events,
@@ -153,7 +157,9 @@ public sealed class InteractionCoordinator
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
         IFrontendCommandContribution? frontendCommands = null,
         IReadOnlyList<MutationValidationStage>? validationStages = null,
-        CodeExploreOutputOptions? codeExploreOutputOptions = null)
+        CodeExploreOutputOptions? codeExploreOutputOptions = null,
+        int standingPreferenceWarningThreshold = 3,
+        Func<string, int>? standingPreferenceWarningThresholdProvider = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
@@ -182,6 +188,8 @@ public sealed class InteractionCoordinator
         _directFetchApprovalPrompt = directFetchApprovalPrompt;
         _frontendCommands = frontendCommands;
         _validationStages = validationStages ?? [];
+        _standingPreferenceWarningThreshold = standingPreferenceWarningThreshold;
+        _standingPreferenceWarningThresholdProvider = standingPreferenceWarningThresholdProvider;
     }
 
     /// <summary>Runs the interactive conversation until the user quits or cancellation is requested.</summary>
@@ -383,7 +391,7 @@ public sealed class InteractionCoordinator
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
         long? turnStartedTimestamp = null;
-        var streamThinking = false;
+        var streamThinking = _sessionPreferences?.IncludeReasoningText ?? false;
         var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
         ContextInspectionProjection? latestContextInspection = null;
         var modelAnswerCollector = new ModelAnswerCollector(_displayOptions.RenderMarkdown);
@@ -856,8 +864,9 @@ public sealed class InteractionCoordinator
                         continue;
                     }
 
+                    _sessionPreferences?.SetIncludeReasoningText(streamThinking);
                     await _surface.WriteAsync(
-                        $"Streaming thinking is {(streamThinking ? "on" : "off")}.\n",
+                        $"Streaming thinking is {(streamThinking ? "on" : "off")}. Inclusion changes on the next model request; an in-flight request continues unchanged.\n",
                         PresentationTextRole.Status,
                         lifetime.Token);
                     continue;
@@ -1050,6 +1059,40 @@ public sealed class InteractionCoordinator
                         result.Message + "\n",
                         resultRole,
                         lifetime.Token);
+                    continue;
+                }
+
+                if (commandText.StartsWith("/models ", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var arguments = commandText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        if (arguments.Length == 3 && string.Equals(arguments[1], "status", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var status = await _presenter.GetModelCatalogStatusAsync(arguments[2], lifetime.Token);
+                            await _surface.WriteAsync(status.Status + "\n", PresentationTextRole.Status, lifetime.Token);
+                        }
+                        else if (arguments.Length == 3 && string.Equals(arguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var result = await _presenter.RefreshModelCatalogAsync(arguments[2], lifetime.Token);
+                            await _surface.WriteAsync(
+                                result.Status + "\n",
+                                result.Refreshed ? PresentationTextRole.Status : PresentationTextRole.Error,
+                                lifetime.Token);
+                        }
+                        else
+                        {
+                            await _surface.WriteAsync("Usage: /models [status|refresh <provider-id>]\n", PresentationTextRole.Error, lifetime.Token);
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        await _surface.WriteAsync(
+                            FormatStatusError(exception) + Environment.NewLine,
+                            PresentationTextRole.Error,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 
@@ -3048,10 +3091,10 @@ public sealed class InteractionCoordinator
                     var rememberText = remainder.StartsWith("repo ", StringComparison.OrdinalIgnoreCase)
                         ? remainder[5..].Trim()
                         : remainder;
-                    if (string.IsNullOrWhiteSpace(rememberText))
+                    if (!TryParseRepositoryMemoryTypeOption(rememberText, out var rememberType, out rememberText))
                     {
                         await _surface.WriteAsync(
-                            "Usage: /memory remember <text>\n",
+                            "Usage: /memory remember [--type standingPreference|situational] <text>\n",
                             PresentationTextRole.Warning,
                             cancellationToken);
                         return;
@@ -3061,11 +3104,13 @@ public sealed class InteractionCoordinator
                         sessionId,
                         repositoryIdentity,
                         rememberText,
+                        rememberType,
                         cancellationToken);
                     await _surface.WriteAsync(
                         $"Remembered repository memory {remembered.Id.Value:D}.\n",
                         PresentationTextRole.Status,
                         cancellationToken);
+                    await WriteStandingPreferenceWarningAsync(sessionId, repositoryIdentity, cancellationToken);
                     return;
 
                 case "list":
@@ -3110,10 +3155,10 @@ public sealed class InteractionCoordinator
                     var supersedeSeparator = remainder.IndexOf(' ');
                     if (supersedeSeparator < 0
                         || !TryParseRepositoryMemoryId(remainder[..supersedeSeparator], out var supersedeId)
-                        || string.IsNullOrWhiteSpace(remainder[(supersedeSeparator + 1)..]))
+                        || !TryParseRepositoryMemoryTypeOption(remainder[(supersedeSeparator + 1)..].Trim(), out var replacementType, out var replacementText))
                     {
                         await _surface.WriteAsync(
-                            "Usage: /memory update <memory-id> <replacement-text>\n",
+                            "Usage: /memory update <memory-id> [--type standingPreference|situational] <replacement-text>\n",
                             PresentationTextRole.Warning,
                             cancellationToken);
                         return;
@@ -3123,12 +3168,18 @@ public sealed class InteractionCoordinator
                         sessionId,
                         repositoryIdentity,
                         supersedeId,
-                        remainder[(supersedeSeparator + 1)..].Trim(),
+                        replacementText,
+                        replacementType,
                         cancellationToken);
                     await _surface.WriteAsync(
                         $"Updated repository memory {replacement.Id.Value:D}.\n",
                         PresentationTextRole.Status,
                         cancellationToken);
+                    if (replacementType == RepositoryMemoryType.StandingPreference)
+                    {
+                        await WriteStandingPreferenceWarningAsync(sessionId, repositoryIdentity, cancellationToken);
+                    }
+
                     return;
 
                 case "forget":
@@ -3157,7 +3208,7 @@ public sealed class InteractionCoordinator
 
                 default:
                     await _surface.WriteAsync(
-                        "Usage: /memory [remember <text>|list|inspect <id>|update <id> <text>|forget <id>]\n",
+                        "Usage: /memory [remember [--type standingPreference|situational] <text>|list|inspect <id>|update <id> [--type standingPreference|situational] <text>|forget <id>]\n",
                         PresentationTextRole.Warning,
                         cancellationToken);
                     return;
@@ -3777,7 +3828,48 @@ public sealed class InteractionCoordinator
     }
 
     private static string FormatRepositoryMemorySummary(RepositoryMemoryEntry item)
-        => $"  {item.Id.Value:D} [{item.Origin.ToString().ToLowerInvariant()}]: {item.Text}\n";
+        => $"  {item.Id.Value:D} [{item.Origin.ToString().ToLowerInvariant()}, {FormatRepositoryMemoryType(item.MemoryType)}]: {item.Text}\n";
+
+    private static string FormatRepositoryMemoryType(RepositoryMemoryType memoryType) => memoryType switch
+    {
+        RepositoryMemoryType.StandingPreference => "standing preference",
+        _ => "situational",
+    };
+
+    private async Task WriteStandingPreferenceWarningAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var snapshot = await _presenter.ListRepositoryMemoryAsync(
+                sessionId,
+                repositoryIdentity,
+                cancellationToken);
+            var count = snapshot.Entries.Count(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
+            var threshold = _standingPreferenceWarningThresholdProvider?.Invoke(repositoryIdentity)
+                ?? _standingPreferenceWarningThreshold;
+            if (count > threshold)
+            {
+                await _surface.WriteAsync(
+                    $"\nYou now have {count} preference memories. You may want to consider adding some of these to AGENTS.md for the repo.\n\n",
+                    PresentationTextRole.Warning,
+                    cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            await _surface.WriteAsync(
+                "Repository-memory preference count could not be checked.\n",
+                PresentationTextRole.Warning,
+                cancellationToken);
+        }
+    }
 
     private static bool TryParseRepositoryMemoryId(string value, out RepositoryMemoryId memoryId)
     {
@@ -3789,6 +3881,36 @@ public sealed class InteractionCoordinator
 
         memoryId = default;
         return false;
+    }
+
+    private static bool TryParseRepositoryMemoryTypeOption(
+        string value,
+        out RepositoryMemoryType? memoryType,
+        out string text)
+    {
+        memoryType = null;
+        text = value;
+        if (!value.Equals("--type", StringComparison.Ordinal) && !value.StartsWith("--type ", StringComparison.Ordinal))
+        {
+            return !string.IsNullOrWhiteSpace(text);
+        }
+
+        var optionValue = value[6..].TrimStart();
+        var separator = optionValue.IndexOf(' ');
+        if (separator < 0)
+        {
+            return false;
+        }
+
+        var type = optionValue[..separator];
+        text = optionValue[(separator + 1)..].Trim();
+        memoryType = type switch
+        {
+            "standingPreference" => RepositoryMemoryType.StandingPreference,
+            "situational" => RepositoryMemoryType.Situational,
+            _ => null,
+        };
+        return memoryType is not null && !string.IsNullOrWhiteSpace(text);
     }
 
     private static string FormatConversationMode(ConversationContextMode mode)

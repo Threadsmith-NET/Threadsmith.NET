@@ -874,7 +874,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
 
         if (request.SelectionConstraints.MaximumCombinedCostPerMillionTokens is { } maximumCost
             && profile.Cost is { } cost
-            && cost.InputPerMillionTokens + cost.OutputPerMillionTokens > maximumCost)
+            && (cost.AdmissionCombinedPerMillionTokens is not { } combinedCost || combinedCost > maximumCost))
         {
             throw new ModelProviderException(
                 "The configured active-turn compaction profile exceeds the request cost ceiling.");
@@ -895,7 +895,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             0,
             modelOutputTokens,
             profile.ProviderInstructions);
-        return new ModelCandidateAttempt(
+        var prepared = ModelRequestPreparation.Prepare(
             _model,
             new ModelStreamRequest
             {
@@ -908,13 +908,20 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 SelectionConstraints = profile.SelectionConstraints,
                 ResolvedProfileId = profile.ProfileId,
                 ReasoningLevel = profile.ReasoningLevel,
+                IncludeReasoningText = false,
                 MaximumOutputTokens = modelOutputTokens,
                 AllowMultipleToolCalls = false,
                 Messages = messages,
                 WireEstimate = wireEstimate,
                 ProviderInstructions = profile.ProviderInstructions,
-            },
-            input.Envelope);
+            });
+        if (prepared.WireEstimate is { } preparedEstimate
+            && preparedEstimate.TotalCapacityTokens > profile.ContextWindowTokens)
+        {
+            throw new ModelProviderException("The prepared summary request exceeds its selected model capacity.");
+        }
+
+        return new ModelCandidateAttempt(_model, prepared, input.Envelope);
     }
 
     private CandidateInputProjection CreateInput(
@@ -964,6 +971,23 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 0,
                 modelOutputTokens,
                 profile.ProviderInstructions);
+            var prepared = ModelRequestPreparation.Prepare(_model, new ModelStreamRequest
+            {
+                RunId = request.RunId,
+                Input = input.Json,
+                ResolvedProfileId = profile.ProfileId,
+                MaximumOutputTokens = modelOutputTokens,
+                ReasoningLevel = profile.ReasoningLevel,
+                IncludeReasoningText = false,
+                WorkloadClass = profile.WorkloadClass,
+                RequiredCapabilities = profile.RequiredCapabilities,
+                SelectionConstraints = profile.SelectionConstraints,
+                ContainsSensitiveData = request.ContainsSensitiveData,
+                Messages = CreateMessages(summaryPrompt, input.Json),
+                ProviderInstructions = profile.ProviderInstructions,
+                WireEstimate = estimate,
+            });
+            estimate = prepared.WireEstimate ?? estimate;
             if (estimate.WireInputTokens <= maximumCandidateInputTokens)
             {
                 selectedInput = input;

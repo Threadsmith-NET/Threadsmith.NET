@@ -70,6 +70,16 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
         var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
+        var messages = new List<ModelMessage>
+        {
+            new()
+            {
+                Role = ModelMessageRole.User,
+                SectionId = "skill-procedure",
+                Content = [new ModelContentPart { Content = prompt }],
+            },
+        };
+        using var transientState = new ModelRequestTransientState();
 
         var seenCalls = new HashSet<string>(StringComparer.Ordinal);
         for (var round = 0; round < maximumRounds; round++)
@@ -79,15 +89,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             var modelTools = BuildToolDefinitions(modelContext.AllowedToolIds);
             var text = new StringBuilder();
             ToolRequestModelOutput? toolRequest = null;
-            IReadOnlyList<ModelMessage> messages =
-            [
-                new ModelMessage
-                {
-                    Role = ModelMessageRole.User,
-                    SectionId = "skill-procedure",
-                    Content = [new ModelContentPart { Content = prompt }],
-                },
-            ];
             var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
             var canonicalModelTools = ModelToolCanonicalizer.Canonicalize(modelTools);
             var wireEstimate = ModelWireEstimator.Estimate(
@@ -97,13 +98,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 stablePrefixMessageCount: 0,
                 outputReserveTokens,
                 providerInstructions);
-            if (profile is not null && wireEstimate.TotalCapacityTokens > profile.ContextWindow)
-            {
-                throw new InvalidOperationException(
-                    "The complete skill procedure request exceeds the selected model context window.");
-            }
-
-            await foreach (var chunk in _models.StreamAsync(
+            var modelRequest = ModelRequestPreparation.Prepare(
+                _models,
                 new ModelStreamRequest
                 {
                     RunId = plan.Request.RunId,
@@ -123,15 +119,34 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         ContainsSensitiveData = plan.Request.Sensitivity == ConversationSensitivity.Sensitive,
                     },
                     ResolvedProfileId = profileId,
+                    ReasoningLevel = profile?.DefaultReasoningLevel ?? ReasoningLevel.None,
                     MaximumOutputTokens = profile?.EffectiveRequestOutputTokenReserve,
                     Tools = canonicalModelTools,
                     AllowMultipleToolCalls = false,
-                    Messages = messages,
+                    Messages = messages.ToArray(),
                     WireEstimate = wireEstimate,
                     ProviderInstructions = providerInstructions,
-                },
+                    IncludeReasoningText = false,
+                    TransientState = transientState,
+                });
+            wireEstimate = modelRequest.WireEstimate
+                ?? throw new InvalidOperationException("The prepared skill procedure request has no capacity estimate.");
+            if (profile is not null && wireEstimate.TotalCapacityTokens > profile.ContextWindow)
+            {
+                throw new InvalidOperationException(
+                    "The complete skill procedure request exceeds the selected model context window.");
+            }
+
+            transientState.ValidateHistory(modelRequest);
+            await foreach (var chunk in _models.StreamAsync(
+                modelRequest,
                 cancellationToken))
             {
+                if (chunk.ResponseEnvelope is { } envelope)
+                {
+                    transientState.Accept(modelRequest, envelope);
+                }
+
                 if (chunk.Text is { } delta)
                 {
                     text.Append(delta);
@@ -143,6 +158,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
                 if (chunk.Output is ToolRequestModelOutput requested)
                 {
+                    if (toolRequest is not null)
+                    {
+                        throw new InvalidDataException("Skill procedure returned multiple tools despite its single-call policy.");
+                    }
+
                     toolRequest = requested;
                 }
                 else if (chunk.Output is not null)
@@ -211,13 +231,46 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         error = result.ErrorClassification.ToString(),
                         message = result.Error,
                     }));
-            prompt += _prompts.Render(
+            var toolCallId = $"skill-{plan.Request.InvocationId.Value:N}-{round}-0";
+            messages.Add(new ModelMessage
+            {
+                Role = ModelMessageRole.Assistant,
+                SectionId = "skill-tool-call",
+                ToolCallId = toolCallId,
+                ToolName = toolRequest.ToolName,
+                ModelRound = round,
+                Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = toolRequest.ArgumentsJson }],
+            });
+            messages.Add(new ModelMessage
+            {
+                Role = ModelMessageRole.Tool,
+                SectionId = "skill-tool-result",
+                ToolCallId = toolCallId,
+                ToolName = toolRequest.ToolName,
+                ModelRound = round,
+                IsError = !result.Succeeded,
+                Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
+            });
+            if (transientState.HasResponses)
+            {
+                transientState.BindToolCall(round, 0, toolCallId);
+                transientState.SealRound(round, messages.ToArray());
+            }
+
+            var continuation = _prompts.Render(
                 PromptFileNames.SkillProcedureContinuation,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["ToolName"] = toolRequest.ToolName,
                     ["ToolResult"] = boundedResult,
                 });
+            prompt += continuation;
+            messages.Add(new ModelMessage
+            {
+                Role = ModelMessageRole.User,
+                SectionId = "skill-procedure-continuation",
+                Content = [new ModelContentPart { Content = continuation }],
+            });
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");

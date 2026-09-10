@@ -21,3 +21,5 @@ Key governing decisions include [central tool policy](adr-11-central-tool-policy
 [ADR-56](adr-56-repository-only-approval-policy-preferences.md) defines repository-only persistence for plan and mutation policy selections, with session-only overrides.
 
 [ADR-59](adr-59-model-managed-repository-memories.md) defines explicit repository-memory operations, local embeddings, hybrid retrieval, inclusion accounting, and deterministic capacity eviction.
+
+[ADR-60](adr-60-native-anthropic-provider-and-transient-replay.md) defines native Anthropic discovery, request preparation, independent thinking controls, and private signed tool continuations.

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -453,21 +454,15 @@ public static partial class Milestone5Tests
         Assert.Equal(repository.PathOf("src"), contextRequest.WorkingScope);
         var modelRequest = Assert.Single(model.Requests);
         Assert.Equal(false, modelRequest.AllowMultipleToolCalls);
-        Assert.True(Assert.Single(modelRequest.Tools).PreferStrictArguments);
-        var contextTool = Assert.Single(contextRequest.ToolSchemas);
-        Assert.True(contextTool.PreferStrictArguments);
-        var modelTool = Assert.Single(modelRequest.Tools);
-        Assert.Equal(contextTool.Id, modelTool.Name);
-        Assert.Equal(contextTool.Description, modelTool.Description);
-        Assert.Contains("host owns approved steps and all execution identities", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("operation-specific shape", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("Use type and relativePath", modelTool.Description, StringComparison.Ordinal);
-        Assert.Contains("omit startOffset/length", modelTool.Description, StringComparison.Ordinal);
-        Assert.DoesNotContain("planRevision", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
-        Assert.DoesNotContain("planStepIds", modelTool.ArgumentsJsonSchema, StringComparison.Ordinal);
+        Assert.Empty(modelRequest.Tools);
+        Assert.Empty(contextRequest.ToolSchemas);
+        var format = Assert.IsType<ModelResponseFormat>(modelRequest.ResponseFormat);
+        Assert.Equal("threadsmith.mutation-proposal.v1", format.SchemaId);
+        Assert.DoesNotContain("planRevision", format.JsonSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain("planStepIds", format.JsonSchema, StringComparison.Ordinal);
         var strictMutationSchema = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-            modelTool.Name,
-            modelTool.ArgumentsJsonSchema);
+            "propose_mutations",
+            format.JsonSchema);
         Assert.NotNull(strictMutationSchema);
         using (var strictDocument = JsonDocument.Parse(strictMutationSchema))
         {
@@ -497,7 +492,6 @@ public static partial class Milestone5Tests
                 .GetProperty("properties").TryGetProperty("expectedText", out _));
         }
 
-        Assert.Equal(contextTool.JsonSchema, modelTool.ArgumentsJsonSchema);
         Assert.Contains(
             modelRequest.Messages,
             message => message.SectionId == "repository-instructions"
@@ -1952,6 +1946,163 @@ public static partial class Milestone5Tests
                     Converters = { new JsonStringEnumConverter() },
                 });
         }
+    }
+
+    /// <summary>A discriminator after ordinary mutation properties remains valid JSON-schema tool output.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_OperationDiscriminatorAfterOrdinaryProperties_StagesProposal()
+    {
+        const string source = "old";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/Example.cs"] = source,
+        });
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var baselineFile = Assert.Single(repository.Baseline.Files);
+        var arguments = $$"""
+            {
+              "mutationSet": {
+                "mutations": [
+                  {
+                    "baselineSha256": "{{baselineFile.Sha256}}",
+                    "expectedText": "old",
+                    "relativePath": "src/Example.cs",
+                    "replacementText": "new",
+                    "type": "ReplaceText"
+                  }
+                ],
+                "rationale": "Replace the value."
+              }
+            }
+            """;
+        var model = new QueueModelProvider(
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", arguments),
+                Usage = new ModelUsage(100, 50),
+            });
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
+        var plan = new ImplementationPlan
+        {
+            Summary = "Change Example.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Edit Example",
+                    Description = "Replace the value.",
+                    FileIntents = ModifyIntents("src/Example.cs"),
+                    ExpectedOutcome = "Example is updated.",
+                },
+            ],
+        };
+
+        var staged = await scenario.ProposeAsync(
+            runId,
+            new TaskSpecification("Change Example", []),
+            plan,
+            RunPhase.ImplementationModelTurn);
+
+        Assert.Single(model.Requests);
+        Assert.Empty(scenario.Events<ModelCorrectionAttempted>());
+        Assert.Contains("+new", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+    }
+
+    /// <summary>Missing or unknown operation discriminators receive the normal schema corrective turn.</summary>
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("UnsupportedOperation", true)]
+    [InlineData("", false)]
+    [InlineData("UnsupportedOperation", false)]
+    public static async Task ModelMutationProposal_InvalidOperationDiscriminator_ReasksWithSchemaCorrectiveMessage(
+        string discriminator,
+        bool useToolCall)
+    {
+        const string source = "old";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["src/Example.cs"] = source,
+        });
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var baselineFile = Assert.Single(repository.Baseline.Files);
+        var goodArguments = $$"""
+            {
+              "mutationSet": {
+                "mutations": [
+                  {
+                    "baselineSha256": "{{baselineFile.Sha256}}",
+                    "expectedText": "old",
+                    "relativePath": "src/Example.cs",
+                    "replacementText": "new",
+                    "type": "ReplaceText"
+                  }
+                ],
+                "rationale": "Replace the value."
+              }
+            }
+            """;
+        var badArgumentsNode = JsonNode.Parse(goodArguments)!.AsObject();
+        var badMutation = badArgumentsNode["mutationSet"]!["mutations"]![0]!.AsObject();
+        if (string.IsNullOrEmpty(discriminator))
+        {
+            badMutation.Remove("type");
+        }
+        else
+        {
+            badMutation["type"] = discriminator;
+        }
+
+        var badArguments = badArgumentsNode.ToJsonString();
+        using var badDocument = JsonDocument.Parse(badArguments);
+        Assert.Equal(JsonValueKind.Object, badDocument.RootElement.ValueKind);
+        var model = new QueueModelProvider(
+            new ModelChunk
+            {
+                Output = useToolCall
+                    ? new ToolRequestModelOutput("propose_mutations", badArguments)
+                    : null,
+                Text = useToolCall ? null : badArguments,
+                Usage = new ModelUsage(100, 50),
+            },
+            new ModelChunk
+            {
+                Output = useToolCall
+                    ? new ToolRequestModelOutput("propose_mutations", goodArguments)
+                    : null,
+                Text = useToolCall ? null : goodArguments,
+                Usage = new ModelUsage(100, 50),
+            });
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
+        var plan = new ImplementationPlan
+        {
+            Summary = "Change Example.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Edit Example",
+                    Description = "Replace the value.",
+                    FileIntents = ModifyIntents("src/Example.cs"),
+                    ExpectedOutcome = "Example is updated.",
+                },
+            ],
+        };
+
+        var staged = await scenario.ProposeAsync(
+            runId,
+            new TaskSpecification("Change Example", []),
+            plan,
+            useToolCall ? RunPhase.ImplementationModelTurn : RunPhase.MutationPreparation);
+
+        Assert.Equal(2, model.Requests.Count);
+        var correction = Assert.Single(scenario.Events<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.MutationProposal, correction.Category);
+        Assert.Contains("schema", correction.SafeReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("+new", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
     }
 
     /// <summary>Legacy-shaped mutation tool arguments receive schema corrective feedback and can repair.</summary>

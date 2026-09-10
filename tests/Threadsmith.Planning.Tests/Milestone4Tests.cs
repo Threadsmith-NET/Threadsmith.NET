@@ -606,8 +606,10 @@ public static class Milestone4Tests
     }
 
     /// <summary>A same-turn propose-plan tool call enters the existing governed review workflow.</summary>
-    [Fact]
-    public static async Task SessionApplication_ProposePlanTool_EntersGovernedPlanning()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task SessionApplication_ProposePlanTool_EntersGovernedPlanning(bool includeReplay)
     {
         await using var events = new DomainEventStream();
         var projections = new InMemoryProjectionStore();
@@ -615,14 +617,14 @@ public static class Milestone4Tests
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
         var plan = CreatePlan("Governed tool plan", 1);
-        var model = new ProposePlanModelProvider(plan);
+        var model = new ProposePlanModelProvider(plan) { IncludeReplay = includeReplay };
         var application = new SessionApplication(
             events,
             model,
             new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
-            contextAssembler: CreateAssembler(events, evidence),
+            contextAssembler: CreateAssembler(events, evidence, modelResolver: includeReplay ? CreateReplayResolver() : null),
             evidenceStore: evidence,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
@@ -646,6 +648,7 @@ public static class Milestone4Tests
         while (projection?.Phase != RunPhase.AwaitingPlanApproval);
 
         Assert.Equal("Governed tool plan", projection.Plan?.Plan.Summary);
+        Assert.True(model.ResponseEnvelope is null || model.ResponseEnvelope.ByteCount == 0);
         var modelRequest = Assert.Single(model.Requests);
         Assert.Equal("propose_plan", modelRequest.Tools.Last().Name);
         Assert.True(modelRequest.Tools.Last().PreferStrictArguments);
@@ -726,8 +729,10 @@ public static class Milestone4Tests
     }
 
     /// <summary>Malformed JSON-object propose-plan arguments publish a plan-schema correction event.</summary>
-    [Fact]
-    public static async Task ProposePlanTool_SchemaMismatchArguments_PublishesGenericCorrectionEvent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ProposePlanTool_SchemaMismatchArguments_PublishesGenericCorrectionEvent(bool includeReplay)
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -741,14 +746,14 @@ public static class Milestone4Tests
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
         var plan = CreatePlan("Schema-repaired tool plan", 1);
-        var model = new MalformedProposePlanThenPlanModelProvider(plan, "{}");
+        var model = new MalformedProposePlanThenPlanModelProvider(plan, "{}") { IncludeReplay = includeReplay };
         var application = new SessionApplication(
             events,
             model,
             new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
-            contextAssembler: CreateAssembler(events, evidence),
+            contextAssembler: CreateAssembler(events, evidence, modelResolver: includeReplay ? CreateReplayResolver() : null),
             evidenceStore: evidence,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
@@ -2490,6 +2495,7 @@ public static class Milestone4Tests
             Assert.Equal(1, correction.AttemptNumber);
             Assert.Contains("counting_read", correction.SafeReason, StringComparison.Ordinal);
             var correctionRequest = model.Requests[1];
+            var correctionMessages = correctionRequest.Messages.ToList();
             ModelMessage[] assistantCalls = [.. correctionRequest.Messages
                 .Where(message => message.Role == ModelMessageRole.Assistant && message.ToolName == "counting_read")];
             ModelMessage[] correctionResults = [.. correctionRequest.Messages
@@ -2501,7 +2507,14 @@ public static class Milestone4Tests
                 message => message.Content.Any(part => part.Content.Contains("Call 1", StringComparison.Ordinal)));
             Assert.All(
                 correctionResults,
-                message => Assert.Contains("executed", message.Content[0].Content, StringComparison.Ordinal));
+                message =>
+                {
+                    Assert.True(message.IsError);
+                    Assert.Contains("executed", message.Content[0].Content, StringComparison.Ordinal);
+                    var resultIndex = correctionMessages.IndexOf(message);
+                    Assert.Equal(ModelMessageRole.Assistant, correctionMessages[resultIndex - 1].Role);
+                    Assert.Equal(message.ToolCallId, correctionMessages[resultIndex - 1].ToolCallId);
+                });
             Assert.Contains(
                 correctionResults,
                 message => message.Content[0].Content.Contains("Nothing in the batch was executed", StringComparison.Ordinal));
@@ -4538,6 +4551,37 @@ public static class Milestone4Tests
         }
     }
 
+    private static ModelResolver CreateReplayResolver()
+    {
+        var profile = CreateProfile("replay", structuredOutput: true, permitsSensitiveData: true) with
+        {
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, StructuredOutput = true },
+            IntendedWorkloadClasses = [],
+        };
+        return new ModelResolver(new ConfiguredModelCatalog([profile]), new InMemoryModelPreferenceSnapshotProvider());
+    }
+
+    private static ModelResponseReplayEnvelope CreatePlanReplayEnvelope(ModelStreamRequest request)
+    {
+        return new ModelResponseReplayEnvelope(
+            new ModelReplayBinding
+            {
+                ProviderId = "test",
+                ModelId = "test",
+                ProfileId = request.ResolvedProfileId ?? throw new InvalidOperationException("Replay requires a profile."),
+                RunId = request.RunId,
+                ModelRound = request.ToolContinuationRound,
+                HistoryRewriteGeneration = request.HistoryRewriteGeneration,
+                CredentialGeneration = "test",
+                ToolInventoryDigest = "test",
+                InstructionDigest = "test",
+                NormalizedRoundDigest = "test",
+            },
+            [1],
+            ["plan-wire"],
+            1);
+    }
+
     private sealed class ProposePlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
@@ -4546,6 +4590,10 @@ public static class Milestone4Tests
         {
             _plan = plan;
         }
+
+        public bool IncludeReplay { get; init; }
+
+        public ModelResponseReplayEnvelope? ResponseEnvelope { get; private set; }
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -4556,6 +4604,12 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
+            if (IncludeReplay)
+            {
+                ResponseEnvelope = CreatePlanReplayEnvelope(request);
+                yield return new ModelChunk { ResponseEnvelope = ResponseEnvelope };
+            }
+
             yield return new ModelChunk
             {
                 Output = new ToolRequestModelOutput(
@@ -4570,6 +4624,8 @@ public static class Milestone4Tests
     {
         private readonly string _malformedArgumentsJson;
         private readonly ImplementationPlan _plan;
+
+        public bool IncludeReplay { get; init; }
 
         public MalformedProposePlanThenPlanModelProvider(
             ImplementationPlan plan,
@@ -4589,6 +4645,12 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
+            if (IncludeReplay)
+            {
+                request.TransientState?.ValidateHistory(request);
+                yield return new ModelChunk { ResponseEnvelope = CreatePlanReplayEnvelope(request) };
+            }
+
             if (Requests.Count == 1)
             {
                 yield return new ModelChunk

@@ -252,15 +252,15 @@ Expected: original-frontend terminal behavior is deterministic and native-scroll
 
 Expected: fixed environment → eligible repository → user order, minimum-source trust enforcement, no value projection, and no environment secret in ordinary `IConfiguration`.
 
-## MTP-228 — Repository Git/path and user-permission denial
+## MTP-228 — Repository Git/path checks and user-store access
 
 1. Stage `.threadsmith/secrets/config.json` with `git add -f`; confirm resolution rejects `tracked-or-staged` before returning the canary. Repeat after opening a repository directory below the worktree root and tracking that subdirectory's store, after tracking a file, symlink, or gitlink at `.threadsmith/secrets` (and at `.threadsmith` where supported), after replacing it in the working tree with the ignored store directory, and with no effective ignore rule, a negating rule, Git unavailable/non-worktree, or an indeterminate index operation.
 2. Remove the index entry, install the effective ignore rule, and verify `git check-ignore -v --no-index` matches while `git ls-files --error-unmatch` does not; confirm resolution succeeds.
 3. Replace the store or an ancestor with a symlink/junction/reparse escape and try malformed, duplicate-case, invalid-UTF-8, oversized, deeply nested, empty, and non-string JSON values. Confirm bounded safe rejection.
 4. On Linux/macOS, replace the ignored repository store with a FIFO and then another non-regular file type available to the test host. Confirm each fails promptly as unsafe without a writer, timeout, or blocked resolver, then restore a regular file.
-5. On Linux/macOS, grant group/other permission bits to `~/.threadsmith/secrets/config.json`; confirm `unsafe-permissions`, then restore mode `600` and confirm success. On Windows, grant another local principal read access and change ownership away from the current user in separate trials; confirm `unsafe-permissions`, then restore the private ACL and current-user owner and confirm success.
+5. Using a temporary user-store fixture, grant group/other read permission bits on Linux/macOS or another principal read access on Windows. Confirm resolution succeeds when the OS permits the process to read the file and leaves permissions unchanged. On Windows, also verify readable stores with inherited ACL entries or a different owner remain eligible. Deny the process read access using the OS and confirm no value is returned; restore or remove the temporary fixture afterward.
 
-Expected: every unsafe/indeterminate state fails closed without reading/projecting values; ignore is never described as encryption.
+Expected: invalid repository/path/content states fail closed without projecting values; user-store permissions are governed by the OS, and Threadsmith does not reject shared permissions or change them. Ignore is never described as encryption.
 
 ## MTP-229 — Migrated consumers and OAuth compatibility
 
@@ -2149,3 +2149,35 @@ Prerequisites: disposable repositories only; a legacy release/database with expl
 4. Restart/resume/clone and switch repositories. Verify retired automatic facts do not return, explicit notes remain repository-local, and migration does not repeat imports. Stop all users of the disposable database, preserve the newer state with SQLite backup, integrity-check the recorded pre-migration backup, and exercise SQLite restore into a disposable destination.
 
 Expected: capacity is never exceeded and no failed write evicts content. Model/manual notes follow the same recency/frequency policy. Migration preserves valid manual intent without truncating long text; errors and degraded mode are truthful. Recovery is deliberate and SQLite-consistent, and a Git rollback alone never downgrades the database.
+
+### MTP-263 — Anthropic discovery, credentials, and model selection
+
+Prerequisites: a disposable repository, current build, trusted user Anthropic descriptor, and an operator-configured user secret. Never place the key in command arguments, logs, or the repository.
+
+1. Start headlessly and interactively; inspect `/models status <provider-id>`, select a discovered model, and record safe model IDs/profile GUIDs. Confirm existing defaults remain unchanged until selection.
+2. Refresh the provider, restart, and compare stable IDs, eligibility, freshness, and exclusion reasons. Confirm refresh alone does not mutate the current catalog.
+3. Use isolated user-state fixtures for missing/invalid keys, expired cache, transient discovery failure, repository-only descriptors, unsafe cache paths, and unsupported metadata. Restore the normal key after the test.
+
+Expected: direct API access uses only the configured eligible secret; status is actionable and credential-free. Authentication failure cannot activate stale models, transient discovery may use a valid stale snapshot, and repository configuration cannot replace trusted provider authority.
+
+### MTP-264 — Anthropic thinking, tool rounds, and privacy
+
+Prerequisites: a selected Anthropic model in a disposable repository, permission for a small billed test, and safe test files. Use controlled stream fixtures for failure/private-canary cases.
+
+1. Ask an ordinary question, request two independent read-only tool operations, then request a task needing a second tool round. Confirm answers use both rounds and no tool executes before message completion.
+2. Repeat with `/thinking off`, then `/thinking on`; use `--thinking on|off` headlessly. Change display between tool continuations without changing `/reasoning`. Exercise a supported effort level and verify unsupported `none` is rejected for a model that cannot disable reasoning.
+3. Request a small code mutation, inspect and approve its exact proposal, then undo it through the governed pipeline. Exercise a delegated explorer and a model-assisted skill when configured.
+4. Cancel during a tool round. Restart/resume and inspect logs/events/context using controlled signature/redaction canaries. Repeat malformed arguments, partial response, and oversized stream with the fixture provider.
+
+Expected: exact tool-result correlation and host authority survive every round; display changes affect the next request without reissuing work. Private signed/redacted blocks and credentials never enter durable or raw-log output. Restart preserves ordinary conversation without restoring private replay; failure never duplicates effects.
+
+### MTP-265 — Anthropic usage, cache behavior, and capacity
+
+Prerequisites: a live selected model for a small repeated-prefix experiment and deterministic native fixtures for exact usage/failure assertions.
+
+1. Submit two requests sharing a sufficiently long stable system/tool prefix within five minutes. Record only normalized usage, model identity, latency, and safe cache counters. Report a miss honestly; a live cache hit is not guaranteed.
+2. With controlled counters, verify input 100 plus cache-write 200 plus cache-read 300 becomes total input 600. Verify cumulative output 10 then 25 is accounted as 25, and omitted counters stay unknown.
+3. Exercise prepared native schemas and signed continuation near the context ceiling. Confirm conservative cold-write admission and an actionable capacity failure before network I/O when the required payload cannot fit.
+4. Simulate transient HTTP failure before output, failure after partial output, a blocked read, and caller cancellation. Confirm one bounded host retry loop and one total deadline; then make another request through the shared transport to verify it remains usable.
+
+Expected: observed costs distinguish ordinary/cache input and output without double-counting. Conservative estimates may reduce usable context; no signed content is compacted to force admission, missing usage is not invented, and retries never repeat observed output or tools.

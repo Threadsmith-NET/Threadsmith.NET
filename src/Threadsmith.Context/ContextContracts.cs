@@ -401,6 +401,12 @@ public sealed record ModelResolution(
     IReadOnlyList<string> Rationale,
     int RequestOutputTokenReserve = 0)
 {
+    /// <summary>Validated model default used when reasoning cannot be disabled.</summary>
+    public ReasoningLevel DefaultReasoningLevel { get; init; } = ReasoningLevel.None;
+
+    /// <summary>Whether the resolved model permits reasoning off; null retains legacy behavior.</summary>
+    public bool? SupportsReasoningOff { get; init; }
+
     /// <summary>Gets the effective per-request reserve, including compatibility for older callers.</summary>
     public int EffectiveRequestOutputTokenReserve => RequestOutputTokenReserve > 0
         ? RequestOutputTokenReserve

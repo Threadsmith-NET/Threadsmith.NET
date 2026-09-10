@@ -172,6 +172,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IRepositoryInstructionResolver? _instructionResolver;
     private readonly IHybridRepositoryMemoryRetriever? _repositoryMemoryRetriever;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
+    private readonly IModelRequestPreparationResolver? _requestPreparationResolver;
     private readonly IModelResolver? _modelResolver;
     private readonly ContextAssemblerOptions _options;
     private readonly ContextPolicy _policy;
@@ -195,7 +196,8 @@ public sealed class ContextAssembler : IContextAssembler
         IConversationStore? conversationStore = null,
         IRepositoryInstructionResolver? instructionResolver = null,
         IModelProviderInstructionResolver? providerInstructionResolver = null,
-        IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null)
+        IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null,
+        IModelRequestPreparationResolver? requestPreparationResolver = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -229,6 +231,7 @@ public sealed class ContextAssembler : IContextAssembler
         _instructionResolver = instructionResolver;
         _repositoryMemoryRetriever = repositoryMemoryRetriever;
         _providerInstructionResolver = providerInstructionResolver;
+        _requestPreparationResolver = requestPreparationResolver;
     }
 
     /// <inheritdoc />
@@ -373,7 +376,7 @@ public sealed class ContextAssembler : IContextAssembler
         var optionalConversationTokens = tokensByCategory["recentTurns"]
             + tokensByCategory["conversationSummary"]
             + tokensByCategory["retrievedMemory"]
-            + tokensByCategory["repositoryMemory"];
+            + tokensByCategory["repositoryMemory"] - repositoryMemory.RequiredTokens;
         var allowedKinds = ContextPolicy.GetAllowedKinds(request.Phase);
         Evidence[] candidates = [.. _evidence.Snapshot(request.SessionId)
             .Where(item => item.RunId is null || item.RunId == request.RunId)
@@ -558,16 +561,45 @@ public sealed class ContextAssembler : IContextAssembler
                 outputSchema,
                 additionalMessages);
             var stablePrefixCount = Math.Min(3, currentMessages.Count);
-            var wireTokens = ModelWireEstimator.Estimate(
+            var currentEstimate = ModelWireEstimator.Estimate(
                 currentMessages,
                 canonicalTools,
                 request.ToolTransportMode,
                 stablePrefixCount,
                 modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
                 providerInstructions,
-                _prompts)
-                .WireInputTokens;
-            return Math.Max(legacyTokens, wireTokens);
+                _prompts);
+            var prepared = PrepareWire(currentModelInput, currentMessages, currentEstimate, null);
+            return Math.Max(legacyTokens, prepared.WireInputTokens);
+        }
+
+        ModelWireEstimate PrepareWire(
+            string input,
+            IReadOnlyList<ModelMessage> requestMessages,
+            ModelWireEstimate estimate,
+            ModelRequestLayout? requestLayout)
+        {
+            if (_requestPreparationResolver is null || modelResolution is null)
+            {
+                return estimate;
+            }
+
+            var candidate = _requestPreparationResolver.Prepare(new ModelStreamRequest
+            {
+                RunId = request.RunId,
+                Input = input,
+                ResolvedProfileId = modelResolution.ProfileId,
+                MaximumOutputTokens = modelResolution.EffectiveRequestOutputTokenReserve,
+                ReasoningLevel = modelResolution.DefaultReasoningLevel,
+                IncludeReasoningText = false,
+                Messages = requestMessages,
+                Tools = canonicalTools,
+                ToolTransportMode = request.ToolTransportMode,
+                ProviderInstructions = providerInstructions,
+                Layout = requestLayout,
+                WireEstimate = estimate,
+            });
+            return candidate.WireEstimate ?? estimate;
         }
 
         if (totalTokens > tokenBudget)
@@ -643,6 +675,7 @@ public sealed class ContextAssembler : IContextAssembler
             modelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
             providerInstructions,
             _prompts);
+        wireEstimate = PrepareWire(modelInput, messages, wireEstimate, layout);
         if (wireEstimate.WireInputTokens > tokenBudget)
         {
             throw new InvalidOperationException(
@@ -916,7 +949,7 @@ public sealed class ContextAssembler : IContextAssembler
                 assembly.AddExcludedMessage(message, "Message is outside the hot recent-turn age window.");
             }
 
-            var turns = CreateCompleteTurns(priorMessages);
+            var turns = CreateCompleteTurns(priorMessages, state.Messages);
             foreach (var turn in turns
                 .TakeLast(_options.Conversation.RecentTurnCount))
             {
@@ -950,7 +983,10 @@ public sealed class ContextAssembler : IContextAssembler
         ConversationAssemblyState conversation,
         CancellationToken cancellationToken)
     {
-        var assembly = new RepositoryMemoryAssemblyState(2_000, _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance));
+        var assembly = new RepositoryMemoryAssemblyState(
+            2_000,
+            _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance),
+            _prompts.Get(PromptFileNames.SystemStandingPreferenceGuidance));
         if (_repositoryMemoryRetriever is null || !request.RepositoryMemoriesEnabled
             || conversation.Mode == ConversationContextMode.Stateless)
         {
@@ -969,6 +1005,12 @@ public sealed class ContextAssembler : IContextAssembler
                 Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
             },
             cancellationToken);
+        foreach (var entry in retrieval.StandingPreferences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            assembly.AddStandingPreference(entry with { Text = _sanitizer.Sanitize(entry.Text) });
+        }
+
         foreach (var candidate in retrieval.Selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1032,21 +1074,51 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     private static List<IReadOnlyList<ConversationMessage>> CreateCompleteTurns(
-        IEnumerable<ConversationMessage> messages)
+        IEnumerable<ConversationMessage> messages,
+        IReadOnlyList<ConversationMessage> archive)
     {
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
-        for (var index = 0; index + 1 < ordered.Length; index++)
+        var pendingUsers = new Dictionary<RunId, ConversationMessage>();
+        foreach (var message in ordered)
         {
-            if (ordered[index].Role == ConversationRole.User
-                && ordered[index + 1].Role == ConversationRole.Assistant)
+            if (message.Role == ConversationRole.User)
             {
-                turns.Add([ordered[index], ordered[index + 1]]);
-                index++;
+                pendingUsers[message.RunId] = message;
+            }
+            else if (message.Role == ConversationRole.Assistant
+                && pendingUsers.Remove(message.RunId, out var user))
+            {
+                // Overlapping runs may finish in a different order from their requests.
+                // Pair by identity and retain complete exchanges in completion order.
+                turns.Add([user, message]);
             }
         }
 
-        return turns;
+        // Older clones assigned a different run id to every copied message. Retain their
+        // original adjacent pairs only when neither side has a counterpart anywhere in the
+        // archive; filtering the current/expired messages cannot create legacy eligibility.
+        HashSet<RunId> userRuns = [.. archive.Where(message => message.Role == ConversationRole.User)
+            .Select(message => message.RunId)];
+        HashSet<RunId> assistantRuns = [.. archive.Where(message => message.Role == ConversationRole.Assistant)
+            .Select(message => message.RunId)];
+        for (var index = 0; index + 1 < ordered.Length; index++)
+        {
+            var user = ordered[index];
+            var assistant = ordered[index + 1];
+            if (user.Role == ConversationRole.User
+                && assistant.Role == ConversationRole.Assistant
+                && assistant.Sequence == user.Sequence + 1
+                && user.SchemaVersion == 1
+                && assistant.SchemaVersion == 1
+                && !assistantRuns.Contains(user.RunId)
+                && !userRuns.Contains(assistant.RunId))
+            {
+                turns.Add([user, assistant]);
+            }
+        }
+
+        return [.. turns.OrderBy(turn => turn[1].Sequence)];
     }
 
     private static PromptAssetReference CreateAssetReference(
@@ -1268,7 +1340,6 @@ public sealed class ContextAssembler : IContextAssembler
                 repositoryMemory.Content));
         }
 
-        messages.AddRange(conversation.CreateRecentMessages());
         messages.Add(CreateTextMessage(
             ModelMessageRole.Developer,
             "governed-request-state",
@@ -1286,11 +1357,14 @@ public sealed class ContextAssembler : IContextAssembler
                         : $"\n<available_tools>{toolSchemas}</available_tools>",
                     ["RequiredOutput"] = $"\n<required_output>{Escape(outputSchema)}</required_output>",
                 })));
+        var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
+        messages.AddRange(additionalPrefix);
+        messages.AddRange(conversation.CreateRecentMessages());
         messages.Add(CreateTextMessage(
             ModelMessageRole.User,
             "current-user",
             conversation.CurrentTurnContent));
-        messages.AddRange(additionalMessages);
+        messages.AddRange(additionalMessages.Skip(additionalPrefix.Length));
         return messages;
     }
 
@@ -1379,23 +1453,43 @@ public sealed class ContextAssembler : IContextAssembler
     {
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
+        private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _standingPreferences = [];
         private readonly int _maximumTokens;
         private readonly string _guidance;
+        private readonly string _standingGuidance;
         private int _includedTokens;
+        private int _standingTokens;
 
-        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance)
+        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance, string standingGuidance)
         {
             _maximumTokens = maximumTokens;
             _guidance = guidance;
+            _standingGuidance = standingGuidance;
         }
 
         public bool CanReduce => _included.Count > 0;
 
-        public bool ContainsSensitiveData => _included.Any(item => item.Candidate.Entry.Sensitivity == ConversationSensitivity.Sensitive);
+        public bool ContainsSensitiveData => _included.Concat(_standingPreferences)
+            .Any(item => item.Candidate.Entry.Sensitivity == ConversationSensitivity.Sensitive);
 
-        public string Content => _included.Count == 0 ? string.Empty : Render(_included.Select(item => item.Candidate));
+        public string Content => _standingPreferences.Count == 0
+            ? SituationalContent
+            : RenderStanding(_standingPreferences.Select(item => item.Candidate))
+                + (_included.Count == 0 ? string.Empty : "\n" + SituationalContent);
 
         public List<string> Reductions { get; } = [];
+
+        public int RequiredTokens => _standingTokens;
+
+        private string SituationalContent => _included.Count == 0 ? string.Empty : Render(_included.Select(item => item.Candidate));
+
+        public void AddStandingPreference(RepositoryMemoryEntry entry)
+        {
+            var candidate = new RepositoryMemoryRetrievalCandidate(entry, 0, null, null, null);
+            var total = TokenEstimator.Estimate(RenderStanding(_standingPreferences.Select(item => item.Candidate).Append(candidate)));
+            _standingPreferences.Add((candidate, total - _standingTokens));
+            _standingTokens = total;
+        }
 
         public void AddExcluded(RepositoryMemoryRetrievalCandidate candidate, string reason, int tokens)
         {
@@ -1406,10 +1500,11 @@ public sealed class ContextAssembler : IContextAssembler
         }
 
         public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions() =>
-            [.. _included.Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
+            [.. _standingPreferences.Concat(_included).Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
 
         public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections() =>
-            [.. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
+            [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),
+                .. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
 
         public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate) =>
             TokenEstimator.Estimate(Render(_included.Select(item => item.Candidate).Append(candidate))) - _includedTokens;
@@ -1448,16 +1543,23 @@ public sealed class ContextAssembler : IContextAssembler
                 $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
             + "\n</repository_memory>";
 
+        private string RenderStanding(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
+            _standingGuidance + "\n<standing_preferences untrusted=\"true\">\n"
+            + string.Join('\n', candidates.Select(candidate =>
+                $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
+            + "\n</standing_preferences>";
+
         private static RepositoryMemoryContextItemProjection CreateProjection(
             RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens) => new()
         {
             Id = candidate.Entry.Id,
             Origin = candidate.Entry.Origin,
+            MemoryType = candidate.Entry.MemoryType,
             Revision = candidate.Entry.Revision,
             Included = included,
             Rationale = reason,
             EstimatedTokens = tokens,
-            Score = candidate.Score,
+            Score = candidate.Entry.MemoryType == RepositoryMemoryType.StandingPreference ? null : candidate.Score,
             LexicalRank = candidate.LexicalRank,
             SemanticRank = candidate.SemanticRank,
             CosineSimilarity = candidate.CosineSimilarity,

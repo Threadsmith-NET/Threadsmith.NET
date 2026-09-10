@@ -1,6 +1,8 @@
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
@@ -57,6 +59,85 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(2, (await fixture.Store.GetSnapshotAsync("repo", [])).Entries.Count);
     }
 
+    /// <summary>A same-text type change advances the content fence while retaining the compatible vector.</summary>
+    [Fact]
+    public async Task Type_only_update_preserves_vector_and_rebuilds_lexical_membership()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var added = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("Always use alpha cancellation"), Model, Embedding, new())).Entry);
+        var update = await fixture.Store.UpdateAsync(
+            "repo",
+            added.Id,
+            added.Revision,
+            Write(added.Text, RepositoryMemoryType.StandingPreference),
+            null,
+            null,
+            new());
+
+        var updated = Assert.IsType<RepositoryMemoryEntry>(update.Entry);
+        Assert.Equal(RepositoryMemoryWriteStatus.Updated, update.Status);
+        Assert.Equal(RepositoryMemoryType.StandingPreference, updated.MemoryType);
+        Assert.Equal(2, updated.Revision);
+        Assert.Equal(added.Embedding.ToArray(), updated.Embedding.ToArray());
+        Assert.Equal(updated.ContentHash, updated.EmbeddingContentHash);
+        Assert.Equal(updated.Revision, updated.EmbeddingRevision);
+        Assert.Equal(1, update.StandingPreferenceCount);
+        Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["alpha"])).LexicalMatches);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => fixture.Store.UpdateAsync(
+            "repo",
+            updated.Id,
+            updated.Revision,
+            Write("Changed text requires an embedding"),
+            null,
+            null,
+            new()));
+        var afterRejectedTextChange = Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries);
+        Assert.Equal(updated.Text, afterRejectedTextChange.Text);
+        Assert.Equal(updated.Revision, afterRejectedTextChange.Revision);
+
+        await fixture.Store.UpdateAsync("repo", updated.Id, updated.Revision, Write(updated.Text), Model, Embedding, new());
+        Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["alpha"])).LexicalMatches);
+    }
+
+    /// <summary>Standing and situational entries share one bounded store capacity.</summary>
+    [Fact]
+    public async Task Mixed_memory_types_share_the_total_storage_capacity()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var options = new RepositoryMemoryOptions { MaxNumberOfRepoMemories = 2 };
+        await fixture.Store.AddAsync("repo", Write("Standing first", RepositoryMemoryType.StandingPreference), Model, Embedding, options);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(1));
+        await fixture.Store.AddAsync("repo", Write("Situational second"), Model, Embedding, options);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(1));
+        var third = await fixture.Store.AddAsync("repo", Write("Standing third", RepositoryMemoryType.StandingPreference), Model, Embedding, options);
+
+        var entries = (await fixture.Store.GetSnapshotAsync("repo", [])).Entries;
+        Assert.Equal(2, entries.Count);
+        Assert.Single(third.EvictedIds);
+        Assert.Equal(1, third.StandingPreferenceCount);
+        Assert.Single(entries, entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
+        Assert.Single(entries, entry => entry.MemoryType == RepositoryMemoryType.Situational);
+    }
+
+    /// <summary>Standing entries are absent from the FTS corpus, leaving situational BM25 scores unchanged.</summary>
+    [Fact]
+    public async Task Standing_preferences_do_not_change_situational_lexical_ranks()
+    {
+        await using var baseline = await MemoryDatabase.CreateAsync();
+        await using var mixed = await MemoryDatabase.CreateAsync();
+        foreach (var text in new[] { "alpha beta implementation", "alpha implementation" })
+        {
+            await baseline.Store.AddAsync("repo", Write(text), Model, Embedding, new());
+            await mixed.Store.AddAsync("repo", Write(text), Model, Embedding, new());
+        }
+
+        await mixed.Store.AddAsync("repo", Write("alpha beta alpha beta guidance", RepositoryMemoryType.StandingPreference), Model, Embedding, new());
+        var baselineRanks = await ReadLexicalRanksAsync(baseline.Store);
+        var mixedRanks = await ReadLexicalRanksAsync(mixed.Store);
+        Assert.Equal(baselineRanks, mixedRanks);
+    }
+
     /// <summary>Complete-input bounds reject truncation, oversized text and invalid vectors before any eviction.</summary>
     [Fact]
     public async Task Invalid_embeddings_and_text_never_evict_at_capacity_one()
@@ -80,6 +161,16 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(entry.Id, Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries).Id);
         var boundary = await fixture.Store.AddAsync("repo", Write(new string('x', 2_000)), Model, Embedding with { InputTokenCount = 256 }, options);
         Assert.Equal(RepositoryMemoryWriteStatus.Added, boundary.Status);
+    }
+
+    /// <summary>Warning thresholds are nonnegative configuration, independently of storage capacity.</summary>
+    [Fact]
+    public void Standing_preference_warning_threshold_rejects_negative_values()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryOptions
+        {
+            StandingPreferenceWarningThreshold = -1,
+        }.Validate());
     }
 
     /// <summary>Capacity one evicts the old entry rather than the incoming note, even during protection.</summary>
@@ -210,11 +301,12 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Forgotten, userCommand: true, "Forgotten manual");
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Active, userCommand: false, "No command provenance");
         var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
-        Assert.Equal(10, await runner.RunAsync());
+        Assert.Equal(11, await runner.RunAsync());
         var imported = Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries);
         Assert.Equal(manual, imported.Id);
         Assert.Equal(2_001, imported.Text.Length);
         Assert.Equal(RepositoryMemoryOrigin.Manual, imported.Origin);
+        Assert.Equal(RepositoryMemoryType.Situational, imported.MemoryType);
         Assert.True(imported.Embedding.IsEmpty);
         var backup = Assert.IsType<string>(runner.LastBackupPath);
         Assert.True(File.Exists(backup));
@@ -223,9 +315,74 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var query = restored.CreateCommand();
         query.CommandText = "SELECT count(*) FROM repository_memory;";
         Assert.Equal(4L, await query.ExecuteScalarAsync());
-        Assert.Equal(10, await runner.RunAsync());
+        Assert.Equal(11, await runner.RunAsync());
         Assert.Equal(1, await fixture.ScalarAsync("SELECT imported_count FROM managed_memory_migration;"));
         Assert.Equal(3, await fixture.ScalarAsync("SELECT dropped_count FROM managed_memory_migration;"));
+    }
+
+    /// <summary>A later memory-schema SQLite failure rolls back v10 import, cap eviction and legacy retirement together.</summary>
+    [Fact]
+    public async Task Failed_memory_type_migration_preserves_version_nine_notes_and_schema()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync(migrate: false);
+        await PrepareVersionNineWithOverCapacityManualEntriesAsync(fixture);
+        var migrations = DefaultMigrations.All.Take(11).Append(new FailingMemoryTypeMigration());
+
+        await Assert.ThrowsAsync<SqliteException>(() => new MigrationRunner(fixture.ConnectionString, migrations).RunAsync());
+
+        var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
+        Assert.Equal(9, await runner.ReadCurrentVersionAsync());
+        Assert.Equal(22, await fixture.ScalarAsync("SELECT count(*) FROM repository_memory;"));
+        Assert.Equal(0, await fixture.ScalarAsync("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_memories';"));
+    }
+
+    /// <summary>Cancellation during a later memory-schema migration also rolls back v10's destructive work.</summary>
+    [Fact]
+    public async Task Cancelled_memory_type_migration_preserves_version_nine_notes_and_schema()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync(migrate: false);
+        await PrepareVersionNineWithOverCapacityManualEntriesAsync(fixture);
+        using var cancellation = new CancellationTokenSource();
+        var migrations = DefaultMigrations.All.Take(11).Append(new CancellingMemoryTypeMigration(cancellation));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new MigrationRunner(fixture.ConnectionString, migrations).RunAsync(cancellation.Token));
+
+        var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
+        Assert.Equal(9, await runner.ReadCurrentVersionAsync());
+        Assert.Equal(22, await fixture.ScalarAsync("SELECT count(*) FROM repository_memory;"));
+        Assert.Equal(0, await fixture.ScalarAsync("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_memories';"));
+    }
+
+    /// <summary>A v10 upgrade may commit v11 before capacity enforcement, but a failing later cap leaves every target note intact.</summary>
+    [Fact]
+    public async Task Failed_capacity_after_version_ten_upgrade_preserves_target_notes()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync(migrate: false);
+        var repositoryRoot = Path.Combine(fixture.DirectoryPath, "version-ten-target");
+        var databasePath = Path.Combine(repositoryRoot, ".threadsmith", "threadsmith.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath) ?? repositoryRoot);
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath, Pooling = false }.ToString();
+        await new SqliteEventStore(connectionString).InitializeAsync();
+        await new MigrationRunner(connectionString, DefaultMigrations.All.Take(11)).RunAsync();
+        var identity = RepositoryIdentity.Create(repositoryRoot);
+        await InsertVersionTenManagedEntriesAsync(connectionString, identity, 22);
+        await using (var connection = new SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            await using var trigger = connection.CreateCommand();
+            trigger.CommandText = "CREATE TRIGGER fail_capacity BEFORE DELETE ON managed_memories BEGIN SELECT RAISE(ABORT, 'injected capacity failure'); END;";
+            await trigger.ExecuteNonQueryAsync();
+        }
+
+        using var router = new RepositoryBoundMemoryStore(fixture.ConnectionString, fixture.DirectoryPath, fixture.Clock);
+        await Assert.ThrowsAsync<SqliteException>(() => router.BindRepositoryAsync(repositoryRoot, maximumMemoryCount: 20));
+
+        await using var verify = new SqliteConnection(connectionString);
+        await verify.OpenAsync();
+        await using var count = verify.CreateCommand();
+        count.CommandText = "SELECT count(*) FROM managed_memories;";
+        Assert.Equal(22L, await count.ExecuteScalarAsync());
+        Assert.Equal(11, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
     }
 
     /// <summary>Repository switches select distinct local databases and reject stale identity calls.</summary>
@@ -476,7 +633,56 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(0L, await receiptSchema.ExecuteScalarAsync());
     }
 
-    private static RepositoryMemoryWrite Write(string text) => new() { Text = text, Origin = RepositoryMemoryOrigin.Manual };
+    private static RepositoryMemoryWrite Write(string text, RepositoryMemoryType memoryType = RepositoryMemoryType.Situational) => new()
+    {
+        Text = text,
+        Origin = RepositoryMemoryOrigin.Manual,
+        MemoryType = memoryType,
+    };
+
+    private static async Task<IReadOnlyList<(string Text, double Bm25)>> ReadLexicalRanksAsync(SqliteManagedRepositoryMemoryStore store)
+    {
+        var snapshot = await store.GetSnapshotAsync("repo", ["alpha", "beta"]);
+        return [.. snapshot.LexicalMatches.Select(match =>
+            (snapshot.Entries.Single(entry => entry.Id == match.Id).Text, match.Bm25))];
+    }
+
+    private static async Task PrepareVersionNineWithOverCapacityManualEntriesAsync(MemoryDatabase fixture)
+    {
+        await new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All.Take(10)).RunAsync();
+        for (var index = 0; index < 22; index++)
+        {
+            await InsertLegacyAsync(
+                fixture,
+                RepositoryMemoryId.New(),
+                RepositoryMemoryAuthority.UserAuthored,
+                RepositoryMemoryValidity.Active,
+                userCommand: true,
+                "Manual memory " + index);
+        }
+    }
+
+    private static async Task InsertVersionTenManagedEntriesAsync(string connectionString, string repositoryIdentity, int count)
+    {
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
+        for (var index = 0; index < count; index++)
+        {
+            var text = "Version ten memory " + index;
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO managed_memories(memory_id, repository_identity, text, content_hash, content_revision,
+                    origin, sensitivity, created_at, updated_at, embedding_dimensions, inclusion_count)
+                VALUES($id, $repository, $text, $hash, 1, 'manual', 0, $now, $now, 0, 0);
+                """;
+            command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$repository", repositoryIdentity);
+            command.Parameters.AddWithValue("$text", text);
+            command.Parameters.AddWithValue("$hash", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant());
+            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            await command.ExecuteNonQueryAsync();
+        }
+    }
 
     private static async Task InsertLegacyAsync(
         MemoryDatabase fixture,
@@ -512,6 +718,42 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         public override DateTimeOffset GetUtcNow() => _now;
 
         internal void Advance(TimeSpan elapsed) => _now += elapsed;
+    }
+
+    private sealed class FailingMemoryTypeMigration : IDatabaseMigration
+    {
+        public int Version => 11;
+
+        public string Name => "Injected failing memory type migration";
+
+        public async Task ApplyAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT missing_memory_type_column FROM managed_memories;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private sealed class CancellingMemoryTypeMigration : IDatabaseMigration
+    {
+        private readonly CancellationTokenSource _cancellation;
+
+        public CancellingMemoryTypeMigration(CancellationTokenSource cancellation)
+        {
+            ArgumentNullException.ThrowIfNull(cancellation);
+            _cancellation = cancellation;
+        }
+
+        public int Version => 11;
+
+        public string Name => "Injected cancelled memory type migration";
+
+        public async Task ApplyAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+            await _cancellation.CancelAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
     private sealed class MemoryDatabase : IAsyncDisposable

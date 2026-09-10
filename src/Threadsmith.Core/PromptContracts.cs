@@ -164,6 +164,9 @@ public static class PromptFileNames
     /// <summary>Gets the relevance caveat preceding optional repository memory references.</summary>
     public const string SystemRepositoryMemoryGuidance = "System-RepositoryMemoryGuidance.md";
 
+    /// <summary>Gets the guidance for standing preferences included independently of query relevance.</summary>
+    public const string SystemStandingPreferenceGuidance = "System-StandingPreferenceGuidance.md";
+
     /// <summary>Gets the stable filename for the SystemGovernedRequestState prompt asset.</summary>
     public const string SystemGovernedRequestState = "System-GovernedRequestState.md";
 
@@ -196,6 +199,9 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ContextActiveRunSteering prompt asset.</summary>
     public const string ContextActiveRunSteering = "Context-ActiveRun-Steering.md";
+
+    /// <summary>Gets the stable filename for the ContextExecutionOutcome prompt asset.</summary>
+    public const string ContextExecutionOutcome = "Context-ExecutionOutcome.md";
 
     /// <summary>Gets the stable filename for the ContextCurrentTurnHostAuthorizedUserUrl prompt asset.</summary>
     public const string ContextCurrentTurnHostAuthorizedUserUrl = "Context-CurrentTurn-HostAuthorizedUserUrl.md";
@@ -1047,6 +1053,7 @@ public static class PromptFileNames
         SystemRequiredOutputPlan,
         SystemRepositoryInstructionsNone,
         SystemRepositoryMemoryGuidance,
+        SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
         SystemLegacyRequestEnvelope,
         SystemToolInventoryTextFallback,
@@ -1058,6 +1065,7 @@ public static class PromptFileNames
         ContextActiveTurnSummaryUntrustedWrapper,
         ContextActiveTurnSummaryHostFileLists,
         ContextActiveRunSteering,
+        ContextExecutionOutcome,
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
@@ -1376,6 +1384,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemRequiredOutputPlan,
             PromptFileNames.SystemRepositoryInstructionsNone,
             PromptFileNames.SystemRepositoryMemoryGuidance,
+            PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
             PromptFileNames.ContextActiveTurnCompactionSystem,
@@ -1466,6 +1475,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsSteering,
             PromptFileNames.ToolDelegateAgentsTruncation,
             PromptFileNames.ContextActiveRunSteering,
+            PromptFileNames.ContextExecutionOutcome,
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
             PromptFileNames.ToolToolInvocationCompleted,
             PromptFileNames.ToolChildAgentToolInvocationCompleted,
@@ -1601,6 +1611,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper] = Set("Version", "SummaryContent"),
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
+                    [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),

@@ -148,6 +148,7 @@ public sealed class MutationProposalApplication :
     {
         PropertyNameCaseInsensitive = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        AllowOutOfOrderMetadataProperties = true,
     };
 
     static MutationProposalApplication()
@@ -401,6 +402,8 @@ public sealed class MutationProposalApplication :
         {
             await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, modelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
             {
+                // Proposal attempts terminate here; no signed tool continuation crosses this boundary.
+                chunk.ResponseEnvelope?.Dispose();
                 if (chunk.Reasoning is not null)
                 {
                     await _events.PublishAsync(
@@ -468,11 +471,12 @@ public sealed class MutationProposalApplication :
                             toolRequest.ArgumentsJson,
                             JsonOptions);
                     }
-                    catch (JsonException exception)
+                    catch (Exception exception) when (exception is JsonException or NotSupportedException)
                     {
-                        var path = string.IsNullOrWhiteSpace(exception.Path)
-                            ? "$"
-                            : _sanitizer.Sanitize(exception.Path);
+                        var path = exception is JsonException jsonException
+                            && !string.IsNullOrWhiteSpace(jsonException.Path)
+                            ? _sanitizer.Sanitize(jsonException.Path)
+                            : "$";
                         throw CreateRepairableMutationFailure(
                             ModelCorrectionCategory.MutationProposal,
                             MalformedInvocationFailureKind.InvalidJsonArguments,
@@ -536,6 +540,31 @@ public sealed class MutationProposalApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (envelope is null && structured is null && modelRequest.ResponseFormat is not null)
+        {
+            try
+            {
+                envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(textOutput.ToString().Trim(), JsonOptions)
+                    ?? throw new JsonException("The final mutation proposal was empty.");
+            }
+            catch (Exception exception) when (exception is JsonException or NotSupportedException)
+            {
+                // Older providers return the complete host-identity shape. Preserve its strict parser and identity checks.
+                try
+                {
+                    structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim());
+                }
+                catch (MalformedModelOutputException fallbackException)
+                {
+                    throw CreateRepairableMutationFailure(
+                        ModelCorrectionCategory.MutationProposal,
+                        MalformedInvocationFailureKind.MutationSchemaMismatch,
+                        "The mutation proposal did not match the required structured mutation schema.",
+                        fallbackException);
+                }
+            }
+        }
+
         if (envelope is not null)
         {
             ValidateEnvelope(envelope);
@@ -684,20 +713,23 @@ public sealed class MutationProposalApplication :
                 DefaultModelProfileId = _sessionPreferences?.CurrentProfileId ?? _defaultModelProfileId,
                 ApprovedPlan = command.ApprovedPlan,
                 MutationBaseline = baseline,
-                ToolSchemas =
+                ToolSchemas = requiresToolCall ?
                 [
                     new ContextToolSchema(
                         _proposeMutationsTool.Name,
                         _proposeMutationsTool.Description,
                         _proposeMutationsTool.ArgumentsJsonSchema,
                         _proposeMutationsTool.PreferStrictArguments),
-                ],
+                ] : [],
                 AdditionalMessages = additionalMessages,
             },
             cancellationToken);
         var messages = context.Messages ?? [];
-        IReadOnlyList<ModelToolDefinition> modelTools = [_proposeMutationsTool];
-        return new ModelStreamRequest
+        IReadOnlyList<ModelToolDefinition> modelTools = requiresToolCall ? [_proposeMutationsTool] : [];
+        var reasoningFallback = context.ModelResolution?.SupportsReasoningOff == false
+            ? context.ModelResolution.DefaultReasoningLevel
+            : (ReasoningLevel?)null;
+        var modelRequest = new ModelStreamRequest
         {
             RunId = command.RunId,
             Input = context.ModelInput,
@@ -712,7 +744,9 @@ public sealed class MutationProposalApplication :
             RequiredCapabilities = context.RequiredCapabilities,
             SelectionConstraints = context.ModelConstraints,
             ResolvedProfileId = context.ModelResolution?.ProfileId,
-            ReasoningLevel = _sessionPreferences?.ResolveFor(context.ModelResolution?.ProfileId) ?? ReasoningLevel.None,
+            ReasoningLevel = _sessionPreferences?.ResolveFor(
+                context.ModelResolution?.ProfileId,
+                reasoningFallback) ?? reasoningFallback ?? ReasoningLevel.None,
             MaximumOutputTokens = context.ModelResolution?.EffectiveRequestOutputTokenReserve,
             Tools = modelTools,
             AllowMultipleToolCalls = false,
@@ -721,7 +755,16 @@ public sealed class MutationProposalApplication :
             ToolTransportMode = ToolTransportMode.Native,
             WireEstimate = EstimateAndValidateCompleteRequest(context, messages, modelTools),
             ProviderInstructions = context.ProviderInstructions,
+            IncludeReasoningText = _sessionPreferences?.IncludeReasoningText ?? false,
+            ResponseFormat = requiresToolCall
+                ? null
+                : new ModelResponseFormat
+                {
+                    SchemaId = "threadsmith.mutation-proposal.v1",
+                    JsonSchema = ProposeMutationsArgumentsSchema,
+                },
         };
+        return ModelRequestPreparation.Prepare(_model, modelRequest);
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()

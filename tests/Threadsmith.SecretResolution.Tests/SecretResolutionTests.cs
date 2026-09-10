@@ -224,7 +224,6 @@ public sealed class SecretResolutionTests
             fixture.UserStorePath,
             $"{{\"secrets\":{{\"tests\":{{\"{fixture.Id}\":\"first\",\"{fixture.Id.ToUpperInvariant()}\":\"second\"}}}}}}",
             new UTF8Encoding(false));
-        fixture.SecureUserStore();
 
         var result = await new UserFileSecretProvider(fixture.UserStorePath)
             .TryResolveAsync(fixture.CreateRequest());
@@ -234,9 +233,9 @@ public sealed class SecretResolutionTests
         Assert.DoesNotContain("second", result.ToString(), StringComparison.Ordinal);
     }
 
-    /// <summary>A Windows user store readable by another local principal is rejected.</summary>
+    /// <summary>Windows user stores use normal read access without rejecting or changing shared ACLs.</summary>
     [Fact]
-    public async Task UserProvider_RejectsUnsafeWindowsAclAsync()
+    public async Task UserProvider_AcceptsSharedWindowsAclWithoutChangingItAsync()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -245,14 +244,62 @@ public sealed class SecretResolutionTests
 
         using var fixture = new SecretFixture();
         fixture.WriteUser("canary-secret");
-        fixture.GrantWindowsWorldRead();
+        fixture.SetWindowsWorldRead(AccessControlType.Allow);
+        var file = new FileInfo(fixture.UserStorePath);
+        var before = file.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+
+        var result = await new UserFileSecretProvider(fixture.UserStorePath)
+            .TryResolveAsync(fixture.CreateRequest());
+
+        Assert.Equal(SecretResolutionFailure.None, result.Failure);
+        Assert.Equal("canary-secret", result.Value?.Reveal());
+        Assert.DoesNotContain("canary-secret", result.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, file.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
+    }
+
+    /// <summary>An operating-system read denial still prevents secret resolution.</summary>
+    [Fact]
+    public async Task UserProvider_RespectsWindowsReadDenialAsync()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SecretFixture();
+        fixture.WriteUser("canary-secret");
+        fixture.SetWindowsWorldRead(AccessControlType.Deny);
 
         var result = await new UserFileSecretProvider(fixture.UserStorePath)
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
-        Assert.Equal("unsafe-permissions", result.DiagnosticCode);
+        Assert.Equal("access-denied", result.DiagnosticCode);
         Assert.Null(result.Value);
+        Assert.DoesNotContain("canary-secret", result.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Unix user stores use normal read access without imposing owner-only mode bits.</summary>
+    [Fact]
+    public async Task UserProvider_AcceptsSharedUnixModeWithoutChangingItAsync()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SecretFixture();
+        fixture.WriteUser("canary-secret");
+        const UnixFileMode mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+        File.SetUnixFileMode(fixture.UserStorePath, mode);
+
+        var result = await new UserFileSecretProvider(fixture.UserStorePath)
+            .TryResolveAsync(fixture.CreateRequest());
+
+        Assert.Equal(SecretResolutionFailure.None, result.Failure);
+        Assert.Equal("canary-secret", result.Value?.Reveal());
+        Assert.DoesNotContain("canary-secret", result.ToString(), StringComparison.Ordinal);
+        Assert.Equal(mode, File.GetUnixFileMode(fixture.UserStorePath));
     }
 
     /// <summary>Repository transitions atomically redirect future repository lookups.</summary>
@@ -595,37 +642,15 @@ public sealed class SecretResolutionTests
             _gitInitialized = true;
         }
 
-        internal void SecureUserStore()
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                using var identity = WindowsIdentity.GetCurrent();
-                var currentUser = identity.User;
-                Assert.NotNull(currentUser);
-
-                var security = new FileSecurity();
-                security.SetOwner(currentUser);
-                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    currentUser,
-                    FileSystemRights.FullControl,
-                    AccessControlType.Allow));
-                new FileInfo(UserStorePath).SetAccessControl(security);
-                return;
-            }
-
-            File.SetUnixFileMode(UserStorePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-
         [SupportedOSPlatform("windows")]
-        internal void GrantWindowsWorldRead()
+        internal void SetWindowsWorldRead(AccessControlType accessControlType)
         {
             var file = new FileInfo(UserStorePath);
             var security = file.GetAccessControl();
             security.AddAccessRule(new FileSystemAccessRule(
                 new SecurityIdentifier(WellKnownSidType.WorldSid, domainSid: null),
                 FileSystemRights.ReadData,
-                AccessControlType.Allow));
+                accessControlType));
             file.SetAccessControl(security);
         }
 
@@ -648,7 +673,6 @@ public sealed class SecretResolutionTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(UserStorePath) ?? Root);
             File.WriteAllText(UserStorePath, Json(value), new UTF8Encoding(false));
-            SecureUserStore();
         }
 
         private void RunGit(params string[] arguments)

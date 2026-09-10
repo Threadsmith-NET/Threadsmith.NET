@@ -33,7 +33,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: true);
         var warnings = new List<string>();
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, warnings, cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, warnings, cancellationToken: cancellationToken);
         await using var generation = CreateCommand(connection, transaction, "SELECT revision FROM managed_memory_repositories WHERE repository_identity = $repo;", repositoryIdentity);
         var revision = Convert.ToInt64(await generation.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
         var matches = await ReadLexicalMatchesAsync(connection, transaction, repositoryIdentity, lexicalTerms, cancellationToken);
@@ -56,7 +56,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken: cancellationToken);
         var duplicate = entries.FirstOrDefault(entry => entry.ContentHash == hash && entry.Text == write.Text);
         if (duplicate is not null)
         {
@@ -65,10 +65,14 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
 
         var evicted = await EvictAsync(connection, transaction, repositoryIdentity, entries, options.MaxNumberOfRepoMemories - 1, now, cancellationToken);
         var entry = CreateEntry(repositoryIdentity, RepositoryMemoryId.New(), write, hash, now, now, 1, model, embedding);
-        await InsertEntryAsync(connection, transaction, entry, cancellationToken);
+        await InsertEntryAsync(connection, transaction, entry, cancellationToken: cancellationToken);
         await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Added, entry, evicted);
+        return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Added, entry, evicted)
+        {
+            StandingPreferenceCount = entries.Count(candidate => candidate.MemoryType == RepositoryMemoryType.StandingPreference) +
+                (entry.MemoryType == RepositoryMemoryType.StandingPreference ? 1 : 0),
+        };
     }
 
     /// <inheritdoc />
@@ -77,18 +81,18 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         RepositoryMemoryId id,
         long expectedRevision,
         RepositoryMemoryWrite write,
-        TextEmbeddingModelDescriptor model,
-        TextEmbeddingResult embedding,
+        TextEmbeddingModelDescriptor? model,
+        TextEmbeddingResult? embedding,
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default)
     {
-        ValidateWrite(repositoryIdentity, write, model, embedding, options);
+        ValidateWrite(repositoryIdentity, write, options);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedRevision);
         var hash = ComputeHash(write.Text);
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken: cancellationToken);
         var existing = entries.FirstOrDefault(entry => entry.Id == id);
         if (existing is null)
         {
@@ -100,28 +104,41 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
             return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Conflict, existing, []);
         }
 
-        if (existing.ContentHash == hash && existing.Text == write.Text)
+        var sameText = existing.ContentHash == hash && existing.Text == write.Text;
+        if (sameText && existing.MemoryType == write.MemoryType)
         {
             return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Unchanged, existing, []);
         }
 
-        var duplicate = entries.FirstOrDefault(entry => entry.Id != id && entry.ContentHash == hash && entry.Text == write.Text);
-        if (duplicate is not null)
+        RepositoryMemoryEntry updated;
+        if (sameText)
         {
-            return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Duplicate, duplicate, []);
+            updated = CreateTypeUpdatedEntry(existing, write, _timeProvider.GetUtcNow());
+        }
+        else
+        {
+            ArgumentNullException.ThrowIfNull(model);
+            ArgumentNullException.ThrowIfNull(embedding);
+            ValidateEmbedding(model, embedding);
+            var duplicate = entries.FirstOrDefault(entry => entry.Id != id && entry.ContentHash == hash && entry.Text == write.Text);
+            if (duplicate is not null)
+            {
+                return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Duplicate, duplicate, []);
+            }
+
+            updated = CreateEntry(repositoryIdentity, id, write, hash, existing.CreatedAt, _timeProvider.GetUtcNow(), checked(existing.Revision + 1), model, embedding);
         }
 
-        var updated = CreateEntry(repositoryIdentity, id, write, hash, existing.CreatedAt, _timeProvider.GetUtcNow(), checked(existing.Revision + 1), model, embedding);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$repo", repositoryIdentity);
         command.CommandText = """
             UPDATE managed_memories SET text = $text, content_hash = $hash, content_revision = $revision,
-                origin = $origin, sensitivity = $sensitivity, updated_at = $updated,
+                origin = $origin, memory_type = $memoryType, sensitivity = $sensitivity, updated_at = $updated,
                 source_session_id = $session, source_run_id = $run, source_invocation_id = $invocation,
                 inclusion_count = 0, last_included_at = NULL, embedding = $embedding,
                 embedding_space_id = $space, embedding_dimensions = $dimensions,
-                embedding_content_hash = $hash, embedding_revision = $revision
+                embedding_content_hash = $vectorHash, embedding_revision = $vectorRevision
             WHERE repository_identity = $repo AND memory_id = $id;
             DELETE FROM managed_memory_inclusions WHERE repository_identity = $repo AND memory_id = $id;
             """;
@@ -132,7 +149,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         var evicted = await EvictAsync(connection, transaction, repositoryIdentity, entries, options.MaxNumberOfRepoMemories, _timeProvider.GetUtcNow(), cancellationToken);
         await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Updated, updated, evicted);
+        return new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Updated, updated, evicted)
+        {
+            StandingPreferenceCount = entries.Count(candidate => candidate.MemoryType == RepositoryMemoryType.StandingPreference),
+        };
     }
 
     /// <inheritdoc />
@@ -142,7 +162,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken: cancellationToken);
         var existing = entries.FirstOrDefault(entry => entry.Id == id);
         if (existing is null)
         {
@@ -168,7 +188,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken: cancellationToken);
         var evicted = await EvictAsync(connection, transaction, repositoryIdentity, entries, options.MaxNumberOfRepoMemories, _timeProvider.GetUtcNow(), cancellationToken);
         if (evicted.Count > 0)
         {
@@ -278,6 +298,12 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         TextEmbeddingResult embedding,
         RepositoryMemoryOptions options)
     {
+        ValidateWrite(repositoryIdentity, write, options);
+        ValidateEmbedding(model, embedding);
+    }
+
+    private static void ValidateWrite(string repositoryIdentity, RepositoryMemoryWrite write, RepositoryMemoryOptions options)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
         ArgumentNullException.ThrowIfNull(write);
         ArgumentNullException.ThrowIfNull(options);
@@ -288,12 +314,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
             throw new ArgumentException("Memory text must be normalized and contain at most 2,000 characters; normalize before embedding.", nameof(write));
         }
 
-        if (!Enum.IsDefined(write.Origin) || !Enum.IsDefined(write.Sensitivity))
+        if (!Enum.IsDefined(write.Origin) || !Enum.IsDefined(write.MemoryType) || !Enum.IsDefined(write.Sensitivity))
         {
-            throw new ArgumentException("Memory origin and sensitivity must be host-owned supported values.", nameof(write));
+            throw new ArgumentException("Memory origin, type and sensitivity must be host-owned supported values.", nameof(write));
         }
-
-        ValidateEmbedding(model, embedding);
     }
 
     private static void ValidateEmbedding(TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding)
@@ -319,6 +343,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
             ContentHash = hash,
             Revision = revision,
             Origin = write.Origin,
+            MemoryType = write.MemoryType,
             Sensitivity = write.Sensitivity,
             CreatedAt = createdAt,
             UpdatedAt = updatedAt,
@@ -331,4 +356,29 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
             EmbeddingContentHash = hash,
             EmbeddingRevision = revision,
         };
+
+    private static RepositoryMemoryEntry CreateTypeUpdatedEntry(
+        RepositoryMemoryEntry existing, RepositoryMemoryWrite write, DateTimeOffset updatedAt)
+    {
+        var revision = checked(existing.Revision + 1);
+        var hasCompatibleEmbedding = !existing.Embedding.IsEmpty;
+        return existing with
+        {
+            Revision = revision,
+            Origin = write.Origin,
+            MemoryType = write.MemoryType,
+            Sensitivity = write.Sensitivity,
+            UpdatedAt = updatedAt,
+            InclusionCount = 0,
+            LastIncludedAt = null,
+            SourceSessionId = write.SourceSessionId,
+            SourceRunId = write.SourceRunId,
+            SourceInvocationId = write.SourceInvocationId,
+            Embedding = hasCompatibleEmbedding ? existing.Embedding : ReadOnlyMemory<float>.Empty,
+            EmbeddingSpaceId = hasCompatibleEmbedding ? existing.EmbeddingSpaceId : null,
+            EmbeddingDimensions = hasCompatibleEmbedding ? existing.EmbeddingDimensions : 0,
+            EmbeddingContentHash = hasCompatibleEmbedding ? existing.ContentHash : null,
+            EmbeddingRevision = hasCompatibleEmbedding ? revision : null,
+        };
+    }
 }

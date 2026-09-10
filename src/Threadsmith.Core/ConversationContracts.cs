@@ -79,8 +79,8 @@ public enum MemoryValidity
 /// <summary>Defines current durable conversation schema versions.</summary>
 public static class ConversationSchemaVersions
 {
-    /// <summary>Current archived-message schema.</summary>
-    public const int Message = 1;
+    /// <summary>Current archived-message schema; version two preserves request/response run correlation.</summary>
+    public const int Message = 2;
 
     /// <summary>Current governed-memory schema.</summary>
     public const int Memory = 1;

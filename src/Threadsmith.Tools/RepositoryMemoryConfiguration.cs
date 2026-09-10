@@ -69,6 +69,9 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
             RerankerEnabled = configuration.GetValue($"{SectionName}:RerankerEnabled", fallback.RerankerEnabled),
             RerankerCandidateLimit = configuration.GetValue($"{SectionName}:RerankerCandidateLimit", fallback.RerankerCandidateLimit),
             RerankerMinimumScore = ReadNullableDouble(configuration, $"{SectionName}:RerankerMinimumScore", fallback.RerankerMinimumScore),
+            StandingPreferenceWarningThreshold = configuration.GetValue(
+                $"{SectionName}:standingPreferenceWarningThreshold",
+                fallback.StandingPreferenceWarningThreshold),
         };
         options.Validate();
         return options;

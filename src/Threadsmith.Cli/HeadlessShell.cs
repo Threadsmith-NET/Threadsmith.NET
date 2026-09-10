@@ -125,6 +125,22 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
+    /// <summary>Inspects model discovery through the same command boundary as interactive selection.</summary>
+    public Task<ModelCatalogProviderStatus> GetModelCatalogStatusAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new GetModelCatalogStatusCommand(providerId), cancellationToken);
+    }
+
+    /// <summary>Refreshes provider metadata for the next application startup.</summary>
+    public Task<ModelCatalogRefreshResult> RefreshModelCatalogAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RefreshModelCatalogCommand(providerId), cancellationToken);
+    }
+
     /// <summary>Lists selectable models through the shared host command boundary.</summary>
     public Task<IReadOnlyList<SelectableModelEntry>> ListActiveModelsAsync(
         CancellationToken cancellationToken = default)
@@ -242,9 +258,18 @@ public sealed class HeadlessShell
         string repositoryIdentity,
         string text,
         CancellationToken cancellationToken = default)
+        => RememberRepositoryMemoryAsync(sessionId, repositoryIdentity, text, null, cancellationToken);
+
+    /// <summary>Creates an explicit repository-scoped memory item with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string text,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text),
+            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, memoryType),
             cancellationToken);
     }
 
@@ -278,9 +303,19 @@ public sealed class HeadlessShell
         RepositoryMemoryId memoryId,
         string replacementText,
         CancellationToken cancellationToken = default)
+        => UpdateRepositoryMemoryAsync(sessionId, repositoryIdentity, memoryId, replacementText, null, cancellationToken);
+
+    /// <summary>Updates an existing memory in place with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> UpdateRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        string replacementText,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText),
+            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText, memoryType),
             cancellationToken);
     }
 

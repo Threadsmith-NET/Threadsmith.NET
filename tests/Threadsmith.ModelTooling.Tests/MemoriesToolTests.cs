@@ -18,7 +18,7 @@ using Xunit;
 /// <summary>Exercises explicit memory admission and actual conversation dispatch boundaries.</summary>
 public static class MemoriesToolTests
 {
-    /// <summary>Canonical provider definitions retain exactly three closed fields and four actions.</summary>
+    /// <summary>Canonical provider definitions retain closed memory-type admission and four actions.</summary>
     [Fact]
     public static void Schema_IsClosedAndNullable()
     {
@@ -36,11 +36,16 @@ public static class MemoriesToolTests
         var definition = Assert.Single(definitions);
         using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
         var fields = schema.RootElement.GetProperty("properties");
-        Assert.Equal(["action", "id", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
+        Assert.Equal(["action", "id", "memoryType", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
         Assert.Equal(["add", "update", "remove", "list"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
         Assert.Contains("null", fields.GetProperty("id").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("null", fields.GetProperty("text").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(
+            ["situational", "standingPreference"],
+            fields.GetProperty("memoryType").GetProperty("enum").EnumerateArray()
+                .Where(value => value.ValueKind == JsonValueKind.String)
+                .Select(value => value.GetString()).OrderBy(value => value));
         Assert.Equal(ToolSideEffect.WritesRepositoryMemory, tool.Definition.SideEffect);
         Assert.Equal(ToolConcurrencyMode.SerializedPerResource, tool.Definition.Scheduling.ConcurrencyMode);
     }
@@ -73,6 +78,40 @@ public static class MemoriesToolTests
         Assert.Equal(0, memory.Receipts);
         Assert.Equal(RepositoryMemoryOrigin.Model, memory.LastOperation?.Origin);
         Assert.Equal("list", ((ITool)tool).GetActivityDetail(new MemoriesInput("list")));
+    }
+
+    /// <summary>Adds and promotions use the committed count and strict configured threshold; ordinary edits do not warn.</summary>
+    [Theory]
+    [InlineData("add", "standingPreference", 4, 3, true)]
+    [InlineData("add", "situational", 4, 3, true)]
+    [InlineData("add", null, 3, 3, false)]
+    [InlineData("add", "standingPreference", 1, 0, true)]
+    [InlineData("add", "standingPreference", null, 3, false)]
+    [InlineData("update", "standingPreference", 4, 3, true)]
+    [InlineData("update", "standingPreference", 4, 4, false)]
+    [InlineData("update", null, 4, 3, false)]
+    [InlineData("update", "situational", 4, 3, false)]
+    public static async Task Memory_writes_project_the_committed_warning(string action, string? type, int? count, int threshold, bool expected)
+    {
+        var memory = new MemoryService { StandingPreferenceCount = count };
+        var tool = new MemoriesTool(memory, new Options { StandingPreferenceWarningThreshold = threshold }, TestPromptLoader.Instance);
+        var invocation = Invocation(Path.GetTempPath());
+        var input = new MemoriesInput(action, Id: action == "update" ? Guid.NewGuid().ToString("D") : null, Text: "Keep pull requests small", MemoryType: type);
+
+        var output = await tool.ExecuteAsync(input, new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation));
+
+        var expectedType = type switch
+        {
+            "standingPreference" => RepositoryMemoryType.StandingPreference,
+            "situational" => RepositoryMemoryType.Situational,
+            _ => (RepositoryMemoryType?)null,
+        };
+        Assert.Equal(expectedType, memory.LastOperation?.MemoryType);
+        Assert.Equal(
+            expected ? $"You now have {count} preference memories. You may want to consider adding some of these to AGENTS.md for the repo." : null,
+            output.Value.StandingPreferenceWarning);
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            tool.DeserializeInput("{\"action\":\"add\",\"text\":\"x\",\"memoryType\":\"permanent\"}"));
     }
 
     /// <summary>The pipeline sanitizes live requested text while the durable memory result names its operation and entries.</summary>
@@ -139,6 +178,7 @@ public static class MemoriesToolTests
             ["tools:config:memories:RerankerEnabled"] = "true",
             ["tools:config:memories:RerankerCandidateLimit"] = "6",
             ["tools:config:memories:RerankerMinimumScore"] = "-2.5",
+            ["tools:config:memories:standingPreferenceWarningThreshold"] = "5",
         }).Build();
         var initial = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -153,6 +193,7 @@ public static class MemoriesToolTests
         Assert.False(source.Capture(RepositoryIdentity.Create(first)).RerankerEnabled);
         Assert.Equal(4, source.Capture(RepositoryIdentity.Create(first)).RerankerCandidateLimit);
         Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(first)).RerankerMinimumScore);
+        Assert.Equal(5, source.Capture(RepositoryIdentity.Create(first)).StandingPreferenceWarningThreshold);
         source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["tools:config:memories:RerankerEnabled"] = "false",
@@ -174,9 +215,11 @@ public static class MemoriesToolTests
         Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
         Assert.Equal(6, source.Capture(RepositoryIdentity.Create(next)).RerankerCandidateLimit);
         Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
+        Assert.Equal(5, source.Capture(RepositoryIdentity.Create(next)).StandingPreferenceWarningThreshold);
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:SemanticMinimum"] = "1.1" }).Build()));
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerCandidateLimit"] = "65" }).Build()));
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerMinimumScore"] = "NaN" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:standingPreferenceWarningThreshold"] = "-1" }).Build()));
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
         Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
         Assert.Throws<InvalidOperationException>(() => source.Capture(RepositoryIdentity.Create(first)));
@@ -346,7 +389,7 @@ public static class MemoriesToolTests
         using var body = JsonDocument.Parse(handler.Body);
         var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
         var schema = function.GetProperty("parameters");
-        Assert.Equal(3, schema.GetProperty("properties").EnumerateObject().Count());
+        Assert.Equal(4, schema.GetProperty("properties").EnumerateObject().Count());
         Assert.Equal(4, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
         Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
@@ -368,7 +411,12 @@ public static class MemoriesToolTests
 
     private sealed class Options : IRepositoryMemoryOptionsProvider
     {
-        public RepositoryMemoryOptions Capture(string repositoryIdentity) => new();
+        public int StandingPreferenceWarningThreshold { get; init; } = 3;
+
+        public RepositoryMemoryOptions Capture(string repositoryIdentity) => new()
+        {
+            StandingPreferenceWarningThreshold = StandingPreferenceWarningThreshold,
+        };
     }
 
     private sealed class MemoryService : IManagedRepositoryMemoryService
@@ -389,6 +437,8 @@ public static class MemoriesToolTests
 
         public bool SuppressRetrieval { get; init; }
 
+        public int? StandingPreferenceCount { get; init; }
+
         public int Receipts => _runs.Count;
 
         public RepositoryMemoryOperationRequest? LastOperation { get; private set; }
@@ -402,7 +452,10 @@ public static class MemoriesToolTests
             }
 
             Removed = request.Action == "remove" || Removed;
-            return Task.FromResult(new RepositoryMemoryOperationResult(Removed ? "removed" : "listed", request.Id, null, Removed ? [] : [Entry], []));
+            return Task.FromResult(new RepositoryMemoryOperationResult(Removed ? "removed" : "listed", request.Id, null, Removed ? [] : [Entry], [])
+            {
+                StandingPreferenceCount = StandingPreferenceCount,
+            });
         }
 
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, CancellationToken cancellationToken = default)

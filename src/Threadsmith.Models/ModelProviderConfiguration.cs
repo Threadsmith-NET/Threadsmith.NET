@@ -291,7 +291,7 @@ public sealed record ConfiguredModelDefinition
 }
 
 /// <summary>Immutable effective provider catalog plus host selection projection.</summary>
-public sealed class EffectiveModelProviderCatalog
+public sealed class EffectiveModelProviderCatalog : IModelRequestPreparationResolver
 {
     private readonly IReadOnlyDictionary<ModelProfileId, ConfiguredModelDefinition> _definitions;
 
@@ -401,6 +401,19 @@ public sealed class EffectiveModelProviderCatalog
         return _definitions.TryGetValue(profileId, out var definition)
             ? definition
             : throw new KeyNotFoundException($"Model profile '{profileId.Value:D}' is not configured.");
+    }
+
+    /// <inheritdoc />
+    public ModelStreamRequest Prepare(ModelStreamRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ResolvedProfileId is not { } profileId)
+        {
+            return request;
+        }
+
+        var definition = Get(profileId);
+        return ModelRequestPreparation.Apply(definition, request);
     }
 }
 
@@ -513,6 +526,37 @@ public static class ModelProviderConfigurationLoader
             throw new ArgumentException("Model provider catalog paths must be normalized absolute paths.");
         }
 
+        var configuration = LoadDescriptor(
+            userCatalogPath,
+            repositoryCatalogPath,
+            registry,
+            limits,
+            includeRepository,
+            observeDiagnostic);
+        return Materialize(configuration, registry, enforceHttps, observeDiagnostic);
+    }
+
+    /// <summary>
+    /// Loads, merges, bounds, and allowlist-deserializes a catalog before provider-specific metadata hydration.
+    /// The returned descriptor is inert configuration and must be materialized before selection or dispatch.
+    /// </summary>
+    public static ModelProviderCatalogConfiguration LoadDescriptor(
+        string userCatalogPath,
+        string repositoryCatalogPath,
+        ModelProviderRegistry registry,
+        ModelProviderCatalogLimits? limits = null,
+        bool includeRepository = true,
+        Action<ModelProviderCatalogDiagnostic>? observeDiagnostic = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userCatalogPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryCatalogPath);
+        ArgumentNullException.ThrowIfNull(registry);
+        if (!Path.IsPathFullyQualified(userCatalogPath)
+            || !Path.IsPathFullyQualified(repositoryCatalogPath))
+        {
+            throw new ArgumentException("Model provider catalog paths must be normalized absolute paths.");
+        }
+
         limits ??= new ModelProviderCatalogLimits();
         var user = File.Exists(userCatalogPath) ? ParseLayer(userCatalogPath, limits, "user") : null;
         var repository = includeRepository && File.Exists(repositoryCatalogPath)
@@ -534,18 +578,8 @@ public static class ModelProviderConfigurationLoader
 
         try
         {
-            var configuration = effective.Deserialize<ModelProviderCatalogConfiguration>(
-                    registry.CreateSerializerOptions())
+            return effective.Deserialize<ModelProviderCatalogConfiguration>(registry.CreateSerializerOptions())
                 ?? throw new InvalidOperationException("The effective model provider catalog is empty.");
-            var catalog = new EffectiveModelProviderCatalog(configuration, registry, enforceHttps);
-            var disabledProviders = configuration.Providers.Count(provider => !provider.Enabled);
-            var disabledModels = configuration.Providers.Sum(provider => provider.Models.Count(model => !model.Enabled));
-            var diagnosticMessage = $"Effective provider catalog contains {configuration.Providers.Count} providers, "
-                + $"{catalog.ModelCatalog.Profiles.Count} selectable models, {disabledProviders} disabled providers, "
-                + $"and {disabledModels} disabled models; default provider='{configuration.DefaultProviderId ?? "none"}', "
-                + $"default model='{configuration.DefaultModelId?.Value.ToString("D") ?? "none"}'.";
-            observeDiagnostic?.Invoke(new ModelProviderCatalogDiagnostic("effective", diagnosticMessage));
-            return catalog;
         }
         catch (JsonException exception)
         {
@@ -553,6 +587,72 @@ public static class ModelProviderConfigurationLoader
                 $"The effective model provider catalog is invalid at '{exception.Path ?? "$"}'.",
                 exception);
         }
+    }
+
+    /// <summary>Applies a bounded repository layer to fully hydrated trusted definitions before final materialization.</summary>
+    public static ModelProviderCatalogConfiguration ApplyRepositoryOverrides(
+        ModelProviderCatalogConfiguration trusted,
+        string repositoryCatalogPath,
+        ModelProviderRegistry registry,
+        ModelProviderCatalogLimits? limits = null)
+    {
+        ArgumentNullException.ThrowIfNull(trusted);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryCatalogPath);
+        if (!Path.IsPathFullyQualified(repositoryCatalogPath))
+        {
+            throw new ArgumentException("Repository catalog path must be absolute.", nameof(repositoryCatalogPath));
+        }
+
+        limits ??= new ModelProviderCatalogLimits();
+        if (!File.Exists(repositoryCatalogPath))
+        {
+            return trusted;
+        }
+
+        var options = registry.CreateSerializerOptions();
+        options.IgnoreReadOnlyProperties = true;
+        var inherited = JsonSerializer.SerializeToNode(trusted, options)?.AsObject()
+            ?? throw new InvalidOperationException("Trusted catalog serialization failed.");
+        var overrides = ParseLayer(repositoryCatalogPath, limits, "repository");
+        var effective = MergeObjects(inherited, overrides, "$", limits);
+        ValidateTree(effective, limits, "effective");
+        try
+        {
+            return effective.Deserialize<ModelProviderCatalogConfiguration>(options)
+                ?? throw new InvalidOperationException("The repository catalog is empty.");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException("The repository model override is invalid.", exception);
+        }
+    }
+
+    /// <summary>Validates a fully hydrated descriptor and publishes its immutable effective catalog.</summary>
+    public static EffectiveModelProviderCatalog Materialize(
+        ModelProviderCatalogConfiguration configuration,
+        ModelProviderRegistry registry,
+        bool enforceHttps = true,
+        Action<ModelProviderCatalogDiagnostic>? observeDiagnostic = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(registry);
+        if (configuration.Providers.Count > 32
+            || configuration.Providers.Any(provider => provider.Models.Count > 128)
+            || configuration.Providers.Sum(provider => provider.Models.Count) > 512)
+        {
+            throw new InvalidOperationException("The hydrated provider catalog exceeds model resource limits.");
+        }
+
+        var catalog = new EffectiveModelProviderCatalog(configuration, registry, enforceHttps);
+        var disabledProviders = configuration.Providers.Count(provider => !provider.Enabled);
+        var disabledModels = configuration.Providers.Sum(provider => provider.Models.Count(model => !model.Enabled));
+        var diagnosticMessage = $"Effective provider catalog contains {configuration.Providers.Count} providers, "
+            + $"{catalog.ModelCatalog.Profiles.Count} selectable models, {disabledProviders} disabled providers, "
+            + $"and {disabledModels} disabled models; default provider='{configuration.DefaultProviderId ?? "none"}', "
+            + $"default model='{configuration.DefaultModelId?.Value.ToString("D") ?? "none"}'.";
+        observeDiagnostic?.Invoke(new ModelProviderCatalogDiagnostic("effective", diagnosticMessage));
+        return catalog;
     }
 
     private static JsonObject ParseLayer(
@@ -825,7 +925,7 @@ public static class ModelProviderConfigurationLoader
                 }
             }
 
-            if (string.Equals(path, "$.providers", StringComparison.Ordinal)
+            if (string.Equals(path, "$.providers", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrWhiteSpace(GetString(inheritedItem, "secretKeyReference")))
             {
                 foreach ((var name, var value) in overrideItem)

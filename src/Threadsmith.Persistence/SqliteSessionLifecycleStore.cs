@@ -163,15 +163,20 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
             CREATE TEMP TABLE clone_message_map(old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL);
             INSERT INTO clone_message_map(old_id, new_id)
                 SELECT message_id, lower(hex(randomblob(16))) FROM conversation_messages WHERE session_id = $source;
+            CREATE TEMP TABLE clone_run_map(old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL);
+            INSERT INTO clone_run_map(old_id, new_id)
+                SELECT run_id, lower(hex(randomblob(16)))
+                FROM (SELECT DISTINCT run_id FROM conversation_messages WHERE session_id = $source);
             INSERT INTO conversation_sessions(session_id, mode, updated_at)
                 SELECT $destination, mode, $updatedAt FROM conversation_sessions WHERE session_id = $source;
             INSERT INTO conversation_messages(
                 message_id, session_id, run_id, sequence, role, body, artifact_id, content_hash,
                 estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version)
-                SELECT map.new_id, $destination, lower(hex(randomblob(16))), source.sequence, source.role,
+                SELECT map.new_id, $destination, runs.new_id, source.sequence, source.role,
                        source.body, source.artifact_id, source.content_hash, source.estimated_tokens,
                        source.sensitivity, source.repository_revision, source.occurred_at, source.schema_version
-                FROM conversation_messages source JOIN clone_message_map map ON map.old_id = source.message_id;
+                FROM conversation_messages source JOIN clone_message_map map ON map.old_id = source.message_id
+                JOIN clone_run_map runs ON runs.old_id = source.run_id;
             """;
         command.Parameters.AddWithValue("$source", source.Value.ToString("D"));
         command.Parameters.AddWithValue("$destination", destination.Value.ToString("D"));
@@ -179,7 +184,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         await command.ExecuteNonQueryAsync(cancellationToken);
         await using var cleanup = connection.CreateCommand();
         cleanup.Transaction = transaction;
-        cleanup.CommandText = "DROP TABLE clone_message_map;";
+        cleanup.CommandText = "DROP TABLE clone_message_map; DROP TABLE clone_run_map;";
         await cleanup.ExecuteNonQueryAsync(cancellationToken);
     }
 

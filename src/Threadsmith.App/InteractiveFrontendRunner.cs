@@ -66,13 +66,19 @@ internal static class InteractiveFrontendRunner
             context.Applications.ClaudeSkillCatalog,
             sessionLifecycleAvailable: true,
             displayOptions: display.ToInteractionOptions(),
-            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).ToArray(),
+            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).Concat(context.Applications.StartupDisplayWarnings).ToArray(),
             gitQueries: new GitQueryService(),
             webFetchAuthorization: context.WebFetchAuthorization,
             directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
             frontendCommands: themeCommands,
             validationStages: context.Applications.ValidationStages,
-            codeExploreOutputOptions: context.CodeExploreOutputOptions);
+            codeExploreOutputOptions: context.CodeExploreOutputOptions,
+            standingPreferenceWarningThreshold: context.Configuration.GetValue(
+                "tools:config:memories:standingPreferenceWarningThreshold",
+                3),
+            standingPreferenceWarningThresholdProvider: repositoryIdentity => context.Applications.MemoryOptions
+                .Capture(repositoryIdentity)
+                .StandingPreferenceWarningThreshold);
     }
 
     private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken)

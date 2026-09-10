@@ -177,6 +177,9 @@ public sealed record RepositoryMemoryContextItemProjection
     /// <summary>Explicit origin supplied by the host.</summary>
     public RepositoryMemoryOrigin Origin { get; init; }
 
+    /// <summary>Selection behavior of the memory.</summary>
+    public RepositoryMemoryType MemoryType { get; init; } = RepositoryMemoryType.Situational;
+
     /// <summary>Content revision selected before final dispatch.</summary>
     public long Revision { get; init; }
 

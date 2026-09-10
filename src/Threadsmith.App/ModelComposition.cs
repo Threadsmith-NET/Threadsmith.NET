@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Models.Anthropic;
 using Threadsmith.Models.OpenAiCodex;
 using Threadsmith.Models.OpenAiCompatible;
 using Threadsmith.Tools;
@@ -64,6 +65,7 @@ internal static class ModelComposition
             ConnectTimeout = transportOptions.ConnectTimeout,
             MaxConnectionsPerServer = transportOptions.MaxConnectionsPerServer,
             UseCookies = false,
+            AllowAutoRedirect = false,
         })
         {
             Timeout = Timeout.InfiniteTimeSpan,
@@ -74,19 +76,10 @@ internal static class ModelComposition
         {
             var openAiRegistration = new OpenAiCompatibleProviderRegistration();
             var codexRegistration = new OpenAiCodexProviderRegistration();
-            var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration]);
-            var effectiveCatalog = LoadEffectiveCatalog(
-                configuration,
-                paths,
-                openAiRegistration,
-                registry,
-                loggerFactory);
-            var trustedCatalog = LoadTrustedCatalog(
-                trustedConfiguration,
-                paths,
-                openAiRegistration,
-                registry,
-                loggerFactory);
+            var anthropicRegistration = new AnthropicProviderRegistration();
+            var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration, anthropicRegistration]);
+            var (effectiveCatalog, trustedCatalog) = await LoadCatalogsAsync(
+                configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory, secretResolver, httpClient, CancellationToken.None).ConfigureAwait(false);
             if (effectiveCatalog?.Configuration.Providers.Any(
                 provider => provider is OpenAiCodexProviderConfiguration) == true)
             {
@@ -153,6 +146,9 @@ internal static class ModelComposition
                     preferences,
                     paths.RepositoryConfiguration);
 
+                var anthropicSecretReferences = configuredProviders.Configuration.Providers.OfType<AnthropicProviderConfiguration>()
+                    .Select(item => item.SecretKeyReference).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
                 ConfiguredModelProvider CreateConfiguredProvider(
                     EffectiveModelProviderCatalog providerCatalog,
                     Func<ModelProfileId?> selectCurrentProfile,
@@ -168,7 +164,7 @@ internal static class ModelComposition
                                 : await ResolveModelSecretAsync(
                                     secretResolver,
                                     secretReference,
-                                    minimumSecretTrust,
+                                    anthropicSecretReferences.Contains(secretReference) ? SecretProviderTrust.UserOwned : minimumSecretTrust,
                                     cancellationToken).ConfigureAwait(false),
                         selectCurrentProfile,
                         async (secretReference, rejectedSecret, cancellationToken) => string.Equals(
@@ -208,7 +204,14 @@ internal static class ModelComposition
                     codexOAuth,
                     trustedModelCatalog,
                     trustedProvider,
-                    roleModels);
+                    roleModels)
+                {
+                    CatalogMaintenance = effectiveCatalog is null ? null : new AnthropicCatalogMaintenance(
+                        trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
+                        (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
+                        httpClient,
+                        userDirectory),
+                };
             }
 
             var script = new ScriptedSession
@@ -239,7 +242,14 @@ internal static class ModelComposition
                 "Scripted demo (offline)",
                 new SessionModelPreferences(),
                 activeModels: null,
-                roleModels: roleModels);
+                roleModels: roleModels)
+            {
+                CatalogMaintenance = new AnthropicCatalogMaintenance(
+                    trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
+                    (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
+                    httpClient,
+                    userDirectory),
+            };
         }
         catch
         {
@@ -421,6 +431,96 @@ internal static class ModelComposition
         };
         var result = await secretResolver.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         return result.Value?.Reveal();
+    }
+
+    /// <summary>Hydrates user-owned discovery once, then validates independent trusted and ordinary catalogs.</summary>
+    internal static async Task<(EffectiveModelProviderCatalog? Ordinary, EffectiveModelProviderCatalog? Trusted)> LoadCatalogsAsync(
+        IConfiguration configuration,
+        IConfiguration trustedConfiguration,
+        ConfigurationPaths paths,
+        OpenAiCompatibleProviderRegistration openAiRegistration,
+        ModelProviderRegistry registry,
+        ILoggerFactory loggerFactory,
+        ISecretResolver secrets,
+        HttpClient httpClient,
+        CancellationToken cancellationToken)
+    {
+        var hasCatalog = File.Exists(paths.UserProviderCatalog) || File.Exists(paths.RepositoryProviderCatalog);
+        if (!hasCatalog)
+        {
+            return (LoadEffectiveCatalog(configuration, paths, openAiRegistration, registry, loggerFactory),
+                LoadTrustedCatalog(trustedConfiguration, paths, openAiRegistration, registry, loggerFactory));
+        }
+
+        OpenAiCompatibleProviderRegistration.EnsureConfigurationIsUnambiguous(
+            hasCatalog, configuration.GetSection("model:profiles").GetChildren().Any());
+        var descriptor = ModelProviderConfigurationLoader.LoadDescriptor(
+            Path.GetFullPath(paths.UserProviderCatalog),
+            Path.GetFullPath(paths.RepositoryProviderCatalog),
+            registry,
+            includeRepository: false);
+        var directory = Path.GetDirectoryName(paths.UserConfiguration)
+            ?? throw new InvalidOperationException("User configuration directory is missing.");
+        var providers = new List<ModelProviderConfiguration>(descriptor.Providers.Count);
+        var catalogLogger = loggerFactory.CreateLogger("Threadsmith.Models.ProviderCatalog");
+        foreach (var provider in descriptor.Providers)
+        {
+            if (provider is not AnthropicProviderConfiguration anthropic)
+            {
+                providers.Add(provider);
+                continue;
+            }
+
+            var hydrated = await AnthropicCatalogMaintenance.HydrateStartupAsync(
+                anthropic,
+                (reference, token) => ResolveModelSecretAsync(secrets, reference, SecretProviderTrust.UserOwned, token),
+                httpClient,
+                directory,
+                cancellationToken).ConfigureAwait(false);
+            providers.Add(hydrated);
+            if (catalogLogger.IsEnabled(LogLevel.Information))
+            {
+                catalogLogger.LogInformation(
+                    "Anthropic provider {ProviderId}: {Status}; eligible={Eligible}, excluded={Excluded}",
+                    anthropic.Id,
+                    hydrated.CatalogSnapshot?.Status,
+                    hydrated.CatalogSnapshot?.Models.Count(model => model.Eligible) ?? 0,
+                    hydrated.CatalogSnapshot?.Models.Count(model => !model.Eligible) ?? 0);
+            }
+        }
+
+        var trustedDescriptor = descriptor with { Providers = providers.AsReadOnly() };
+        var ordinaryDescriptor = ModelProviderConfigurationLoader.ApplyRepositoryOverrides(
+            trustedDescriptor, Path.GetFullPath(paths.RepositoryProviderCatalog), registry);
+        var trustedAnthropic = providers.OfType<AnthropicProviderConfiguration>()
+            .ToDictionary(provider => provider.Id, StringComparer.OrdinalIgnoreCase);
+        var ordinaryProviders = new List<ModelProviderConfiguration>(ordinaryDescriptor.Providers.Count);
+        foreach (var provider in ordinaryDescriptor.Providers)
+        {
+            if (provider is not AnthropicProviderConfiguration candidate)
+            {
+                ordinaryProviders.Add(provider);
+                continue;
+            }
+
+            if (!trustedAnthropic.TryGetValue(candidate.Id, out var trustedProvider))
+            {
+                throw new InvalidOperationException("Repository configuration cannot introduce Anthropic discovery providers.");
+            }
+
+            ordinaryProviders.Add(AnthropicRepositoryModelOverrides.Apply(trustedProvider, candidate));
+        }
+
+        // Defaults resolve only after hydration and layering; neither partially validated catalog escapes.
+        var trusted = ModelProviderConfigurationLoader.Materialize(
+            trustedDescriptor,
+            registry,
+            trustedConfiguration.GetValue("model:enforceModelEndpointHttps", true));
+        var ordinary = ModelProviderConfigurationLoader.Materialize(
+            ordinaryDescriptor with { Providers = ordinaryProviders.AsReadOnly() },
+            registry,
+            configuration.GetValue("model:enforceModelEndpointHttps", true));
+        return (ordinary, trusted);
     }
 
     /// <summary>Returns whether the path is inside the directory, including equality.</summary>
@@ -751,6 +851,9 @@ internal sealed class ModelServices : IDisposable
 
     /// <summary>Gets runtime model selection, when configured models are available.</summary>
     internal ActiveModelSelectionService? ActiveModels { get; }
+
+    /// <summary>Gets optional provider metadata maintenance for shared command composition.</summary>
+    internal IModelCatalogMaintenance? CatalogMaintenance { get; init; }
 
     /// <summary>Disposes the shared HTTP client and its owned sockets handler after all model use completes.</summary>
     public void Dispose()

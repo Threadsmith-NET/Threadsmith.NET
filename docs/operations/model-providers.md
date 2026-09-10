@@ -6,9 +6,11 @@ Threadsmith.NET loads an optional user base from `~/.threadsmith/providers.json`
 
 `/models` lists enabled bindings from the immutable effective catalog and changes the host-owned active selection used by the next request. It does not edit provider catalogs. The repository stores only `model.providerId`, `model.profileId`, and `model.reasoningLevel` in `.threadsmith/config.json` through an atomic same-directory replacement.
 
+Headless `/models` returns a JSON array. When startup uses the scripted offline model because no selectable catalog is available, it returns `[]` successfully without dispatching an active-selection command. Configured provider status and refresh remain available for diagnosis and recovery.
+
 Selection precedence is explicit session override, valid repository selection, user-catalog default, then deterministic no-default policy. Present-invalid repository intent is an error, not absence. A selected binding captures provider/profile/reasoning generation for each new request, so a switch cannot splice providers into an in-flight turn.
 
-`/reasoning` persists successful changes with the complete repository selection. A model switch preserves only an exactly supported host reasoning level and otherwise records `none`. The latest context-occupancy projection is invalidated on a switch until a request is assembled under the new limit; cumulative session usage remains unchanged.
+`/reasoning` persists successful changes with the complete repository selection. A model switch preserves an exactly supported host reasoning level. Otherwise it selects `none` when supported, or the profile's validated default when reasoning cannot be disabled. The latest context-occupancy projection is invalidated on a switch until a request is assembled under the new limit; cumulative session usage remains unchanged.
 
 ## Provider catalog configuration
 
@@ -78,6 +80,44 @@ The native Responses `instructions` value comes from the deployed `prompts/Provi
 After login, Threadsmith calls the protected Codex `/models?client_version=...` resource and projects every distinct returned model. The product has no fixed Codex model list and never reads Pi credentials, configuration, or catalogs. Profile GUIDs are deterministic from provider/model identity. A bounded credential-free metadata snapshot is stored in the user `.threadsmith` directory; the next process start composes it alongside unrelated configured providers only while a valid Threadsmith grant exists. Logout clears both the grant and snapshot.
 
 Authorization/resource authorities, OAuth client identity, scopes, exact localhost redirect, and credential headers are compiled policy and cannot be changed by repository catalogs. The browser callback is fixed at `http://localhost:1455/auth/callback`; resolve a port collision before retrying. Malformed credential or model caches are ignored and recover through re-login. Token values, account routing IDs, callbacks, raw provider bodies, and reasoning never enter catalogs, repositories, durable events, logs, or diagnostics.
+
+## Native Anthropic
+
+The compiled `anthropic` provider uses the native Messages and Models APIs through the pinned Anthropic .NET SDK. It connects directly to `https://api.anthropic.com`; custom endpoints, OAuth/login, repository credentials, arbitrary headers, and ambient SDK authentication are not supported. The host resolves the configured logical API-key reference from a user-owned or higher source before authenticating.
+
+Add this provider entry to the `providers` array in `~/.threadsmith/providers.json`, retaining any existing providers and defaults. The disabled Anthropic entry in `.threadsmith/providers.example.json` is also intended for this user catalog; remove it when using that example as a repository-only catalog, since repository configuration cannot introduce Anthropic connections even when disabled:
+
+```json
+{
+  "type": "anthropic",
+  "id": "anthropic",
+  "name": "Anthropic",
+  "enabled": true,
+  "secretKeyReference": "secrets:models:anthropic",
+  "models": [],
+  "defaults": {
+    "requestOutputTokenReserve": 8192,
+    "defaultReasoningLevel": "high",
+    "timeoutSeconds": 120,
+    "retryMaxAttempts": 3,
+    "retryDelayMilliseconds": 250
+  }
+}
+```
+
+Put the key in the separate `~/.threadsmith/secrets/config.json` store under `secrets` → `models` → `anthropic`. The operating system controls file access; Threadsmith does not impose additional ownership or permission rules on this store. Merge that property into the existing store; do not replace unrelated secrets. Alternatively use the exact `THREADSMITH_secrets__models__anthropic` environment variable. Do not place the value in a provider catalog, repository file, command argument, or chat message. See [static secret discovery](secret-discovery.md).
+
+At startup, enabled trusted descriptors are hydrated from bounded Models API discovery. Exact model IDs produce stable profile GUIDs; API capability metadata takes precedence over the dated reviewed compatibility table. Models without sufficient verified limits or compatibility remain visible in discovery status with an exclusion reason. Discovery does not choose a new application default. Select an eligible profile with `/models`, or use its reported GUID in the existing default/role configuration.
+
+`/models status anthropic` reports discovery freshness and individual model eligibility. `/models refresh anthropic` refreshes metadata; restart to compose the new immutable catalog. These commands also work headlessly. A credential-free cache lasts 24 hours and can support stale fallback after transient discovery failures. Missing keys and authentication rejection never enable models from stale metadata. Repository configuration cannot introduce an Anthropic connection or change its credential authority; permitted model policy overrides do not change trusted delegated-role routes.
+
+Thinking effort and display are independent. `/reasoning` selects only the discovered profile's supported levels; a profile may support selectable effort without supporting `none`. `/thinking on|off` controls summarized thinking display on the next request, including the next tool continuation. Headless calls use `--thinking on|off`. Display defaults to off and changing it does not reissue an in-flight request or change the reasoning effort. Signed thinking and redacted blocks needed for tool continuation remain private, bounded process memory even when display is off. They are disposed at the end of the active loop and are excluded from raw-model logs, ordinary diagnostics, events, checkpoints, and restored sessions.
+
+The host preserves native tool-call IDs and ordered assistant blocks through every tool round. Tools execute only after a complete response. Active signed tool continuations are not compacted or reconstructed from durable history; if the required continuation cannot fit, the request fails with capacity guidance. Ordinary completed conversation history remains available after restart.
+
+Before admission and dispatch, the adapter prepares the same native body, including strict tool schemas, system blocks, replay, and explicit five-minute cache breakpoints. The initial local estimator conservatively counts UTF-8 bytes plus framing; signed output also retains provider-reported output-token cost. This can admit less context than a calibrated tokenizer. Cache writes are priced conservatively for admission; actual usage distinguishes uncached input, cache writes, cache reads, and output. A missing cache hit is reported as such. The host owns the single deadline and bounded retry policy, and never retries after response content has been observed.
+
+Protocol references: [Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [thinking with tools](https://platform.claude.com/docs/en/build-with-claude/thinking-tool-workflows), and [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 
 ## Legacy migration
 

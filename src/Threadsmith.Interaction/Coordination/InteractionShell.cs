@@ -193,6 +193,22 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(new SetActiveReasoningCommand(reasoningLevel), cancellationToken);
     }
 
+    /// <summary>Inspects secret-free model discovery status through the shared host boundary.</summary>
+    public Task<ModelCatalogProviderStatus> GetModelCatalogStatusAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new GetModelCatalogStatusCommand(providerId), cancellationToken);
+    }
+
+    /// <summary>Refreshes model metadata for the next startup through the shared host boundary.</summary>
+    public Task<ModelCatalogRefreshResult> RefreshModelCatalogAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RefreshModelCatalogCommand(providerId), cancellationToken);
+    }
+
     /// <summary>Runs a model-provider authentication operation through the shared host boundary.</summary>
     public Task<ModelProviderAuthenticationResult> ManageModelProviderAuthenticationAsync(
         string providerId,
@@ -773,9 +789,18 @@ public class InteractionPresenter
         string repositoryIdentity,
         string text,
         CancellationToken cancellationToken = default)
+        => RememberRepositoryMemoryAsync(sessionId, repositoryIdentity, text, null, cancellationToken);
+
+    /// <summary>Creates an explicit repository-scoped memory item with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string text,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text),
+            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, memoryType),
             cancellationToken);
     }
 
@@ -809,9 +834,19 @@ public class InteractionPresenter
         RepositoryMemoryId memoryId,
         string replacementText,
         CancellationToken cancellationToken = default)
+        => UpdateRepositoryMemoryAsync(sessionId, repositoryIdentity, memoryId, replacementText, null, cancellationToken);
+
+    /// <summary>Updates an existing memory in place with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> UpdateRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        string replacementText,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText),
+            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText, memoryType),
             cancellationToken);
     }
 

@@ -1,5 +1,6 @@
 namespace Threadsmith.App;
 
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Cli;
 using Threadsmith.Core;
@@ -37,6 +38,14 @@ internal static class ShellRunner
         Console.CancelKeyPress += OnCancelKeyPress;
         try
         {
+            if (!context.CommandLine.UseInteractiveTerminal)
+            {
+                foreach (var warning in context.Applications.StartupDisplayWarnings)
+                {
+                    await Console.Error.WriteLineAsync($"{Environment.NewLine}{warning}{Environment.NewLine}");
+                }
+            }
+
             if (context.CommandLine.McpAction is not null)
             {
                 var mcpShell = new HeadlessShell(
@@ -65,6 +74,15 @@ internal static class ShellRunner
                 return 0;
             }
 
+            await using var memoryWarningSubscription = SubscribeMemoryWarnings(context.Events, Console.Error);
+            await using var thinkingSubscription = context.Events.Subscribe(async (domainEvent, token) =>
+            {
+                if (domainEvent is ModelReasoningObserved reasoning && context.Models.SessionPreferences.IncludeReasoningText)
+                {
+                    await Console.Error.WriteAsync(reasoning.Text.AsMemory(), token);
+                }
+            });
+
             var headlessShell = new HeadlessShell(
                 context.Dispatcher,
                 context.Projections,
@@ -72,6 +90,19 @@ internal static class ShellRunner
                 context.WebFetchAuthorization,
                 context.Paths.RepositoryRoot);
             var request = string.Join(' ', context.CommandLine.RequestArguments);
+            var catalogArguments = request.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (catalogArguments.Length > 0
+                && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunModelCatalogCommandAsync(
+                    headlessShell,
+                    catalogArguments,
+                    context.Models.ActiveModels is not null,
+                    Console.Out,
+                    Console.Error,
+                    processCancellation.Token);
+            }
+
             if (context.CommandLine.RepositoryOptionsSpecified)
             {
                 if (context.CommandLine.RequestArguments.Count > 0)
@@ -115,6 +146,73 @@ internal static class ShellRunner
         {
             Console.CancelKeyPress -= OnCancelKeyPress;
         }
+    }
+
+    /// <summary>Runs headless catalog commands while preserving offline listing and provider recovery.</summary>
+    internal static async Task<int> RunModelCatalogCommandAsync(
+        HeadlessShell shell,
+        IReadOnlyList<string> arguments,
+        bool activeModelsAvailable,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(error);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (arguments.Count == 3 && string.Equals(arguments[1], "status", StringComparison.OrdinalIgnoreCase))
+        {
+            var status = await shell.GetModelCatalogStatusAsync(arguments[2], cancellationToken);
+            await output.WriteLineAsync(JsonSerializer.Serialize(status).AsMemory(), cancellationToken);
+            return 0;
+        }
+
+        if (arguments.Count == 3 && string.Equals(arguments[1], "refresh", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await shell.RefreshModelCatalogAsync(arguments[2], cancellationToken);
+            await output.WriteLineAsync(JsonSerializer.Serialize(result).AsMemory(), cancellationToken);
+            return result.Refreshed ? 0 : 1;
+        }
+
+        if (arguments.Count == 1)
+        {
+            var json = activeModelsAvailable
+                ? JsonSerializer.Serialize(await shell.ListActiveModelsAsync(cancellationToken))
+                : "[]";
+            await output.WriteLineAsync(json.AsMemory(), cancellationToken);
+            return 0;
+        }
+
+        await error.WriteLineAsync("Usage: /models [status|refresh <provider-id>]".AsMemory(), cancellationToken);
+        return 2;
+    }
+
+    /// <summary>Subscribes headless stderr delivery to completed built-in memory operations.</summary>
+    internal static IDomainEventSubscription SubscribeMemoryWarnings(IDomainEventStream events, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(output);
+        var memoryInvocations = new HashSet<ToolInvocationId>();
+        return events.Subscribe(async (domainEvent, cancellationToken) =>
+        {
+            if (domainEvent is ToolInvocationStarted { ToolName: "memories" } started
+                && started.Source is not { Kind: not ToolActivitySourceKind.BuiltIn })
+            {
+                memoryInvocations.Add(started.ToolInvocationId);
+                return;
+            }
+
+            if (domainEvent is ToolInvocationCompleted completed
+                && memoryInvocations.Remove(completed.ToolInvocationId)
+                && completed.Succeeded
+                && completed.ResultJson is { } resultJson
+                && TryGetStandingPreferenceWarning(resultJson, out var warning))
+            {
+                await output.WriteLineAsync($"{Environment.NewLine}{warning}{Environment.NewLine}".AsMemory(), cancellationToken);
+            }
+        });
     }
 
     private static McpManagementRequest ParseMcpRequest(CommandLineOptions options)
@@ -200,6 +298,35 @@ internal static class ShellRunner
             AllowLocalCleanupAfterUnconfirmedRevocation = options.McpAllowLocalCleanup,
             RevokeCurrentIdentityBeforeSwitch = options.McpRevokeCurrentIdentity,
         };
+    }
+
+    private static bool TryGetStandingPreferenceWarning(string resultJson, out string warning)
+    {
+        warning = string.Empty;
+        if (resultJson.Length > 64 * 1024)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("StandingPreferenceWarning", out var value)
+                && value.ValueKind == JsonValueKind.String
+                && value.GetString() is { } suppliedWarning
+                && suppliedWarning.StartsWith("You now have ", StringComparison.Ordinal)
+                && !suppliedWarning.Any(char.IsControl))
+            {
+                warning = suppliedWarning;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return false;
     }
 }
 

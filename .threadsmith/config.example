@@ -503,8 +503,8 @@
     // Plan-28 arbitrary per-tool scalar configuration. csharp_script runs in a
     // fresh tracked worker, is disabled by default, and rejects file/network/process APIs.
     "config": {
-      // Explicit repository memories share these bounds regardless of origin.
-      // Zero context entries disables retrieval; stored capacity must be positive.
+      // The storage limit is shared by both memory types and origins.
+      // The context count limits situational memories only; zero disables their retrieval.
       "memories": {
         "MaxNumberOfRepoMemories": 20,
         "MaxRepoMemoriesInContext": 3,
@@ -515,7 +515,9 @@
         "RerankerEnabled": false,
         "RerankerCandidateLimit": 8,
         // Optional strict raw-logit floor; null preserves the top ranked candidates.
-        "RerankerMinimumScore": null
+        "RerankerMinimumScore": null,
+        // Warn at startup, after additions or type promotions, above this nonnegative count.
+        "standingPreferenceWarningThreshold": 3
       },
       "csharp_script": {
         "timeout_ms": "5000",

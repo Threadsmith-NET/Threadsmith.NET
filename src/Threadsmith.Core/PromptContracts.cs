@@ -164,6 +164,9 @@ public static class PromptFileNames
     /// <summary>Gets the relevance caveat preceding optional repository memory references.</summary>
     public const string SystemRepositoryMemoryGuidance = "System-RepositoryMemoryGuidance.md";
 
+    /// <summary>Gets the guidance for standing preferences included independently of query relevance.</summary>
+    public const string SystemStandingPreferenceGuidance = "System-StandingPreferenceGuidance.md";
+
     /// <summary>Gets the stable filename for the SystemGovernedRequestState prompt asset.</summary>
     public const string SystemGovernedRequestState = "System-GovernedRequestState.md";
 
@@ -1047,6 +1050,7 @@ public static class PromptFileNames
         SystemRequiredOutputPlan,
         SystemRepositoryInstructionsNone,
         SystemRepositoryMemoryGuidance,
+        SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
         SystemLegacyRequestEnvelope,
         SystemToolInventoryTextFallback,
@@ -1376,6 +1380,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemRequiredOutputPlan,
             PromptFileNames.SystemRepositoryInstructionsNone,
             PromptFileNames.SystemRepositoryMemoryGuidance,
+            PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
             PromptFileNames.ContextActiveTurnCompactionSystem,

@@ -1,5 +1,6 @@
 namespace Threadsmith.App;
 
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Cli;
 using Threadsmith.Core;
@@ -37,6 +38,14 @@ internal static class ShellRunner
         Console.CancelKeyPress += OnCancelKeyPress;
         try
         {
+            if (!context.CommandLine.UseInteractiveTerminal)
+            {
+                foreach (var warning in context.Applications.StartupDisplayWarnings)
+                {
+                    await Console.Error.WriteLineAsync($"{Environment.NewLine}{warning}{Environment.NewLine}");
+                }
+            }
+
             if (context.CommandLine.McpAction is not null)
             {
                 var mcpShell = new HeadlessShell(
@@ -64,6 +73,8 @@ internal static class ShellRunner
                 processCancellation.Token.ThrowIfCancellationRequested();
                 return 0;
             }
+
+            await using var memoryWarningSubscription = SubscribeMemoryWarnings(context.Events, Console.Error);
 
             var headlessShell = new HeadlessShell(
                 context.Dispatcher,
@@ -115,6 +126,32 @@ internal static class ShellRunner
         {
             Console.CancelKeyPress -= OnCancelKeyPress;
         }
+    }
+
+    /// <summary>Subscribes headless stderr delivery to completed built-in memory operations.</summary>
+    internal static IDomainEventSubscription SubscribeMemoryWarnings(IDomainEventStream events, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(output);
+        var memoryInvocations = new HashSet<ToolInvocationId>();
+        return events.Subscribe(async (domainEvent, cancellationToken) =>
+        {
+            if (domainEvent is ToolInvocationStarted { ToolName: "memories" } started
+                && started.Source is not { Kind: not ToolActivitySourceKind.BuiltIn })
+            {
+                memoryInvocations.Add(started.ToolInvocationId);
+                return;
+            }
+
+            if (domainEvent is ToolInvocationCompleted completed
+                && memoryInvocations.Remove(completed.ToolInvocationId)
+                && completed.Succeeded
+                && completed.ResultJson is { } resultJson
+                && TryGetStandingPreferenceWarning(resultJson, out var warning))
+            {
+                await output.WriteLineAsync($"{Environment.NewLine}{warning}{Environment.NewLine}".AsMemory(), cancellationToken);
+            }
+        });
     }
 
     private static McpManagementRequest ParseMcpRequest(CommandLineOptions options)
@@ -200,6 +237,35 @@ internal static class ShellRunner
             AllowLocalCleanupAfterUnconfirmedRevocation = options.McpAllowLocalCleanup,
             RevokeCurrentIdentityBeforeSwitch = options.McpRevokeCurrentIdentity,
         };
+    }
+
+    private static bool TryGetStandingPreferenceWarning(string resultJson, out string warning)
+    {
+        warning = string.Empty;
+        if (resultJson.Length > 64 * 1024)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("StandingPreferenceWarning", out var value)
+                && value.ValueKind == JsonValueKind.String
+                && value.GetString() is { } suppliedWarning
+                && suppliedWarning.StartsWith("You now have ", StringComparison.Ordinal)
+                && !suppliedWarning.Any(char.IsControl))
+            {
+                warning = suppliedWarning;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return false;
     }
 }
 

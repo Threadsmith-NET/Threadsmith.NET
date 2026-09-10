@@ -242,9 +242,18 @@ public sealed class HeadlessShell
         string repositoryIdentity,
         string text,
         CancellationToken cancellationToken = default)
+        => RememberRepositoryMemoryAsync(sessionId, repositoryIdentity, text, null, cancellationToken);
+
+    /// <summary>Creates an explicit repository-scoped memory item with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string text,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text),
+            new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, memoryType),
             cancellationToken);
     }
 
@@ -278,9 +287,19 @@ public sealed class HeadlessShell
         RepositoryMemoryId memoryId,
         string replacementText,
         CancellationToken cancellationToken = default)
+        => UpdateRepositoryMemoryAsync(sessionId, repositoryIdentity, memoryId, replacementText, null, cancellationToken);
+
+    /// <summary>Updates an existing memory in place with an optional type.</summary>
+    public Task<RepositoryMemoryEntry> UpdateRepositoryMemoryAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        RepositoryMemoryId memoryId,
+        string replacementText,
+        RepositoryMemoryType? memoryType,
+        CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText),
+            new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, memoryId, replacementText, memoryType),
             cancellationToken);
     }
 

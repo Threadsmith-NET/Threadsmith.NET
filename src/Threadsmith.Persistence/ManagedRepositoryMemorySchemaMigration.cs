@@ -78,7 +78,7 @@ public sealed class ManagedRepositoryMemorySchemaMigration : IDatabaseMigration
                 continue;
             }
 
-            await SqliteManagedRepositoryMemoryStore.InsertEntryAsync(connection, null, entry, cancellationToken);
+            await SqliteManagedRepositoryMemoryStore.InsertEntryAsync(connection, null, entry, includesMemoryType: false, cancellationToken: cancellationToken);
             imported++;
             if (entry.Text.Length > 2_000)
             {
@@ -89,7 +89,7 @@ public sealed class ManagedRepositoryMemorySchemaMigration : IDatabaseMigration
         var evicted = 0;
         foreach (var repository in candidates.Entries.Select(entry => entry.RepositoryIdentity).Distinct(StringComparer.Ordinal))
         {
-            var entries = await SqliteManagedRepositoryMemoryStore.ReadEntriesAsync(connection, null, repository, [], cancellationToken);
+            var entries = await SqliteManagedRepositoryMemoryStore.ReadEntriesAsync(connection, null, repository, [], includesMemoryType: false, cancellationToken: cancellationToken);
             evicted += (await SqliteManagedRepositoryMemoryStore.EvictAsync(
                 connection, null, repository, entries, _maximumMemoryCount, DateTimeOffset.UtcNow, cancellationToken)).Count;
             await SqliteManagedRepositoryMemoryStore.AdvanceRevisionAsync(connection, null, repository, cancellationToken);

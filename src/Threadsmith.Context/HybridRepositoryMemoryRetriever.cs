@@ -47,26 +47,29 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         request.Options.Validate();
         var semanticMinimum = request.Options.SemanticMinimum;
         cancellationToken.ThrowIfCancellationRequested();
-        if (request.Options.EffectiveContextMaximum == 0)
-        {
-            return new RepositoryMemoryRetrievalResult([], ["Automatic repository-memory retrieval is disabled by the context limit."]);
-        }
-
         var query = BuildQuery(request, out var bounded);
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return new RepositoryMemoryRetrievalResult([], ["The current memory query is empty."]);
-        }
-
+        IReadOnlyList<RepositoryMemoryEntry> standingPreferences = [];
+        long? memorySetRevision = null;
         var timer = Stopwatch.StartNew();
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(MaximumQueryTerms).ToArray();
             var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
-            if (snapshot.Entries.Count == 0)
+            memorySetRevision = snapshot.Revision;
+            standingPreferences = SelectStandingPreferences(snapshot);
+            snapshot = SelectSituationalSnapshot(snapshot);
+            if (request.Options.EffectiveContextMaximum == 0 || string.IsNullOrWhiteSpace(query) || snapshot.Entries.Count == 0)
             {
-                return new RepositoryMemoryRetrievalResult([], snapshot.Warnings, snapshot.Revision);
+                IReadOnlyList<string> earlyDiagnostics = request.Options.EffectiveContextMaximum == 0
+                    ? [.. snapshot.Warnings, "Automatic situational-memory retrieval is disabled by the context limit."]
+                    : string.IsNullOrWhiteSpace(query)
+                        ? [.. snapshot.Warnings, "The current situational-memory query is empty."]
+                        : snapshot.Warnings;
+                return new RepositoryMemoryRetrievalResult([], earlyDiagnostics, snapshot.Revision)
+                {
+                    StandingPreferences = standingPreferences,
+                };
             }
 
             var model = _generator.Model;
@@ -119,6 +122,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
                     snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
+                    memorySetRevision = snapshot.Revision;
+                    standingPreferences = SelectStandingPreferences(snapshot);
+                    snapshot = SelectSituationalSnapshot(snapshot);
                     rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey, rerankerKey);
                 }
             }
@@ -161,7 +167,10 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
 
             IReadOnlyList<string> boundedDiagnostics = diagnostics.Count <= 64
                 ? diagnostics : [.. diagnostics.Take(63), $"Omitted {diagnostics.Count - 63} additional memory diagnostics."];
-            var result = new RepositoryMemoryRetrievalResult(selected, boundedDiagnostics, snapshot.Revision, truncated, queryCacheHit, false);
+            var result = new RepositoryMemoryRetrievalResult(selected, boundedDiagnostics, snapshot.Revision, truncated, queryCacheHit, false)
+            {
+                StandingPreferences = standingPreferences,
+            };
             var degraded = embedding is null || rerankerDegraded || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
             if (!degraded)
             {
@@ -180,7 +189,27 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         }
         catch (Exception exception)
         {
-            return new RepositoryMemoryRetrievalResult([], [$"Repository memory search failed ({exception.GetType().Name}); memory was omitted."]);
+            if (memorySetRevision is null)
+            {
+                try
+                {
+                    // A failed lexical index must not suppress readable standing preferences.
+                    var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);
+                    standingPreferences = SelectStandingPreferences(snapshot);
+                    memorySetRevision = snapshot.Revision;
+                }
+                catch (Exception readException) when (readException is not OperationCanceledException)
+                {
+                    throw new InvalidOperationException(
+                        "Repository memories could not be read, so standing preferences cannot be assembled. Check the repository memory database and retry.",
+                        readException);
+                }
+            }
+
+            return new RepositoryMemoryRetrievalResult([], [$"Repository memory search failed ({exception.GetType().Name}); situational matches were omitted."], memorySetRevision)
+            {
+                StandingPreferences = standingPreferences,
+            };
         }
         finally
         {
@@ -190,6 +219,16 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
 
     /// <inheritdoc />
     public void Dispose() => _gate.Dispose();
+
+    private static IReadOnlyList<RepositoryMemoryEntry> SelectStandingPreferences(RepositoryMemoryReadSnapshot snapshot)
+        => [.. snapshot.Entries.Where(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference).OrderBy(entry => entry.Id.Value)];
+
+    private static RepositoryMemoryReadSnapshot SelectSituationalSnapshot(RepositoryMemoryReadSnapshot snapshot)
+    {
+        var entries = snapshot.Entries.Where(entry => entry.MemoryType == RepositoryMemoryType.Situational).ToArray();
+        var ids = entries.Select(entry => entry.Id).ToHashSet();
+        return snapshot with { Entries = entries, LexicalMatches = [.. snapshot.LexicalMatches.Where(match => ids.Contains(match.Id))] };
+    }
 
     private static void AddBounded<T>(Dictionary<string, T> cache, string key, T value)
     {

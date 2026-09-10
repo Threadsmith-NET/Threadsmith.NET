@@ -26,7 +26,7 @@ public sealed class RepositoryMemoryApplication :
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, cancellationToken);
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, command.MemoryType, cancellationToken);
 
     /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> HandleAsync(ListRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
@@ -41,11 +41,11 @@ public sealed class RepositoryMemoryApplication :
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(UpdateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, cancellationToken);
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(SupersedeRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, cancellationToken);
+        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
 
     /// <inheritdoc />
     public async Task<bool> HandleAsync(ForgetRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
@@ -71,7 +71,7 @@ public sealed class RepositoryMemoryApplication :
         throw new InvalidOperationException("Memory validation and categories have been retired. Use /memory list, inspect <id>, update <id> <text>, or forget <id>.");
     }
 
-    private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, CancellationToken cancellationToken)
+    private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, RepositoryMemoryType? memoryType, CancellationToken cancellationToken)
     {
         var result = await _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
@@ -80,6 +80,7 @@ public sealed class RepositoryMemoryApplication :
                 Action = action,
                 Id = id,
                 Text = text,
+                MemoryType = memoryType,
                 Origin = RepositoryMemoryOrigin.Manual,
                 SourceSessionId = sessionId.Value.ToString("D"),
                 Options = _options.Capture(repositoryIdentity),

@@ -150,6 +150,7 @@ internal static class ConfigurationBootstrap
             ["tools:config:memories:SemanticMinimum"] = RepositoryMemoryOptions.DefaultSemanticMinimum.ToString(CultureInfo.InvariantCulture),
             ["tools:config:memories:RerankerEnabled"] = "false",
             ["tools:config:memories:RerankerCandidateLimit"] = "8",
+            ["tools:config:memories:standingPreferenceWarningThreshold"] = "3",
             ["reranking:cpuThreads"] = "8",
             ["events:subscriberCapacity"] = "256",
             ["persistence:path"] = ".threadsmith/threadsmith.db",

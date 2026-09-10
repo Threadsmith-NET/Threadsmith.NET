@@ -3,11 +3,12 @@ namespace Threadsmith.Persistence;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
-/// <summary>One ordered, idempotent, transactional schema migration (strategy §19.5).</summary>
+/// <summary>One ordered, idempotent schema migration (strategy §19.5).</summary>
 /// <remarks>
-/// A migration failure must not destroy prior session data. Each migration runs in its own
-/// transaction; a failure rolls back and the prior schema version remains readable. Migrations
-/// must be idempotent so re-running against an already-migrated database is a no-op.
+/// A migration failure must not destroy prior session data. Ordinary migrations run in their own
+/// transaction; the destructive managed-memory migration and all later pending migrations share
+/// one transaction. A failure rolls back and the prior schema version remains readable.
+/// Migrations must be idempotent so re-running against an already-migrated database is a no-op.
 /// </remarks>
 public interface IDatabaseMigration
 {
@@ -71,38 +72,21 @@ public sealed class MigrationRunner
         await EnsureSchemaVersionTableAsync(connection, cancellationToken);
         var current = await ReadCurrentVersionAsync(connection, cancellationToken);
         var originalVersion = current;
-        foreach (var migration in _migrations.Where(m => m.Version > current))
+        var pending = _migrations.Where(migration => migration.Version > current).ToArray();
+        for (var index = 0; index < pending.Length; index++)
         {
+            var migration = pending[index];
             cancellationToken.ThrowIfCancellationRequested();
             if (migration.Version == 10 && originalVersion > 0)
             {
                 LastBackupPath = await CreateVerifiedMemoryBackupAsync(connection, cancellationToken);
             }
 
-            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
-                cancellationToken);
-            try
+            IReadOnlyList<IDatabaseMigration> batch = migration.Version == 10 ? pending[index..] : [migration];
+            current = await ApplyBatchAsync(connection, batch, cancellationToken);
+            if (migration.Version == 10)
             {
-                await migration.ApplyAsync(connection, cancellationToken);
-                if (migration.Version == 10 && LastBackupPath is { } backupPath)
-                {
-                    await using var backupRecord = connection.CreateCommand();
-                    backupRecord.Transaction = transaction;
-                    backupRecord.CommandText = "UPDATE managed_memory_migration SET backup_path = $path WHERE version = 10;";
-                    backupRecord.Parameters.AddWithValue("$path", backupPath);
-                    await backupRecord.ExecuteNonQueryAsync(cancellationToken);
-                }
-
-                await WriteVersionAsync(connection, transaction, migration.Version, cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                current = migration.Version;
-            }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Roll back: the prior version remains readable (§19.5). Re-throw so the caller
-                // knows the migration failed; the database is still openable at the prior version.
-                await transaction.RollbackAsync(CancellationToken.None);
-                throw;
+                break;
             }
         }
 
@@ -118,6 +102,41 @@ public sealed class MigrationRunner
         await connection.OpenAsync(cancellationToken);
         await EnsureSchemaVersionTableAsync(connection, cancellationToken);
         return await ReadCurrentVersionAsync(connection, cancellationToken);
+    }
+
+    private async Task<int> ApplyBatchAsync(
+        SqliteConnection connection,
+        IReadOnlyList<IDatabaseMigration> migrations,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            foreach (var migration in migrations)
+            {
+                await migration.ApplyAsync(connection, cancellationToken);
+                if (migration.Version == 10 && LastBackupPath is { } backupPath)
+                {
+                    await using var backupRecord = connection.CreateCommand();
+                    backupRecord.Transaction = transaction;
+                    backupRecord.CommandText = "UPDATE managed_memory_migration SET backup_path = $path WHERE version = 10;";
+                    backupRecord.Parameters.AddWithValue("$path", backupPath);
+                    await backupRecord.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await WriteVersionAsync(connection, transaction, migration.Version, cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return migrations[^1].Version;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Roll back: the prior version remains readable (§19.5). Re-throw so the caller
+            // knows the migration failed; the database is still openable at the prior version.
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
+        }
     }
 
     private static async Task<string?> CreateVerifiedMemoryBackupAsync(

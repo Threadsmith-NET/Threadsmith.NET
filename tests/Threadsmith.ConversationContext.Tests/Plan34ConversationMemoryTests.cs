@@ -222,9 +222,9 @@ public static class Plan34ConversationMemoryTests
         Assert.False(retried.RankingCacheHit);
     }
 
-    /// <summary>A failed SQLite search omits memories without aborting the main conversation.</summary>
+    /// <summary>An unreadable memory snapshot fails clearly because standing preferences cannot be recovered.</summary>
     [Fact]
-    public static async Task Store_failure_omits_memory_with_diagnostic()
+    public static async Task Store_failure_reports_unavailable_standing_preferences()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         await using var connection = new SqliteConnection(fixture.ConnectionString);
@@ -234,10 +234,10 @@ public static class Plan34ConversationMemoryTests
         await command.ExecuteNonQueryAsync();
         using var retriever = CreateRetriever(fixture, new TestMemoryEmbeddingGenerator());
 
-        var result = await retriever.RetrieveAsync(Query("query"));
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => retriever.RetrieveAsync(Query("query")));
 
-        Assert.Empty(result.Selected);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("search failed", StringComparison.Ordinal));
+        Assert.Contains("standing preferences cannot be assembled", failure.Message, StringComparison.Ordinal);
+        Assert.IsType<SqliteException>(failure.InnerException);
     }
 
     /// <summary>Unavailable semantics are cached only for the same turn and recover on a later turn.</summary>

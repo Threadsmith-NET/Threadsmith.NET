@@ -582,6 +582,7 @@ public sealed class DefaultMigrations
         new SessionLifecycleSchemaMigration(),
         new RepositoryMemorySchemaMigration(),
         new ManagedRepositoryMemorySchemaMigration(),
+        new RepositoryMemoryTypeSchemaMigration(),
     ];
 
     /// <summary>Uses the effective repository capacity during first import so valid manual memories are not prematurely evicted.</summary>

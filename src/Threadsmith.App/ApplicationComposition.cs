@@ -108,6 +108,16 @@ internal static class ApplicationComposition
     }
 
     /// <summary>Loads trusted active-turn summary bounds while keeping repository configuration excluded.</summary>
+    /// <summary>Creates the bounded standing-preference advisory when the strict threshold is exceeded.</summary>
+    internal static IReadOnlyList<string> CreateStandingPreferenceWarnings(int count, int threshold)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        ArgumentOutOfRangeException.ThrowIfNegative(threshold);
+        return count > threshold
+            ? [$"You now have {count} preference memories. You may want to consider adding some of these to AGENTS.md for the repo."]
+            : [];
+    }
+
     private static async Task<ApplicationServices> CreateCoreAsync(
         ApplicationCompositionInputs inputs,
         LocalTextEmbeddingGenerator embeddings,
@@ -151,7 +161,13 @@ internal static class ApplicationComposition
         var memoryOptions = new RepositoryMemoryConfiguration(host.Configuration, host.TrustedConfiguration, host.Paths.RepositoryRoot);
         var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>());
         var initialRepositoryIdentity = RepositoryIdentity.Create(host.Paths.RepositoryRoot);
-        await memoryService.EnforceCapacityAsync(initialRepositoryIdentity, memoryOptions.Capture(initialRepositoryIdentity));
+        var initialMemoryOptions = memoryOptions.Capture(initialRepositoryIdentity);
+        await memoryService.EnforceCapacityAsync(initialRepositoryIdentity, initialMemoryOptions);
+        var initialMemorySnapshot = await memoryService.GetSnapshotAsync(initialRepositoryIdentity);
+        var initialStandingPreferenceCount = initialMemorySnapshot.Entries.Count(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
+        var startupDisplayWarnings = CreateStandingPreferenceWarnings(
+            initialStandingPreferenceCount,
+            initialMemoryOptions.StandingPreferenceWarningThreshold);
         if (host.Configuration.GetSection("context:repositoryMemory").Exists())
         {
             host.LoggerFactory.CreateLogger<RepositoryMemoryService>().LogWarning(
@@ -777,7 +793,9 @@ internal static class ApplicationComposition
                 embeddings,
                 reranker,
                 memoriesTool,
-                memoryRetriever);
+                memoryRetriever,
+                memoryOptions,
+                startupDisplayWarnings);
         }
         catch
         {
@@ -1286,11 +1304,14 @@ internal sealed class ApplicationServices : IAsyncDisposable
         LocalTextEmbeddingGenerator embeddings,
         LocalTextCrossEncoder reranker,
         MemoriesTool memoriesTool,
-        HybridRepositoryMemoryRetriever memoryRetriever)
+        HybridRepositoryMemoryRetriever memoryRetriever,
+        RepositoryMemoryConfiguration memoryOptions,
+        IReadOnlyList<string> startupDisplayWarnings)
     {
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
         ArgumentNullException.ThrowIfNull(validationStages);
+        ArgumentNullException.ThrowIfNull(startupDisplayWarnings);
         Dispatcher = dispatcher;
         _mutationCoordinator = mutationCoordinator;
         _agentScheduler = agentScheduler;
@@ -1311,6 +1332,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         _reranker = reranker;
         _memoriesTool = memoriesTool;
         _memoryRetriever = memoryRetriever;
+        MemoryOptions = memoryOptions;
+        StartupDisplayWarnings = startupDisplayWarnings;
     }
 
     /// <summary>Gets the dispatcher exposed to terminal command surfaces.</summary>
@@ -1339,6 +1362,12 @@ internal sealed class ApplicationServices : IAsyncDisposable
 
     /// <summary>Gets the host-owned resolved post-apply validation stages.</summary>
     internal IReadOnlyList<MutationValidationStage> ValidationStages { get; }
+
+    /// <summary>Gets the live rebound repository-memory options provider.</summary>
+    internal RepositoryMemoryConfiguration MemoryOptions { get; }
+
+    /// <summary>Gets bounded host-authored startup warnings for terminal delivery.</summary>
+    internal IReadOnlyList<string> StartupDisplayWarnings { get; }
 
     /// <summary>Releases transactional staging resources after all command surfaces stop.</summary>
     public async ValueTask DisposeAsync()

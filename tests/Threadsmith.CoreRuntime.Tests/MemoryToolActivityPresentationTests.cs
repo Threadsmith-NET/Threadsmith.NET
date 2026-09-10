@@ -19,10 +19,33 @@ public static class MemoryToolActivityPresentationTests
             CreateResult("add", "added", [new { Id = "memory-1", Text = note }], 0));
 
         Assert.Contains("Outcome: added", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Memory memory-1:", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Memory memory-1 [situational]:", transcript.Text, StringComparison.Ordinal);
         Assert.Contains(firstLine, transcript.Text, StringComparison.Ordinal);
         Assert.Contains("second line\\u001B[31m", transcript.Text, StringComparison.Ordinal);
         Assert.DoesNotContain(note[..240] + "...", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Legacy entries default to situational while typed entries and advisory warning remain visible.</summary>
+    [Fact]
+    public static void Transcript_ShowsLegacyTypeAndStandingPreferenceWarning()
+    {
+        var legacy = Render(
+            succeeded: true,
+            CreateResult("list", "listed", [new { Id = "legacy", Text = "legacy note" }], 0));
+        var typed = Render(
+            succeeded: true,
+            JsonSerializer.Serialize(new
+            {
+                Action = "add",
+                Outcome = "added",
+                Entries = new[] { new { Id = "preference", Text = "always run tests", MemoryType = "standingPreference" } },
+                OmittedEntries = 0,
+                StandingPreferenceWarning = "You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.",
+            }));
+
+        Assert.Contains("Memory legacy [situational]:", legacy.Text, StringComparison.Ordinal);
+        Assert.Contains("Memory preference [standingPreference]:", typed.Text, StringComparison.Ordinal);
+        Assert.Contains("You now have 4 preference memories.", typed.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Empty and bounded list outcomes retain their status and inspectability guidance.</summary>

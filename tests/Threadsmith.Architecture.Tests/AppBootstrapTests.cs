@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Threadsmith.App;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Tools;
 using Xunit;
@@ -34,6 +35,44 @@ public static class AppBootstrapTests
             }).Build();
             Assert.Throws<ArgumentOutOfRangeException>(() => ApplicationComposition.GetRerankerCpuThreads(invalid));
         }
+    }
+
+    /// <summary>Startup preference warnings are host-authored, thresholded, and suitable for terminal delivery.</summary>
+    [Fact]
+    public static void StandingPreferenceStartupWarning_IsBoundedAndStrictlyThresholded()
+    {
+        Assert.Empty(ApplicationComposition.CreateStandingPreferenceWarnings(3, 3));
+        Assert.Equal(
+            "You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.",
+            Assert.Single(ApplicationComposition.CreateStandingPreferenceWarnings(4, 3)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ApplicationComposition.CreateStandingPreferenceWarnings(-1, 3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ApplicationComposition.CreateStandingPreferenceWarnings(1, -1));
+    }
+
+    /// <summary>Headless memory warnings are emitted once for a completed built-in memory operation only.</summary>
+    [Fact]
+    public static async Task HeadlessMemoryWarningSubscription_RejectsUnrelatedMalformedAndFailedEvents()
+    {
+        await using var events = new DomainEventStream();
+        await using var writer = new StringWriter();
+        await using var subscription = ShellRunner.SubscribeMemoryWarnings(events, writer);
+        var session = SessionId.New();
+        var invocation = ToolInvocationId.New();
+        var now = DateTimeOffset.UtcNow;
+        await events.PublishAsync(new ToolInvocationStarted(session, now, invocation, "memories"), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new ToolInvocationCompleted(session, now, invocation, true, "{\"StandingPreferenceWarning\":\"You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.\"}"), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new ToolInvocationCompleted(session, now, invocation, true, "{\"StandingPreferenceWarning\":\"You now have 5 preference memories.\"}"), TestContext.Current.CancellationToken);
+        var external = ToolInvocationId.New();
+        await events.PublishAsync(new ToolInvocationStarted(session, now, external, "memories", Source: new ToolActivitySource(ToolActivitySourceKind.Extension)), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new ToolInvocationCompleted(session, now, external, true, "{\"StandingPreferenceWarning\":\"You now have 6 preference memories.\"}", Source: new ToolActivitySource(ToolActivitySourceKind.Extension)), TestContext.Current.CancellationToken);
+        var failed = ToolInvocationId.New();
+        await events.PublishAsync(new ToolInvocationStarted(session, now, failed, "memories"), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new ToolInvocationCompleted(session, now, failed, false, "{\"StandingPreferenceWarning\":\"You now have 7 preference memories.\"}"), TestContext.Current.CancellationToken);
+        var malformed = ToolInvocationId.New();
+        await events.PublishAsync(new ToolInvocationStarted(session, now, malformed, "memories"), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new ToolInvocationCompleted(session, now, malformed, true, "{malformed"), TestContext.Current.CancellationToken);
+
+        Assert.Equal($"{Environment.NewLine}You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.{Environment.NewLine}{Environment.NewLine}", writer.ToString());
     }
 
     /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>

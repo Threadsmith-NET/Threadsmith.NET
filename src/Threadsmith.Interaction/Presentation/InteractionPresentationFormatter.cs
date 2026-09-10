@@ -392,18 +392,18 @@ internal static class InteractionPresentationFormatter
         string childIndent,
         string outerIndent)
     {
-        var itemCount = lines.Count(line => line.Kind == TuiBlockLineKind.Item);
-        var itemIndex = 0;
-        foreach (var line in lines)
+        for (var index = 0; index < lines.Count; index++)
         {
-            if (line.Kind == TuiBlockLineKind.Item)
+            var line = lines[index];
+            var isLast = index == lines.Count - 1;
+            var hasFollowingBody = !isLast && lines[index + 1].Kind == TuiBlockLineKind.Body;
+            if (line.Kind == TuiBlockLineKind.Item && !hasFollowingBody)
             {
-                itemIndex++;
-                AppendItemLine(builder, line.Text, itemIndex == itemCount, childIndent, outerIndent);
+                AppendItemLine(builder, line.Text, isLast, childIndent, outerIndent);
                 continue;
             }
 
-            AppendBodyLine(builder, line.Text, childIndent, outerIndent, line.PreserveText);
+            AppendBodyLine(builder, line.Text, childIndent, outerIndent, line.PreserveText, isLast);
         }
     }
 
@@ -412,13 +412,28 @@ internal static class InteractionPresentationFormatter
         string text,
         string childIndent,
         string outerIndent,
-        bool preserveText)
+        bool preserveText,
+        bool isLast)
     {
-        foreach (var line in SplitBlockText(text, preserveText))
+        var lines = SplitBlockText(text, preserveText);
+        var lastContentIndex = lines.Count - 1;
+        while (isLast && lastContentIndex > 0 && lines[lastContentIndex].Length == 0)
         {
+            lastContentIndex--;
+        }
+
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (isLast && index > lastContentIndex)
+            {
+                builder.AppendLine();
+                continue;
+            }
+
+            var line = lines[index];
             builder.Append(outerIndent);
             builder.Append(childIndent);
-            builder.Append('\u2502');
+            builder.Append(isLast && index == lastContentIndex ? '\u2514' : '\u2502');
             if (line.Length > 0)
             {
                 builder.Append(' ');
@@ -512,7 +527,18 @@ internal static class InteractionPresentationFormatter
                     return null;
                 }
 
-                output.Append("Memory ").Append(id.GetString()).AppendLine(":");
+                var memoryType = entry.TryGetProperty("MemoryType", out var suppliedMemoryType)
+                    ? suppliedMemoryType.ValueKind == JsonValueKind.String
+                        ? suppliedMemoryType.GetString()
+                        : null
+                    : "situational";
+                if (memoryType is not ("standingPreference" or "situational"))
+                {
+                    return null;
+                }
+
+                output.Append("Memory ").Append(id.GetString()).Append(" [")
+                    .Append(memoryType).AppendLine("]:");
                 output.AppendLine(text.GetString());
             }
 
@@ -527,6 +553,14 @@ internal static class InteractionPresentationFormatter
                 && count > 0)
             {
                 output.Append("Omitted memories: ").Append(count).AppendLine(". Use /memory inspect <id> for an individual note.");
+            }
+
+            if (root.TryGetProperty("StandingPreferenceWarning", out var warning)
+                && warning.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(warning.GetString()))
+            {
+                output.AppendLine();
+                output.AppendLine(warning.GetString());
             }
 
             return PrepareMemoryOutput(output.ToString().TrimEnd());

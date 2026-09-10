@@ -373,7 +373,7 @@ public sealed class ContextAssembler : IContextAssembler
         var optionalConversationTokens = tokensByCategory["recentTurns"]
             + tokensByCategory["conversationSummary"]
             + tokensByCategory["retrievedMemory"]
-            + tokensByCategory["repositoryMemory"];
+            + tokensByCategory["repositoryMemory"] - repositoryMemory.RequiredTokens;
         var allowedKinds = ContextPolicy.GetAllowedKinds(request.Phase);
         Evidence[] candidates = [.. _evidence.Snapshot(request.SessionId)
             .Where(item => item.RunId is null || item.RunId == request.RunId)
@@ -950,7 +950,10 @@ public sealed class ContextAssembler : IContextAssembler
         ConversationAssemblyState conversation,
         CancellationToken cancellationToken)
     {
-        var assembly = new RepositoryMemoryAssemblyState(2_000, _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance));
+        var assembly = new RepositoryMemoryAssemblyState(
+            2_000,
+            _prompts.Get(PromptFileNames.SystemRepositoryMemoryGuidance),
+            _prompts.Get(PromptFileNames.SystemStandingPreferenceGuidance));
         if (_repositoryMemoryRetriever is null || !request.RepositoryMemoriesEnabled
             || conversation.Mode == ConversationContextMode.Stateless)
         {
@@ -969,6 +972,12 @@ public sealed class ContextAssembler : IContextAssembler
                 Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
             },
             cancellationToken);
+        foreach (var entry in retrieval.StandingPreferences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            assembly.AddStandingPreference(entry with { Text = _sanitizer.Sanitize(entry.Text) });
+        }
+
         foreach (var candidate in retrieval.Selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1379,23 +1388,43 @@ public sealed class ContextAssembler : IContextAssembler
     {
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
+        private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _standingPreferences = [];
         private readonly int _maximumTokens;
         private readonly string _guidance;
+        private readonly string _standingGuidance;
         private int _includedTokens;
+        private int _standingTokens;
 
-        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance)
+        public RepositoryMemoryAssemblyState(int maximumTokens, string guidance, string standingGuidance)
         {
             _maximumTokens = maximumTokens;
             _guidance = guidance;
+            _standingGuidance = standingGuidance;
         }
 
         public bool CanReduce => _included.Count > 0;
 
-        public bool ContainsSensitiveData => _included.Any(item => item.Candidate.Entry.Sensitivity == ConversationSensitivity.Sensitive);
+        public bool ContainsSensitiveData => _included.Concat(_standingPreferences)
+            .Any(item => item.Candidate.Entry.Sensitivity == ConversationSensitivity.Sensitive);
 
-        public string Content => _included.Count == 0 ? string.Empty : Render(_included.Select(item => item.Candidate));
+        public string Content => _standingPreferences.Count == 0
+            ? SituationalContent
+            : RenderStanding(_standingPreferences.Select(item => item.Candidate))
+                + (_included.Count == 0 ? string.Empty : "\n" + SituationalContent);
 
         public List<string> Reductions { get; } = [];
+
+        public int RequiredTokens => _standingTokens;
+
+        private string SituationalContent => _included.Count == 0 ? string.Empty : Render(_included.Select(item => item.Candidate));
+
+        public void AddStandingPreference(RepositoryMemoryEntry entry)
+        {
+            var candidate = new RepositoryMemoryRetrievalCandidate(entry, 0, null, null, null);
+            var total = TokenEstimator.Estimate(RenderStanding(_standingPreferences.Select(item => item.Candidate).Append(candidate)));
+            _standingPreferences.Add((candidate, total - _standingTokens));
+            _standingTokens = total;
+        }
 
         public void AddExcluded(RepositoryMemoryRetrievalCandidate candidate, string reason, int tokens)
         {
@@ -1406,10 +1435,11 @@ public sealed class ContextAssembler : IContextAssembler
         }
 
         public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions() =>
-            [.. _included.Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
+            [.. _standingPreferences.Concat(_included).Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
 
         public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections() =>
-            [.. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
+            [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),
+                .. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
 
         public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate) =>
             TokenEstimator.Estimate(Render(_included.Select(item => item.Candidate).Append(candidate))) - _includedTokens;
@@ -1448,16 +1478,23 @@ public sealed class ContextAssembler : IContextAssembler
                 $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
             + "\n</repository_memory>";
 
+        private string RenderStanding(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
+            _standingGuidance + "\n<standing_preferences untrusted=\"true\">\n"
+            + string.Join('\n', candidates.Select(candidate =>
+                $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
+            + "\n</standing_preferences>";
+
         private static RepositoryMemoryContextItemProjection CreateProjection(
             RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens) => new()
         {
             Id = candidate.Entry.Id,
             Origin = candidate.Entry.Origin,
+            MemoryType = candidate.Entry.MemoryType,
             Revision = candidate.Entry.Revision,
             Included = included,
             Rationale = reason,
             EstimatedTokens = tokens,
-            Score = candidate.Score,
+            Score = candidate.Entry.MemoryType == RepositoryMemoryType.StandingPreference ? null : candidate.Score,
             LexicalRank = candidate.LexicalRank,
             SemanticRank = candidate.SemanticRank,
             CosineSimilarity = candidate.CosineSimilarity,

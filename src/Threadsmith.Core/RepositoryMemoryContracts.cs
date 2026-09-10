@@ -180,7 +180,7 @@ public sealed record RepositoryMemoryItem
 }
 
 /// <summary>Creates an explicit manual repository memory.</summary>
-public sealed record RememberRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, string Text)
+public sealed record RememberRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, string Text, RepositoryMemoryType? MemoryType = null)
     : ICommand<RepositoryMemoryEntry>;
 
 /// <summary>Lists current repository memories.</summary>
@@ -192,11 +192,11 @@ public sealed record InspectRepositoryMemoryCommand(SessionId SessionId, string 
     : ICommand<RepositoryMemoryEntry?>;
 
 /// <summary>Corrects an existing entry in place, preserving its stable ID.</summary>
-public sealed record UpdateRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText)
+public sealed record UpdateRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText, RepositoryMemoryType? MemoryType = null)
     : ICommand<RepositoryMemoryEntry>;
 
 /// <summary>Compatibility alias for an in-place update; no supersession record is created.</summary>
-public sealed record SupersedeRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText)
+public sealed record SupersedeRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText, RepositoryMemoryType? MemoryType = null)
     : ICommand<RepositoryMemoryEntry>;
 
 /// <summary>Deletes a repository memory and its current search and usage rows.</summary>

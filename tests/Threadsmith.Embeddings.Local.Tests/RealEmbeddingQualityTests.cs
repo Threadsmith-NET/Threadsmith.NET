@@ -72,8 +72,12 @@ public sealed class RealEmbeddingQualityTests
             var metrics = Measure(examples.Where(example => example.Split == "calibration"), threshold, "semantic");
             return new { Threshold = threshold, metrics.FalseInclusions, metrics.MissedRelevant, Loss = (2 * metrics.FalseInclusions) + metrics.MissedRelevant };
         }).OrderBy(value => value.Loss).ThenBy(value => value.MissedRelevant).ThenByDescending(value => value.Threshold).ToArray();
-        var selectedMinimum = calibration[0].Threshold;
-        Assert.Equal(LocalTextEmbeddingGenerator.SemanticMinimum, selectedMinimum);
+        // Keep the already pinned threshold during the engine adaptation when it remains
+        // calibration-optimal. Held-out examples evaluate it; they never choose a new value.
+        var selectedMinimum = LocalTextEmbeddingGenerator.SemanticMinimum;
+        var retained = Assert.Single(calibration, candidate => candidate.Threshold == selectedMinimum);
+        Assert.Equal(calibration[0].Loss, retained.Loss);
+        Assert.Equal(calibration[0].MissedRelevant, retained.MissedRelevant);
         using var production = new HybridRepositoryMemoryRetriever(store, generator, selectedMinimum);
         var outcomes = new List<object>();
         var retrievalTimings = new List<double>();
@@ -138,6 +142,7 @@ public sealed class RealEmbeddingQualityTests
         var report = new
         {
             FixtureVersion = 1,
+            CalibrationPolicyVersion = 2,
             generator.Model,
             Runtime = RuntimeInformation.FrameworkDescription,
             OS = RuntimeInformation.OSDescription,
@@ -164,7 +169,8 @@ public sealed class RealEmbeddingQualityTests
             QueryCacheHits = cacheHits,
             QueryCacheRequests = examples.Count,
             SemanticMinimum = selectedMinimum,
-            CalibrationCriterion = "Minimum 2*falseInclusions + missedRelevant on semantic-only calibration; ties minimize misses then prefer higher threshold. Held-out examples never select threshold.",
+            CalibrationCriterion = "Minimum 2*falseInclusions + missedRelevant on semantic-only calibration; ties minimize misses. Retain the prior pinned minimum only if still optimal; held-out examples never select it.",
+            HighestEquivalentCalibrationMinimum = calibration[0].Threshold,
             Calibration = calibration,
             HeldOut = new
             {

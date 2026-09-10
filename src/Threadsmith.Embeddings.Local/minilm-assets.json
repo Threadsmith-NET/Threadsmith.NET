@@ -7,9 +7,9 @@
   "licenseEvidence": "README.md frontmatter at the pinned source revision",
   "dimensions": 384,
   "maxInputTokens": 256,
-  "pooling": "attention-mask mean including boundary tokens",
-  "normalization": "L2",
-  "tokenization": "BERT WordPiece; lower-case, strip accents, basic and CJK tokenization; CLS/SEP exactly once; dynamic sequence length",
+  "pooling": "float32 attention-mask mean including all reference boundary tokens",
+  "normalization": "float32 L2 inside the engine; provider returns the finished vector unchanged",
+  "tokenization": "Microsoft.ML.Tokenizers built-in BERT options; default EncodeToIds boundaries plus manual CLS/SEP as in the supplied MpnetEmbedderEngine; dynamic attended sequence length",
   "nativePackage": "Microsoft.ML.OnnxRuntime",
   "nativeVersion": "1.22.1",
   "tokenizerPackage": "Microsoft.ML.Tokenizers",
@@ -91,5 +91,12 @@
       "bytes": 33548864,
       "sha256": "36a46aeb65eee6618daded125577192514d058d0cce6adc4892bc1bcc77cb9be"
     }
+  },
+  "referenceEngine": {
+    "provider": "MlNetAllMiniLML12V2",
+    "engine": "MpnetEmbedderEngine",
+    "engineSha256": "97e23f75fbb593c8247c7ac2c1391c0678d7fcd48b92c1ffd4b4619e42ca304a",
+    "nativeVersion": "1.23.0",
+    "tokenizerVersion": "2.0.0-preview.1.25127.4"
   }
 }

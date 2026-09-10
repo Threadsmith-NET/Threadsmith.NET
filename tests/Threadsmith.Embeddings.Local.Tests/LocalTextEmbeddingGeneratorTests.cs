@@ -17,7 +17,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
         tensor[0, 0, 0] = 3;
         tensor[0, 1, 383] = 4;
         tensor[0, 2, 0] = 999;
-        var result = LocalTextEmbeddingGenerator.PoolAndNormalize(tensor, [1, 1, 0]);
+        var result = MiniLmEmbedderEngine.PoolAndNormalize(tensor, [1, 1, 0]);
         Assert.Equal(384, result.Length);
         Assert.Equal(0.6f, result[0], 5);
         Assert.Equal(0.8f, result[383], 5);
@@ -28,10 +28,10 @@ public sealed class LocalTextEmbeddingGeneratorTests
     public static void PoolingRejectsInvalidOutput()
     {
         var tensor = new DenseTensor<float>([1, 1, 384]);
-        Assert.Throws<TextEmbeddingUnavailableException>(() => LocalTextEmbeddingGenerator.PoolAndNormalize(tensor, [1]));
+        Assert.Throws<TextEmbeddingUnavailableException>(() => MiniLmEmbedderEngine.PoolAndNormalize(tensor, [1]));
         tensor[0, 0, 1] = float.NaN;
-        Assert.Throws<TextEmbeddingUnavailableException>(() => LocalTextEmbeddingGenerator.PoolAndNormalize(tensor, [1]));
-        Assert.Throws<TextEmbeddingUnavailableException>(() => LocalTextEmbeddingGenerator.PoolAndNormalize(tensor, [1, 1]));
+        Assert.Throws<TextEmbeddingUnavailableException>(() => MiniLmEmbedderEngine.PoolAndNormalize(tensor, [1]));
+        Assert.Throws<TextEmbeddingUnavailableException>(() => MiniLmEmbedderEngine.PoolAndNormalize(tensor, [1, 1]));
     }
 
     /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
@@ -39,9 +39,14 @@ public sealed class LocalTextEmbeddingGeneratorTests
     public static void CompleteInputBoundaryRetainsSepAndReportsOverflow()
     {
         using var vocabulary = new MemoryStream(Encoding.UTF8.GetBytes("[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\na\n"));
-        var tokenizer = LocalTextEmbeddingGenerator.CreateTokenizer(vocabulary);
-        var exact = LocalTextEmbeddingGenerator.Encode(tokenizer, string.Join(' ', Enumerable.Repeat("a", 254)));
-        var overflow = LocalTextEmbeddingGenerator.Encode(tokenizer, string.Join(' ', Enumerable.Repeat("a", 255)));
+        var tokenizer = MiniLmEmbedderEngine.CreateTokenizer(vocabulary);
+        // Compatibility with the supplied engine includes both the tokenizer's and
+        // engine's boundary tokens. Count all four before truncation admission.
+        var single = MiniLmEmbedderEngine.Encode(tokenizer, "a");
+        Assert.Equal([2L, 2L, 5L, 3L, 3L], single.Ids);
+        Assert.Equal(5, single.FullTokenCount);
+        var exact = MiniLmEmbedderEngine.Encode(tokenizer, string.Join(' ', Enumerable.Repeat("a", 252)));
+        var overflow = MiniLmEmbedderEngine.Encode(tokenizer, string.Join(' ', Enumerable.Repeat("a", 253)));
         Assert.Equal(256, exact.FullTokenCount);
         Assert.False(exact.WasTruncated);
         Assert.Equal(257, overflow.FullTokenCount);
@@ -90,7 +95,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
         await using var generator = new LocalTextEmbeddingGenerator(
             Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2"), () => entered.TrySetResult());
         using var source = new CancellationTokenSource();
-        var cancelled = generator.GenerateAsync(string.Join(' ', Enumerable.Repeat("a", 254)), source.Token);
+        var cancelled = generator.GenerateAsync(string.Join(' ', Enumerable.Repeat("a", 252)), source.Token);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         var queued = generator.GenerateAsync("queue remains available after cancellation", TestContext.Current.CancellationToken);
         await source.CancelAsync();
@@ -112,7 +117,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
     /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
     [Fact]
     [Trait("Category", "Integration")]
-    public static async Task RealModelMatchesPinnedReferenceTokensMasksVectorsAndDynamicPadding()
+    public static async Task RealModelMatchesProductionReferenceFinishedVectorsAndDynamicPadding()
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1")
         {
@@ -121,13 +126,14 @@ public sealed class LocalTextEmbeddingGeneratorTests
 
         var assetRoot = Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2");
         using var vocabulary = File.OpenRead(Path.Combine(assetRoot, "vocab.txt"));
-        var tokenizer = LocalTextEmbeddingGenerator.CreateTokenizer(vocabulary);
+        var tokenizer = MiniLmEmbedderEngine.CreateTokenizer(vocabulary);
         await using var generator = new LocalTextEmbeddingGenerator();
-        using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "tokenizer-parity.json"), TestContext.Current.CancellationToken));
+        using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "production-reference-parity.json"), TestContext.Current.CancellationToken));
+        Assert.EndsWith(":v2", generator.Model.SpaceId, StringComparison.Ordinal);
         foreach (var sample in fixture.RootElement.GetProperty("samples").EnumerateArray())
         {
             var text = sample.GetProperty("text").GetString() ?? string.Empty;
-            var encoded = LocalTextEmbeddingGenerator.Encode(tokenizer, text);
+            var encoded = MiniLmEmbedderEngine.Encode(tokenizer, text);
             Assert.True(sample.GetProperty("ids").EnumerateArray().Select(item => item.GetInt64()).SequenceEqual(encoded.Ids), $"Token mismatch for {text}: {string.Join(',', encoded.Ids)}");
             Assert.Equal(sample.GetProperty("attentionMask").EnumerateArray().Select(item => item.GetInt64()), encoded.AttentionMask);
             var actual = await generator.GenerateAsync(text, TestContext.Current.CancellationToken);

@@ -1,0 +1,39 @@
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text.Json;
+using AI.Inference.GIST.Embeddings.Local.LocalEmbeddingsModel.MlNet;
+using Microsoft.ML.Tokenizers;
+
+// Arguments: exact linked reference engine path, assets path, input-text JSON, output path.
+// The accompanying project must link that original engine unchanged and pin its exact packages.
+var sourcePath = Path.GetFullPath(args[0]);
+var assetsPath = Path.GetFullPath(args[1]);
+var texts = JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[2]))
+    ?? throw new InvalidDataException("Missing input texts.");
+var modelPath = Path.Combine(assetsPath, "model.onnx");
+var vocabularyPath = Path.Combine(assetsPath, "vocab.txt");
+string Hash(string path) => Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)));
+const string sourceHash = "97e23f75fbb593c8247c7ac2c1391c0678d7fcd48b92c1ffd4b4619e42ca304a";
+const string modelHash = "84c56795d395593cbee215e2d635a8f0ad3199ae99f99299c44cf1eaecff3ad4";
+const string vocabHash = "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3";
+if (Hash(sourcePath) != sourceHash || Hash(modelPath) != modelHash || Hash(vocabularyPath) != vocabHash)
+{
+    throw new InvalidDataException("Reference source or assets do not match the recorded identities.");
+}
+using var engine = new MpnetEmbedderEngine(modelPath, vocabularyPath, 384, 256);
+var tokenizer = typeof(MpnetEmbedderEngine).GetField("_tokenizer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(engine) as BertTokenizer
+    ?? throw new InvalidDataException("The reference tokenizer field is missing.");
+var tokenize = typeof(MpnetEmbedderEngine).GetMethod("Tokenize", BindingFlags.Instance | BindingFlags.NonPublic)
+    ?? throw new InvalidDataException("The reference tokenization method is missing.");
+var samples = new List<object>();
+foreach (var text in texts)
+{
+    var encoded = tokenize.Invoke(engine, [text]) is ValueTuple<long[], long[], long[]> value
+        ? value : throw new InvalidDataException("The reference returned unexpected tensors.");
+    var active = encoded.Item2.Count(value => value != 0);
+    var fullTokenCount = checked(tokenizer.EncodeToIds(text).Count + 2);
+    var vector = engine.Embed(text); // Already a completed, normalized reference vector.
+    samples.Add(new { text, ids = encoded.Item1.Take(active).ToArray(), attentionMask = encoded.Item2.Take(active).ToArray(), fullTokenCount, wasTruncated = fullTokenCount > 256, vector });
+}
+var result = new { revision = "9bc18616990647530c139b95df1d1aa30cd115b7", runtime = "Unmodified MpnetEmbedderEngine; ONNX Runtime1.23.0; Microsoft.ML.Tokenizers2.0.0-preview.1.25127.4; " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, referenceEngineSha256 = sourceHash, modelSha256 = modelHash, vocabSha256 = vocabHash, intraOpThreads = Environment.ProcessorCount, fixedSequenceLength = 256, boundaryPolicy = "Default BertTokenizer.EncodeToIds boundaries plus reference manual CLS/SEP", samples };
+File.WriteAllText(args[3], JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));

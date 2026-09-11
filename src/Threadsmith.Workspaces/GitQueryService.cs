@@ -655,6 +655,8 @@ public sealed class GitQueryService : IGitQueryService
             "-c",
             "core.quotepath=false",
             "-c",
+            "core.fsmonitor=false",
+            "-c",
             "diff.external=",
             "-c",
             "diff.trustExitCode=false",

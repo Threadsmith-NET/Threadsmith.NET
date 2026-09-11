@@ -93,7 +93,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(3, handler.Requests.Count);
         Assert.All(handler.Requests, request =>
         {
-            Assert.Equal("omitted", request.GetProperty("thinking").GetProperty("display").GetString());
+            Assert.Equal("summarized", request.GetProperty("thinking").GetProperty("display").GetString());
             Assert.All(request.GetProperty("messages").EnumerateArray(), message =>
                 Assert.Contains(message.GetProperty("role").GetString(), new[] { "user", "assistant" }));
         });

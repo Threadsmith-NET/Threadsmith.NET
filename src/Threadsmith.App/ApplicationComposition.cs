@@ -194,6 +194,7 @@ internal static class ApplicationComposition
         // the same effective profile, reasoning level, and provider-neutral accounting.
         var preferences = integration.Models.SessionPreferences;
         var usage = new SessionUsageProjection();
+        var agentDisplay = new AgentDisplayStream();
         var repositoryMemoryApplication = new RepositoryMemoryApplication(memoryService, memoryOptions);
         var activeTurnCompactionPolicy = CreateActiveTurnCompactionPolicy(
             host.TrustedConfiguration);
@@ -535,7 +536,8 @@ internal static class ApplicationComposition
                         usage,
                         runSteering,
                         integration.Models.TrustedProvider,
-                        activeTurnCompactionProfile);
+                        activeTurnCompactionProfile,
+                        agentDisplay);
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
@@ -801,7 +803,8 @@ internal static class ApplicationComposition
                 memoriesTool,
                 memoryRetriever,
                 memoryOptions,
-                startupDisplayWarnings);
+                startupDisplayWarnings,
+                agentDisplay);
         }
         catch
         {
@@ -1312,7 +1315,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         MemoriesTool memoriesTool,
         HybridRepositoryMemoryRetriever memoryRetriever,
         RepositoryMemoryConfiguration memoryOptions,
-        IReadOnlyList<string> startupDisplayWarnings)
+        IReadOnlyList<string> startupDisplayWarnings,
+        AgentDisplayStream agentDisplay)
     {
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
@@ -1329,6 +1333,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         PlanApprovalPolicy = planApprovalPolicy;
         SessionModelPreferences = sessionModelPreferences;
         SessionUsage = sessionUsage;
+        AgentDisplay = agentDisplay;
         SessionLifecycle = sessionLifecycle;
         _sessionCheckpointSubscription = sessionCheckpointSubscription;
         EffectiveStartupProfileId = effectiveStartupProfileId;
@@ -1356,6 +1361,9 @@ internal sealed class ApplicationServices : IAsyncDisposable
 
     /// <summary>Gets provider-neutral cumulative usage shared with the terminal.</summary>
     internal SessionUsageProjection SessionUsage { get; }
+
+    /// <summary>Gets bounded transient child display observations.</summary>
+    internal AgentDisplayStream AgentDisplay { get; }
 
     /// <summary>Gets the serialized host-owned active-session authority.</summary>
     internal SessionLifecycleApplication SessionLifecycle { get; }

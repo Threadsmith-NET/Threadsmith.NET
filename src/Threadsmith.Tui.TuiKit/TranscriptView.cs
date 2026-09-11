@@ -36,6 +36,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private Point? _end;
     private long? _clearBeforeId;
     private int _itemBytes;
+    private int _byteBudget = ByteLimit;
+    private int _lineBudget = LineLimit;
 
     /// <inheritdoc/>
     public Size Measure(Size available)
@@ -52,7 +54,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         var topId = TopId;
-        surface.Fill(new Rect(0, 0, surface.Size.Width, surface.Size.Height), Cell.Blank(CellStyle.Default));
+        surface.Fill(new Rect(0, 0, surface.Size.Width, surface.Size.Height), Cell.Blank(ResolveStyle(PresentationTextRole.OutputStreamPaneRole)));
         if (_width != surface.Size.Width)
         {
             _width = surface.Size.Width;
@@ -308,12 +310,26 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         return safe.ToString();
     }
 
+    /// <summary>Shares the aggregate child retention budget without disturbing surviving selection anchors.</summary>
+    internal void SetRetentionBudget(int bytes, int lines)
+    {
+        _byteBudget = Math.Clamp(bytes, 0, ByteLimit);
+        _lineBudget = Math.Clamp(lines, 0, LineLimit);
+        while (_items.Count > _lineBudget || _itemBytes > _byteBudget)
+        {
+            _itemBytes -= PresentationBytes(_items.Dequeue());
+        }
+
+        Trim();
+        _rowGlyphs.Clear();
+    }
+
     private void Retain(PresentationItem item)
     {
         var bytes = PresentationBytes(item);
         _items.Enqueue(item);
         _itemBytes += bytes;
-        while (_items.Count > LineLimit || _itemBytes > ByteLimit)
+        while (_items.Count > _lineBudget || _itemBytes > _byteBudget)
         {
             var removed = _items.Dequeue();
             _itemBytes -= PresentationBytes(removed);
@@ -698,7 +714,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void Trim()
     {
-        while (_lines.Count > LineLimit || RetainedBytes > ByteLimit)
+        while (_lines.Count > _lineBudget || RetainedBytes > _byteBudget)
         {
             var first = _lines[0];
             RetainedBytes -= first.Bytes;

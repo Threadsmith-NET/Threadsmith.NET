@@ -13,9 +13,9 @@ using Xunit;
 /// <summary>Plan 35 conversation modes, assembly, pressure, inspection, and command tests.</summary>
 public static class Plan35ConversationContextTests
 {
-    /// <summary>Native-compatible requests keep host instructions in one prefix without changing visible conversation order.</summary>
+    /// <summary>Stable instructions precede history, while changing host state follows completed turns.</summary>
     [Fact]
-    public static async Task Canonical_request_keeps_governed_state_and_local_corrections_before_conversation()
+    public static async Task Canonical_request_keeps_history_before_governed_state_and_instructions_in_prefix()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         await using var events = new DomainEventStream();
@@ -24,7 +24,8 @@ public static class Plan35ConversationContextTests
         await ArchiveAsync(fixture, sessionId, ConversationRole.User, "earlier question", runId: priorRun);
         await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "earlier answer", runId: priorRun);
         var current = await ArchiveAsync(fixture, sessionId, ConversationRole.User, "current question");
-        var result = await CreateAssembler(fixture, events).AssembleAsync(CreateRequest(fixture, sessionId, current, "current question") with
+        var assembler = CreateAssembler(fixture, events);
+        var request = CreateRequest(fixture, sessionId, current, "current question") with
         {
             AdditionalMessages =
             [
@@ -35,18 +36,26 @@ public static class Plan35ConversationContextTests
                     Content = [new ModelContentPart { Content = "Keep the operation schema." }],
                 },
             ],
-        });
+        };
+        var result = await assembler.AssembleAsync(request);
+        var changed = await assembler.AssembleAsync(request with { CurrentTurnHostContext = ["Fresh external semantic evidence."] });
 
         var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
         var prefix = messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
-        Assert.Contains(prefix, message => message.SectionId == "governed-request-state");
+        Assert.DoesNotContain(prefix, message => message.SectionId == "governed-request-state");
         Assert.Contains(prefix, message => message.SectionId == "request-local-correction");
         var conversation = messages.Skip(prefix.Length).ToArray();
         Assert.DoesNotContain(conversation, message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer);
-        Assert.Equal([ModelMessageRole.User, ModelMessageRole.Assistant, ModelMessageRole.User], conversation.Select(message => message.Role));
+        Assert.Equal([ModelMessageRole.User, ModelMessageRole.Assistant, ModelMessageRole.HostContext, ModelMessageRole.User], conversation.Select(message => message.Role));
         Assert.Contains("earlier question", conversation[0].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains("earlier answer", conversation[1].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal("current-user", conversation[^1].SectionId);
+        Assert.Equal("governed-request-state", conversation[2].SectionId);
+        Assert.Equal(
+            messages.Take(prefix.Length + 2).Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())),
+            changed.Messages!.Take(prefix.Length + 2).Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())));
+        Assert.NotEqual(conversation[2].GetModelVisibleContent(), changed.Messages![prefix.Length + 2].GetModelVisibleContent());
+        Assert.Equal(result.Layout?.StablePrefixDigest, changed.Layout?.StablePrefixDigest);
     }
 
     /// <summary>Transient host URL mappings enter only the current assembled request state.</summary>

@@ -1130,6 +1130,54 @@ public static class Milestone1Tests
             segment => segment.Text.Contains("/help", StringComparison.Ordinal));
     }
 
+    /// <summary>The help command opens the retained column dialog without writing help into MAIN or invoking a model.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_TuiKitHelpUsesModalWithoutTranscriptOutput()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        using var backend = new TUIKit.Terminal.HeadlessBackend(120, 35);
+        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var surface = new TuiKitCommandSurface(terminal, backend, ["/help\r", "\u001b", "/quit\r"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
+
+        Assert.Equal(["/help", "/quit"], surface.Submitted);
+        Assert.Equal(1, surface.HelpOpened);
+        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.DoesNotContain("Manage MCP profiles and capabilities", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Submit any other text to Threadsmith.", output, StringComparison.Ordinal);
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
+    }
+
+    /// <summary>The retained startup surface owns the logo, while MAIN retains warnings and session information.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_TuiKitStartupDoesNotEchoBanner()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
+        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var surface = new TuiKitCommandSurface(terminal, backend, ["/quit\r"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            displayWarnings: ["Startup configuration warning"]);
+
+        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
+
+        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.DoesNotContain("_____ _", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Forge better code, not slop.", output, StringComparison.Ordinal);
+        Assert.Contains("Startup configuration warning", output, StringComparison.Ordinal);
+        Assert.Contains("Current status", output, StringComparison.Ordinal);
+    }
+
     /// <summary>Completed names enter shared routing only as submitted input; unknown commands never create model work.</summary>
     [Theory]
     [InlineData("/the\t current\r")]
@@ -2108,6 +2156,7 @@ public static class Milestone1Tests
             [ReasoningLevel.None, ReasoningLevel.High]) with
         {
             ContextWindow = 16_000,
+            ProviderName = "Remote service",
         };
         var inspection = new ContextInspectionProjection
         {
@@ -2126,6 +2175,7 @@ public static class Milestone1Tests
             new SessionUsageSnapshot(1, 2, false));
 
         Assert.Equal("Status model", status.Model);
+        Assert.Equal("Remote service", status.ProviderName);
         Assert.Equal(8_000, status.ContextTokens);
         Assert.Equal(16_000, status.ContextLimit);
     }
@@ -5072,7 +5122,7 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution
+    private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution, IStartupProgressSurface, IInteractionHelpSurface
     {
         private readonly Threadsmith.Tui.TuiKit.TuiKitSurface _surface;
         private readonly TUIKit.Terminal.HeadlessBackend _backend;
@@ -5092,6 +5142,17 @@ public static class Milestone1Tests
         internal List<InteractiveCommandInvocation> Invocations { get; } = [];
 
         internal List<PresentationBatch> Batches { get; } = [];
+
+        internal int HelpOpened { get; private set; }
+
+        public async Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
+        {
+            var help = _surface.ShowCommandHelpAsync(commands, cancellationToken);
+            await _surface.PresentAsync(new PresentationBatch([]), cancellationToken);
+            HelpOpened++;
+            _backend.FeedInput(_keys.Dequeue());
+            await help;
+        }
 
         public async Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
         {
@@ -5118,6 +5179,13 @@ public static class Milestone1Tests
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned operation to the actual surface without a synchronization context.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
             => _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned startup operation to the actual surface.")]
+        public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
+            => _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+
+        public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
+            => _surface.SetStartupDetailsAsync(details, cancellationToken);
 
         public Task<FrontendCommandOutcome> HandleAsync(InteractiveCommandInvocation invocation, IInteractionSurface surface, CancellationToken cancellationToken = default)
         {

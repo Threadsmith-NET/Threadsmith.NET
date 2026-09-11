@@ -9,6 +9,49 @@ using Threadsmith.Models.Anthropic;
 /// <summary>Exercises native request preparation, authority, schemas, and exact private replay.</summary>
 public sealed class AnthropicRequestMapperTests
 {
+    /// <summary>Changing request context cannot rewrite native system blocks or the preceding conversation prefix.</summary>
+    [Fact]
+    public async Task StreamAsync_RequestContext_LeavesReusableNativePrefixUnchanged()
+    {
+        var handler = new TestAnthropicHandler(TestAnthropic.TextStream(), TestAnthropic.TextStream());
+        using var client = new HttpClient(handler);
+        var compatibility = TestAnthropic.Compatibility() with { PromptCachingEnabled = true, MinimumCacheableTokens = 1 };
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", compatibility);
+        var request = TestAnthropic.Request() with
+        {
+            Messages =
+            [
+                TestAnthropic.Message(ModelMessageRole.System, "host-policy", "stable host"),
+                TestAnthropic.Message(ModelMessageRole.Developer, "repository-instructions", "stable repository"),
+                TestAnthropic.Message(ModelMessageRole.User, "recent-user", "prior question"),
+                TestAnthropic.Message(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+                TestAnthropic.Message(ModelMessageRole.HostContext, "repository-memory", "old memory"),
+                TestAnthropic.Message(ModelMessageRole.HostContext, "governed-request-state", "old evidence"),
+                TestAnthropic.Message(ModelMessageRole.User, "current-user", "current question"),
+            ],
+        };
+        await TestAnthropic.CollectAsync(provider, request);
+        await TestAnthropic.CollectAsync(provider, request with
+        {
+            Messages = [.. request.Messages.Take(4), TestAnthropic.Message(ModelMessageRole.HostContext, "governed-request-state", "fresh evidence"), request.Messages[^1]],
+        });
+
+        var first = handler.Requests[0];
+        var next = handler.Requests[1];
+        Assert.Equal(first.GetProperty("system").GetRawText(), next.GetProperty("system").GetRawText());
+        for (var index = 0; index < 2; index++)
+        {
+            Assert.Equal(first.GetProperty("messages")[index].GetRawText(), next.GetProperty("messages")[index].GetRawText());
+        }
+
+        Assert.DoesNotContain("old memory", next.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal("user", next.GetProperty("messages")[2].GetProperty("role").GetString());
+        Assert.Equal("<threadsmith_host_context>\nfresh evidence\n</threadsmith_host_context>", next.GetProperty("messages")[2].GetProperty("content")[0].GetProperty("text").GetString());
+        Assert.Equal("current question", next.GetProperty("messages")[2].GetProperty("content")[1].GetProperty("text").GetString());
+        Assert.Equal("ephemeral", next.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("cache_control").GetProperty("type").GetString());
+        Assert.Equal("ephemeral", next.GetProperty("messages")[2].GetProperty("content")[1].GetProperty("cache_control").GetProperty("type").GetString());
+    }
+
     /// <summary>Initial instructions retain trust order while hidden and legacy duplicate content stay absent.</summary>
     [Fact]
     public async Task StreamAsync_StructuredMessages_PreservesNativeRolesAndExactContent()
@@ -176,6 +219,7 @@ public sealed class AnthropicRequestMapperTests
         var body = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), compatibility);
         Assert.Equal(4, prepared.CachePlan?.Breakpoints.Count);
         Assert.Equal(4, CountCacheControls(body));
+        Assert.NotNull(body["messages"]?.AsArray().Last()?["content"]?.AsArray().Last()?["cache_control"]);
         Assert.Equal(AnthropicRequestMapper.Digest(body), prepared.WireDigest);
         Assert.True(prepared.WireEstimate.WireInputTokens >= JsonSerializer.SerializeToUtf8Bytes(body).Length);
         var uncached = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), compatibility with { PromptCachingEnabled = false });
@@ -184,27 +228,45 @@ public sealed class AnthropicRequestMapperTests
     }
 
     /// <summary>Exact thinking/text/tool replay remains in chronological position despite sanitized host text and a display toggle.</summary>
-    [Fact]
-    public async Task StreamAsync_TwoToolContinuation_ReplaysSignedContentExactlyOnce()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamAsync_TwoToolContinuation_ReplaysSignedContentExactlyOnce(bool withRequestContext)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true), TestAnthropic.TextStream("done"));
         using var client = new HttpClient(handler);
         using var state = new ModelRequestTransientState();
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], IncludeReasoningText = true, TransientState = state };
+        if (withRequestContext)
+        {
+            request = request with
+            {
+                Messages =
+                [
+                    TestAnthropic.Message(ModelMessageRole.System, "host-policy", "stable host"),
+                    TestAnthropic.Message(ModelMessageRole.User, "recent-user", "prior question"),
+                    TestAnthropic.Message(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+                    TestAnthropic.Message(ModelMessageRole.HostContext, "governed-request-state", "current evidence"),
+                    .. request.Messages,
+                ],
+            };
+        }
+
         var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), request);
         var continuation = BindContinuation(request, chunks);
         await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), continuation with { IncludeReasoningText = false });
         var second = handler.Requests[1];
         var messages = second.GetProperty("messages");
-        Assert.Equal("hello", messages[0].GetProperty("content")[0].GetProperty("text").GetString());
-        var content = messages[1].GetProperty("content");
+        var offset = withRequestContext ? 2 : 0;
+        Assert.Equal("hello", messages[offset].GetProperty("content").EnumerateArray().Last().GetProperty("text").GetString());
+        var content = messages[offset + 1].GetProperty("content");
         Assert.Equal(new[] { "thinking", "redacted_thinking", "text", "tool_use", "tool_use" }, content.EnumerateArray().Select(block => block.GetProperty("type").GetString()));
         Assert.Equal("signed-canary-AB", content[0].GetProperty("signature").GetString());
         Assert.Equal("redacted-canary", content[1].GetProperty("data").GetString());
         Assert.Equal("original visible text", content[2].GetProperty("text").GetString());
         Assert.Equal("wire_one", content[3].GetProperty("id").GetString());
         Assert.Equal("wire_two", content[4].GetProperty("id").GetString());
-        var results = messages[2].GetProperty("content");
+        var results = messages[offset + 2].GetProperty("content");
         Assert.Equal("wire_one", results[0].GetProperty("tool_use_id").GetString());
         Assert.Equal("wire_two", results[1].GetProperty("tool_use_id").GetString());
         Assert.True(results[1].GetProperty("is_error").GetBoolean());
@@ -222,12 +284,18 @@ public sealed class AnthropicRequestMapperTests
     [InlineData("thinking")]
     [InlineData("history")]
     [InlineData("preceding-user")]
+    [InlineData("host-context")]
     public async Task StreamAsync_ReplayIdentityChange_FailsLocally(string change)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true));
         using var client = new HttpClient(handler);
         using var state = new ModelRequestTransientState();
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], TransientState = state };
+        if (change == "host-context")
+        {
+            request = request with { Messages = [TestAnthropic.Message(ModelMessageRole.HostContext, "governed-request-state", "original host context"), .. request.Messages] };
+        }
+
         var profile = TestAnthropic.Profile(true);
         var compatibility = TestAnthropic.Compatibility(true);
         var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", compatibility, "instance"), request);
@@ -239,6 +307,7 @@ public sealed class AnthropicRequestMapperTests
             "thinking" => next with { ReasoningLevel = ReasoningLevel.High },
             "history" => next with { HistoryRewriteGeneration = 1 },
             "preceding-user" => next with { Messages = [next.Messages[0] with { Content = [new ModelContentPart { Content = "rewritten user" }] }, .. next.Messages.Skip(1)] },
+            "host-context" => next with { Messages = [next.Messages[0] with { Content = [new ModelContentPart { Content = "changed host context" }] }, .. next.Messages.Skip(1)] },
             _ => next,
         };
         if (change == "model")
@@ -526,7 +595,3 @@ public sealed class AnthropicRequestMapperTests
         }
     }
 }
-
-
-
-

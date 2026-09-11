@@ -421,6 +421,12 @@ public sealed partial class SessionApplication
             _sessionPreferences?.IncludeReasoningText ?? false);
         modelRequest = modelRequest with { TransientState = loopState.TransientState };
         modelRequest = ModelRequestPreparation.Prepare(_model, modelRequest);
+        _sessionUsage?.ObserveRequest(registration.SessionId, runId, new AgentRequestStatus(
+            modelRequest.ResolvedProfileId,
+            modelRequest.ReasoningLevel,
+            modelRequest.WireEstimate?.WireInputTokens,
+            context?.ModelResolution?.ContextWindow,
+            Stopwatch.GetTimestamp()));
         loopState.RequiresChronologicalCorrections = modelRequest.Preparation?.RequiresInitialInstructionPrefix == true;
         if (invocationContext is not null)
         {
@@ -2546,6 +2552,12 @@ public sealed partial class SessionApplication
             Guid invocationId,
             CancellationToken cancellationToken = default)
         {
+            _owner._sessionUsage?.ObserveRequest(_registration.SessionId, request.RunId, new AgentRequestStatus(
+                request.CandidateProfile?.ProfileId ?? request.ProfileId,
+                request.CandidateProfile?.ReasoningLevel ?? request.ReasoningLevel,
+                null,
+                request.CandidateProfile?.ContextWindowTokens ?? request.ProfileContextWindowTokens,
+                Stopwatch.GetTimestamp()));
             return _owner.InvokeBeforeModelRequestHookAsync(
                 CreateBoundary(request, attempt, invocationId),
                 cancellationToken);

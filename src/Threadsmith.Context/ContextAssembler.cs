@@ -1332,16 +1332,19 @@ public sealed class ContextAssembler : IContextAssembler
                 "repository-instructions",
                 repositoryInstructions),
         };
+        var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
+        messages.AddRange(additionalPrefix);
+        messages.AddRange(conversation.CreateRecentMessages());
         if (!string.IsNullOrWhiteSpace(repositoryMemory.Content))
         {
             messages.Add(CreateTextMessage(
-                ModelMessageRole.Developer,
+                ModelMessageRole.HostContext,
                 "repository-memory",
                 repositoryMemory.Content));
         }
 
         messages.Add(CreateTextMessage(
-            ModelMessageRole.Developer,
+            ModelMessageRole.HostContext,
             "governed-request-state",
             _prompts.Render(
                 PromptFileNames.SystemGovernedRequestState,
@@ -1357,9 +1360,6 @@ public sealed class ContextAssembler : IContextAssembler
                         : $"\n<available_tools>{toolSchemas}</available_tools>",
                     ["RequiredOutput"] = $"\n<required_output>{Escape(outputSchema)}</required_output>",
                 })));
-        var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
-        messages.AddRange(additionalPrefix);
-        messages.AddRange(conversation.CreateRecentMessages());
         messages.Add(CreateTextMessage(
             ModelMessageRole.User,
             "current-user",

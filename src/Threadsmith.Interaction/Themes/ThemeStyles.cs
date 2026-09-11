@@ -139,7 +139,7 @@ internal sealed record TuiTheme
     {
         return role switch
         {
-            PresentationTextRole.SessionStatus => new TuiTextStyle(Decorations: TuiTextDecoration.Invert),
+            PresentationTextRole.SessionStatus or PresentationTextRole.TitleBarRole or PresentationTextRole.AgentSelectedTabRole => new TuiTextStyle(Decorations: TuiTextDecoration.Invert),
             PresentationTextRole.MarkdownHeading or PresentationTextRole.MarkdownStrong or PresentationTextRole.MarkdownListMarker
                 => new TuiTextStyle(Decorations: TuiTextDecoration.Bold),
             PresentationTextRole.MarkdownEmphasis => new TuiTextStyle(Decorations: TuiTextDecoration.Italic),

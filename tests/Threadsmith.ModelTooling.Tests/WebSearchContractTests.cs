@@ -187,6 +187,57 @@ public sealed class WebSearchContractTests
         Assert.Equal("20", ReadParameters(handler)["count"]);
     }
 
+    /// <summary>Query hints compile without lookarounds while retaining word and character-class bounds.</summary>
+    [Theory]
+    [InlineData("C# tools", true)]
+    [InlineData("  C#   tools  ", true)]
+    [InlineData("C#\u00a0tools\u2003", true)]
+    [InlineData("\u2028C#\u2029tools", true)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("\u00a0\u2003", false)]
+    [InlineData("a\tb", false)]
+    [InlineData("a\nb", false)]
+    [InlineData("a\u0000b", false)]
+    [InlineData("a\u007fb", false)]
+    [InlineData("a\u0085b", false)]
+    public void QuerySchema_SupportsFiniteStateGrammar(string query, bool accepted)
+    {
+        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var pattern = schema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("pattern").GetString();
+        Assert.NotNull(pattern);
+        var regex = new Regex(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+        Assert.Equal(accepted, regex.IsMatch(query));
+        Assert.Matches(regex, string.Join(' ', Enumerable.Repeat("a", 75)));
+        Assert.DoesNotMatch(regex, string.Join(' ', Enumerable.Repeat("a", 76)));
+        var arguments = JsonSerializer.Serialize(new { query });
+        if (accepted)
+        {
+            Assert.IsType<WebSearchRequest>(tool.DeserializeInput(arguments));
+        }
+        else
+        {
+            Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(arguments));
+        }
+    }
+
+    /// <summary>Control characters at the end remain forbidden even where regex dollar anchors allow a final newline.</summary>
+    [Theory]
+    [InlineData("a\n")]
+    [InlineData("a\r\n")]
+    [InlineData("a\t")]
+    [InlineData("a\u0085")]
+    public void QueryBinding_RejectsTrailingControlCharacters(string query)
+    {
+        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
+
+        Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(JsonSerializer.Serialize(new { query })));
+    }
+
     /// <summary>Unadvertised aliases and incorrectly typed arguments are rejected by binding.</summary>
     [Theory]
     [InlineData("{\"q\":\"test\"}")]

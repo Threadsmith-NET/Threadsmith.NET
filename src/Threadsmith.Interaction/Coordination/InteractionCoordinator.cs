@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Channels;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
@@ -63,7 +64,7 @@ internal enum InteractiveDecisionResult
 /// Runs Threadsmith as an inline conversational terminal whose transcript remains in
 /// native terminal scrollback.
 /// </summary>
-public sealed class InteractionCoordinator
+public sealed partial class InteractionCoordinator
 {
     private const string RetiredConversationCompactionGuidance =
         "Automatic conversation fact promotion has been retired. Model-generated active-turn compaction still runs when needed; "
@@ -79,6 +80,8 @@ public sealed class InteractionCoordinator
         Forge better code, not slop.
         """;
 
+    private readonly AgentDisplayStream? _agentDisplay;
+    private readonly AgentNameCatalog _agentNames;
     private readonly IDomainEventStream _events;
     private readonly bool _activeModelSelectionAvailable;
     private readonly bool _sessionLifecycleAvailable;
@@ -133,6 +136,8 @@ public sealed class InteractionCoordinator
     /// <param name="codeExploreOutputOptions">Per-session code-explore output state.</param>
     /// <param name="standingPreferenceWarningThreshold">Fallback count above which saved preference advice is shown.</param>
     /// <param name="standingPreferenceWarningThresholdProvider">Live repository-specific preference warning threshold.</param>
+    /// <param name="agentDisplay">Bounded transient child display stream.</param>
+    /// <param name="agentNames">Validated immutable child name catalog.</param>
     public InteractionCoordinator(
         InteractionPresenter presenter,
         IDomainEventStream events,
@@ -159,11 +164,15 @@ public sealed class InteractionCoordinator
         IReadOnlyList<MutationValidationStage>? validationStages = null,
         CodeExploreOutputOptions? codeExploreOutputOptions = null,
         int standingPreferenceWarningThreshold = 3,
-        Func<string, int>? standingPreferenceWarningThresholdProvider = null)
+        Func<string, int>? standingPreferenceWarningThresholdProvider = null,
+        AgentDisplayStream? agentDisplay = null,
+        AgentNameCatalog? agentNames = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(surface);
+        _agentDisplay = agentDisplay;
+        _agentNames = agentNames ?? new AgentNameCatalog();
         _presenter = presenter;
         _events = events;
         _surface = new InteractionSessionSurface(surface);
@@ -210,7 +219,11 @@ public sealed class InteractionCoordinator
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelStatus);
-        var controller = new InteractionController(_presenter, _surface.ShowStatusUntilAsync);
+        var starting = true;
+        var controller = new InteractionController(_presenter, (label, operation, token) =>
+            starting && label.StartsWith("Loading solution", StringComparison.Ordinal) && _surface.Surface is IStartupProgressSurface startup
+                ? startup.ShowStartupAsync(StartupBanner, label, operation, token)
+                : _surface.ShowStatusUntilAsync(label, operation, token));
         var sessionId = _sessionLifecycleAvailable
             ? (await controller.CreateNewSessionAsync(cancellationToken)).ActiveSession.SessionId
             : await controller.OpenAsync("Interactive", cancellationToken);
@@ -226,6 +239,15 @@ public sealed class InteractionCoordinator
             SingleWriter = true,
         });
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        await using var agents = _surface.Surface is IAgentWorkspaceSurface
+            ? new AgentWorkspaceProjection(_surface.Surface, _agentDisplay, _sessionUsage, _modelCatalog, _agentNames, _displayOptions.RenderMarkdown, lifetime.Token)
+            : null;
+        if (agents is not null)
+        {
+            await agents.AttachAsync(sessionId, lifetime.Token);
+        }
+
+        _agentDisplay?.IncludeReasoningText = _sessionPreferences?.IncludeReasoningText ?? false;
         using var directFetchApprovalLease = _directFetchApprovalPrompt?.Attach(
             PromptForDirectFetchApprovalAsync,
             dispatcher.QueueAsync);
@@ -256,10 +278,14 @@ public sealed class InteractionCoordinator
             return Task.CompletedTask;
         });
 
-        await _surface.WriteAsync(
-            StartupBanner + Environment.NewLine + Environment.NewLine,
-            PresentationTextRole.Brand,
-            lifetime.Token);
+        if (_surface.Surface is not IStartupProgressSurface)
+        {
+            await _surface.WriteAsync(
+                StartupBanner + Environment.NewLine + Environment.NewLine,
+                PresentationTextRole.Brand,
+                lifetime.Token);
+        }
+
         foreach (var warning in _displayWarnings)
         {
             await _surface.WriteAsync(
@@ -277,6 +303,7 @@ public sealed class InteractionCoordinator
                 requestedTrust,
                 requestedSolutionPath,
                 repositoryConfigurationDirectoryExistedAtStartup,
+                isStartup: true,
                 lifetime.Token);
 
             var startupWasCancelled = activeRepository.Repository is null
@@ -301,10 +328,15 @@ public sealed class InteractionCoordinator
         {
             try
             {
-                await _surface.ShowStatusUntilAsync(
-                    "Semantic confidence: Loading...",
-                    semanticCompletion.Task,
-                    lifetime.Token);
+                if (_surface.Surface is IStartupProgressSurface startup)
+                {
+                    await startup.ShowStartupAsync(StartupBanner, "Semantic loading", semanticCompletion.Task, lifetime.Token);
+                }
+                else
+                {
+                    await _surface.ShowStatusUntilAsync("Semantic confidence: Loading...", semanticCompletion.Task, lifetime.Token);
+                }
+
                 startupSemanticCompletion = await semanticCompletion.Task;
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -360,10 +392,14 @@ public sealed class InteractionCoordinator
             .AppendLine($"  Model: {modelStatus}")
             .AppendLine($"  Repository: {repositoryStatus}")
             .AppendLine($"  Trust: {trustStatus}")
-            .AppendLine($"  Solution: {solutionStatus}")
-            .AppendLine(_showSessionStatus
-                ? _surface.Surface.Capabilities.SupportsRetainedStatus ? "  Session status: Fixed bottom row" : "  Session status: Composer-adjacent"
+            .AppendLine($"  Solution: {solutionStatus}");
+        if (!_surface.Surface.Capabilities.SupportsRetainedStatus)
+        {
+            startupStatus.AppendLine(_showSessionStatus
+                ? "  Session status: Composer-adjacent"
                 : "  Session status: Disabled by tui:footer:enabled");
+        }
+
         if (snapshot.TargetFrameworks is { Count: > 0 } targetFrameworks)
         {
             startupStatus.AppendLine($"  Target frameworks: {string.Join(", ", targetFrameworks)}");
@@ -381,6 +417,7 @@ public sealed class InteractionCoordinator
             await SetRepositoryPromptAsync(startupRepository.RepositoryPath, lifetime.Token);
         }
 
+        starting = false;
         var startupCompletedAt = DateTimeOffset.UtcNow;
         TaskCompletionSource? activityCompletion = null;
         TaskCompletionSource<string?>? renderedRunCompletion = null;
@@ -411,6 +448,11 @@ public sealed class InteractionCoordinator
                 foreach (var domainEvent in batch.Where(item => item.SessionId == sessionId))
                 {
                     delegations.Observe(domainEvent);
+                    if (agents is not null && await agents.ObserveAsync(domainEvent, token))
+                    {
+                        continue;
+                    }
+
                     var occurredDuringStartup = domainEvent.OccurredAt <= startupCompletedAt;
                     if (occurredDuringStartup
                         && (domainEvent is RepositoryOpened or SolutionLoaded
@@ -590,7 +632,10 @@ public sealed class InteractionCoordinator
 
                         if (eventSegments.Count > 0)
                         {
-                            output.Add(new PresentationTextItem(eventSegments));
+                            output.Add(new PresentationTextItem(eventSegments)
+                            {
+                                Notification = InteractionEventSegments.CreateNotification(domainEvent),
+                            });
                         }
                     }
 
@@ -753,7 +798,7 @@ public sealed class InteractionCoordinator
                 InteractionInput input;
                 try
                 {
-                    if (_showSessionStatus)
+                    if (_showSessionStatus || _surface.Surface is IAgentWorkspaceSurface)
                     {
                         var activePath = activeRepository?.Repository?.RepositoryPath
                             ?? snapshot.RepositoryPath
@@ -775,6 +820,8 @@ public sealed class InteractionCoordinator
                             activePath,
                             repositoryName != "Not open",
                             lifetime.Token);
+                        var gitStatus = await ResolveWorkingTreeStatusAsync(activePath, lifetime.Token);
+                        var gitRefreshedAt = _timeProvider.GetTimestamp();
                         var status = SessionStatusAssembler.Create(
                             Directory.GetCurrentDirectory(),
                             repositoryName,
@@ -784,6 +831,7 @@ public sealed class InteractionCoordinator
                             latestContextInspection,
                             usage,
                             branch);
+                        status = WithAgentStatus(status, sessionId) with { GitStatus = gitStatus };
                         await _surface.ShowSessionStatusAsync(status, lifetime.Token);
                         if (_surface.Surface.Capabilities.SupportsRetainedStatus)
                         {
@@ -806,7 +854,15 @@ public sealed class InteractionCoordinator
                                     latestContextInspection,
                                     _sessionUsage?.GetSnapshot(statusSessionId) ?? new SessionUsageSnapshot(0, 0, false, HasObservation: false),
                                     branch);
-                                await _surface.ShowSessionStatusAsync(refreshed, token);
+                                _agentDisplay?.IncludeReasoningText = _sessionPreferences?.IncludeReasoningText ?? false;
+
+                                if (_timeProvider.GetElapsedTime(gitRefreshedAt).TotalSeconds >= 2)
+                                {
+                                    gitStatus = await ResolveWorkingTreeStatusAsync(activePath, token);
+                                    gitRefreshedAt = _timeProvider.GetTimestamp();
+                                }
+
+                                await _surface.ShowSessionStatusAsync(WithAgentStatus(refreshed, statusSessionId) with { GitStatus = gitStatus }, token);
                             },
                                 lifetime);
                         }
@@ -865,6 +921,7 @@ public sealed class InteractionCoordinator
                     }
 
                     _sessionPreferences?.SetIncludeReasoningText(streamThinking);
+                    _agentDisplay?.IncludeReasoningText = streamThinking;
                     await _surface.WriteAsync(
                         $"Streaming thinking is {(streamThinking ? "on" : "off")}. Inclusion changes on the next model request; an in-flight request continues unchanged.\n",
                         PresentationTextRole.Status,
@@ -884,10 +941,18 @@ public sealed class InteractionCoordinator
 
                 if (string.Equals(commandText, "/help", StringComparison.OrdinalIgnoreCase))
                 {
-                    await _surface.WriteAsync(
-                        InteractiveCommandCatalog.FormatHelp(),
-                        PresentationTextRole.Status,
-                        lifetime.Token);
+                    if (_surface.Surface is IInteractionHelpSurface help)
+                    {
+                        await help.ShowCommandHelpAsync(InteractiveCommandCatalog.All, lifetime.Token);
+                    }
+                    else
+                    {
+                        await _surface.WriteAsync(
+                            InteractiveCommandCatalog.FormatHelp(),
+                            PresentationTextRole.Status,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 
@@ -933,6 +998,11 @@ public sealed class InteractionCoordinator
                     var result = await controller.CreateNewSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
+                    if (agents is not null)
+                    {
+                        await agents.AttachAsync(sessionId, lifetime.Token);
+                    }
+
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     await _surface.WriteAsync(
@@ -953,6 +1023,11 @@ public sealed class InteractionCoordinator
                     var result = await controller.CloneSessionAsync(lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
+                    if (agents is not null)
+                    {
+                        await agents.AttachAsync(sessionId, lifetime.Token);
+                    }
+
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     await _surface.WriteAsync(
@@ -1015,6 +1090,11 @@ public sealed class InteractionCoordinator
                     var result = await controller.ResumeSessionAsync(target, lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
+                    if (agents is not null)
+                    {
+                        await agents.AttachAsync(sessionId, lifetime.Token);
+                    }
+
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
                     var warnings = result.Warnings.Count == 0
@@ -1280,12 +1360,18 @@ public sealed class InteractionCoordinator
                             requestedTrust: null,
                             requestedSolutionPath: null,
                             configurationDirectoryExistedBeforeRuntimeStorage: null,
+                            isStartup: false,
                             lifetime.Token);
                         activeRepository = result.Repository is null
                             ? activeRepository
                             : result;
                         if (result.Repository is { } openedRepository)
                         {
+                            if (agents is not null)
+                            {
+                                await agents.AttachAsync(sessionId, lifetime.Token);
+                            }
+
                             await SetRepositoryPromptAsync(
                                 openedRepository.RepositoryPath,
                                 lifetime.Token);
@@ -1354,6 +1440,7 @@ public sealed class InteractionCoordinator
                             trust,
                             activeRepository.Solution?.SolutionPath,
                             configurationDirectoryExistedBeforeRuntimeStorage: null,
+                            isStartup: false,
                             lifetime.Token);
                         var updatedRepository = result.Repository ?? openRepository;
                         activeRepository = result.Repository is null ? activeRepository : result;
@@ -2149,20 +2236,8 @@ public sealed class InteractionCoordinator
         var current = await _presenter.GetActiveModelSelectionAsync(cancellationToken);
         var models = await _presenter.ListActiveModelsAsync(cancellationToken);
         string[] choices = [.. models.Select(entry =>
-        {
-            var marker = entry.Profile.Id == current.Profile.Id ? "*" : " ";
-            var reasoning = entry.Profile.ReasoningCapability.Controllability switch
-            {
-                ReasoningControllability.Selectable => string.Join(
-                    '/',
-                    entry.Profile.SupportedReasoningLevels.Select(level => level.Value)),
-                ReasoningControllability.AlwaysOn => "always-on",
-                _ => "unsupported",
-            };
-            return $"{marker} {entry.Profile.Name} — {entry.ProviderName} ({entry.ProviderId})"
-                + $" — context {entry.Profile.ContextWindow:N0}, output {entry.Profile.MaximumOutputTokens:N0}"
-                + $" — reasoning {reasoning}";
-        })];
+            $"({entry.ProviderName}) {entry.Profile.Name}"
+            + (entry.Profile.Id == current.Profile.Id ? " [current]" : string.Empty))];
         var selected = await _surface.SelectAsync(
             "Models (Up/Down, Enter; Esc to cancel):",
             choices,
@@ -2213,6 +2288,27 @@ public sealed class InteractionCoordinator
             await _surface.WriteAsync(
                 "Tool management is not available in this session.\n",
                 PresentationTextRole.Status,
+                cancellationToken);
+            return;
+        }
+
+        if (_surface.Surface is IInteractionToggleSurface toggles)
+        {
+            var catalog = _toolStateManager.GetAllStates();
+            if (catalog.Count == 0)
+            {
+                return;
+            }
+
+            await toggles.SelectTogglesAsync(
+                new InteractionToggleRequest("Tools", catalog.Select(state => new InteractionToggleOption(
+                    state.Id,
+                    state.DisplayName,
+                    state.Category.ToString(),
+                    state.Enabled,
+                    state.Essential,
+                    state.Essential ? "Essential: locked by host policy" : state.ConsentRequired ? "Enabling requires repository consent" : null)).ToArray()),
+                ApplyToolToggleAsync,
                 cancellationToken);
             return;
         }
@@ -2706,6 +2802,14 @@ public sealed class InteractionCoordinator
                     },
                     cancellationToken);
             }
+        }
+
+        if (action == McpManagementAction.ListCapabilities && profileId is not null
+            && _surface.Surface is IInteractionToggleSurface toggles
+            && result.Capabilities.Any(capability => capability.Enabled is not null))
+        {
+            await ManageMcpTogglesAsync(controller, toggles, profileId, result.Capabilities, cancellationToken);
+            return;
         }
 
         await _surface.WriteAsync(
@@ -4344,6 +4448,7 @@ public sealed class InteractionCoordinator
         RepositoryTrustLevel? requestedTrust,
         string? requestedSolutionPath,
         bool? configurationDirectoryExistedBeforeRuntimeStorage,
+        bool isStartup,
         CancellationToken cancellationToken)
     {
         try
@@ -4392,11 +4497,18 @@ public sealed class InteractionCoordinator
                         result.Repository.RepositoryPath,
                         result.Solution.SolutionPath)
                     .Replace('\\', '/');
-                await _surface.WriteAsync(
-                    $"Loading remembered solution: {relativeSolution}{Environment.NewLine}" +
-                    $"  (Use --solution to change){Environment.NewLine}",
-                    PresentationTextRole.Status,
-                    cancellationToken);
+                string[] details = [$"Loading remembered solution: {relativeSolution}", "  (Use --solution to change)"];
+                if (isStartup && _surface.Surface is IStartupProgressSurface startup)
+                {
+                    await startup.SetStartupDetailsAsync(details, cancellationToken);
+                }
+                else
+                {
+                    await _surface.WriteAsync(
+                        string.Join(Environment.NewLine, details) + Environment.NewLine,
+                        PresentationTextRole.Status,
+                        cancellationToken);
+                }
             }
 
             return result;
@@ -4705,6 +4817,50 @@ public sealed class InteractionCoordinator
             $"Reasoning set to {level.Value} for {activeProfile.Name}.{persistence}\n",
             result is { Persisted: false } ? PresentationTextRole.Error : PresentationTextRole.Status,
             cancellationToken);
+    }
+
+    private async Task<RepositoryGitStatus?> ResolveWorkingTreeStatusAsync(string path, CancellationToken cancellationToken)
+    {
+        if (_gitQueries is null)
+        {
+            return null;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        try
+        {
+            var status = await _gitQueries.GetWorkingTreeStatusAsync(path, timeout.Token);
+            if (status is null)
+            {
+                return null;
+            }
+
+            return status;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or ArgumentException or TimeoutException)
+        {
+            return null;
+        }
+    }
+
+    private SessionStatusSnapshot WithAgentStatus(SessionStatusSnapshot status, SessionId sessionId)
+    {
+        var request = _sessionUsage?.GetRequestStatus(sessionId);
+        var profile = request is null ? null : _modelCatalog?.Profiles.FirstOrDefault(profile => profile.Id == request.ProfileId);
+        return status with
+        {
+            FooterEnabled = _showSessionStatus,
+            AgentUsage = _sessionUsage?.GetOwnerSnapshot(sessionId),
+            AgentRequest = request,
+            Model = request is null ? status.Model : profile?.Name ?? "Model unavailable",
+            ProviderName = request is null ? status.ProviderName : profile?.ProviderName ?? profile?.Provider,
+            IsPostResume = _sessionUsage?.HasRestoredUsage(sessionId) == true,
+        };
     }
 
     private static string FormatStatusError(Exception exception)

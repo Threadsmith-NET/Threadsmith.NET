@@ -485,7 +485,12 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
             ?? throw new InvalidOperationException("The generated web-search schema has no query.");
         query["minLength"] = 1;
         query["maxLength"] = WebSearchRequestContract.MaximumQueryCharacters;
-        query["pattern"] = @"^(?![\s\S]*[\u0000-\u001F\u007F-\u009F])\s*\S+(?:\s+\S+){0,74}\s*$";
+
+        // Keep the advertised expression usable by finite-state generation grammars.
+        // The host independently enforces all query bounds before credentials or HTTP.
+        query["pattern"] = @"^[^\S\u0000-\u001F\u007F-\u009F]*"
+            + @"[^\s\u0000-\u001F\u007F-\u009F]+(?:[^\S\u0000-\u001F\u007F-\u009F]+[^\s\u0000-\u001F\u007F-\u009F]+){0,74}"
+            + @"[^\S\u0000-\u001F\u007F-\u009F]*$";
         var count = properties["maximumResults"]?.AsObject()
             ?? throw new InvalidOperationException("The generated web-search schema has no result count.");
         count["minimum"] = 1;

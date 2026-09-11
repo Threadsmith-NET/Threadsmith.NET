@@ -820,3 +820,7 @@ Record automated and physical-terminal evidence separately; unexecuted operator 
 7. Inspect ordinary and privileged raw logs, durable events, hooks, checkpoints, restart/resume, and context output using seeded private canaries. Confirm no native signed/redacted replay payload or credentials escape the active loop. Restart retains ordinary completed conversation boundaries only.
 
 **Verifies:** native protocol compatibility, trusted discovery, immutable selection, host-owned tools, independent effort/display controls, bounded private replay, conservative admission, honest caching/cost, transport lifetime, failure recovery, and interactive/headless parity.
+
+## Scenario AU — TUIKit agent workspace
+
+Follow [the agent workspace procedure](../operations/agent-workspace.md#verification-procedure). Confirm stable person/role labels, suffix collisions, targeted output/tool/status/counters, selected and unselected retirement, child input blocking, draft retention, centered modal isolation, immediate authoritative toggles, startup input discard, seven theme roles, narrow layout/overflow, and queue/retention notices. Repeat physical Windows and Unix cases and record evidence independently; automated headless success does not close those platform checks.

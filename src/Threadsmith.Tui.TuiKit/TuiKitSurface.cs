@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading.Channels;
+using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
@@ -19,7 +20,7 @@ using TUIKit.Terminal;
 using TUIKit.Widgets;
 
 /// <summary>Projects shared interactions through one retained UI loop and one input owner.</summary>
-internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
+internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspaceSurface, IAsyncDisposable
 {
     /// <summary>
     /// Default prompt shown before the coordinator supplies repository context.
@@ -31,7 +32,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         "F3 - command palette (empty draft or partial slash command)",
         "Slash prefix - suggestions; arrows choose; Tab/Enter insert only",
         "Completion - Enter again submits; Esc dismisses suggestions",
-        "F7 — switch controls between the message editor and output",
+        "F7 — switch MAIN editor/output; child views keep output focus",
+        "Ctrl+Left/Right — previous/next agent while output has focus",
+        "F2 — selected agent details while output has focus",
         "Output keys — arrows scroll; Shift+arrows select text",
         "F8 — show output links; Enter copies the selected address",
         "Ctrl+C — copy selected text; exit Threadsmith when none is selected",
@@ -44,6 +47,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     ];
 
     private readonly ITerminalBackend _backend;
+    private readonly Func<CancellationToken, Task<string?>> _readClipboard;
     private readonly TuiApplication _app;
     private readonly Channel<Update> _updates = Channel.CreateBounded<Update>(new BoundedChannelOptions(64)
     {
@@ -56,9 +60,15 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private readonly TuiKitComposer _ordinary = new();
     private readonly TuiKitComposer _secondary = new();
     private readonly TuiKitComposer _steering = new();
-    private readonly TranscriptView _transcript = new();
+    private readonly AgentViews _agents;
+    private readonly AgentTabStrip _tabs;
+    private readonly OutputPane _outputPane;
+    private readonly ComposerPane _composerPane;
+    private Size _layoutSize;
+
+    private TranscriptView SelectedTranscript => _agents.Selected.Transcript;
+
     private readonly CachedTextRun _terminalTooSmall = new();
-    private readonly Action _drain;
     private readonly Action _interrupt;
     private readonly bool _suppressStyles;
     private readonly TuiKitCommandDiscovery _discovery;
@@ -69,7 +79,6 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private TuiKitComposer _composer;
     private TuiKitStyles _styles;
     private ConfiguredTheme _theme;
-    private string? _queuedOrdinaryInput;
     private Task? _loop;
     private Task _clipboardRead = Task.CompletedTask;
     private Task _utilityModal = Task.CompletedTask;
@@ -89,15 +98,14 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private int _interrupted;
     private int _disposed;
     private InteractionActivity? _formattedActivity;
-    private bool _activityQueued;
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitSurface"/> class.</summary>
-    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null)
+    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(interrupt);
-        _drain = Drain;
         _backend = backend ?? new ConsoleBackend();
+        _readClipboard = readClipboard ?? ClipboardReader.ReadAsync;
         if (backend is null && (!_backend.IsInteractive
             || string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)))
         {
@@ -110,6 +118,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         _suppressStyles = TuiThemeResolver.ShouldSuppressStyles(false, Environment.GetEnvironmentVariable("NO_COLOR"), Environment.GetEnvironmentVariable("TERM"));
         _styles = new TuiKitStyles(theme, _suppressStyles);
         _composer = _ordinary;
+        _agents = new AgentViews(ResolveOutputStyle);
+        _tabs = new AgentTabStrip(_agents, SelectAgent, ResolveStyle);
+        _outputPane = new OutputPane(this);
+        _composerPane = new ComposerPane(this);
+        _layoutSize = _backend.Size;
         _discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand);
         _completion = new ComposerCommandCompletion(_discovery);
         _autocomplete = new ComposerAutocomplete(_discovery, _completion, CompleteCommand);
@@ -117,15 +130,15 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             CtrlCPolicy = CtrlCPolicy.Custom,
             TargetFps = 30,
-            Layout = new LayoutBuilder().DockBottom("status", 1).DockBottom("composer", 4)
-                .DockBottom("activity", 1).Fill("transcript").Build(),
+            Layout = WorkspaceLayout.Create(_layoutSize),
+            EnableMouseRouting = false,
+            AutoRenderNotifications = false,
         };
-        _transcript.ResolveStyle = ResolveStyle;
-        _app.Bind("transcript", _transcript);
-        _app.Bind("composer", new ComposerPane(this));
-        _app.Bind("activity", new TextRow(
-            ActivityText,
-            () => _styles.Resolve(_activity?.Label == "THINKING" ? PresentationTextRole.ThinkingIndicator : PresentationTextRole.Status)));
+        _app.Bind("title", new TextRow(() => "Threadsmith.NET", () => ResolveStyle(PresentationTextRole.TitleBarRole)));
+        _app.Bind("tabs", _tabs);
+        _app.Bind("transcript", _outputPane);
+        _app.Bind("composer", _composerPane);
+        _app.MouseReceived += RouteMouse;
         _app.Bind("status", new TextRow(
             StatusText,
             () => _status is null ? CellStyle.Default : _styles.Resolve(PresentationTextRole.SessionStatus)));
@@ -141,7 +154,6 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         _app.PasteReceived += Paste;
         _app.RenderOverlay = surface =>
         {
-            _app.Post(_drain);
             RefreshDiscovery();
             if (!ModalFrame.Fits(surface.Size))
             {
@@ -152,13 +164,13 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                 }
             }
             else if (surface is BufferSurface root
-                && _app.Layout.FindById("composer") is { } composerRegion
-                && _app.Layout.FindById("activity") is { } activityRegion)
+                && _app.Layout?.FindById("composer") is { } composerRegion
+                && _app.Layout?.FindById("transcript") is { } outputRegion)
             {
                 _autocomplete.Render(
                     root,
-                    composerRegion.ContentRect(surface.Size),
-                    activityRegion.ContentRect(surface.Size),
+                    ComposerScreenRect(composerRegion.ContentRect(surface.Size)),
+                    OutputScreenRect(outputRegion.ContentRect(surface.Size)),
                     _composer.VisibleCaret,
                     ResolveStyle(PresentationTextRole.Default),
                     ResolveStyle(PresentationTextRole.SelectionHighlight));
@@ -176,7 +188,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                     Cell.Continuation(CellStyle.Default));
             }
         };
-        _app.Post(_drain);
+        _app.Interrupted += _interrupt;
     }
 
     /// <inheritdoc />
@@ -188,7 +200,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
         ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
 
-    private bool DiscoveryEnabled => _app.FocusedRegion == "composer" && !_app.Modals.IsActive
+    private bool CanEdit => ReferenceEquals(_agents.Selected, _agents.Main) && (!_startupBlocked || _activeInput is not null);
+
+    private bool DiscoveryEnabled => CanEdit && _app.FocusedRegion == "composer" && !_app.Modals.IsActive
         && ModalFrame.Fits(_backend.Size) && !_stop.IsCancellationRequested;
 
     /// <inheritdoc />
@@ -205,6 +219,9 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             }
 
             _read = completion;
+            _startupBlocked = false;
+            _startupDetails = [];
+            _startupPhases.Clear();
             ClosePalette();
             _prompt = request.Prompt;
             _composer.OnFocusChanged(false);
@@ -216,14 +233,17 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
             _composer.OnFocusChanged(true);
             _inputEpoch++;
-            _app.Focus("composer");
-            _notice = "Ctrl+C copy selected text (exits if none) | Ctrl+Enter add line break | F1 explain all shortcuts";
-            if (request.Purpose == ComposerPurpose.Conversation
-                && _queuedOrdinaryInput is { } queuedInput)
+            if (request.Purpose != ComposerPurpose.Conversation)
             {
-                _queuedOrdinaryInput = null;
-                _read.TrySetResult(new InteractionInput(true, queuedInput, _stop.Token));
+                SelectAgent(_agents.Main);
             }
+
+            if (CanEdit)
+            {
+                _app.Focus("composer");
+            }
+
+            _notice = string.Empty;
         },
             cancellationToken);
         try
@@ -297,7 +317,29 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        return EnqueueAsync(() => _transcript.Present(batch), cancellationToken);
+        return EnqueueAsync(
+            () =>
+        {
+            _agents.Present(batch);
+            if (batch.Target is null)
+            {
+                foreach (var item in batch.Items.OfType<PresentationTextItem>())
+                {
+                    if (item.Notification is { } notification)
+                    {
+                        var severity = notification.Role switch
+                        {
+                            PresentationTextRole.Success => NotificationSeverity.Success,
+                            PresentationTextRole.Warning => NotificationSeverity.Warning,
+                            PresentationTextRole.Error => NotificationSeverity.Error,
+                            _ => NotificationSeverity.Info,
+                        };
+                        _app.Notify(TranscriptView.Safe(notification.Text).ReplaceLineEndings(" "), severity);
+                    }
+                }
+            }
+        },
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -450,7 +492,21 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             _app.Start();
             _started.TrySetResult();
-            await _app.RunAsync(cancellationToken);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (_layoutSize != _backend.Size)
+                {
+                    _layoutSize = _backend.Size;
+                    _app.Layout = WorkspaceLayout.Create(_layoutSize);
+                    RefreshDiscovery();
+                    _app.RenderOnce();
+                }
+
+                _app.PumpInputOnce();
+                Drain();
+                _app.RenderOnce();
+                await Task.Delay(TimeSpan.FromMilliseconds(1000d / 30), cancellationToken);
+            }
         }
         catch (Exception exception)
         {
@@ -537,6 +593,38 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             return true;
         }
 
+        if (_startupBlocked && _activeInput is null)
+        {
+            return true;
+        }
+
+        if (key.Modifiers == KeyModifiers.Ctrl && key.Code is KeyCode.Left or KeyCode.Right
+            && _app.FocusedRegion == "transcript")
+        {
+            if (_agents.Cycle(key.Code == KeyCode.Left ? -1 : 1))
+            {
+                AgentSelectionChanged();
+            }
+
+            return true;
+        }
+
+        if (key.Code == KeyCode.F2)
+        {
+            if (_utilityModal.IsCompleted)
+            {
+                var modal = new ChoiceModal("Agent details — F2 full text; Esc closes", [new Choice("details", AgentHeader.FormatDetails(GetAgentHeaderState()))])
+                {
+                    ResolveStyle = ResolveStyle,
+                    ToggleMouse = () => _app.ToggleMouseCapture(),
+                    CopyRequested = Copy,
+                };
+                _utilityModal = ShowUtilityModalAsync(modal, _stop.Token);
+            }
+
+            return true;
+        }
+
         if (key.Code == KeyCode.F1)
         {
             if (_utilityModal.IsCompleted)
@@ -588,13 +676,13 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
         if (key.Code == KeyCode.F7)
         {
-            _app.Focus(_app.FocusedRegion == "composer" ? "transcript" : "composer");
+            _app.Focus(_app.FocusedRegion == "composer" || !CanEdit ? "transcript" : "composer");
             return true;
         }
 
         if (key.Code == KeyCode.F6 || (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == (KeyModifiers.Ctrl | KeyModifiers.Shift)))
         {
-            Copy(_app.FocusedRegion == "transcript" ? _transcript.SelectedText() : key.Code == KeyCode.F6 ? _composer.Buffer.Selection : _composer.Text);
+            Copy(_app.FocusedRegion == "transcript" ? SelectedTranscript.SelectedText() : key.Code == KeyCode.F6 ? _composer.Buffer.Selection : _composer.Text);
             return true;
         }
 
@@ -618,6 +706,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             return true;
         }
 
+        if (!CanEdit)
+        {
+            return _app.FocusedRegion != "transcript";
+        }
+
         if (_app.FocusedRegion != "composer")
         {
             return false;
@@ -627,7 +720,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         {
             if (key.Rune == 'l')
             {
-                _transcript.ClearView();
+                SelectedTranscript.ClearView();
                 return true;
             }
 
@@ -651,19 +744,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             case SubmitDecision.Submit:
                 if (_read is null)
                 {
-                    if (lease is not null)
-                    {
-                        lease.Steer();
-                    }
-                    else if (ReferenceEquals(_composer, _ordinary)
-                        && _queuedOrdinaryInput is null
-                        && _composer.Text.Length > 0)
-                    {
-                        var queuedInput = _composer.Text;
-                        _queuedOrdinaryInput = queuedInput;
-                        CommitComposerInput(queuedInput);
-                        _notice = "Message queued until the semantic model is ready";
-                    }
+                    lease?.Steer();
 
                     return true;
                 }
@@ -684,7 +765,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     {
         if (ReferenceEquals(_composer, _ordinary) && text.Length > 0)
         {
-            _transcript.Present(new PresentationBatch([
+            _agents.Main.Transcript.Present(new PresentationBatch([
                 new PresentationTextItem([
                     new(_prompt, PresentationTextRole.ComposerPrompt),
                     new(text, PresentationTextRole.UserPrompt),
@@ -713,7 +794,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
     private void CompleteCommand(string name)
     {
         var target = _paletteTarget ?? _autocomplete.Target;
-        if (target is null || _app.FocusedRegion != "composer" || !ModalFrame.Fits(_backend.Size))
+        if (!CanEdit || target is null || _app.FocusedRegion != "composer" || !ModalFrame.Fits(_backend.Size))
         {
             return;
         }
@@ -768,7 +849,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private async Task SelectLinkAsync(CancellationToken cancellationToken)
     {
-        var links = _transcript.Links;
+        var links = SelectedTranscript.Links;
         if (links.Count == 0)
         {
             _notice = "No links in retained output";
@@ -805,6 +886,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private string ActivityText()
     {
+        if (_agents.Selected.Snapshot is { } child)
+        {
+            return PrependUnseenOutput(child.Activity ?? child.State.ToString());
+        }
+
         const string frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
         if (_activity is null)
         {
@@ -814,14 +900,12 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         }
 
         var frame = (int)((Environment.TickCount64 / 250) % frames.Length);
-        var queued = _queuedOrdinaryInput is not null;
-        if (!ReferenceEquals(_formattedActivity, _activity) || frame != _activityFrame || queued != _activityQueued)
+        if (!ReferenceEquals(_formattedActivity, _activity) || frame != _activityFrame)
         {
             _formattedActivity = _activity;
             _activityFrame = frame;
-            _activityQueued = queued;
             var activity = $"{frames[frame]} {_activity.Format()}";
-            _activityText = queued ? $"{activity} | message queued" : activity;
+            _activityText = activity;
         }
 
         return PrependUnseenOutput(_activityText);
@@ -829,30 +913,29 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private string PrependUnseenOutput(string text)
     {
-        if (_transcript.NewCount == 0)
+        if (SelectedTranscript.NewCount == 0)
         {
             return text;
         }
 
-        var followKeys = _app.FocusedRegion == "transcript" ? "End" : "F7, End";
-        return $"{_transcript.NewCount} new output — {followKeys} to follow{(text.Length == 0 ? string.Empty : " | " + text)}";
+        return $"{SelectedTranscript.NewCount} new output{(text.Length == 0 ? string.Empty : " | " + text)}";
     }
 
     private string StatusText()
     {
-        if (_status is null)
+        if (_status is null || !_status.FooterEnabled)
         {
             return string.Empty;
         }
 
-        var width = _backend.Size.Width;
+        var width = WorkspaceLayout.RowContent(_backend.Size).Width;
         var separator = _theme.Ui.FooterSeparator;
         if (!ReferenceEquals(_status, _formattedStatus) || width != _statusWidth || separator != _statusSeparator)
         {
             _formattedStatus = _status;
             _statusWidth = width;
             _statusSeparator = separator;
-            _statusText = TuiSessionStatusFormatter.Format(_status, width, separator);
+            _statusText = RepositoryFooter.Format(_status.Folder, _status.Branch, _status.GitStatus, width, separator);
         }
 
         return _statusText;
@@ -865,7 +948,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private void HandleControlC()
     {
-        var transcriptSelection = _transcript.SelectedText();
+        var transcriptSelection = SelectedTranscript.SelectedText();
         var composerSelection = _composer.Buffer.Selection;
         var focusedSelection = _app.FocusedRegion == "transcript" ? transcriptSelection : composerSelection;
         var remainingSelection = _app.FocusedRegion == "transcript" ? composerSelection : transcriptSelection;
@@ -915,6 +998,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
             return;
         }
 
+        if (!CanEdit)
+        {
+            return;
+        }
+
         try
         {
             _composer.InsertText(text);
@@ -928,7 +1016,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
     private void RequestPaste(Modal? modal, Func<string>? filterText = null)
     {
-        if (_clipboardRead.IsCompleted)
+        if ((modal is not null || CanEdit) && _clipboardRead.IsCompleted)
         {
             _clipboardRead = PasteClipboardAsync(modal, filterText, _composer, _inputEpoch, _stop.Token);
         }
@@ -939,7 +1027,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
         var filter = filterText?.Invoke();
         try
         {
-            var text = await ClipboardReader.ReadAsync(cancellationToken);
+            var text = await _readClipboard(cancellationToken);
             await EnqueueAsync(
                 () =>
             {
@@ -951,7 +1039,7 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                 {
                     modal.HandlePaste(text);
                 }
-                else if (modal is null && !_app.Modals.IsActive && ReferenceEquals(_composer, composer) && epoch == _inputEpoch)
+                else if (CanEdit && modal is null && !_app.Modals.IsActive && ReferenceEquals(_composer, composer) && epoch == _inputEpoch)
                 {
                     Paste(text);
                 }
@@ -996,6 +1084,11 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
         public bool HandleKey(KeyEvent key)
         {
+            if (!_owner.CanEdit || _owner._app.Modals.IsActive)
+            {
+                return true;
+            }
+
             var handled = _owner._composer.HandleKey(key);
             _owner.RefreshDiscovery();
             return handled;
@@ -1003,17 +1096,19 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
 
         public void OnFocusChanged(bool focused)
         {
-            _owner._composer.OnFocusChanged(focused);
+            _owner._composer.OnFocusChanged(focused && _owner.CanEdit);
         }
 
         public bool HandleMouse(MouseEvent mouse)
         {
-            if (!ModalFrame.Fits(_owner._backend.Size))
+            if (!_owner.CanEdit || _owner._app.Modals.IsActive || !ModalFrame.Fits(_owner._backend.Size))
             {
                 return true;
             }
 
-            var handled = _owner._composer.HandleMouse(mouse);
+            var region = _owner._app.Layout?.FindById("composer")?.ContentRect(_owner._backend.Size) ?? default;
+            var rect = WorkspaceLayout.ComposerContent(new Size(region.Width, region.Height));
+            var handled = _owner._composer.HandleMouse(WorkspaceLayout.Translate(mouse, rect));
             _owner.RefreshDiscovery();
             return handled;
         }
@@ -1025,11 +1120,23 @@ internal sealed class TuiKitSurface : IInteractionSurface, IAsyncDisposable
                 return;
             }
 
-            var promptWidth = PromptWidth(surface.Size.Width);
+            var background = _owner.ResolveStyle(PresentationTextRole.ComposerBackgroundPaneRole);
+            WorkspaceLayout.DrawFrame(surface, background);
+            if (surface is not BufferSurface buffer)
+            {
+                return;
+            }
+
+            var view = buffer.CreateView(WorkspaceLayout.ComposerContent(surface.Size));
+            var promptWidth = PromptWidth(view.Size.Width);
             _owner._composer.FirstRowOffset = promptWidth;
-            _owner._composer.Style = _owner._styles.Resolve(PresentationTextRole.Default);
-            _owner._composer.Render(surface);
-            _prompt.Draw(surface, 0, 0, _owner._prompt, _owner._styles.Resolve(PresentationTextRole.ComposerPrompt));
+            _owner._composer.Style = _owner.ResolvePaneStyle(PresentationTextRole.Default, PresentationTextRole.ComposerBackgroundPaneRole);
+            _owner._composer.Render(view);
+            _prompt.Draw(view, 0, 0, _owner._prompt, _owner.ResolvePaneStyle(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
+            if (!_owner.CanEdit)
+            {
+                _prompt.Draw(surface, 2, 0, " Read-only — return to MAIN ", background);
+            }
         }
 
         private int PromptWidth(int availableWidth)

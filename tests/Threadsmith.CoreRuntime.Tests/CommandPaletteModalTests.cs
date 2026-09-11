@@ -29,7 +29,7 @@ public static class CommandPaletteModalTests
         Assert.Equal(entry.Name, await modal.Completion.WaitAsync(TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Full-frame clearing keeps the footer intact; labels use whole Unicode graphemes and live theme roles.</summary>
+    /// <summary>Centered clearing keeps surrounding rows intact; labels use whole Unicode graphemes and live theme roles.</summary>
     [Theory]
     [InlineData(40, 12)]
     [InlineData(80, 24)]
@@ -52,23 +52,19 @@ public static class CommandPaletteModalTests
         var text = TUIKit.Testing.Snapshot.ToText(cells);
         Assert.Contains(entry.Usage, text, StringComparison.Ordinal);
         Assert.Contains(entry.Description, text, StringComparison.Ordinal);
-        Assert.Equal("\u754c", cells.Get(12, 3).Grapheme);
-        Assert.Equal(2, cells.Get(12, 3).Width);
-        Assert.True(cells.Get(13, 3).IsContinuation);
-        Assert.Equal("e\u0301", cells.Get(14, 3).Grapheme);
-        Assert.True(cells.Get(1, 3).Style.Attributes.HasFlag(CellAttributes.Reverse));
-        for (var row = 0; row < height - 1; row++)
-        {
-            for (var column = 0; column < width; column++)
-            {
-                Assert.NotEqual("X", cells.Get(column, row).Grapheme);
-            }
-        }
+        var left = ((width - Math.Min(90, width - 4)) / 2) + 2;
+        var top = ((height - 1 - Math.Min(24, height - 3)) / 2) + 1;
+        Assert.Equal("\u754c", cells.Get(left + 11, top + 3).Grapheme);
+        Assert.Equal(2, cells.Get(left + 11, top + 3).Width);
+        Assert.True(cells.Get(left + 12, top + 3).IsContinuation);
+        Assert.Equal("e\u0301", cells.Get(left + 13, top + 3).Grapheme);
+        Assert.True(cells.Get(left, top + 3).Style.Attributes.HasFlag(CellAttributes.Reverse));
+        Assert.Equal("X", cells.Get(0, 0).Grapheme);
 
         normal = CellStyle.Default.WithBackground(Color.FromPalette(2));
         modal.Render(new BufferSurface(cells));
-        Assert.Equal(normal, cells.Get(0, 0).Style);
-        Assert.Equal(normal.Background, cells.Get(1, 3).Style.Background);
+        Assert.Equal(normal, cells.Get(left, top).Style);
+        Assert.Equal(normal.Background, cells.Get(left, top + 3).Style.Background);
         Assert.Equal("X", cells.Get(0, height - 1).Grapheme);
     }
 

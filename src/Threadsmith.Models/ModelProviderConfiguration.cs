@@ -346,7 +346,7 @@ public sealed class EffectiveModelProviderCatalog : IModelRequestPreparationReso
 
                 if (!definitions.TryAdd(profile.Id, new ConfiguredModelDefinition
                 {
-                    Profile = profile,
+                    Profile = profile with { ProviderName = provider.Name },
                     ProviderId = provider.Id,
                     Registration = registration,
                     ProviderConfiguration = provider,

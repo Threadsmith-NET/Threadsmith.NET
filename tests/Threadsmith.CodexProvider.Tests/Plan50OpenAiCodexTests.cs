@@ -697,6 +697,64 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(0, handler.RequestCount);
     }
 
+    /// <summary>Request-local host context retains developer authority without disturbing reusable Responses history.</summary>
+    [Fact]
+    public async Task Provider_HostContext_PreservesNativePrefixAndToolContinuation()
+    {
+        var handler = new RecordingHandler(_ => StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token");
+        static ModelMessage Message(ModelMessageRole role, string section, string text) => new()
+        {
+            Role = role, SectionId = section, Content = [new ModelContentPart { Content = text }],
+        };
+        var request = WithCapacity(CreateStreamRequest() with
+        {
+            Messages =
+            [
+                Message(ModelMessageRole.System, "host-policy", "stable host"),
+                Message(ModelMessageRole.Developer, "repository-instructions", "stable repository"),
+                Message(ModelMessageRole.User, "recent-user", "prior question"),
+                Message(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+                Message(ModelMessageRole.HostContext, "repository-memory", "old memory"),
+                Message(ModelMessageRole.HostContext, "governed-request-state", "old evidence"),
+                Message(ModelMessageRole.User, "current-user", "current question"),
+            ],
+            Tools = [CreateReadTool("read")],
+        });
+        _ = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var first = JsonDocument.Parse(handler.RequestBody!);
+        var changed = WithCapacity(request with
+        {
+            Messages = [.. request.Messages.Take(4), Message(ModelMessageRole.HostContext, "governed-request-state", "fresh evidence"), request.Messages[^1]],
+        });
+        _ = await provider.StreamAsync(changed, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var next = JsonDocument.Parse(handler.RequestBody!);
+        var originalInput = first.RootElement.GetProperty("input");
+        var nextInput = next.RootElement.GetProperty("input");
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.Equal(originalInput[index].GetRawText(), nextInput[index].GetRawText());
+        }
+
+        Assert.Equal("developer", nextInput[4].GetProperty("role").GetString());
+        Assert.DoesNotContain("old memory", next.RootElement.GetRawText(), StringComparison.Ordinal);
+        var continuation = WithCapacity(changed with
+        {
+            Messages =
+            [
+                .. changed.Messages,
+                Message(ModelMessageRole.Assistant, "call", "{\"path\":\"a.cs\"}") with { ToolCallId = "call-1", ToolName = "read" },
+                Message(ModelMessageRole.Tool, "result", "synthetic result") with { ToolCallId = "call-1", ToolName = "read" },
+            ],
+        });
+        _ = await provider.StreamAsync(continuation, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var continued = JsonDocument.Parse(handler.RequestBody!);
+        var continuedInput = continued.RootElement.GetProperty("input");
+        Assert.Equal(nextInput.EnumerateArray().Select(item => item.GetRawText()), continuedInput.EnumerateArray().Take(nextInput.GetArrayLength()).Select(item => item.GetRawText()));
+        Assert.Equal("function_call", continuedInput[nextInput.GetArrayLength()].GetProperty("type").GetString());
+        Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
+    }
+
     private static HttpResponseMessage JsonResponse(string value)
     {
         return new(HttpStatusCode.OK)

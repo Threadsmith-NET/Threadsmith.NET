@@ -114,6 +114,20 @@ internal static class InteractionEventSegments
             });
     }
 
+    /// <summary>Creates transient echoes from external refresh events, independently of output wording.</summary>
+    internal static PresentationNotification? CreateNotification(IDomainEvent domainEvent) => domainEvent switch
+    {
+        SemanticRefreshStarted { Reason: SemanticRefreshReason.ExternalChange } =>
+            new("External changes; refreshing semantics", PresentationTextRole.Status),
+        SemanticRefreshStarted { Reason: SemanticRefreshReason.Recovery } =>
+            new("Recovering semantic model...", PresentationTextRole.Status),
+        SemanticRefreshCompleted { Reason: SemanticRefreshReason.ExternalChange or SemanticRefreshReason.Recovery } =>
+            new("Semantic model updated", PresentationTextRole.Success),
+        SemanticRefreshFailed { Reason: SemanticRefreshReason.ExternalChange or SemanticRefreshReason.Recovery } =>
+            new("Semantic refresh failed; see output", PresentationTextRole.Error),
+        _ => null,
+    };
+
     private static void AppendTranscriptDelta(
         IList<PresentationTextSegment> segments,
         IDomainEvent domainEvent,

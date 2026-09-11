@@ -156,6 +156,10 @@ public sealed record GitBranchComparisonResult(
 /// <summary>Host boundary for closed, local-only Git queries.</summary>
 public interface IGitQueryService
 {
+    /// <summary>Gets bounded local working-tree counts, or null when the implementation cannot supply them.</summary>
+    Task<RepositoryGitStatus?> GetWorkingTreeStatusAsync(string repositoryPath, CancellationToken cancellationToken = default) =>
+        Task.FromResult<RepositoryGitStatus?>(null);
+
     /// <summary>Resolves the current local branch, or null for a detached head.</summary>
     Task<string?> GetCurrentBranchAsync(string repositoryPath, CancellationToken cancellationToken = default);
 

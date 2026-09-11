@@ -71,12 +71,12 @@ internal sealed class KeyHelpModal : Modal
             return;
         }
 
-        _titleRun.Draw(view, 1, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
-        _height = view.Size.Height - 1;
+        _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
+        _height = view.Size.Height - 2;
         _top = Math.Min(_top, Math.Max(0, _entries.Length - _height));
         for (var index = _top; index < _entries.Length && index - _top < _height; index++)
         {
-            _entryRuns[index].Draw(view, 2, index - _top + 1, _entries[index], ResolveStyle(PresentationTextRole.Default));
+            _entryRuns[index].Draw(view, 0, index - _top + 2, _entries[index], ResolveStyle(PresentationTextRole.Default));
         }
     }
 }

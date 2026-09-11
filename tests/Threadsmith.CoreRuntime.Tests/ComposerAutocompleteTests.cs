@@ -62,7 +62,7 @@ public static class ComposerAutocompleteTests
     [Theory]
     [InlineData("/rea", 1)]
     [InlineData("/", 6)]
-    public static void OverlayDoesNotCoverActivityOrStatus(string prefix, int expectedRows)
+    public static void OverlayDoesNotCoverBordersOrStatus(string prefix, int expectedRows)
     {
         var discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, _ => { });
         var buffer = new ComposerBuffer();
@@ -71,7 +71,7 @@ public static class ComposerAutocompleteTests
         overlay.Refresh(buffer, ComposerPurpose.Conversation, 1, true);
         var cells = new CellBuffer(40, 12);
         cells.Fill(new Rect(0, 0, 40, 12), Cell.Glyph("X", CellStyle.Default, 1));
-        overlay.Render(new BufferSurface(cells), new Rect(0, 7, 40, 4), new Rect(0, 6, 40, 1), (39, 0), CellStyle.Default, CellStyle.Default);
+        overlay.Render(new BufferSurface(cells), new Rect(0, 7, 40, 4), new Rect(0, 0, 40, 6), (39, 0), CellStyle.Default, CellStyle.Default);
         var rows = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
         Assert.Equal(expectedRows, rows.Count(row => row.Contains('/')));
         Assert.Equal(new string('X', 40), rows[6]);

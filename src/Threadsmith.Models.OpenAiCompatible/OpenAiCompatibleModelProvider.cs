@@ -339,6 +339,23 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         exception);
                 }
 
+                if (envelope.Error is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } error)
+                {
+                    var code = error.ValueKind == JsonValueKind.Object
+                        && error.TryGetProperty("code", out var errorCode)
+                        && errorCode.ValueKind == JsonValueKind.Number
+                        && errorCode.TryGetInt32(out var status)
+                        && status is >= 400 and <= 599
+                            ? $" (code {status})"
+                            : string.Empty;
+
+                    // Providers may echo request content in their error message. Report only the
+                    // bounded status, and do not turn an upstream failure into an empty-answer retry.
+                    throw new ModelProviderException(
+                        $"The model endpoint reported an error inside the response stream{code}. "
+                        + "Check the provider server logs for details.");
+                }
+
                 if (envelope.Usage is { } reportedUsage)
                 {
                     if (reportedUsage.PromptTokens < 0 || reportedUsage.CompletionTokens < 0)
@@ -470,6 +487,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     AddSystemMessage(messages, content);
                     break;
                 case ModelMessageRole.Developer:
+                case ModelMessageRole.HostContext:
                     AddUserMessage(
                         messages,
                         $"<threadsmith_host_context>\n{content}\n</threadsmith_host_context>");
@@ -563,7 +581,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     {
         var cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
             ?? usage.CacheReadInputTokens;
-        var cacheWriteTokens = usage.CacheCreationInputTokens;
+        var cacheWriteTokens = usage.PromptTokenDetails?.CreatedCacheTokens
+            ?? usage.CacheCreationInputTokens;
         if (cacheReadTokens is < 0 || cacheWriteTokens is < 0)
         {
             throw new MalformedModelOutputException("The provider returned negative cache token usage.");
@@ -978,6 +997,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiStreamEnvelope
     {
+        [JsonPropertyName("error")]
+        public JsonElement? Error { get; init; }
+
         [JsonPropertyName("choices")]
         public IReadOnlyList<OpenAiChoice> Choices { get; init; } = [];
 
@@ -1055,5 +1077,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     {
         [JsonPropertyName("cached_tokens")]
         public long? CachedTokens { get; init; }
+
+        [JsonPropertyName("created_cache_tokens")]
+        public long? CreatedCacheTokens { get; init; }
     }
 }

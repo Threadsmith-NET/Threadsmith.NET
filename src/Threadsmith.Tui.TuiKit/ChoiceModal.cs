@@ -32,7 +32,7 @@ internal sealed class ChoiceModal : Modal
     private bool _fits = true;
     private TranscriptView? _detail;
 
-    /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class over fixed authoritative options.</summary>
+    /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class.</summary>
     internal ChoiceModal(string title, IReadOnlyList<Choice> options)
     {
         _title = title;
@@ -79,7 +79,7 @@ internal sealed class ChoiceModal : Modal
 
         if (key.Code == KeyCode.F6 && _details)
         {
-            CopyRequested?.Invoke(_detail!.SelectedText());
+            CopyRequested?.Invoke(_detail?.SelectedText() ?? string.Empty);
             return true;
         }
 
@@ -120,7 +120,7 @@ internal sealed class ChoiceModal : Modal
 
         if (_details)
         {
-            _detail!.HandleKey(key);
+            _detail?.HandleKey(key);
             return true;
         }
 
@@ -190,14 +190,14 @@ internal sealed class ChoiceModal : Modal
             return;
         }
 
-        var area = new Rect(1, 1, surface.Size.Width - 2, surface.Size.Height - 3);
+        var area = new Rect(0, 0, frame.Size.Width, frame.Size.Height);
         var view = frame.CreateView(area);
         _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
-        _hintRun.Draw(view, 0, 1, _details ? "Details: PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
-        _height = Math.Max(1, area.Height - 3);
+        _hintRun.Draw(view, 0, 2, _details ? "Details: PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
+        _height = Math.Max(1, area.Height - 4);
         if (_details)
         {
-            _detail!.Render(view.CreateView(new Rect(0, 3, area.Width, _height)));
+            _detail?.Render(view.CreateView(new Rect(0, 4, area.Width, _height)));
             return;
         }
 
@@ -207,7 +207,7 @@ internal sealed class ChoiceModal : Modal
             var selected = index == _selected;
             var prefix = selected ? _selectionPrefix : "  ";
             var style = selected ? ResolveStyle(PresentationTextRole.SelectionHighlight) : ResolveStyle(PresentationTextRole.Default);
-            var row = index - top + 3;
+            var row = index - top + 4;
             (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, 0, row, prefix, style);
             GetOptionRun(_matches[index]).Draw(view, selected ? _selectionPrefixWidth : 2, row, _matches[index].Label, style);
         }

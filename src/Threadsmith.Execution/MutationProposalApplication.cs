@@ -764,7 +764,14 @@ public sealed class MutationProposalApplication :
                     JsonSchema = ProposeMutationsArgumentsSchema,
                 },
         };
-        return ModelRequestPreparation.Prepare(_model, modelRequest);
+        var prepared = ModelRequestPreparation.Prepare(_model, modelRequest);
+        _sessionUsage?.ObserveRequest(command.SessionId, command.RunId, new AgentRequestStatus(
+            prepared.ResolvedProfileId,
+            prepared.ReasoningLevel,
+            prepared.WireEstimate?.WireInputTokens,
+            context.ModelResolution?.ContextWindow,
+            System.Diagnostics.Stopwatch.GetTimestamp()));
+        return prepared;
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()

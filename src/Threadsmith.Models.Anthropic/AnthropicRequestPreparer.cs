@@ -46,15 +46,19 @@ internal static class AnthropicRequestPreparer
         var stableBytes = stableSections.Values.Sum() + toolBytes;
         var breakpoints = new List<ModelCacheBreakpoint>();
 
-        // Only known stable prefix sections qualify. Legacy planner indices are never treated as native block indices.
+        // Keep reusable instructions and tools, then move the final breakpoint with the conversation.
+        // Legacy planner indices are never treated as native block indices.
         if (capabilities.ExplicitCacheControl && stableBytes / 4 >= capabilities.MinimumCacheablePrefixTokens)
         {
+            var historyEnd = request.Messages.Select((message, index) => (message, index))
+                .Where(item => item.message.SectionId is "recent-user" or "recent-assistant"
+                    && item.message.Role is ModelMessageRole.User or ModelMessageRole.Assistant
+                    && item.message.Content.Any(part => part.IsModelVisible))
+                .Select(item => (int?)item.index).LastOrDefault();
             foreach (var candidate in new[]
             {
                 (ModelCacheBreakpointClass.ToolInventory, string.Empty),
-                (ModelCacheBreakpointClass.HostPolicy, "host-policy"),
                 (ModelCacheBreakpointClass.RepositoryInstructions, "repository-instructions"),
-                (ModelCacheBreakpointClass.PhasePolicy, "phase-policy"),
             })
             {
                 if (candidate.Item1 == ModelCacheBreakpointClass.ToolInventory ? request.Tools.Count > 0 : stableSections.ContainsKey(candidate.Item2))
@@ -62,6 +66,17 @@ internal static class AnthropicRequestPreparer
                     breakpoints.Add(new ModelCacheBreakpoint(candidate.Item1, -1));
                 }
             }
+
+            if (historyEnd is { } index)
+            {
+                breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.ConversationHistory, index));
+            }
+            else if (stableSections.ContainsKey("phase-policy"))
+            {
+                breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.PhasePolicy, -1));
+            }
+
+            breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.RequestTail, -1));
         }
 
         var plan = new ModelCachePlan(breakpoints.AsReadOnly());
@@ -101,4 +116,3 @@ internal static class AnthropicRequestPreparer
         }
     }
 }
-

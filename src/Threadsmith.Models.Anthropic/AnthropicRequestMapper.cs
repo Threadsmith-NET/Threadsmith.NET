@@ -80,7 +80,8 @@ internal static class AnthropicRequestMapper
             body["system"] = system;
         }
 
-        body["messages"] = CreateMessages(request, names);
+        var messageBlocks = new Dictionary<int, JsonObject>();
+        body["messages"] = CreateMessages(request, names, messageBlocks);
         var output = new JsonObject();
         AddThinking(body, output, request, profile, compatibility);
         if (request.ResponseFormat is { } format)
@@ -100,7 +101,7 @@ internal static class AnthropicRequestMapper
             body["output_config"] = output;
         }
 
-        AddCacheControls(body, request, compatibility, sections);
+        AddCacheControls(body, request, compatibility, sections, messageBlocks);
         return body;
     }
 
@@ -110,7 +111,7 @@ internal static class AnthropicRequestMapper
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    private static JsonArray CreateMessages(ModelStreamRequest request, ModelToolWireNameMap names)
+    private static JsonArray CreateMessages(ModelStreamRequest request, ModelToolWireNameMap names, Dictionary<int, JsonObject> messageBlocks)
     {
         var messages = new JsonArray();
         var replay = request.TransientState?.Responses.ToDictionary(item => item.Binding.ModelRound) ?? [];
@@ -199,9 +200,12 @@ internal static class AnthropicRequestMapper
             }
             else
             {
-                block = Text(content);
+                block = Text(message.Role == ModelMessageRole.HostContext
+                    ? $"<threadsmith_host_context>\n{content}\n</threadsmith_host_context>"
+                    : content);
             }
 
+            messageBlocks[messageIndex] = block;
             if (messages.LastOrDefault() is JsonObject last && last["role"]?.GetValue<string>() == role)
             {
                 var blocks = last["content"] as JsonArray ?? throw new ModelProviderException("Invalid Anthropic message content.");
@@ -395,7 +399,7 @@ internal static class AnthropicRequestMapper
         }
     }
 
-    private static void AddCacheControls(JsonObject body, ModelStreamRequest request, AnthropicModelCompatibility compatibility, IReadOnlyDictionary<string, JsonObject> sections)
+    private static void AddCacheControls(JsonObject body, ModelStreamRequest request, AnthropicModelCompatibility compatibility, IReadOnlyDictionary<string, JsonObject> sections, IReadOnlyDictionary<int, JsonObject> messageBlocks)
     {
         if (!compatibility.PromptCachingEnabled || request.CacheCapabilities.ExplicitCacheControl != true || request.CachePlan is null)
         {
@@ -412,9 +416,13 @@ internal static class AnthropicRequestMapper
                 ModelCacheBreakpointClass.PhasePolicy => "phase-policy",
                 _ => string.Empty,
             };
-            var target = breakpoint.Class == ModelCacheBreakpointClass.ToolInventory
-                ? (body["tools"] as JsonArray)?.LastOrDefault() as JsonObject
-                : sections.GetValueOrDefault(section);
+            var target = breakpoint.Class switch
+            {
+                ModelCacheBreakpointClass.ToolInventory => (body["tools"] as JsonArray)?.LastOrDefault() as JsonObject,
+                ModelCacheBreakpointClass.RequestTail => ((body["messages"] as JsonArray)?.LastOrDefault()?["content"] as JsonArray)?.LastOrDefault() as JsonObject,
+                ModelCacheBreakpointClass.ConversationHistory => messageBlocks.GetValueOrDefault(breakpoint.AfterMessageIndex),
+                _ => sections.GetValueOrDefault(section),
+            };
             if (target is not null && locations.Count < 4 && locations.Add(target))
             {
                 target["cache_control"] = new JsonObject { ["type"] = "ephemeral", ["ttl"] = "5m" };
@@ -422,4 +430,3 @@ internal static class AnthropicRequestMapper
         }
     }
 }
-

@@ -48,6 +48,7 @@ internal static class InteractiveFrontendRunner
         Func<ConfiguredTheme, CancellationToken, Task> applyTheme)
     {
         var extensionHost = context.ExtensionHost ?? throw new InvalidOperationException("Interactive startup requires the extension host.");
+        var names = AgentNameConfiguration.Load(context.Configuration);
         var themeCommands = new ThemeCommandContribution(themes, applyTheme, new UserConfigurationThemePreferenceStore(context.Paths.UserConfiguration));
         return new InteractionCoordinator(
             new InteractionPresenter(context.Dispatcher, context.Projections),
@@ -66,7 +67,7 @@ internal static class InteractiveFrontendRunner
             context.Applications.ClaudeSkillCatalog,
             sessionLifecycleAvailable: true,
             displayOptions: display.ToInteractionOptions(),
-            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).Concat(context.Applications.StartupDisplayWarnings).ToArray(),
+            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).Concat(context.Applications.StartupDisplayWarnings).Concat(names.Warnings).ToArray(),
             gitQueries: new GitQueryService(),
             webFetchAuthorization: context.WebFetchAuthorization,
             directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
@@ -78,7 +79,9 @@ internal static class InteractiveFrontendRunner
                 3),
             standingPreferenceWarningThresholdProvider: repositoryIdentity => context.Applications.MemoryOptions
                 .Capture(repositoryIdentity)
-                .StandingPreferenceWarningThreshold);
+                .StandingPreferenceWarningThreshold,
+            agentDisplay: context.Applications.AgentDisplay,
+            agentNames: names.Catalog);
     }
 
     private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken)

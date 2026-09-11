@@ -181,6 +181,9 @@ public sealed record ModelChunk
     /// <summary>Reasoning text delta, separate from <see cref="Text"/>.</summary>
     public string? Reasoning { get; init; }
 
+    /// <summary>Marks an optional public summary that must not inflate host estimates of reasoning work already accounted by provider usage.</summary>
+    public bool IsDisplayOnlyReasoning { get; init; }
+
     /// <summary>Private completed-response replay metadata emitted before normalized tool calls.</summary>
     [JsonIgnore]
     public ModelResponseReplayEnvelope? ResponseEnvelope { get; init; }

@@ -54,11 +54,9 @@ public static class TuiKitFrontendTests
         var text = TUIKit.Testing.Snapshot.ToText(cells);
         Assert.Contains("> same label", text, StringComparison.Ordinal);
         var lines = text.Split('\n');
-        for (var index = 0; index < lines.Length - 1; index++)
-        {
-            Assert.DoesNotContain("X", lines[index], StringComparison.Ordinal);
-        }
-
+        Assert.StartsWith("X", lines[0], StringComparison.Ordinal);
+        Assert.StartsWith("XX", lines[2], StringComparison.Ordinal);
+        Assert.Contains("╭", lines[1], StringComparison.Ordinal);
         Assert.StartsWith("X", lines[^1], StringComparison.Ordinal);
         Assert.True(modal.HandleKey(KeyEvent.Special(KeyCode.Down)));
         Assert.True(modal.HandleKey(KeyEvent.Special(KeyCode.F2)));
@@ -66,9 +64,9 @@ public static class TuiKitFrontendTests
         Assert.Contains("same label", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
     }
 
-    /// <summary>Keyboard help is static and conceals the application frame beneath it.</summary>
+    /// <summary>Keyboard help is static within a centered frame with visible surrounding application rows.</summary>
     [Fact]
-    public static void KeyHelpIsNotSelectableAndCoversUnderlyingFrame()
+    public static void KeyHelpIsNotSelectableAndCentersOverUnderlyingFrame()
     {
         var cells = new CellBuffer(40, 12);
         var surface = new BufferSurface(cells);
@@ -78,10 +76,59 @@ public static class TuiKitFrontendTests
         modal.Render(surface);
 
         var lines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
-        Assert.StartsWith(" Key help", lines[0], StringComparison.Ordinal);
-        Assert.StartsWith("  F7 — focus", lines[1], StringComparison.Ordinal);
-        Assert.DoesNotContain("> F7", lines[1], StringComparison.Ordinal);
+        Assert.Contains("Key help", lines[2], StringComparison.Ordinal);
+        Assert.Contains("F7 — focus", lines[4], StringComparison.Ordinal);
+        Assert.DoesNotContain("> F7", lines[4], StringComparison.Ordinal);
         Assert.StartsWith("X", lines[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>Every modal keeps its heading flush to the top, a blank row below it, and side and bottom padding.</summary>
+    [Theory]
+    [InlineData(40, 12)]
+    [InlineData(80, 24)]
+    [InlineData(120, 35)]
+    public static void AllModalsKeepHeadingSpacingAndInteriorPadding(int width, int height)
+    {
+        var size = new Size(width, height);
+        var discovery = new TuiKitCommandDiscovery(Threadsmith.Interaction.Commands.InteractiveCommandCatalog.All, _ => { });
+        TUIKit.Modals.Modal[] modals =
+        [
+            new StartupModal("Logo", "Loading", [], () => { }, _ => CellStyle.Default),
+            new ChoiceModal("Models", [new("one", "Model one")]),
+            new ToggleModal(new InteractionToggleRequest("Tools", [new("one", "Tool one", "Tools", true)]), _ => CellStyle.Default, () => { }, () => { }),
+            new KeyHelpModal("Help", ["F7 focuses output"]),
+            new CommandHelpModal(Threadsmith.Interaction.Commands.InteractiveCommandCatalog.All, _ => CellStyle.Default, () => { }, () => { }),
+            new CommandPaletteModal(discovery, string.Empty, () => size, _ => CellStyle.Default, () => { }, () => { }, () => { }),
+        ];
+        var frameWidth = Math.Min(90, width - 4);
+        var frameHeight = Math.Min(24, height - 3);
+        var left = (width - frameWidth) / 2;
+        var top = (height - 1 - frameHeight) / 2;
+        foreach (var modal in modals)
+        {
+            var cells = new CellBuffer(width, height);
+            cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", CellStyle.Default, 1));
+            modal.Render(new BufferSurface(cells));
+
+            Assert.Equal("╭", cells.Get(left, top).Grapheme);
+            Assert.Equal("╮", cells.Get(left + frameWidth - 1, top).Grapheme);
+            Assert.Equal("╰", cells.Get(left, top + frameHeight - 1).Grapheme);
+            Assert.Equal("╯", cells.Get(left + frameWidth - 1, top + frameHeight - 1).Grapheme);
+            Assert.NotEqual(" ", cells.Get(left + 2, top + 1).Grapheme);
+            for (var x = left + 1; x < left + frameWidth - 1; x++)
+            {
+                Assert.Equal(" ", cells.Get(x, top + 2).Grapheme);
+                Assert.Equal(" ", cells.Get(x, top + frameHeight - 2).Grapheme);
+            }
+
+            for (var y = top + 1; y < top + frameHeight - 1; y++)
+            {
+                Assert.Equal(" ", cells.Get(left + 1, y).Grapheme);
+                Assert.Equal(" ", cells.Get(left + frameWidth - 2, y).Grapheme);
+            }
+
+            Assert.Equal("X", cells.Get(0, height - 1).Grapheme);
+        }
     }
 
     /// <summary>Streaming fragments append continuously and stay bounded with pathological Unicode.</summary>
@@ -160,9 +207,10 @@ public static class TuiKitFrontendTests
                 await surface.PresentAsync(new PresentationBatch([]), token);
                 var offscreenFrame = backend.TakeOutput();
 
-                // Assert: the notice leads the row, and its advertised keys reveal the saved answer.
+                // Assert: unseen output remains visible on the border without reserving a hint row.
                 Assert.Contains("new output", offscreenFrame, StringComparison.Ordinal);
-                Assert.Contains("F7, End to follow", offscreenFrame, StringComparison.Ordinal);
+                Assert.DoesNotContain("F7, End to follow", offscreenFrame, StringComparison.Ordinal);
+                Assert.DoesNotContain("Ctrl+C copy selected text", offscreenFrame, StringComparison.Ordinal);
                 Assert.DoesNotContain(answer, offscreenFrame, StringComparison.Ordinal);
                 backend.FeedInput("\u001b[18~\u001b[F\u001b[18~\r");
                 Assert.Equal(string.Empty, (await nextRead).Text);
@@ -211,9 +259,9 @@ public static class TuiKitFrontendTests
         Assert.True(backend.IsStopped);
     }
 
-    /// <summary>An early startup submission waits for the first conversation read without losing the next draft.</summary>
+    /// <summary>Input before the first composer read is discarded rather than queued.</summary>
     [Fact]
-    public static async Task StartupSubmissionIsQueued()
+    public static async Task InputBeforeFirstReadIsDiscarded()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         using var backend = new HeadlessBackend(80, 24);
@@ -221,22 +269,12 @@ public static class TuiKitFrontendTests
         await surface.RunAsync(
             async token =>
         {
-            backend.FeedInput("hello");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), token);
-            _ = backend.TakeOutput();
-            backend.FeedInput("\rnext draft");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), token);
-            var committedOutput = backend.TakeOutput();
-            Assert.Contains("message queued", committedOutput, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("hello", committedOutput, StringComparison.Ordinal);
-
-            var queued = await surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
-            Assert.Equal("hello", queued.Text);
-
+            backend.FeedInput("hello\rdiscard");
+            await surface.PresentAsync(new PresentationBatch([]), token);
             var next = surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
-            backend.FeedInput("\r");
-            Assert.Equal("next draft", (await next).Text);
+            backend.FeedInput("ready\r");
+            Assert.Equal("ready", (await next).Text);
         },
             timeout.Token);
         Assert.True(backend.IsStopped);
@@ -323,7 +361,7 @@ public static class TuiKitFrontendTests
             var read = surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
             _ = backend.TakeOutput();
-            backend.FeedInput("\u001b[<0;1;1M\u001b[<32;4;1M\u001b[<0;16;1m\u0003\u001b[18~copy me\u0001\u0003\r");
+            backend.FeedInput("\u001b[<0;3;6M\u001b[<32;6;6M\u001b[<0;18;6m\u0003\u001b[18~copy me\u0001\u0003\r");
 
             Assert.Equal("copy me", (await read).Text);
             Assert.Equal(0, interruptions);

@@ -66,7 +66,7 @@ internal sealed class ComposerAutocomplete : IDisposable
     }
 
     /// <summary>Anchors suggestions within the composer or transcript without covering persistent rows.</summary>
-    internal void Render(BufferSurface root, Rect composer, Rect activity, (int X, int Y) caret, CellStyle normal, CellStyle highlight)
+    internal void Render(BufferSurface root, Rect composer, Rect output, (int X, int Y) caret, CellStyle normal, CellStyle highlight)
     {
         if (!_overlay.IsVisible)
         {
@@ -75,6 +75,7 @@ internal sealed class ComposerAutocomplete : IDisposable
 
         _overlay.Style = normal;
         _overlay.HighlightStyle = highlight.WithAttribute(CellAttributes.Reverse, true);
+        _overlay.MaxRows = 6;
         var rows = Math.Min(_overlay.MaxRows, _overlay.Suggestions.Count);
         var width = _overlay.Suggestions.Max(UnicodeWidth.GetWidth) + 1;
         var x = Math.Clamp(caret.X, 0, Math.Max(0, composer.Width - width));
@@ -84,10 +85,11 @@ internal sealed class ComposerAutocomplete : IDisposable
         }
         else
         {
-            // The activity row separates composer and transcript. Flip into the transcript
-            // instead of covering activity or truncating a selectable suggestion at that row.
-            var view = root.CreateView(new Rect(0, 0, root.Size.Width, activity.Top));
-            _overlay.RenderAt(view, composer.Left + x, activity.Top);
+            // Keep the flipped list inside streamed content, clear of the header and borders.
+            _overlay.MaxRows = Math.Max(1, Math.Min(6, output.Height));
+            var view = root.CreateView(output);
+            var outputX = Math.Clamp(composer.Left + x - output.Left, 0, Math.Max(0, output.Width - width));
+            _overlay.RenderAt(view, outputX, output.Height);
         }
     }
 

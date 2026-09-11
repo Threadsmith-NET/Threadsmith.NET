@@ -21,6 +21,16 @@ public sealed class GitQueryService : IGitQueryService
         throwOnInvalidBytes: true);
 
     /// <inheritdoc />
+    public async Task<RepositoryGitStatus?> GetWorkingTreeStatusAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    {
+        var output = await RunAsync(
+            await ValidateRepositoryAsync(repositoryPath, cancellationToken),
+            ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"],
+            cancellationToken);
+        return ParseWorkingTreeStatus(output.Text, output.IsTruncated);
+    }
+
+    /// <inheritdoc />
     public async Task<string?> GetCurrentBranchAsync(
         string repositoryPath,
         CancellationToken cancellationToken = default)
@@ -755,6 +765,44 @@ public sealed class GitQueryService : IGitQueryService
         }
 
         return new BoundedBytes(output.ToArray(), truncated, binary);
+    }
+
+    /// <summary>Parses machine-delimited status without treating filenames as status records.</summary>
+    private static RepositoryGitStatus ParseWorkingTreeStatus(string text, bool truncated = false)
+    {
+        string? branch = null;
+        var staged = 0;
+        var modified = 0;
+        var untracked = 0;
+        var conflicts = 0;
+        var records = text.Split('\0');
+        for (var index = 0; index < records.Length; index++)
+        {
+            var record = records[index];
+            if (record.StartsWith("# branch.head ", StringComparison.Ordinal))
+            {
+                branch = record[14..];
+            }
+            else if (record.StartsWith("? ", StringComparison.Ordinal))
+            {
+                untracked++;
+            }
+            else if (record.StartsWith("u ", StringComparison.Ordinal))
+            {
+                conflicts++;
+            }
+            else if (record.Length > 4 && record[0] is '1' or '2' && record[1] == ' ')
+            {
+                staged += record[2] != '.' ? 1 : 0;
+                modified += record[3] != '.' ? 1 : 0;
+                if (record[0] == '2')
+                {
+                    index++;
+                }
+            }
+        }
+
+        return new RepositoryGitStatus(branch == "(detached)" ? null : branch, branch == "(detached)", staged, modified, untracked, conflicts, truncated);
     }
 
     private sealed record BoundedText(string Text, bool IsTruncated);

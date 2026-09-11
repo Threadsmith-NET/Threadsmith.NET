@@ -348,6 +348,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             {
                 ModelMessageRole.System => "system",
                 ModelMessageRole.Developer => "developer",
+                ModelMessageRole.HostContext => "developer",
                 ModelMessageRole.User => "user",
                 ModelMessageRole.Assistant => "assistant",
                 _ => throw new InvalidOperationException(

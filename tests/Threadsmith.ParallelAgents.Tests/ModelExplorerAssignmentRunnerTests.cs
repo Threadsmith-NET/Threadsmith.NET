@@ -159,7 +159,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(call.ModelRound, result.ModelRound);
         Assert.False(result.IsError);
         Assert.Equal(call.ToolCallId, result.ToolCallId);
-        Assert.False(continuation.IncludeReasoningText);
+        Assert.True(continuation.IncludeReasoningText);
         Assert.DoesNotContain(
             continuation.Messages.SkipWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer),
             message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer);
@@ -684,6 +684,27 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Contains("HIGH_PRIORITY_EVIDENCE", initialEvidence, StringComparison.Ordinal);
         Assert.Contains("LOW_PRIORITY_EVIDENCE", initialEvidence, StringComparison.Ordinal);
         Assert.DoesNotContain("<evidence-omission", initialEvidence, StringComparison.Ordinal);
+    }
+
+    /// <summary>Optional public summaries do not change baseline host limits or fallback estimates.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DisplayOnlyReasoningDoesNotConsumeLegacyChildBudget(bool includeSummary)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, []);
+        var plan = CreatePlan(assignment);
+        var provider = new ExcessiveReasoningProvider(includeSummary ? new string('r', (128 * 1024) + 1) : string.Empty, displayOnly: true);
+        var registry = new ToolRegistry([]);
+        var runner = CreateRunner(provider, CreatePipeline(registry, events, sanitizer), evidence, sanitizer, profile, CreateParentContext(plan, []), []);
+        var outcome = await runner.RunAsync(plan, assignment);
+        Assert.Equal(string.Empty, outcome.Response);
+        Assert.True(provider.Requests[0].IncludeReasoningText);
+        Assert.True(outcome.Usage.ModelTokens < 128 * 1024 / 4);
     }
 
     /// <summary>Missing-usage reasoning is telemetry; only the independent character ceiling rejects its size.</summary>
@@ -1742,7 +1763,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
     }
 
-    private sealed class ExcessiveReasoningProvider(string reasoning) : IModelProvider
+    private sealed class ExcessiveReasoningProvider(string reasoning, bool displayOnly = false) : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1753,7 +1774,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
             await Task.Yield();
-            yield return new ModelChunk { Reasoning = reasoning };
+            yield return new ModelChunk { Reasoning = reasoning, IsDisplayOnlyReasoning = displayOnly };
         }
     }
 

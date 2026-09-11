@@ -4,7 +4,7 @@ Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--
 
 ## Default TUIKit frontend
 
-- `Enter`: accept a highlighted command suggestion when visible; otherwise submit the current composer text. A committed ordinary entry moves into the retained transcript before the composer clears. During initial semantic loading, one message is visibly queued and sent automatically when conversation input becomes available.
+- `Enter`: accept a highlighted command suggestion when visible; otherwise submit the current composer text. A committed ordinary entry moves into the retained transcript before the composer clears. Startup input is discarded while the timed loading splash owns the screen.
 - `Ctrl+Enter`: insert a newline without submitting.
 - `Ctrl+V` or `Shift+Insert`: paste clipboard text into the composer as one operation.
 - `Ctrl+C`: copy selected transcript or composer text. When no text is selected, exit or cancel through Threadsmith's normal cancellation path.
@@ -13,7 +13,10 @@ Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--
 - `Ctrl+T`: on an empty composer, toggle live streaming of future sanitized reasoning. Reasoning streaming is off by default.
 - `F1`: show the non-selectable key-help list; arrows or PageUp/PageDown scroll it, and `Esc` closes it.
 - `F3`: open the fuzzy command palette on a focused ordinary composer containing only an empty draft or a partial slash command. Type to search command names and descriptions, navigate with arrows/PageUp/PageDown/Home/End, and press `Enter` to insert the canonical name. `Esc` or `F3` closes without changing the draft. The palette shows usage and description; `F6` copies those details.
-- `F7`: switch focus between the composer and transcript.
+- `F7`: switch MAIN composer/output focus; child viewing keeps output focus.
+- `Ctrl+Left/Right`: select previous/next agent from output only; composer word navigation is preserved.
+- `F2`: show the selected agent’s complete status and label.
+- Child views preserve MAIN’s draft and block every editing, paste, submit, steering, and command-discovery path.
 - `F8`: show validated links retained in the transcript; Enter copies the selected address.
 - `F12`: hand mouse selection to the terminal; press it again to restore application mouse control.
 - Arrow keys scroll the focused transcript. `Shift` plus arrow keys selects text.
@@ -21,6 +24,8 @@ Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--
 A leading partial slash token shows up to six autocomplete rows in catalog order. While visible, unmodified arrows/PageUp/PageDown/Home/End select a suggestion, `Tab` or `Enter` inserts it, and `Esc` dismisses only the suggestions. Completion never executes or submits a command, adds a space, or changes submission history; undo restores the previous draft in one step. Add any arguments and press Enter separately to submit. Ctrl+Enter still inserts a newline; hidden suggestions leave normal Tab indentation and editor navigation unchanged.
 
 Discovery is absent for exact command names, arguments, prose, multiline input, selected text, secondary/steering prompts, other modals, transcript focus, and terminals below 40 x 12. Argument completion is not supported. Palette queries are limited to 256 characters and single-line paste; command discovery performs no host queries. F3 and this retained autocomplete are TUIKit-only; the original frontend is unchanged.
+
+Selectors are centered and block background mouse input. Tools and MCP tool availability use keyboard-only checkbox trees: arrows navigate, Space applies now, typing/paste filters, F2 shows details, F6 copies selected detail text, and Esc/Enter closes while keeping acknowledged changes. Group changes affect only currently visible eligible members; essential and consent restrictions remain enforced by the host.
 
 ## Original PrettyPrompt/Spectre frontend
 
@@ -36,7 +41,7 @@ Discovery is absent for exact command names, arguments, prose, multiline input, 
 
 ## Shared interactive commands
 
-- `/help`: display available interactive commands.
+- `/help`: display available interactive commands. In TUIKit, opens a scrollable modal with wrapped command and description columns; Up/Down, PgUp/PgDn, Home, and End scroll, and Esc closes it. Help text is not appended to the output pane.
 - `/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource|prompt|auth|logout|revoke|switch-account|diagnose]`: inspect or manage configured MCP profiles through the shared host authority. Omit exact IDs to use numbered selectors; identity mutations require an exact confirmation. See [MCP connections](mcp-connections.md).
 - `/open [path]`: open or switch repositories, choose trust, and select a solution when multiple candidates exist.
 - `/quit`: exit cleanly.

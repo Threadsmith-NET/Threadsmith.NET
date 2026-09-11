@@ -39,17 +39,39 @@ internal static class InteractionPresentationFormatter
         PresentationTextRole Role,
         bool PreserveText = false);
 
+    /// <summary>Creates a live tool block with the same identity and detail as its eventual completion.</summary>
+    internal static InteractionActivity CreateToolActivity(
+        ToolInvocationStarted started,
+        TimeProvider timeProvider,
+        bool showOperationDurations)
+    {
+        ArgumentNullException.ThrowIfNull(started);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        var label = started.Source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS";
+        var identity = GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
+        return new InteractionActivity(
+            $"{label}: {identity} - running",
+            timeProvider.GetTimestamp(),
+            showOperationDurations,
+            timeProvider)
+        {
+            ToolDetail = GetToolDetail(started, null, started.Source),
+        };
+    }
+
     /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
     /// <param name="started">The matching invocation start event.</param>
     /// <param name="completed">The invocation completion event.</param>
     /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
     /// <param name="inspectCodeExploreOutput">Whether successful code_explore blocks include final model-visible output.</param>
+    /// <param name="progress">Final host-owned progress entries collected for this invocation.</param>
     /// <returns>A terminal-neutral TUI presentation block.</returns>
     internal static string FormatToolCompletion(
         ToolInvocationStarted started,
         ToolInvocationCompleted completed,
         bool showOperationDurations,
-        bool inspectCodeExploreOutput = false)
+        bool inspectCodeExploreOutput = false,
+        IReadOnlyList<PresentationTextSegment>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
@@ -59,6 +81,11 @@ internal static class InteractionPresentationFormatter
         {
             new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
         };
+        foreach (var entry in progress ?? [])
+        {
+            lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, entry.Text, entry.Role));
+        }
+
         if (IsBuiltInMemoryTool(started, source)
             && GetMemoryOutput(started, completed) is { } memoryOutput)
         {
@@ -83,7 +110,7 @@ internal static class InteractionPresentationFormatter
 
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
-                "TOOLS",
+                source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS",
                 GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
                 GetOutcomeText(completed),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
@@ -810,7 +837,7 @@ internal static class InteractionPresentationFormatter
 
     private static string GetToolDetail(
         ToolInvocationStarted started,
-        ToolInvocationCompleted completed,
+        ToolInvocationCompleted? completed,
         ToolActivitySource? source)
     {
         var detail = new StringBuilder();
@@ -828,8 +855,8 @@ internal static class InteractionPresentationFormatter
 
         var activityDetail = IsBuiltInMemoryTool(started, source)
             ? started.ActivityDetail
-            : completed.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
-        var resultDetail = GetBuiltInSearchResultDetail(started, completed, source);
+            : completed?.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
+        var resultDetail = completed is null ? null : GetBuiltInSearchResultDetail(started, completed, source);
         if (resultDetail is not null)
         {
             activityDetail = string.IsNullOrWhiteSpace(activityDetail)
@@ -838,7 +865,7 @@ internal static class InteractionPresentationFormatter
         }
 
         AppendDetailPart(detail, activityDetail);
-        if (!completed.Succeeded)
+        if (completed is { Succeeded: false })
         {
             AppendDetailPart(detail, completed.Error);
         }

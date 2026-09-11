@@ -379,7 +379,10 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             _profile.Cost.Calculate(
                                 conservativeInputTokens,
                                 conservativeOutputTokens),
-                            Cache: CreateCacheUsage(reportedUsage)),
+                            Cache: CreateCacheUsage(reportedUsage))
+                        {
+                            ReasoningTokens = ReasoningTokenUsage.Read(reportedUsage.CompletionTokenDetails, "reasoning_tokens", reportedUsage.CompletionTokens),
+                        },
                     };
                 }
 
@@ -1065,6 +1068,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         [JsonPropertyName("prompt_tokens_details")]
         public OpenAiPromptTokenDetails? PromptTokenDetails { get; init; }
+
+        [JsonPropertyName("completion_tokens_details")]
+        public JsonElement CompletionTokenDetails { get; init; }
 
         [JsonPropertyName("cache_read_input_tokens")]
         public long? CacheReadInputTokens { get; init; }

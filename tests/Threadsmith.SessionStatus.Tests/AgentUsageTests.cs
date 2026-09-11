@@ -85,6 +85,44 @@ public static class AgentUsageTests
         Assert.Equal(10, usage.GetOwnerSnapshot(session).InputTokens);
     }
 
+    /// <summary>Breakdowns are deduplicated by request and hidden whenever a contributing request is unknown.</summary>
+    [Fact]
+    public static void ReasoningBreakdownsRemainCompleteAndNeverIncreaseTotals()
+    {
+        var projection = new SessionUsageProjection();
+        var session = SessionId.New();
+        var root = RunId.New();
+        var child = RunId.New();
+        projection.RegisterChild(session, child);
+        var first = new ModelRequestUsageId(root, "conversation", 0, Guid.NewGuid());
+        var second = first with { Round = 1, InvocationId = Guid.NewGuid() };
+        var usage = new ModelUsage(100, 10) { ReasoningTokens = 7 };
+        Assert.Null(projection.GetSnapshot(session).ReasoningTokens);
+        projection.Observe(session, first, usage);
+        projection.Observe(session, first, usage);
+        Assert.Equal(7, projection.GetOwnerSnapshot(session).ReasoningTokens);
+        Assert.Equal(110, projection.GetSnapshot(session).TotalTokens);
+        projection.Observe(session, second, usage with { ReasoningTokens = 0 });
+        Assert.Equal(7, projection.GetOwnerSnapshot(session).ReasoningTokens);
+        Assert.Equal(0, projection.GetOwnerSnapshot(session).LatestRequest?.Usage?.ReasoningTokens);
+        projection.Observe(session, second, usage with { ReasoningTokens = null });
+        Assert.Null(projection.GetOwnerSnapshot(session).ReasoningTokens);
+        projection.Observe(session, second, usage);
+        Assert.Equal(14, projection.GetSnapshot(session).ReasoningTokens);
+        projection.ObserveMissing(session, second);
+        Assert.Null(projection.GetSnapshot(session).ReasoningTokens);
+        projection.Observe(session, second, usage);
+        projection.Observe(session, new(child, "delegate-agent", 0, Guid.NewGuid()), new ModelUsage(20, 2));
+        Assert.Null(projection.GetSnapshot(session).ReasoningTokens);
+        Assert.Null(projection.GetOwnerSnapshot(session, child).ReasoningTokens);
+        Assert.Equal(14, projection.GetOwnerSnapshot(session).ReasoningTokens);
+        Assert.Equal(242, projection.GetSnapshot(session).TotalTokens);
+        projection.Restore(session, projection.GetDurableSnapshot(session));
+        projection.Observe(session, second with { InvocationId = Guid.NewGuid() }, usage);
+        Assert.Null(projection.GetSnapshot(session).ReasoningTokens);
+        Assert.Equal(7, projection.GetOwnerSnapshot(session).ReasoningTokens);
+    }
+
     /// <summary>Verifies context reflects latest request and explicit owner.</summary>
     [Fact]
     public static void ContextReflectsLatestRequestAndExplicitOwner()

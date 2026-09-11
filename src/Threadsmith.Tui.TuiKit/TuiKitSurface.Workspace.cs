@@ -20,6 +20,7 @@ internal sealed partial class TuiKitSurface
             () =>
         {
             _agents.Attach(sessionId);
+            _toolActivities = [];
             _inputEpoch++;
             RefreshDiscovery();
         },
@@ -190,6 +191,7 @@ internal sealed partial class TuiKitSurface
             header.Fill(new Rect(0, 0, header.Size.Width, header.Size.Height), Cell.Blank(headerStyle));
             _header.Render(header, _owner.GetAgentHeaderState(), headerStyle);
             var content = buffer.CreateView(WorkspaceLayout.OutputContent(surface.Size));
+            _owner.SelectedTranscript.ToolActivities = _owner._agents.Selected.Snapshot?.ToolActivities ?? _owner._toolActivities;
             _owner.SelectedTranscript.Render(content);
             NotificationOverlay.Render(content, _owner._app.Notifications, _owner._app.NowMilliseconds, _owner.ResolveOutputStyle);
             _activity.Draw(buffer.CreateView(WorkspaceLayout.OutputNotice(surface.Size)), 0, 0, _owner.ActivityText(), _owner.ResolveOutputStyle(PresentationTextRole.Status));

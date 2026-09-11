@@ -29,6 +29,9 @@ public sealed record SessionUsageSnapshot(
     long CacheWriteTokens = 0,
     bool HasCacheObservation = false)
 {
+    /// <summary>Gets cumulative reasoning tokens only when every contributing request reports its breakdown.</summary>
+    public long? ReasoningTokens { get; init; }
+
     /// <summary>Gets the latest observed request for this agent, independent of cumulative counters.</summary>
     public ModelRequestUsageSnapshot? LatestRequest { get; init; }
 
@@ -107,10 +110,13 @@ public sealed class SessionUsageProjection
                 return result;
             }
 
+            long? reasoningTokens = 0;
             foreach (var pair in requests.Where(pair => childRunId is { } child
                 ? pair.Key.RunId == child : !IsChild(sessionId, pair.Key.RunId)))
             {
                 var usage = pair.Value;
+                reasoningTokens = reasoningTokens is { } accumulated && usage?.ReasoningTokens is { } reasoning
+                    ? SaturatingAdd(accumulated, reasoning) : null;
                 result = result with
                 {
                     HasObservation = true,
@@ -124,7 +130,11 @@ public sealed class SessionUsageProjection
                 };
             }
 
-            return result with { LatestRequest = _latestUsage.GetValueOrDefault((sessionId, childRunId)) };
+            return result with
+            {
+                ReasoningTokens = result.HasObservation ? reasoningTokens : null,
+                LatestRequest = _latestUsage.GetValueOrDefault((sessionId, childRunId)),
+            };
         }
     }
 
@@ -172,10 +182,16 @@ public sealed class SessionUsageProjection
 
         if (usage.InputTokens < 0
             || usage.OutputTokens < 0
+            || usage.ReasoningTokens is < 0
             || usage.Cache?.CacheReadTokens is < 0
             || usage.Cache?.CacheWriteTokens is < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(usage), "Token usage cannot be negative.");
+        }
+
+        if (usage.ReasoningTokens > usage.OutputTokens)
+        {
+            throw new ArgumentOutOfRangeException(nameof(usage), "Reasoning tokens must be included in output tokens.");
         }
 
         lock (_gate)
@@ -293,8 +309,11 @@ public sealed class SessionUsageProjection
             long cachedInputTokens = 0;
             long cacheWriteTokens = 0;
             var hasCacheObservation = false;
+            long? reasoningTokens = restored is null ? 0 : null;
             foreach (var usage in requests.Values)
             {
+                reasoningTokens = reasoningTokens is { } accumulated && usage?.ReasoningTokens is { } reasoning
+                    ? SaturatingAdd(accumulated, reasoning) : null;
                 if (usage is null)
                 {
                     hasUnknownUsage = true;
@@ -328,7 +347,10 @@ public sealed class SessionUsageProjection
                 HasObservation: requests.Count > 0 || restored?.HasObservation == true,
                 cachedInputTokens,
                 cacheWriteTokens,
-                hasCacheObservation);
+                hasCacheObservation)
+            {
+                ReasoningTokens = requests.Count > 0 ? reasoningTokens : null,
+            };
         }
     }
 

@@ -537,7 +537,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
                 Provenance = "openai-codex:input_tokens_details",
             };
-        return new ModelUsage(input, output, Cache: cache);
+        usage.TryGetProperty("output_tokens_details", out var outputDetails);
+        return new ModelUsage(input, output, Cache: cache)
+        {
+            ReasoningTokens = ReasoningTokenUsage.Read(outputDetails, "reasoning_tokens", output),
+        };
     }
 
     private static async Task<Exception> CreateFailureAsync(

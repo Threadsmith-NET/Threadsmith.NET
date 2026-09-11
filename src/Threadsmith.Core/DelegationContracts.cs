@@ -394,6 +394,9 @@ public sealed record AgentAssignment
 /// <summary>Immutable parent and repository provenance for one delegation.</summary>
 public sealed record DelegationProvenance
 {
+    /// <summary>Originating tool invocation, when this delegation was requested through a tool.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+
     /// <summary>Owning session.</summary>
     public required SessionId SessionId { get; init; }
 

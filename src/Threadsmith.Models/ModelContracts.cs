@@ -145,7 +145,11 @@ public sealed record ModelUsage(
     long OutputTokens,
     decimal EstimatedCost = 0,
     bool IsEstimate = false,
-    ModelCacheUsage? Cache = null);
+    ModelCacheUsage? Cache = null)
+{
+    /// <summary>Gets provider-reported reasoning tokens included in OutputTokens, or null when unavailable.</summary>
+    public long? ReasoningTokens { get; init; }
+}
 
 /// <summary>Provider-neutral reason that a model stream finished.</summary>
 public enum ModelFinishReason

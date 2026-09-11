@@ -360,6 +360,37 @@ public sealed class Plan50OpenAiCodexTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>Final Responses usage retains optional reasoning without changing output totals.</summary>
+    [Theory]
+    [InlineData("null", null)]
+    [InlineData("{}", null)]
+    [InlineData("[]", null)]
+    [InlineData("{\"reasoning_tokens\":null}", null)]
+    [InlineData("{\"reasoning_tokens\":0}", 0L)]
+    [InlineData("{\"reasoning_tokens\":7}", 7L)]
+    [InlineData("{\"reasoning_tokens\":-1}", null)]
+    [InlineData("{\"reasoning_tokens\":11}", null)]
+    [InlineData("{\"reasoning_tokens\":\"7\"}", null)]
+    public async Task Provider_ReasoningUsagePreservesMissingAndZero(string details, long? expected)
+    {
+        using var document = JsonDocument.Parse(details);
+        var stream = "data: " + JsonSerializer.Serialize(new
+        {
+            type = "response.completed",
+            response = new { usage = new { input_tokens = 100, output_tokens = 10, output_tokens_details = document.RootElement } },
+        }) + "\n\ndata: [DONE]\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(100, usage.InputTokens);
+        Assert.Equal(10, usage.OutputTokens);
+        Assert.Equal(expected, usage.ReasoningTokens);
+    }
+
     /// <summary>One Codex response can return multiple tool calls while the request keeps parallel execution enabled.</summary>
     [Fact]
     public async Task Provider_BatchedToolCalls_PreserveModelOrderAndParallelAllowance()

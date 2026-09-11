@@ -111,6 +111,11 @@ internal sealed class AgentHeader
             : compact
                 ? $"I{prefix}{CompactCount(usage.InputTokens)} C{(usage.HasCacheObservation ? CompactCount(usage.CachedInputTokens) : "?")} O{prefix}{CompactCount(usage.OutputTokens)}{(usage.HasUnknownUsage ? "+?" : string.Empty)}"
                 : $"in {prefix}{usage.InputTokens:N0} cache {(usage.HasCacheObservation ? usage.CachedInputTokens.ToString("N0", CultureInfo.InvariantCulture) : "?")} out {prefix}{usage.OutputTokens:N0}{(usage.HasUnknownUsage ? " +?" : string.Empty)}";
+        if (usage.HasObservation && usage.ReasoningTokens is { } reasoning)
+        {
+            counts += compact ? $" (R{CompactCount(reasoning)})" : $" (reasoning {reasoning:N0})";
+        }
+
         return counts + (state.IsPostResume ? " since resume" : string.Empty);
     }
 
@@ -129,6 +134,11 @@ internal sealed class AgentHeader
 
         var prefix = usage.IsEstimate ? "~" : string.Empty;
         var tokens = $"{identity}: in {prefix}{usage.InputTokens:N0}, out {prefix}{usage.OutputTokens:N0}";
+        if (usage.ReasoningTokens is { } reasoning)
+        {
+            tokens += $" (reasoning {reasoning:N0})";
+        }
+
         if (usage.Cache is not { Availability: CacheUsageAvailability.Reported } cache)
         {
             return tokens + "; cache usage unavailable (provider did not report counters)";

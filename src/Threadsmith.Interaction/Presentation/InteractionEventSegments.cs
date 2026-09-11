@@ -28,12 +28,6 @@ internal static class InteractionEventSegments
 
         switch (domainEvent)
         {
-            case DelegationCheckpointWritten { Phase: DelegationCheckpointPhase.Accepted } accepted:
-                Add(
-                    segments,
-                    DelegationActivityRegistry.FormatAccepted(accepted),
-                    PresentationTextRole.Status);
-                break;
             case ActiveTurnCompactionCompleted completed:
                 var compactionRole = completed.Status switch
                 {

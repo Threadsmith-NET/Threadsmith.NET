@@ -135,11 +135,22 @@ public static class AgentWorkspaceTests
         views.Update(first);
         views.Update(second);
         var selectedStyle = CellStyle.Default.WithForeground(Color.FromPalette(15)).WithBackground(Color.FromPalette(8));
-        var strip = new AgentTabStrip(views, view => views.Select(view), role => role == Threadsmith.Interaction.Presentation.PresentationTextRole.AgentSelectedTabRole ? selectedStyle : CellStyle.Default);
+        var inactiveStyle = CellStyle.Default.WithBackground(Color.FromPalette(4));
+        var strip = new AgentTabStrip(views, view => views.Select(view), role => role switch
+        {
+            PresentationTextRole.AgentSelectedTabRole => selectedStyle,
+            PresentationTextRole.AgentNotSelectedTabRole => inactiveStyle,
+            _ => CellStyle.Default,
+        });
         var cells = new CellBuffer(80, 1);
         strip.Render(new BufferSurface(cells));
         Assert.StartsWith(" MAIN", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
         Assert.Equal(selectedStyle, cells.Get(1, 0).Style);
+        var gap = UnicodeWidth.GetWidth(AgentTabStrip.Label(views.Main, 25)) + 2;
+        Assert.Equal(CellStyle.Default, cells.Get(gap, 0).Style);
+        Assert.Equal(inactiveStyle, cells.Get(gap + 1, 0).Style);
+        strip.HandleMouse(new MouseEvent(MouseEventKind.Press, MouseButton.Left, gap, 0, KeyModifiers.None, 1));
+        Assert.Same(views.Main, views.Selected);
         var selected = views.Ordered[1];
         views.Select(selected);
         views.Present(Text("MAIN output"));
@@ -365,6 +376,93 @@ public static class AgentWorkspaceTests
             Assert.Equal(["allowed", "denied"], calls);
         },
             timeout.Token);
+    }
+
+    /// <summary>The native action menu dispatches only the selected leaf and Esc cancels without closing its parent list.</summary>
+    [Fact]
+    public static async Task AuthenticationActionCanBeCancelledAndListRemainsUsable()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var backend = new HeadlessBackend(100, 28);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var toggles = surface.SelectActionTogglesAsync(
+                new InteractionToggleRequest("Connections", [new("oauth", "OAuth profile", "Connections", false) { Actions = [new("authenticate", "Sign in / Authenticate")] }]),
+                (_, enabled, _) => Task.FromResult(new InteractionToggleResult(enabled)),
+                async (id, action, operationToken) =>
+            {
+                Assert.Equal("oauth", id);
+                Assert.Equal("authenticate", action);
+                started.SetResult();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, operationToken);
+                }
+                catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+                {
+                    cancelled.SetResult();
+                }
+
+                return new InteractionToggleResult(false, "Authentication cancelled.");
+            },
+                token);
+            await surface.PresentAsync(Text(string.Empty), token);
+            backend.TakeOutput();
+            backend.FeedInput("\u001b[B\u001bOR");
+            var output = string.Empty;
+            while (!output.Contains("Sign in / Authenticate", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, token);
+                output += backend.TakeOutput();
+            }
+
+            backend.FeedInput("\r");
+            await started.Task.WaitAsync(token);
+            backend.FeedInput("\u001b[27u");
+            await cancelled.Task.WaitAsync(token);
+            output = string.Empty;
+            while (!output.Contains("Authentication cancelled.", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, token);
+                output += backend.TakeOutput();
+            }
+
+            Assert.False(toggles.IsCompleted);
+            backend.FeedInput("\u001b[27u");
+            await toggles;
+        },
+            timeout.Token);
+    }
+
+    /// <summary>Child tool starts publish immediately and one completion leaves the other tool visible.</summary>
+    [Fact]
+    public static async Task ConcurrentChildToolsPublishIndependentActivityImmediately()
+    {
+        var session = SessionId.New();
+        var target = Target(session);
+        var sink = new RecordingSurface();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, false, timeout.Token);
+        await projection.AttachAsync(session, timeout.Token);
+        await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
+        var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty);
+        await projection.ObserveAsync(lifecycle, timeout.Token);
+        var first = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "first", target.RunId, Source: new ToolActivitySource(ToolActivitySourceKind.Mcp, "Server"));
+        var second = first with { ToolInvocationId = ToolInvocationId.New(), ToolName = "second" };
+        await projection.ObserveAsync(first, timeout.Token);
+        Assert.Single(sink.Agents[^1].ToolActivities);
+        await projection.ObserveAsync(second, timeout.Token);
+        var activities = sink.Agents[^1].ToolActivities;
+        Assert.Equal(2, activities.Count);
+        Assert.All(activities, activity => Assert.False(activity.ShowDuration));
+        await projection.ObserveAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, first.ToolInvocationId, true), timeout.Token);
+        Assert.Same(activities[1], Assert.Single(sink.Agents[^1].ToolActivities));
+        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Cancelled, Revision = 2 }, timeout.Token);
+        Assert.Empty(sink.Agents[^1].ToolActivities);
     }
 
     /// <summary>Verifies child output before lifecycle is retained and terminal outcome precedes retirement.</summary>
@@ -753,6 +851,43 @@ public static class AgentWorkspaceTests
                 Assert.Contains("S1 M2 U3 !4", backend.TakeOutput(), StringComparison.Ordinal);
             },
             timeout.Token);
+    }
+
+    /// <summary>Concurrent delegations with the same parent retain exact invocation ownership and ignore stale revisions.</summary>
+    [Fact]
+    public static async Task ToolProgressUsesExactInvocationAndGeneration()
+    {
+        var session = SessionId.New();
+        var parent = RunId.New();
+        var first = Target(session);
+        var second = Target(session);
+        var firstTool = ToolInvocationId.New();
+        var secondTool = ToolInvocationId.New();
+        var sink = new RecordingSurface();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery", "Robin"]), false, timeout.Token);
+        await projection.AttachAsync(session, timeout.Token);
+        var checkpoint = new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, first.DelegationId, parent, DelegationCheckpointPhase.Accepted, 1, "run") { ToolInvocationId = firstTool };
+        await projection.ObserveAsync(checkpoint, timeout.Token);
+        await projection.ObserveAsync(checkpoint with { DelegationId = second.DelegationId, ToolInvocationId = secondTool }, timeout.Token);
+        var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, first.DelegationId, first.AssignmentId, first.RunId, AgentRole.Explorer, AgentRunStatus.Queued, 1, "first queued");
+        await projection.ObserveAsync(lifecycle, timeout.Token);
+        await projection.ObserveAsync(lifecycle with { DelegationId = second.DelegationId, AssignmentId = second.AssignmentId, ChildRunId = second.RunId, Reason = "second queued" }, timeout.Token);
+        Assert.Contains("first queued", Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token)).Text, StringComparison.Ordinal);
+        Assert.Contains("second queued", Assert.Single(await projection.GetToolProgressAsync(secondTool, false, timeout.Token)).Text, StringComparison.Ordinal);
+        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Completed, Revision = 2, Reason = "first done" }, timeout.Token);
+        await projection.ObserveAsync(lifecycle, timeout.Token);
+        Assert.Contains("first done", Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token)).Text, StringComparison.Ordinal);
+        await projection.ObserveAsync(checkpoint with { Generation = 2, Revision = 3 }, timeout.Token);
+        Assert.Empty(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
+        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Cancelled, Generation = 2, Revision = 4, Reason = "cancelled" }, timeout.Token);
+        Assert.Contains("Cancelled", Assert.Single(await projection.GetToolProgressAsync(firstTool, true, timeout.Token)).Text, StringComparison.Ordinal);
+        Assert.Empty(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
+        Assert.Empty(sink.Output);
+        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Discarded, Generation = 2, Revision = 5, Reason = "late correction" }, timeout.Token);
+        Assert.Single(sink.Output);
+        await projection.AttachAsync(SessionId.New(), timeout.Token);
+        Assert.Empty(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
     }
 
     private static AgentPresentationTarget Target(SessionId session) => new(session, DelegationId.New(), AgentAssignmentId.New(), RunId.New(), 1);

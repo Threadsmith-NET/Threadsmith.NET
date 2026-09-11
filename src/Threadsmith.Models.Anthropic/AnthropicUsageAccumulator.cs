@@ -10,6 +10,7 @@ internal sealed class AnthropicUsageAccumulator
     private readonly int _estimatedInput;
     private long? _input;
     private long? _output;
+    private long? _reasoning;
     private long? _writes;
     private long? _reads;
     private bool _hasFinalOutput;
@@ -42,6 +43,8 @@ internal sealed class AnthropicUsageAccumulator
         if (finalOutput && usage.TryGetProperty("output_tokens", out var output) && output.ValueKind == JsonValueKind.Number)
         {
             _hasFinalOutput = true;
+            usage.TryGetProperty("output_tokens_details", out var details);
+            _reasoning = ReasoningTokenUsage.Read(details, "thinking_tokens", _output.GetValueOrDefault());
         }
     }
 
@@ -64,7 +67,10 @@ internal sealed class AnthropicUsageAccumulator
             ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
             Provenance = "anthropic.messages.usage",
         };
-        var usage = new ModelUsage(input, output, IsEstimate: !_input.HasValue || !_hasFinalOutput, Cache: cache);
+        var usage = new ModelUsage(input, output, IsEstimate: !_input.HasValue || !_hasFinalOutput, Cache: cache)
+        {
+            ReasoningTokens = _hasFinalOutput ? _reasoning : null,
+        };
         var prices = _compatibility.Prices;
         if (!prices.IsComplete)
         {

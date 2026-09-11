@@ -27,6 +27,9 @@ public sealed record AgentPresentationSnapshot(
     /// <summary>Gets current child-local tool activity.</summary>
     public string? Activity { get; init; }
 
+    /// <summary>Gets the independently timed live tool blocks for this child.</summary>
+    public IReadOnlyList<InteractionActivity> ToolActivities { get; init; } = [];
+
     /// <summary>Gets the human-readable tab label.</summary>
     public string Label => Name + " · " + RoleLabel(Role);
 

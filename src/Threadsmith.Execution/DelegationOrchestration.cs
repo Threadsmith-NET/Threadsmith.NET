@@ -1304,7 +1304,10 @@ public sealed class DelegationCoordinator :
                 checkpoint.Phase,
                 checkpoint.Provenance.Generation,
                 checkpoint.NextAction,
-                checkpoint.Revision),
+                checkpoint.Revision)
+            {
+                ToolInvocationId = checkpoint.Provenance.ToolInvocationId,
+            },
             cancellationToken);
         foreach (var outcome in lifecycleOutcomes ?? checkpoint.ChildOutcomes)
         {

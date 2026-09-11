@@ -88,6 +88,29 @@ public static class OpenAiCompatibleCacheTests
         Assert.Equal(reads is null && writes is null ? CacheUsageAvailability.Unavailable : CacheUsageAvailability.Reported, usage.Cache?.Availability);
     }
 
+    /// <summary>Reasoning is an optional output subset; absent or invalid metadata never changes totals.</summary>
+    [Theory]
+    [InlineData("null", null)]
+    [InlineData("{}", null)]
+    [InlineData("[]", null)]
+    [InlineData("{\"reasoning_tokens\":null}", null)]
+    [InlineData("{\"reasoning_tokens\":0}", 0L)]
+    [InlineData("{\"reasoning_tokens\":7}", 7L)]
+    [InlineData("{\"reasoning_tokens\":-1}", null)]
+    [InlineData("{\"reasoning_tokens\":11}", null)]
+    [InlineData("{\"reasoning_tokens\":\"7\"}", null)]
+    public static async Task ReasoningCountersRetainAvailability(string details, long? expected)
+    {
+        var fields = $$"""{"completion_tokens_details":{{details}}}""";
+        using var client = new HttpClient(new CaptureHandler(fields));
+        var chunks = await Provider(client).StreamAsync(new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" }, TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(1000, usage.InputTokens);
+        Assert.Equal(10, usage.OutputTokens);
+        Assert.Equal(expected, usage.ReasoningTokens);
+    }
+
     /// <summary>Negative creation or read counters cannot corrupt usage projections.</summary>
     [Theory]
     [InlineData("cached_tokens")]

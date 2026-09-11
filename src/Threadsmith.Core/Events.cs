@@ -719,7 +719,11 @@ public sealed record DelegationCheckpointWritten(
     DelegationCheckpointPhase Phase,
     int Generation,
     string NextAction,
-    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Originating tool invocation for exact live progress correlation.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+}
 
 /// <summary>One child reached an observable lifecycle state.</summary>
 public sealed record AgentRunLifecycleObserved(

@@ -20,7 +20,7 @@ internal sealed class ToggleModal : Modal
     private readonly Action _cancel;
     private readonly Action _toggleMouse;
     private readonly CachedTextRun _text = new();
-    private readonly Channel<(string Id, bool Enabled)> _changes = Channel.CreateBounded<(string, bool)>(1);
+    private readonly Channel<(string Id, bool Enabled, bool Actions)> _changes = Channel.CreateBounded<(string, bool, bool)>(1);
     private CheckTree<string> _tree;
     private TranscriptView? _details;
     private string? _selected;
@@ -75,9 +75,29 @@ internal sealed class ToggleModal : Modal
         }
         else if (key.Code is KeyCode.Escape or KeyCode.Enter)
         {
-            RequestClose(null);
+            if (CancelOperation is { } cancelOperation)
+            {
+                cancelOperation();
+                _notice = "Cancelling authentication...";
+            }
+            else
+            {
+                RequestClose(null);
+            }
         }
-        else if (_fits && key.Code == KeyCode.F2)
+        else if (_fits && !_busy && _details is null && SupportsActions && key.Code == KeyCode.F3)
+        {
+            var selected = _options.GetValueOrDefault(_tree.SelectedNode);
+            if (selected?.Actions.Count > 0)
+            {
+                _busy = _changes.Writer.TryWrite((_tree.SelectedNode, false, true));
+            }
+            else
+            {
+                _notice = "Select an individual item with available actions.";
+            }
+        }
+        else if (_fits && !_busy && key.Code == KeyCode.F2)
         {
             if (_details is null)
             {
@@ -112,7 +132,7 @@ internal sealed class ToggleModal : Modal
             }
             else
             {
-                _busy = _changes.Writer.TryWrite((id, !Members(id).All(option => option.Enabled)));
+                _busy = _changes.Writer.TryWrite((id, !Members(id).All(option => option.Enabled), false));
                 _notice = "Applying host checks…";
             }
         }
@@ -167,7 +187,7 @@ internal sealed class ToggleModal : Modal
         _tree.HighlightStyle = _style(PresentationTextRole.SelectionHighlight).WithAttribute(CellAttributes.Reverse, true);
         _tree.RowStyle = _ => _style(PresentationTextRole.Default);
         _text.Draw(frame, 0, 0, _request.Title + " — keyboard only", _style(PresentationTextRole.SelectionPrompt));
-        _text.Draw(frame, 0, 2, "Filter: " + _filter.Text + " | F2 details", _style(PresentationTextRole.Muted));
+        _text.Draw(frame, 0, 2, "Filter: " + _filter.Text + " | F2 details" + (SupportsActions ? "; F3 actions" : string.Empty), _style(PresentationTextRole.Muted));
         var content = frame.CreateView(new Rect(0, 3, frame.Size.Width, Math.Max(1, frame.Size.Height - 5)));
         if (_details is not null)
         {
@@ -183,8 +203,24 @@ internal sealed class ToggleModal : Modal
         _text.Draw(frame, 0, frame.Size.Height - 1, selected?.Reason ?? "Space applies immediately; closing keeps changes", _style(PresentationTextRole.Muted));
     }
 
+    /// <summary>Gets or sets cancellation of the current individual action.</summary>
+    internal Action? CancelOperation { get; set; }
+
+    /// <summary>Gets or sets whether the caller can execute individual actions.</summary>
+    internal bool SupportsActions { get; set; }
+
+    /// <summary>Gets the selected immutable item for individual action dispatch.</summary>
+    internal InteractionToggleOption? GetOption(string key) => _options.GetValueOrDefault(key);
+
+    /// <summary>Shows progress while the host owns a cancellable action.</summary>
+    internal void BeginAction(string label, Action cancel)
+    {
+        CancelOperation = cancel;
+        _notice = label + " - waiting for authentication; Esc cancels";
+    }
+
     /// <summary>Gets serialized pending host requests.</summary>
-    internal ChannelReader<(string Id, bool Enabled)> Changes => _changes.Reader;
+    internal ChannelReader<(string Id, bool Enabled, bool Actions)> Changes => _changes.Reader;
 
     /// <summary>Gets the exact eligible members for the current immutable group or leaf.</summary>
     internal IReadOnlyList<InteractionToggleOption> Members(string id) =>
@@ -195,13 +231,25 @@ internal sealed class ToggleModal : Modal
     internal void Reconcile(string id, InteractionToggleResult result)
     {
         var key = "item:" + id;
-        _options[key] = _options[key] with { Enabled = result.Enabled };
+        if (result.UpdatedOption is { } updated && updated.Id == id && updated.Group == _options[key].Group)
+        {
+            _options[key] = updated with { Enabled = result.Enabled };
+        }
+        else
+        {
+            _options[key] = _options[key] with { Enabled = result.Enabled };
+        }
+
         ReconcileTree();
-        _notice = result.Reason is null ? "Saved immediately; Esc closes" : TranscriptView.Safe(result.Reason);
+        _notice = result.Reason is null ? "Applied immediately; Esc closes" : TranscriptView.Safe(result.Reason);
     }
 
     /// <summary>Releases the serialized toggle gate after all concrete group members finish.</summary>
-    internal void CompleteChange() => _busy = false;
+    internal void CompleteChange()
+    {
+        CancelOperation = null;
+        _busy = false;
+    }
 
     private bool Matches(InteractionToggleOption option) =>
         option.Label.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase) || option.Group.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase);

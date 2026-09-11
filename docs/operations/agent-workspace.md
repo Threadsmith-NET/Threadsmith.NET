@@ -10,6 +10,20 @@ External semantic changes and recovery also produce TUIKit toast notifications w
 
 `/help` opens a read-only modal with command usage in the first column and its description in the second, using TUIKit's column formatter and text wrapping. Both columns wrap to fit the terminal, including long command arguments. Up/Down, PgUp/PgDn, Home, and End scroll the list; Esc closes it and returns to the composer. Help text stays out of the output transcript. F1 continues to show keyboard help.
 
+`ENTER to steer; ESC-ESC to cancel` appears after the activity timer at the bottom of MAIN only while active-turn input is available. It disappears when the turn completes, is cancelled, or pauses for input, and is not retained in the output transcript.
+
+Tool calls appear inside the selected agent's output pane while they run, using TUIKit `ActivityIndicator` widgets and independent elapsed timers. MCP calls use `MCP:`; built-in and extension tools use `TOOLS:`. Concurrent calls remain visible independently, and each completion replaces its live entry with one retained result block. The existing operation-duration preference applies. Short panes omit detail lines first, then show an explicit count of additional running tools when necessary. Animation frames are transient and do not accumulate in copied or durable conversation history.
+
+## Management dialogs
+
+`/theme` remains a single-selection modal: choose one theme with Enter; Esc cancels.
+
+`/hooks` (or `/hooks list`), `/mcp` (or `/mcp list`), and `/extensions` use the same keyboard-only CheckTree as `/tools`. Space toggles an item or the unlocked, filtered members of a group; each operation applies immediately and the dialog stays open for further changes. Esc closes without rolling back completed changes. Type to filter and use F2 for details.
+
+OAuth-enabled MCP profiles display sign-in status. Select an individual profile and press F3 to open Actions, then choose **Sign in / Authenticate**. This uses the existing browser OAuth flow and may reuse cached credentials. While authentication is pending, Esc cancels the attempt and keeps the MCP list open; afterward the status and connection checkbox refresh from the manager. The Actions menu targets one profile; group connection changes still follow each profile's existing authentication requirements. Static-token profiles do not offer it. Use `/mcp logout <profile>` to clear an existing identity before signing in again; the modal does not offer Switch account.
+
+Hook checkboxes mean enabled, extension checkboxes mean loaded, and MCP profile checkboxes mean connected. MCP connection changes do not change startup auto-connect configuration or individual tool preferences; `/mcp capabilities [profile]` manages tool enablement separately. Hook enablement does not grant repository approval. Every checkbox is reconciled against current host state after an operation, including failed connections and blocked unloads. Direct subcommands and the original frontend remain available.
+
 ## Name configuration
 
 Ordinary `tui.agentNames.defaultNames` supplies an optional shared list. `tui.agentNames.byRole` accepts exactly the keys below. Resolution is independently per list, highest ordinary provider first (compiled/machine/user/repository/session/CLI/environment). A provider’s indexed list replaces the whole lower list, so setting `THREADSMITH_tui__agentNames__defaultNames__0` or the CLI key `tui:agentNames:defaultNames:0` never leaves lower-provider tails. Explicit nonempty role lists take precedence over shared names even if the shared list comes from a higher provider. Missing/unusable lists fall through to shared names and then compiled defaults.
@@ -39,6 +53,8 @@ The header shows the latest effective request's provider name, model, reasoning,
 
 The footer abbreviates staged, modified, untracked, and conflict counts as `S`, `M`, `U`, and `!`. `Git ?` means unavailable, not clean. Counts above 999 use `999+`; a final `+` means the captured Git status was partial. Folder and branch labels are clipped independently so the counters remain visible at the supported minimum.
 
+When the provider reports reasoning-token usage, the header adds `(reasoning n)` after output tokens (or `(Rn)` in compact layouts), and F2 includes the latest request's breakdown. These tokens are already included in output totals and cost; they are never added again. Missing or invalid optional counts add no label or placeholder, while reported zero remains visible. Cumulative reasoning is shown only when all contributing requests report it; a partially known cumulative sum is hidden. Restored historical totals without a breakdown remain unknown, while agent counters since resume use new observations. OpenAI Responses/Codex uses `output_tokens_details.reasoning_tokens`, OpenAI-compatible servers may supply `completion_tokens_details.reasoning_tokens`, and Anthropic supplies `output_tokens_details.thinking_tokens` in final usage. Threadsmith does not estimate reasoning counts from visible text.
+
 Agent details also show the latest observed request's stage/round, input/output, cache reads/writes, and cache-hit percentage separately from cumulative totals. Open F2 from output, then F2 for full text. Missing counters remain unavailable and reported zero remains zero; see [cache reporting and vLLM setup](cache-optimized-context.md).
 
 ## Verification procedure
@@ -46,3 +62,5 @@ Agent details also show the latest observed request's stage/round, input/output,
 Run Windows Terminal/PowerShell and a supported Unix terminal independently. Record OS, terminal/version, dimensions, theme, keyboard protocol, mouse mode, and exit path. At 120×35, 80×24, and 40×12, stream MAIN and several children, switch with Ctrl+Left/Right from output and captured mouse, and retire selected/unselected children. Resize below and back above minimum with a Unicode multiline draft and detached child scroll position.
 
 Check actual OS clipboard paste, bracketed paste, selected-copy Ctrl+C in both panes, Ctrl+C cancellation without selection, F12 native selection, F2 long labels, modal background clicks, and immediate denied/consent/group toggles. Enter and paste on children must never steer MAIN. Verify startup choices precede the splash, input is discarded, and success/cancellation/failure restore terminal modes. Check no footer scrolling, blank-row corruption, or escape leakage. Physical terminal results and measured render latency must be recorded separately from headless test results.
+
+Delegated agents report their current named role and queued, running, or final status inside the live `delegate_agents` tool block. Each agent has one row that updates as lifecycle events arrive; repeated final checkpoints do not duplicate it. The completed tool block retains the final rows beneath its timer. Delegation-to-tool correlation uses the originating invocation ID, including when calls overlap. The automatic delegation GUID and `/agents` navigation notices are omitted; the explicit command remains available. On short panes, an omission count replaces progress rows that cannot fit.

@@ -20,7 +20,7 @@ using TUIKit.Terminal;
 using TUIKit.Widgets;
 
 /// <summary>Projects shared interactions through one retained UI loop and one input owner.</summary>
-internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspaceSurface, IAsyncDisposable
+internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspaceSurface, IInteractionToolActivitySurface, IAsyncDisposable
 {
     /// <summary>
     /// Default prompt shown before the coordinator supplies repository context.
@@ -86,6 +86,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private SessionStatusSnapshot? _status;
     private SessionStatusSnapshot? _formattedStatus;
     private InteractionActivity? _activity;
+    private IReadOnlyList<InteractionActivity> _toolActivities = [];
     private ActiveInputLease? _activeInput;
     private string _prompt = DefaultPrompt;
     private string _notice = string.Empty;
@@ -195,7 +196,8 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     public InteractionSurfaceCapabilities Capabilities { get; } = new(
         SupportsActiveRunInput: true,
         SupportsRetainedStatus: true,
-        SupportsRetainedActivity: true);
+        SupportsRetainedActivity: true,
+        SupportsRetainedRunHints: true);
 
     private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
         ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
@@ -347,6 +349,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         ArgumentNullException.ThrowIfNull(status);
         return EnqueueAsync(() => _status = status, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task PresentToolActivitiesAsync(IReadOnlyList<InteractionActivity> activities, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(activities);
+        var snapshot = activities.ToArray();
+        return EnqueueAsync(() => _toolActivities = snapshot, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -892,11 +902,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         }
 
         const string frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
-        if (_activity is null)
+        if (_activity is null || _toolActivities.Count > 0)
         {
             _formattedActivity = null;
             _activityFrame = -1;
-            return PrependUnseenOutput(_notice);
+            return ActiveRunNotice(_notice);
         }
 
         var frame = (int)((Environment.TickCount64 / 250) % frames.Length);
@@ -908,7 +918,18 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _activityText = activity;
         }
 
-        return PrependUnseenOutput(_activityText);
+        return ActiveRunNotice(_activityText);
+    }
+
+    private string ActiveRunNotice(string text)
+    {
+        if (Volatile.Read(ref _activeInput) is not null)
+        {
+            const string hints = "ENTER to steer; ESC-ESC to cancel";
+            text = string.IsNullOrEmpty(text) ? hints : $"{text} | {hints}";
+        }
+
+        return PrependUnseenOutput(text);
     }
 
     private string PrependUnseenOutput(string text)

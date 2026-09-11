@@ -27,13 +27,22 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
     private readonly Queue<(DelegationId Id, int Generation)> _closed = [];
     private readonly HashSet<DelegationId> _closedIds = [];
     private readonly Dictionary<ToolInvocationId, ToolInvocationStarted> _tools = [];
+    private readonly Dictionary<DelegationId, ToolInvocationId> _delegationTools = [];
+    private readonly Dictionary<AgentPresentationTarget, PresentationTextSegment> _progress = [];
     private readonly bool _markdown;
+    private readonly bool _showOperationDurations;
     private readonly List<AgentDisplayText> _pendingDisplay = [];
     private SessionId _session;
     private Task _pump = Task.CompletedTask;
 
     /// <summary>Initializes a new instance of the <see cref="AgentWorkspaceProjection"/> class.</summary>
     internal AgentWorkspaceProjection(IInteractionSurface surface, AgentDisplayStream? display, SessionUsageProjection? usage, ConfiguredModelCatalog? models, AgentNameCatalog names, bool markdown, CancellationToken cancellationToken)
+        : this(surface, display, usage, models, names, markdown, true, cancellationToken)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="AgentWorkspaceProjection"/> class with the host duration preference.</summary>
+    internal AgentWorkspaceProjection(IInteractionSurface surface, AgentDisplayStream? display, SessionUsageProjection? usage, ConfiguredModelCatalog? models, AgentNameCatalog names, bool markdown, bool showOperationDurations, CancellationToken cancellationToken)
     {
         _surface = surface;
         _workspace = (IAgentWorkspaceSurface)surface;
@@ -42,6 +51,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         _models = models;
         _names = new AgentNameAllocator(names);
         _markdown = markdown;
+        _showOperationDurations = showOperationDurations;
         _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _display?.Attach();
     }
@@ -80,6 +90,8 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
             _children.Clear();
             _tools.Clear();
+            _delegationTools.Clear();
+            _progress.Clear();
             _revisions.Clear();
             _accepted.Clear();
             _terminal.Clear();
@@ -127,6 +139,12 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
                         ForgetTargets(checkpoint.DelegationId);
                         _accepted[checkpoint.DelegationId] = checkpoint.Generation;
+                        _delegationTools.Remove(checkpoint.DelegationId);
+                        if (checkpoint.ToolInvocationId is { } invocation)
+                        {
+                            _delegationTools[checkpoint.DelegationId] = invocation;
+                        }
+
                         _closedIds.Remove(checkpoint.DelegationId);
                     }
                 }
@@ -154,7 +172,10 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             {
                 _tools[started.ToolInvocationId] = started;
                 await FlushAsync(_children[started.RunId], cancellationToken);
-                _children[started.RunId].Activity = "TOOLS: " + TerminalControlEncoder.Encode(started.ToolName);
+                var child = _children[started.RunId];
+                child.ToolActivities[started.ToolInvocationId] = InteractionPresentationFormatter.CreateToolActivity(started, TimeProvider.System, _showOperationDurations);
+                child.Snapshot = child.Snapshot with { ToolActivities = child.ToolActivities.Values.ToArray() };
+                await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
                 return true;
             }
 
@@ -163,13 +184,15 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 var matched = _tools.Remove(completed.ToolInvocationId, out var start);
                 if (start is not null && _children.TryGetValue(start.RunId, out var child))
                 {
-                    var transcript = new ConversationTranscript(string.Empty);
+                    var transcript = new ConversationTranscript(string.Empty, _showOperationDurations);
                     transcript.Apply(start);
                     transcript.Apply(completed);
                     var segments = new List<PresentationTextSegment>();
                     InteractionEventSegments.Append(segments, completed, transcript.Text);
                     await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
-                    child.Activity = null;
+                    child.ToolActivities.Remove(completed.ToolInvocationId);
+                    child.Snapshot = child.Snapshot with { ToolActivities = child.ToolActivities.Values.ToArray() };
+                    await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
                     return true;
                 }
 
@@ -203,7 +226,6 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                     ContextTokens = request?.ContextTokens,
                     ContextLimit = request?.ContextLimit,
                     Usage = _usage?.GetOwnerSnapshot(_session, child.Snapshot.Target.RunId),
-                    Activity = child.Activity,
                 };
                 if (snapshot != child.Snapshot)
                 {
@@ -211,6 +233,30 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                     await _workspace.PresentAgentAsync(snapshot, cancellationToken);
                 }
             }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Captures current progress for exactly one tool; completion releases its live correlation.</summary>
+    internal async Task<IReadOnlyList<PresentationTextSegment>> GetToolProgressAsync(ToolInvocationId invocation, bool complete, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var delegations = _delegationTools.Where(pair => pair.Value == invocation).Select(pair => pair.Key).ToHashSet();
+            var entries = _progress.Where(pair => delegations.Contains(pair.Key.DelegationId)).Select(pair => pair.Value).ToArray();
+            if (complete)
+            {
+                foreach (var delegation in delegations)
+                {
+                    _delegationTools.Remove(delegation);
+                }
+            }
+
+            return entries;
         }
         finally
         {
@@ -274,6 +320,8 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         if (terminal)
         {
             await FlushAsync(state, cancellationToken);
+            state.ToolActivities.Clear();
+            state.Snapshot = state.Snapshot with { ToolActivities = [] };
             _terminal[target] = state.Snapshot;
             await PresentOutcomeAsync(state.Snapshot, lifecycle.Reason, false, cancellationToken);
             _children.Remove(lifecycle.ChildRunId);
@@ -285,13 +333,29 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             }
         }
 
+        if (!terminal)
+        {
+            await PresentOutcomeAsync(state.Snapshot, lifecycle.Reason, false, cancellationToken);
+        }
+
         await _workspace.PresentAgentAsync(state.Snapshot, cancellationToken);
     }
 
     private Task PresentOutcomeAsync(AgentPresentationSnapshot snapshot, string reason, bool correction, CancellationToken cancellationToken)
     {
         var safe = TerminalControlEncoder.Encode(reason);
+        safe = safe.Replace('\r', ' ').Replace('\n', ' ');
         safe = safe.Length > 240 ? safe[..240] + "…" : safe;
+        var entry = new PresentationTextSegment(
+            $"{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}",
+            snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status);
+        var unchanged = _progress.GetValueOrDefault(snapshot.Target) == entry;
+        _progress[snapshot.Target] = entry;
+        if (_delegationTools.ContainsKey(snapshot.Target.DelegationId) || !snapshot.IsTerminal || unchanged)
+        {
+            return Task.CompletedTask;
+        }
+
         var text = $"{(correction ? "Updated outcome: " : string.Empty)}{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}\n";
         return _surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(text, snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status)])]), cancellationToken);
     }
@@ -302,6 +366,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         {
             _revisions.Remove(target);
             _terminal.Remove(target);
+            _progress.Remove(target);
         }
     }
 
@@ -325,6 +390,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
             _closedIds.Remove(delegation);
             _accepted.Remove(delegation);
+            _delegationTools.Remove(delegation);
             ForgetTargets(delegation);
         }
     }
@@ -443,6 +509,6 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
         internal Guid ResponseId { get; set; }
 
-        internal string? Activity { get; set; }
+        internal Dictionary<ToolInvocationId, InteractionActivity> ToolActivities { get; } = [];
     }
 }

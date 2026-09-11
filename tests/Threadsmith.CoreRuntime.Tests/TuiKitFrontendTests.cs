@@ -306,6 +306,53 @@ public static class TuiKitFrontendTests
         Assert.True(backend.IsStopped);
     }
 
+    /// <summary>Steering hints follow the live timer and disappear after active input ends, without entering the transcript.</summary>
+    [Fact]
+    public static async Task ActiveRunHintsAreTransientAndFollowThinking()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var backend = new HeadlessBackend(120, 28);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            Assert.True(surface.Capabilities.SupportsRetainedRunHints);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            Assert.DoesNotContain("ENTER to steer", backend.TakeOutput(), StringComparison.Ordinal);
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var activity = new InteractionActivity("THINKING", TimeProvider.System.GetTimestamp(), true, TimeProvider.System);
+            var display = surface.PresentActivityUntilAsync(activity, completion.Task, token);
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            {
+                var output = string.Empty;
+                while (!output.Contains("ENTER to steer; ESC-ESC to cancel", StringComparison.Ordinal))
+                {
+                    await Task.Delay(10, token);
+                    output += backend.TakeOutput();
+                }
+
+                Assert.Contains("THINKING", output, StringComparison.Ordinal);
+                Assert.True(output.IndexOf("THINKING", StringComparison.Ordinal) < output.IndexOf("ENTER to steer", StringComparison.Ordinal));
+            }
+
+            completion.SetResult();
+            await display;
+            await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new("Response arrived", PresentationTextRole.Default)])]), token);
+            backend.TakeOutput();
+            backend.Resize(121, 28);
+            var repaint = string.Empty;
+            while (!repaint.Contains("Response arrived", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, token);
+                repaint += backend.TakeOutput();
+            }
+
+            Assert.DoesNotContain("ENTER to steer", repaint, StringComparison.Ordinal);
+            Assert.DoesNotContain("THINKING", repaint, StringComparison.Ordinal);
+        },
+            timeout.Token);
+    }
+
     /// <summary>Active-run chords emit semantic signals without consuming the ordinary draft.</summary>
     [Fact]
     public static async Task ActiveRunInputAndShutdown()

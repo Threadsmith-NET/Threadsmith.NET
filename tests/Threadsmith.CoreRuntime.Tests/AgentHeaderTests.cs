@@ -31,6 +31,40 @@ public static class AgentHeaderTests
         Assert.Contains("cache 5,000", details, StringComparison.Ordinal);
     }
 
+    /// <summary>Reported reasoning is shown as a subset; absent counters leave the old display byte-for-byte intact.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0L)]
+    [InlineData(1200L)]
+    public static void ReasoningBreakoutIsShownOnlyWhenReported(long? reasoning)
+    {
+        var baseline = State();
+        var state = baseline with
+        {
+            Usage = baseline.Usage with
+            {
+                ReasoningTokens = reasoning,
+                LatestRequest = new ModelRequestUsageSnapshot(new(RunId.New(), "conversation", 0, Guid.NewGuid()), new ModelUsage(11000, 2000) { ReasoningTokens = reasoning }),
+            },
+        };
+        var cells = new CellBuffer(198, 1);
+        new AgentHeader().Render(new BufferSurface(cells), state, CellStyle.Default);
+        var text = TUIKit.Testing.Snapshot.ToText(cells);
+        var details = AgentHeader.FormatDetails(state);
+        if (reasoning is { } count)
+        {
+            Assert.Contains($"out 2,000 (reasoning {count:N0})", text, StringComparison.Ordinal);
+            Assert.Contains($"out 2,000 (reasoning {count:N0})", details, StringComparison.Ordinal);
+        }
+        else
+        {
+            var original = new CellBuffer(198, 1);
+            new AgentHeader().Render(new BufferSurface(original), baseline, CellStyle.Default);
+            Assert.Equal(TUIKit.Testing.Snapshot.ToText(original), text);
+            Assert.DoesNotContain("(reasoning", details, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>The context graph stays right-aligned at every supported width while identity remains separate.</summary>
     [Theory]
     [InlineData(38)]

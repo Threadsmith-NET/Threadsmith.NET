@@ -240,7 +240,7 @@ public sealed partial class InteractionCoordinator
         });
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         await using var agents = _surface.Surface is IAgentWorkspaceSurface
-            ? new AgentWorkspaceProjection(_surface.Surface, _agentDisplay, _sessionUsage, _modelCatalog, _agentNames, _displayOptions.RenderMarkdown, lifetime.Token)
+            ? new AgentWorkspaceProjection(_surface.Surface, _agentDisplay, _sessionUsage, _modelCatalog, _agentNames, _displayOptions.RenderMarkdown, _displayOptions.ShowOperationDurations, lifetime.Token)
             : null;
         if (agents is not null)
         {
@@ -427,6 +427,8 @@ public sealed partial class InteractionCoordinator
         SemanticActivityKey? currentSemanticActivityKey = null;
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
+        var toolSurface = _surface.Surface as IInteractionToolActivitySurface;
+        var toolActivities = new Dictionary<ToolInvocationId, (RunId RunId, InteractionActivity Activity)>();
         long? turnStartedTimestamp = null;
         var streamThinking = _sessionPreferences?.IncludeReasoningText ?? false;
         var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
@@ -443,6 +445,7 @@ public sealed partial class InteractionCoordinator
                 var readySteeringPauses = new List<RunSteeringPaused>();
                 var runCompletedInBatch = false;
                 string? completedRunDiagnostic = null;
+                var toolActivitiesChanged = false;
                 var nextActivity = currentActivity;
                 var nextSemanticActivityKey = currentSemanticActivityKey;
                 foreach (var domainEvent in batch.Where(item => item.SessionId == sessionId))
@@ -450,7 +453,28 @@ public sealed partial class InteractionCoordinator
                     delegations.Observe(domainEvent);
                     if (agents is not null && await agents.ObserveAsync(domainEvent, token))
                     {
+                        toolActivitiesChanged = true;
                         continue;
+                    }
+
+                    if (domainEvent is ToolInvocationStarted toolStarted)
+                    {
+                        toolActivities[toolStarted.ToolInvocationId] = (
+                            toolStarted.RunId,
+                            InteractionPresentationFormatter.CreateToolActivity(toolStarted, _timeProvider, _displayOptions.ShowOperationDurations));
+                        toolActivitiesChanged = true;
+                    }
+                    else if (domainEvent is ToolInvocationCompleted toolCompleted)
+                    {
+                        toolActivitiesChanged |= toolActivities.Remove(toolCompleted.ToolInvocationId);
+                    }
+                    else if (domainEvent is RunCompleted finishedRun)
+                    {
+                        foreach (var id in toolActivities.Where(pair => pair.Value.RunId == finishedRun.RunId).Select(pair => pair.Key).ToArray())
+                        {
+                            toolActivities.Remove(id);
+                            toolActivitiesChanged = true;
+                        }
                     }
 
                     var occurredDuringStartup = domainEvent.OccurredAt <= startupCompletedAt;
@@ -528,11 +552,7 @@ public sealed partial class InteractionCoordinator
                                 _timeProvider.GetTimestamp(),
                                 _displayOptions.ShowOperationDurations,
                                 _timeProvider),
-                            ToolInvocationStarted started => new InteractionActivity(
-                                FormatActiveToolLabel(started),
-                                _timeProvider.GetTimestamp(),
-                                _displayOptions.ShowOperationDurations,
-                                _timeProvider),
+                            ToolInvocationStarted started when toolSurface is null => toolActivities[started.ToolInvocationId].Activity,
                             MutationProposalStarted => new InteractionActivity(
                                 "MUTATION PREVIEW",
                                 _timeProvider.GetTimestamp(),
@@ -547,8 +567,10 @@ public sealed partial class InteractionCoordinator
                         };
                     }
 
+                    var toolProgress = domainEvent is ToolInvocationCompleted completedTool && agents is not null
+                        ? await agents.GetToolProgressAsync(completedTool.ToolInvocationId, true, token) : null;
                     var previousLength = transcript.Text.Length;
-                    var transcriptDelta = transcript.Apply(domainEvent)
+                    var transcriptDelta = transcript.Apply(domainEvent, toolProgress)
                         ? transcript.Text[previousLength..]
                         : string.Empty;
                     if (domainEvent is RunSteeringPauseRequested)
@@ -676,6 +698,11 @@ public sealed partial class InteractionCoordinator
                             }
                         }
                     }
+                    else if (domainEvent is ToolInvocationCompleted && toolSurface is null && toolActivities.Count > 0)
+                    {
+                        nextActivity = toolActivities.Values.Last().Activity;
+                        nextSemanticActivityKey = null;
+                    }
                     else if ((domainEvent is ToolInvocationCompleted or ActiveTurnCompactionCompleted)
                         && turnStartedTimestamp is { } continuationStart)
                     {
@@ -747,6 +774,24 @@ public sealed partial class InteractionCoordinator
                 {
                     await WriteCancellationSafeOutputAsync(_surface, output);
                     throw;
+                }
+
+                if (toolActivitiesChanged && toolSurface is not null)
+                {
+                    if (agents is not null)
+                    {
+                        foreach (var id in toolActivities.Keys.ToArray())
+                        {
+                            var current = toolActivities[id];
+                            var progress = await agents.GetToolProgressAsync(id, false, token);
+                            if (!current.Activity.ToolProgress.SequenceEqual(progress))
+                            {
+                                toolActivities[id] = (current.RunId, current.Activity with { ToolProgress = progress });
+                            }
+                        }
+                    }
+
+                    await toolSurface.PresentToolActivitiesAsync(toolActivities.Values.Select(item => item.Activity).ToArray(), token);
                 }
 
                 if (output.Count > 0)
@@ -1525,10 +1570,10 @@ public sealed partial class InteractionCoordinator
                     SteeringPauseId? pendingSteeringPauseId = null;
                     try
                     {
-                        if (activeInput is not null)
+                        if (activeInput is not null && !_surface.Surface.Capabilities.SupportsRetainedRunHints)
                         {
                             await _surface.WriteAsync(
-                                "Running — Enter to steer; Esc Esc to stop.\n",
+                                "ENTER to steer; ESC-ESC to cancel\n",
                                 PresentationTextRole.Status,
                                 operation.Token);
                         }
@@ -1834,6 +1879,11 @@ public sealed partial class InteractionCoordinator
             {
                 try
                 {
+                    if (toolSurface is not null)
+                    {
+                        await toolSurface.PresentToolActivitiesAsync([], CancellationToken.None);
+                    }
+
                     var finalAnswer = FlushFinalAnswerForShutdown(modelAnswerCollector);
                     if (finalAnswer is not null)
                     {
@@ -2466,47 +2516,6 @@ public sealed partial class InteractionCoordinator
         return false;
     }
 
-    private static string FormatActiveToolLabel(ToolInvocationStarted started)
-    {
-        ArgumentNullException.ThrowIfNull(started);
-        var detail = string.IsNullOrWhiteSpace(started.ActivityDetail)
-            ? string.Empty
-            : $" ({started.ActivityDetail})";
-        var requestor = FormatToolRequestorPrefix(started.RequestedBy);
-        if (started.Source?.Kind == ToolActivitySourceKind.Mcp)
-        {
-            var identity = string.IsNullOrWhiteSpace(started.Source.DisplayName)
-                ? started.ToolName
-                : $"{started.Source.DisplayName}/{started.ToolName}";
-            return $"MCP: {requestor}{identity}{detail}";
-        }
-
-        return $"TOOLS: {requestor}{started.ToolName}{detail}";
-    }
-
-    private static string FormatToolRequestorPrefix(string? requestedBy)
-    {
-        if (string.IsNullOrWhiteSpace(requestedBy)
-            || string.Equals(requestedBy, "model", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(requestedBy, "host", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
-        }
-
-        return $"({CollapseToolLabelControls(requestedBy)}) ";
-    }
-
-    private static string CollapseToolLabelControls(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-        foreach (var character in value)
-        {
-            builder.Append(char.IsControl(character) ? ' ' : character);
-        }
-
-        return builder.ToString().Trim();
-    }
-
     private readonly record struct SemanticActivityKey(RunId RunId, SemanticCheckId SemanticCheckId);
 
     private static string FormatActiveSemanticCheckLabel(SemanticCheckStarted started)
@@ -2618,6 +2627,27 @@ public sealed partial class InteractionCoordinator
                 "Usage: /mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose] [profile] [capability] [key=value ...]\n",
                 PresentationTextRole.Error,
                 cancellationToken);
+            return;
+        }
+
+        if (action == McpManagementAction.List && _surface.Surface is IInteractionToggleSurface connectionToggles)
+        {
+            if (parts.Length > 1)
+            {
+                await _surface.WriteAsync("Usage: /mcp [list]\n", PresentationTextRole.Error, cancellationToken);
+                return;
+            }
+
+            var catalog = await controller.ManageMcpAsync(new McpManagementRequest { Action = McpManagementAction.List }, cancellationToken);
+            if (catalog.Succeeded && catalog.Profiles.Count > 0)
+            {
+                await ManageMcpConnectionTogglesAsync(controller, connectionToggles, catalog.Profiles, cancellationToken);
+            }
+            else
+            {
+                await _surface.WriteAsync(FormatMcpResult(catalog), catalog.Succeeded ? PresentationTextRole.Status : PresentationTextRole.Error, cancellationToken);
+            }
+
             return;
         }
 
@@ -3039,6 +3069,12 @@ public sealed partial class InteractionCoordinator
             if (action == "list")
             {
                 var handlers = await controller.ListHooksAsync(cancellationToken);
+                if (handlers.Count > 0 && _surface.Surface is IInteractionToggleSurface toggles)
+                {
+                    await ManageHookTogglesAsync(controller, toggles, handlers, cancellationToken);
+                    return;
+                }
+
                 var output = handlers.Count == 0
                     ? "No lifecycle hooks are configured.\n"
                     : string.Join(
@@ -4359,6 +4395,12 @@ public sealed partial class InteractionCoordinator
                 "No extensions discovered. Place extension packages in the configured discovery directory (.threadsmith/extensions by default).\n",
                 PresentationTextRole.Status,
                 cancellationToken);
+            return;
+        }
+
+        if (_surface.Surface is IInteractionToggleSurface toggles)
+        {
+            await ManageExtensionTogglesAsync(_extensionManager, controller.SessionId ?? SessionId.New(), toggles, summaries, cancellationToken);
             return;
         }
 

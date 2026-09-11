@@ -6,7 +6,7 @@ using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 
 /// <summary>Owns startup, command-help, and immediate-toggle modal lifetimes on the existing terminal runtime.</summary>
-internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionToggleSurface, IInteractionHelpSurface
+internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface
 {
     private readonly List<string> _startupPhases = [];
     private IReadOnlyList<string> _startupDetails = [];
@@ -97,8 +97,26 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     }
 
     /// <inheritdoc />
+    public Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)
+        => SelectTogglesCoreAsync(request, change, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task SelectActionTogglesAsync(
+        InteractionToggleRequest request,
+        Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change,
+        Func<string, string, CancellationToken, Task<InteractionToggleResult>> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        return SelectTogglesCoreAsync(request, change, action, cancellationToken);
+    }
+
     [SuppressMessage("Usage", "VSTHRD003", Justification = "Modal completion and UI acknowledgements are owned by the dedicated terminal loop.")]
-    public async Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)
+    private async Task SelectTogglesCoreAsync(
+        InteractionToggleRequest request,
+        Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change,
+        Func<string, string, CancellationToken, Task<InteractionToggleResult>>? action,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(change);
@@ -107,7 +125,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             throw new ArgumentException("Toggle catalogs require 1–2048 distinct stable IDs.", nameof(request));
         }
 
-        var modal = new ToggleModal(request, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()) { CopyRequested = Copy };
+        var modal = new ToggleModal(request, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()) { CopyRequested = Copy, SupportsActions = action is not null };
         Task<string?>? closed = null;
         await EnqueueAsync(() => closed = _app.ShowAsync<string>(modal), cancellationToken);
         var completion = closed ?? throw new InvalidOperationException("Toggle popup did not open.");
@@ -132,6 +150,49 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                 }
 
                 var requested = await next;
+                if (requested.Actions && action is not null)
+                {
+                    var option = modal.GetOption(requested.Id);
+                    if (option is not null && option.Actions.Count > 0)
+                    {
+                        var selection = await SelectAsync(new InteractionSelectionRequest(option.Label, option.Actions), cancellationToken);
+                        if (!selection.IsCancelled && selection.SelectedOptionId is { } actionId
+                            && option.Actions.Any(item => item.Id == actionId))
+                        {
+                            using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            var label = option.Actions.Single(item => item.Id == actionId).Label;
+                            await EnqueueAsync(() => modal.BeginAction(label, operation.Cancel), cancellationToken);
+                            InteractionToggleResult? result = null;
+                            try
+                            {
+                                result = await action(option.Id, actionId, operation.Token);
+                            }
+                            finally
+                            {
+                                if (!_stop.IsCancellationRequested)
+                                {
+                                    await EnqueueAsync(
+                                        () =>
+                                    {
+                                        if (result is not null)
+                                        {
+                                            modal.Reconcile(option.Id, result);
+                                        }
+
+                                        modal.CompleteChange();
+                                    },
+                                        _stop.Token);
+                                }
+                            }
+
+                            continue;
+                        }
+                    }
+
+                    await EnqueueAsync(modal.CompleteChange, cancellationToken);
+                    continue;
+                }
+
                 foreach (var option in modal.Members(requested.Id))
                 {
                     var result = await change(option.Id, requested.Enabled, cancellationToken);

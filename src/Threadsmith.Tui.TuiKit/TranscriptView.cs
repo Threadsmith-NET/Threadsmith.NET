@@ -22,12 +22,18 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private const int RowGlyphCacheLimit = 512;
     private static readonly string[] _asciiGlyphs = CreateAsciiGlyphs();
     private readonly CachedTextRun _evictionNotice = new();
+    private readonly CachedTextRun _activityHeader = new();
+    private readonly CachedTextRun _activityDetail = new();
+    private readonly Dictionary<InteractionActivity, ActivityIndicator> _toolIndicators = new(ReferenceEqualityComparer.Instance);
     private readonly Queue<PresentationItem> _items = [];
     private readonly List<Line> _lines = [];
     private readonly List<Row> _rows = [];
     private readonly Dictionary<RowKey, DisplayGlyph[]> _rowGlyphs = [];
     private readonly List<RowKey> _rowGlyphRemovals = [];
     private readonly Dictionary<long, List<StyledRange>> _styles = [];
+    private long _activityTick;
+    private int _activityTop;
+    private int _activityBottom;
     private int _width;
     private int _height = 12;
     private int _top;
@@ -62,7 +68,9 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         var notice = Evicted > 0 ? 1 : 0;
-        _height = Math.Max(1, surface.Size.Height - notice);
+        var availableActivityRows = Math.Max(0, surface.Size.Height - notice - 1);
+        var activityRows = (int)Math.Min(ToolActivities.Sum(activity => 2L + activity.ToolProgress.Count), availableActivityRows);
+        _height = Math.Max(1, surface.Size.Height - notice - activityRows);
         _top = AtBottom ? Math.Max(0, _rows.Count - _height) : Math.Min(_top, Math.Max(0, _rows.Count - _height));
         if (_clearBeforeId is { } clearBefore)
         {
@@ -82,6 +90,63 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             var row = _rows[index];
             var selected = hasSelection && row.Line.Id >= first.Line && row.Line.Id <= last.Line;
             DrawRow(surface, index - _top + notice, row, selected, first, last);
+        }
+
+        foreach (var stale in _toolIndicators.Keys.Where(key => !ToolActivities.Any(activity => ReferenceEquals(activity, key))).ToArray())
+        {
+            _toolIndicators.Remove(stale);
+        }
+
+        var tick = Environment.TickCount64 / 250;
+        var advance = tick != _activityTick;
+        _activityTick = tick;
+        var activityRow = notice + Math.Min(_height, Math.Max(0, _rows.Count - _top));
+        _activityTop = activityRow;
+        _activityBottom = activityRow + activityRows;
+        var visibleTools = Math.Min(ToolActivities.Count, activityRows);
+        for (var index = 0; index < visibleTools; index++)
+        {
+            if (index == visibleTools - 1 && visibleTools < ToolActivities.Count)
+            {
+                _activityHeader.Draw(surface, 0, activityRow, $" + {ToolActivities.Count - index} more tools running", ResolveStyle(PresentationTextRole.Status));
+                break;
+            }
+
+            var activity = ToolActivities[index];
+            if (!_toolIndicators.TryGetValue(activity, out var indicator))
+            {
+                indicator = new ActivityIndicator();
+                _toolIndicators.Add(activity, indicator);
+            }
+
+            if (advance)
+            {
+                indicator.Tick();
+            }
+
+            var phrase = FitActivity(activity, surface.Size.Width - 2);
+            if (indicator.CurrentPhrase != phrase)
+            {
+                indicator.Phrases = [phrase];
+            }
+
+            // TUIKit explicitly supports CurrentLine for embedding animated activity in scrollback.
+            _activityHeader.Draw(surface, 0, activityRow++, indicator.CurrentLine, ResolveStyle(PresentationTextRole.Status));
+            var remainingHeaders = visibleTools - index - 1;
+            var detailRows = Math.Min(1 + activity.ToolProgress.Count, _activityBottom - activityRow - remainingHeaders);
+            for (var detailIndex = 0; detailIndex < detailRows; detailIndex++)
+            {
+                var lastDetail = detailIndex == detailRows - 1;
+                var entry = detailIndex == 0
+                    ? new PresentationTextSegment(activity.ToolDetail ?? string.Empty, PresentationTextRole.Muted)
+                    : activity.ToolProgress[detailIndex - 1];
+                if (lastDetail && detailRows < 1 + activity.ToolProgress.Count)
+                {
+                    entry = new PresentationTextSegment($"{1 + activity.ToolProgress.Count - detailIndex} more status lines", PresentationTextRole.Muted);
+                }
+
+                _activityDetail.Draw(surface, 0, activityRow++, (lastDetail ? "   \u2514 " : "   \u2502 ") + entry.Text, ResolveStyle(entry.Role));
+            }
         }
     }
 
@@ -145,6 +210,11 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             return true;
         }
 
+        if (mouse.Y >= _activityTop && mouse.Y < _activityBottom)
+        {
+            return true;
+        }
+
         if (mouse.Kind == MouseEventKind.Release)
         {
             if (_anchor is not null && mouse.Button == MouseButton.Left && _rows.Count > _top)
@@ -168,6 +238,9 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
         return true;
     }
+
+    /// <summary>Gets or sets the transient tool blocks rendered after visible output without retaining timer frames.</summary>
+    internal IReadOnlyList<InteractionActivity> ToolActivities { get; set; } = [];
 
     /// <summary>Gets or sets semantic role resolution for the current theme.</summary>
     internal Func<PresentationTextRole, CellStyle> ResolveStyle { get; set; } = _ => CellStyle.Default;
@@ -826,6 +899,31 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         {
             _rowGlyphs.Remove(key);
         }
+    }
+
+    private static string FitActivity(InteractionActivity activity, int width)
+    {
+        var text = activity.Format();
+        if (Graphemes.MeasureWidth(text) <= width)
+        {
+            return text;
+        }
+
+        var elapsed = text[activity.Label.Length..];
+        var available = Math.Max(0, width - Graphemes.MeasureWidth(elapsed) - 1);
+        var label = new StringBuilder();
+        foreach (var glyph in Graphemes.Split(activity.Label))
+        {
+            if (glyph.Width > available)
+            {
+                break;
+            }
+
+            label.Append(glyph.Text);
+            available -= glyph.Width;
+        }
+
+        return label + "…" + elapsed;
     }
 
     private static string[] CreateAsciiGlyphs()

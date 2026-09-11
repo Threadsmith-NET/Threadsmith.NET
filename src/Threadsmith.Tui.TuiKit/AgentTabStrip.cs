@@ -43,6 +43,13 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
         if (surface is BufferSurface buffer && surface.Size.Width > 1)
         {
             _tabs.Render(buffer.CreateView(new Rect(0, 0, surface.Size.Width - 1, 1)));
+            foreach (var hit in _hits.Take(Math.Max(0, _hits.Count - 1)))
+            {
+                surface.Fill(
+                    new Rect(hit.Left + hit.Width, 0, 1, 1),
+                    Cell.Blank(_style(Threadsmith.Interaction.Presentation.PresentationTextRole.AgentTabHeaderRole)));
+            }
+
             if (_start > 0)
             {
                 surface.DrawText(0, 0, "‹", _tabs.InactiveStyle);

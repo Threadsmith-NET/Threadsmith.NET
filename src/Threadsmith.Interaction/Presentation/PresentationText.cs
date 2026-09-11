@@ -89,6 +89,27 @@ public enum PresentationTextRole
 
     /// <summary>Markdown table border.</summary>
     MarkdownTableBorder,
+
+    /// <summary>Workspace title bar role.</summary>
+    TitleBarRole,
+
+    /// <summary>Workspace agent tab header role.</summary>
+    AgentTabHeaderRole,
+
+    /// <summary>Workspace agent selected tab role.</summary>
+    AgentSelectedTabRole,
+
+    /// <summary>Workspace agent not selected tab role.</summary>
+    AgentNotSelectedTabRole,
+
+    /// <summary>Workspace agent status pane role.</summary>
+    AgentStatusPaneRole,
+
+    /// <summary>Workspace output stream pane role.</summary>
+    OutputStreamPaneRole,
+
+    /// <summary>Workspace composer background pane role.</summary>
+    ComposerBackgroundPaneRole,
 }
 
 /// <summary>Represents one terminal-neutral text fragment and its semantic rendering role.</summary>

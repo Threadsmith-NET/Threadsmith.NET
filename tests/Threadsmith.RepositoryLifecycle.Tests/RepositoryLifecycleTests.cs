@@ -10,7 +10,9 @@ using Threadsmith.Core;
 using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
+using Threadsmith.Interaction.Sessions;
 using Threadsmith.Persistence;
 using Threadsmith.Tui;
 using Threadsmith.Workspaces;
@@ -890,6 +892,27 @@ public static class RepositoryLifecycleTests
         Assert.Contains("(Use --solution to change)", surface.Output, StringComparison.Ordinal);
     }
 
+    /// <summary>Remembered-solution startup details belong to the splash instead of the model transcript.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_RememberedSolution_UsesStartupDetails()
+    {
+        await using var repository = await TemporaryRepository.CreateAsync();
+        File.Copy(repository.SolutionPath, Path.Combine(repository.RootPath, "Second.sln"));
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
+        var surface = new StartupRepositorySurface();
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, harness.Projections), harness.Events, surface);
+
+        await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(["Loading remembered solution: Sample.sln", "  (Use --solution to change)"], surface.StartupDetails);
+        Assert.True(surface.DetailsShownDuringSemanticLoading);
+        Assert.DoesNotContain("Loading remembered solution", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
+    }
+
     /// <summary>Interactive startup offers scaffolding when runtime storage creates .threadsmith after eligibility is captured.</summary>
     [Fact]
     public static async Task ConversationalShell_EmptyRepository_OffersInitialization()
@@ -985,6 +1008,59 @@ public static class RepositoryLifecycleTests
         Assert.Equal(string.Empty, surface.Prompt);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is SolutionLoaded);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is TaskIntentRecorded);
+    }
+
+    private sealed class StartupRepositorySurface : IInteractionSurface, IStartupProgressSurface
+    {
+        private readonly StringBuilder _output = new();
+
+        public InteractionSurfaceCapabilities Capabilities { get; } = new();
+
+        public IReadOnlyList<string> StartupDetails { get; private set; } = [];
+
+        public bool DetailsShownDuringSemanticLoading { get; private set; }
+
+        public string Output => _output.ToString();
+
+        public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new InteractionInput(true, "/quit", cancellationToken));
+
+        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Remembered-solution startup should not require selection.");
+
+        public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
+        {
+            foreach (var segment in batch.Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments))
+            {
+                _output.Append(segment.Text);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation awaited by this test surface.")]
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+            => operation.WaitAsync(cancellationToken);
+
+        public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
+        {
+            StartupDetails = details.ToArray();
+            return Task.CompletedTask;
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation awaited by this test surface.")]
+        public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
+        {
+            if (label == "Semantic loading")
+            {
+                DetailsShownDuringSemanticLoading = StartupDetails.Count == 2;
+            }
+
+            return operation.WaitAsync(cancellationToken);
+        }
     }
 
     private sealed class RepositoryConsoleSurface : IConsoleSurface

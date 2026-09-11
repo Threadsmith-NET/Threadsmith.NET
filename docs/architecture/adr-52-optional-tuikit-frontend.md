@@ -1,7 +1,7 @@
 # ADR-52: Selectable TUIKit Frontend
 
 - **Status:** Accepted
-- **Date:** 2026-09-04; amended 2026-09-05
+- **Date:** 2026-09-04; amended 2026-09-05 and 2026-09-10
 - **Deciders:** Threadsmith.NET maintainers
 
 ## Context
@@ -17,6 +17,8 @@ Interaction additionally owns terminal-free theme values/catalog/preferences and
 The new adapter owns one input/render loop, a bounded update queue, three composer-purpose drafts, stable-ID selectors, safe semantic rendering, theme conversion, clipboard mechanics, and unconditional terminal cleanup. The stock TextEditor is not used. Retained output is bounded and does not replace durable history. Existing Markdown layout semantics are preserved using TUIKit display-cell measurement.
 
 Package evidence preserves MIT plus embedded font headers/attribution and permissive WTFPL v2. No upstream posting or permission request is part of implementation.
+
+Plan 105 expands the retained adapter with a public `TabView` header adapter, independent bounded child projections, measured bordered panes, centered modals, keyboard-only `CheckTree` availability selectors, and post-choice loading presentation. Interaction owns optional terminal-neutral agent/startup/toggle capabilities and name assignment; Execution exposes sanitized transient child text and request-owned usage/status. MAIN is the only input target. Child terminal outcomes reach MAIN before view retirement. No child display text is durable or part of provider replay; ADR-60 remains unchanged. Immediate checkbox changes are requests to existing tool/MCP authority, never permissions.
 
 ## Consequences
 

@@ -22,7 +22,7 @@ internal sealed class ConversationTranscript
     private readonly Dictionary<(RunId RunId, SemanticCheckId SemanticCheckId), SemanticCheckStarted> _pendingSemanticChecks = [];
     private readonly Dictionary<SemanticRefreshId, LinkedListNode<SemanticRefreshId>> _renderedSemanticRefreshStarts = [];
     private readonly LinkedList<SemanticRefreshId> _renderedSemanticRefreshStartOrder = [];
-    private ToolInvocationStarted? _pendingTool;
+    private readonly Dictionary<ToolInvocationId, ToolInvocationStarted> _pendingTools = [];
     private RunId? _activeMutationProposalRunId;
     private bool _answerActive;
     private bool _reasoningActive;
@@ -52,8 +52,9 @@ internal sealed class ConversationTranscript
 
     /// <summary>Applies one event through the single conversation-append boundary.</summary>
     /// <param name="domainEvent">Event to project into the conversation.</param>
+    /// <param name="toolProgress">Final progress entries for a completed tool invocation.</param>
     /// <returns>True when the visible transcript changed.</returns>
-    internal bool Apply(IDomainEvent domainEvent)
+    internal bool Apply(IDomainEvent domainEvent, IReadOnlyList<PresentationTextSegment>? toolProgress = null)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
         switch (domainEvent)
@@ -94,11 +95,10 @@ internal sealed class ConversationTranscript
             case ToolInvocationStarted started:
                 _reasoningActive = false;
                 _answerActive = false;
-                _pendingTool = started;
+                _pendingTools[started.ToolInvocationId] = started;
                 return false;
-            case ToolInvocationCompleted completed when _pendingTool is not null:
-                AppendToolCompletion(_pendingTool, completed);
-                _pendingTool = null;
+            case ToolInvocationCompleted completed when _pendingTools.Remove(completed.ToolInvocationId, out var toolStart):
+                AppendToolCompletion(toolStart, completed, toolProgress);
                 _answerActive = false;
                 return true;
             case SemanticCheckStarted started:
@@ -115,7 +115,11 @@ internal sealed class ConversationTranscript
                 _answerActive = false;
                 return true;
             case RunCompleted completed:
-                _pendingTool = null;
+                foreach (var id in _pendingTools.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray())
+                {
+                    _pendingTools.Remove(id);
+                }
+
                 RemovePendingSemanticChecks(completed.RunId);
                 RemoveRunCorrelationState(completed.RunId);
                 _answerActive = false;
@@ -380,13 +384,15 @@ internal sealed class ConversationTranscript
 
     private void AppendToolCompletion(
         ToolInvocationStarted started,
-        ToolInvocationCompleted completed)
+        ToolInvocationCompleted completed,
+        IReadOnlyList<PresentationTextSegment>? progress)
     {
         AppendLifecycleBlock(InteractionPresentationFormatter.FormatToolCompletion(
             started,
             completed,
             _showOperationDurations,
-            _inspectCodeExploreOutput()));
+            _inspectCodeExploreOutput(),
+            progress));
     }
 
     private void AppendSemanticCheckCompletion(

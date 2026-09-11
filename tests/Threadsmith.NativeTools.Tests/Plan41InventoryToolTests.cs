@@ -61,6 +61,54 @@ public sealed class Plan41InventoryToolTests
         Assert.DoesNotContain("test@example.invalid", logExecution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Verifies read-only queries suppress configured hooks while status still observes subsequent edits.</summary>
+    [Fact]
+    public async Task GitQueries_RepositoryFsMonitorHook_IsNotExecuted()
+    {
+        // Arrange: a harmless hook records execution only inside this temporary repository.
+        await using var repository = await TestRepository.CreateAsync();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var hookPath = Path.Combine(repository.Path, ".git", "fsmonitor-probe");
+        var markerPath = Path.Combine(repository.Path, ".git", "fsmonitor-invoked");
+        await File.WriteAllTextAsync(
+            hookPath,
+            "#!/bin/sh\nprintf 'invoked\n' > .git/fsmonitor-invoked\nexit 0\n",
+            cancellationToken);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hookPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await repository.RunGitAsync("config", "core.fsmonitor", "./.git/fsmonitor-probe");
+        await repository.RunGitAsync("config", "core.fsmonitorHookVersion", "2");
+
+        // Prove the fixture would execute the hook without the host-owned override.
+        await repository.RunGitAsync("status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal");
+        Assert.True(File.Exists(markerPath));
+        File.Delete(markerPath);
+
+        // Act: the same service used by automatic footer refresh must remain read-only.
+        var service = new GitQueryService();
+        var before = await service.GetWorkingTreeStatusAsync(repository.Path, cancellationToken);
+        Assert.False(File.Exists(markerPath));
+        await File.AppendAllTextAsync(Path.Combine(repository.Path, "tracked.txt"), "changed\n", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(repository.Path, "untracked.txt"), "new\n", cancellationToken);
+        var after = await service.GetWorkingTreeStatusAsync(repository.Path, cancellationToken);
+        var diff = await service.DiffAsync(repository.Path, new GitDiffRequest(), cancellationToken);
+
+        // Assert: later refreshes see changes without invoking or rewriting the configured hook.
+        Assert.NotNull(before);
+        Assert.Equal("main", before.Branch);
+        Assert.Equal(0, before.Modified);
+        Assert.Equal(0, before.Untracked);
+        Assert.NotNull(after);
+        Assert.Equal(1, after.Modified);
+        Assert.Equal(1, after.Untracked);
+        Assert.Contains(diff.Entries, entry => entry.Path == "tracked.txt");
+        Assert.False(File.Exists(markerPath));
+        Assert.Equal("./.git/fsmonitor-probe", (await repository.RunGitAsync("config", "--get", "core.fsmonitor")).Trim());
+    }
+
     /// <summary>Verifies Git queries cannot discover a worktree rooted above the opened directory.</summary>
     [Fact]
     public async Task GitQueries_OpenedSubdirectoryOfRepository_IsRejected()
@@ -617,7 +665,8 @@ public sealed class Plan41InventoryToolTests
             await File.WriteAllTextAsync(System.IO.Path.Combine(repository.Path, "tracked.txt"), "initial\n");
             await repository.RunGitAsync("add", "tracked.txt");
             await repository.RunGitAsync("commit", "-m", "initial commit");
-            return repository;
+            // Git resolves platform temp-directory aliases (for example /var on macOS).
+            return new TestRepository((await repository.RunGitAsync("rev-parse", "--show-toplevel")).Trim());
         }
 
         public static async Task<TestRepository> CreateDotNetAsync()
@@ -632,7 +681,7 @@ public sealed class Plan41InventoryToolTests
             return repository;
         }
 
-        public async Task RunGitAsync(params string[] arguments)
+        public async Task<string> RunGitAsync(params string[] arguments)
         {
             using var process = new Process
             {
@@ -651,9 +700,14 @@ public sealed class Plan41InventoryToolTests
             }
 
             process.Start();
-            var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            var cancellationToken = TestContext.Current.CancellationToken;
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            var output = await outputTask;
+            var error = await errorTask;
             Assert.True(process.ExitCode == 0, error);
+            return output;
         }
 
         public ValueTask DisposeAsync()

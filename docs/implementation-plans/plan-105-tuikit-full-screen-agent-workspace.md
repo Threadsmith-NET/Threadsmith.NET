@@ -1,6 +1,6 @@
 # Implementation Plan 105: TUIKit Full-Screen Agent Workspace
 
-**Status:** Planned.
+**Status:** Implemented and automatically validated on `plan-105-tuikit-full-screen-agent-workspace`; both adversarial reviews are clean. Physical-terminal and end-to-end latency acceptance remain open (section 18).
 
 **Delivery track:** Product capability — richer retained interaction in the default TUIKit frontend.
 
@@ -10,7 +10,7 @@
 
 **Requirements source:** User-supplied `tuikit_ui.txt`, reviewed on 2026-09-10. Its visual and interaction requirements are restated below so implementation does not depend on a local attachment. The user subsequently clarified that tab shortcuts apply only from the output pane, the startup splash begins after startup choices, checkbox toggles apply immediately, each child displays a random person name together with its role rather than a GUID, and CheckTree remains keyboard-only for now. Child name lists are configurable, with separate themed defaults for each role and optional shared names; exhausted lists use `_1`, `_2`, and subsequent numeric suffixes.
 
-**Planning-only publication:** This request authorizes this plan file only. Do not update indexes, milestones, ADRs, code, dependencies, or other documentation as part of publishing this plan. The implementation's documentation tasks are listed in section 16. No implementation, branch creation, commit, or push is authorized by this document itself.
+**Authorization history:** Initial publication authorized this plan file only. The subsequent user request authorized implementation on a new Git branch and adversarial review through clean findings. Staging, committing, and pushing remain outside that request.
 
 ## 1 Objective
 
@@ -352,20 +352,22 @@ No persistent child-view schema is required. If accurate historical per-agent ac
 
 ## 14 Acceptance Criteria
 
-- [ ] The screen has the specified fixed title, agent tabs, bordered selected-agent output/status, bordered multiline composer, and repository footer.
-- [ ] MAIN always exists; accepted nonterminal children appear, are selectable, and disappear on every terminal outcome without losing MAIN's draft or hiding failures.
-- [ ] Every child displays a locally assigned random person name plus its role, stable for its lifetime and unique among active children, while GUIDs remain internal identities.
-- [ ] Shared and per-role name lists are configurable, all six roles have themed defaults, and list overrides replace rather than merge by array index. Exhausted lists use collision-safe `_1`, `_2`, and subsequent numeric suffixes without renaming existing agents.
-- [ ] Tab clicks work with application mouse capture; Ctrl+Left/Right switches tabs only from output and preserves composer word movement.
-- [ ] Each agent's output, activity, effective model, context, and token counts are correctly isolated; external semantic updates always appear on MAIN.
-- [ ] Child viewing prevents every edit/submit/steering ingress while preserving output selection/copy and the MAIN draft.
+Checked items have implementation and automated evidence. Combined physical-terminal criteria remain open even where their automated portions pass; see section 18 for the separate review, rendering, and terminal evidence.
+
+- [x] The screen has the specified fixed title, agent tabs, bordered selected-agent output/status, bordered multiline composer, and repository footer.
+- [x] MAIN always exists; accepted nonterminal children appear, are selectable, and disappear on every terminal outcome without losing MAIN's draft or hiding failures.
+- [x] Every child displays a locally assigned random person name plus its role, stable for its lifetime and unique among active children, while GUIDs remain internal identities.
+- [x] Shared and per-role name lists are configurable, all six roles have themed defaults, and list overrides replace rather than merge by array index. Exhausted lists use collision-safe `_1`, `_2`, and subsequent numeric suffixes without renaming existing agents.
+- [x] Tab clicks work with application mouse capture; Ctrl+Left/Right switches tabs only from output and preserves composer word movement.
+- [x] Each agent's output, activity, effective model, context, and token counts are correctly isolated; external semantic updates always appear on MAIN.
+- [x] Child viewing prevents every edit/submit/steering ingress while preserving output selection/copy and the MAIN draft.
 - [ ] The existing composer, multiline paste, Markdown, tool/diff presentation, clipboard, and terminal restoration scenarios pass.
-- [ ] Required startup choices precede the timed logo splash; the composer stays blocked until completion, and startup failures/cancellation remain usable.
-- [ ] Selectors are centered; eligible multi-setting workflows use CheckTree and apply each toggle immediately without closing/reopening the list or bypassing host checks.
-- [ ] CheckTree is explicitly keyboard-only, and all modals block background mouse input as well as keys/paste while preserving the user's capture preference.
-- [ ] All seven new theme roles work with defaults, custom/older themes, suppression, and live theme changes; the footer retains its existing style role.
-- [ ] Dynamic tab overflow, resizing, bounded retention, late events, async paste, modal focus, and concurrent output tests pass.
-- [ ] Session totals, host authority, private replay handling, original frontend, headless operation, and provider compatibility remain intact.
+- [x] Required startup choices precede the timed logo splash; the composer stays blocked until completion, and startup failures/cancellation remain usable.
+- [x] Selectors are centered; eligible multi-setting workflows use CheckTree and apply each toggle immediately without closing/reopening the list or bypassing host checks.
+- [x] CheckTree is explicitly keyboard-only, and all modals block background mouse input as well as keys/paste while preserving the user's capture preference.
+- [x] All seven new theme roles work with defaults, custom/older themes, suppression, and live theme changes; the footer retains its existing style role.
+- [x] Dynamic tab overflow, resizing, bounded retention, late events, async paste, modal focus, and concurrent output tests pass.
+- [x] Session totals, host authority, private replay handling, original frontend, headless operation, and provider compatibility remain intact.
 - [ ] Independent reviews are clean, and automated, physical-terminal, and performance evidence is recorded separately with explicit limitations.
 
 ## 15 Risks
@@ -390,7 +392,7 @@ During implementation update the user guide, keyboard shortcuts, theme configura
 
 Update affected acceptance scenarios/manual procedures where observable workflows change. Amend ADR-52 only as needed to record the expanded retained UI and neutral capabilities; preserve ADR-15's original-frontend scope and ADR-60's privacy boundary. Follow planning governance for any future capability registration without reopening completed milestone details.
 
-Record final implementation status and evidence in this plan. For this planning request, **create or modify no file other than this plan**.
+Record final implementation status and evidence in this plan. The original planning-only publication restriction was superseded by the implementation request recorded above.
 
 ## 17 Open Decisions
 
@@ -404,3 +406,54 @@ No user-facing decision remains open from the supplied requirements review:
 - CheckTree remains keyboard-only for this implementation; checkbox mouse support is deferred.
 
 The confirmed widget gaps are addressed by the adapter and verification gates above. If implementation proves a requirement impossible through the pinned public API, report the specific gap and proposed dependency change before substituting controls or widening upstream scope.
+
+## 18 Implementation and validation evidence — 2026-09-10
+
+Implementation is in the active Git checkout, `C:\source\repos\Threadsmith`, on the new branch `plan-105-tuikit-full-screen-agent-workspace`. TUIKit remains pinned to 0.10.1; the upstream checkout was read only. Changes are uncommitted.
+
+### Delivered behavior
+
+The retained frontend now owns fixed workspace geometry, public-API TabView adaptation, independently retained MAIN/child output, effective request/usage headers, read-only child input, a bounded Git footer, centered selectors, immediate host-reconciled CheckTree toggles, and the post-choice timed startup modal. The seven roles and configurable six-role name catalog are wired through normal configuration and theme loading. Original/headless frontends retain compatible optional-capability fallbacks.
+
+Child display observations are transient and sanitized before publication. Each response captures reasoning-display eligibility, so a visibility change cannot discard a credential prefix and expose its suffix. The production sanitizer retains potentially sensitive multiline suffixes until response completion, with whole-suffix omission above its bound. Public Anthropic summaries are identified separately from legacy reasoning budget observations; display visibility does not change child execution accounting or signed private replay. Root and child usage queries share the existing deduplicated accounting. Successful and unsuccessful delegation closures release presentation data while retaining only a bounded recent correction window. Operational limits and counter meanings are documented in [agent workspace operations](../operations/agent-workspace.md).
+
+### Automated validation
+
+The final solution build passed with **0 warnings and 0 errors**:
+
+```powershell
+dotnet build src\Threadsmith.sln --no-restore --nologo -v quiet -m:4
+```
+
+Each suite below ran through its Microsoft Testing Platform executable using `dotnet run --project tests\Threadsmith.<Suite>.Tests --no-build -- --progress off`. Counts are actual executed results, not discovery or a zero-test solution invocation.
+
+| Suite | Passed | Skipped | Failed |
+|---|---:|---:|---:|
+| CoreRuntime | 477 | 0 | 0 |
+| ParallelAgents | 247 | 0 | 0 |
+| Architecture | 231 | 1 | 0 |
+| SessionStatus | 18 | 0 | 0 |
+| AnthropicProvider | 147 | 0 | 0 |
+| McpLifecycle | 37 | 0 | 0 |
+| ModelTooling | 611 | 8 | 0 |
+| **Total** | **1,768** | **9** | **0** |
+
+The skips are one opt-in live-provider test, seven opt-in isolated C# script integration cases, and one unavailable Windows symbolic-link fixture. No live provider call was required for these results. `git diff --check` passed.
+
+Regression coverage includes real rendered minimum-size footer counts; below-minimum resize recovery before mouse dispatch; modal background tab-click isolation; delayed clipboard completion after changing agents; modified-Space eligibility; stale MCP capability digests; Unicode/suffixed tab labels; late terminal corrections and successful delegation churn; normalized per-owner usage; multiline, chunk-split, oversized, unterminated, and visibility-transition secret canaries; and signed Anthropic tool continuation with unchanged private replay assertions.
+
+### Adversarial review
+
+Two independent review agents inspected the completed implementation: one focused on UI, input, layout, modal authority, and stale completions; the other on events, privacy, lifecycle, usage, and naming. All valid findings were fixed and re-reviewed. Both final reports were **clean**, with no remaining actionable findings in their scopes.
+
+Corrections included modifier-safe CheckTree handling, compact tab/footer measurements, stale MCP digest rejection, safe resize ordering, response-wide credential context, visibility-transition isolation, display-only reasoning accounting, corrected terminal revisions, bounded successful-delegation cleanup, and replacement of historical root request metadata with the latest request per session. Review was read only; the build and test results above were obtained separately after the final code changes.
+
+### Synthetic render measurement
+
+The Windows x64 headless harness compares retained transcript primitives with the new workspace under the same eight synthetic streams at 120 × 35, after 40 warm-up frames and over 200 measured frames. The final run recorded primitive p50 **0.916 ms**, p95 **1.345 ms**, and workspace p50 **1.290 ms**, p95 **2.008 ms**, maximum **5.782 ms**. Other regression suites were running concurrently. Workspace render work remained below the 33.3 ms frame budget in this workload.
+
+This is a synthetic comparison of retained primitives, not a captured pre-change frontend baseline or an input-to-visible latency measurement. It does not establish physical-terminal typing, paste, selection, or tab-switch latency.
+
+### Remaining physical acceptance
+
+No Windows Terminal or Unix physical-terminal acceptance run was performed. Real OS clipboard delivery, terminal protocols, visual appearance, terminal mode restoration across real exit/error paths, and end-to-end input latency remain unverified on those terminals. Automated backend tests cover the corresponding state transitions but do not close that gate. Follow the [recorded verification procedure](../operations/agent-workspace.md#verification-procedure) before claiming cross-platform or full physical acceptance.

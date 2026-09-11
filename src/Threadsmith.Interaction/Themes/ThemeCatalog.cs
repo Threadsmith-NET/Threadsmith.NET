@@ -145,6 +145,13 @@ internal static class BuiltInThemes
         var emphasis = accessible ? TuiTextDecoration.Bold | TuiTextDecoration.Underline : TuiTextDecoration.Bold;
         KeyValuePair<PresentationTextRole, TuiTextStyle>[] styles =
         [
+            new(PresentationTextRole.TitleBarRole, new TuiTextStyle(TuiColor.Parse(accent), Decorations: emphasis)),
+            new(PresentationTextRole.AgentTabHeaderRole, new TuiTextStyle(TuiColor.Parse(foreground))),
+            new(PresentationTextRole.AgentSelectedTabRole, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse(accent), emphasis)),
+            new(PresentationTextRole.AgentNotSelectedTabRole, new TuiTextStyle(TuiColor.Parse(foreground))),
+            new(PresentationTextRole.AgentStatusPaneRole, new TuiTextStyle(TuiColor.Parse(accent))),
+            new(PresentationTextRole.OutputStreamPaneRole, new TuiTextStyle(TuiColor.Parse(foreground))),
+            new(PresentationTextRole.ComposerBackgroundPaneRole, new TuiTextStyle(TuiColor.Parse(foreground))),
             new(PresentationTextRole.Default, new TuiTextStyle(TuiColor.Parse(foreground))),
             new(PresentationTextRole.Brand, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Bold)),
             new(PresentationTextRole.Hyperlink, new TuiTextStyle(TuiColor.Parse(accent), Decorations: TuiTextDecoration.Underline)),

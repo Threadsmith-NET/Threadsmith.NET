@@ -91,6 +91,7 @@ public sealed class Plan91DelegationToolTests
         var plan = factory.Create(input, context);
 
         // Assert
+        Assert.Equal(context.ToolInvocationId, plan.Provenance.ToolInvocationId);
         Assert.Equal(2, plan.Assignments.Count);
         Assert.Equal("Focus on src/A.cs.", plan.Assignments[0].InitialContext);
         Assert.Equal(["src"], plan.Assignments[0].Scope.Directories);

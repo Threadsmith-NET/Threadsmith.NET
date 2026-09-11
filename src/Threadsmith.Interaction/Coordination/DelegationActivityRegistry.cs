@@ -93,16 +93,6 @@ internal sealed class DelegationActivityRegistry
         return output.ToString();
     }
 
-    /// <summary>Formats the stable identity announced at the accepted checkpoint.</summary>
-    /// <param name="checkpoint">Accepted delegation checkpoint.</param>
-    /// <returns>User-facing stable delegation identity.</returns>
-    internal static string FormatAccepted(DelegationCheckpointWritten checkpoint)
-    {
-        ArgumentNullException.ThrowIfNull(checkpoint);
-        return $"\nDelegation started: {checkpoint.DelegationId.Value:D}\n"
-            + $"  Inspect or cancel: /agents {checkpoint.DelegationId.Value:D}\n";
-    }
-
     private static bool IsActive(DelegationCheckpointPhase? phase)
     {
         return phase is not DelegationCheckpointPhase.ResearchJoined

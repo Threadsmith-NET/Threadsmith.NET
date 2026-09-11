@@ -25,6 +25,9 @@ public enum ModelMessageRole
 
     /// <summary>Normalized result correlated to an assistant tool call.</summary>
     Tool,
+
+    /// <summary>Request-local host state and reference material, kept in chronological position after reusable history.</summary>
+    HostContext,
 }
 
 /// <summary>Closed content-part kinds supported by provider-neutral requests.</summary>
@@ -131,7 +134,7 @@ public sealed record CanonicalContextSegment(
 public sealed record ModelRequestLayout
 {
     /// <summary>Current structured request layout version.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>Layout version.</summary>
     public int Version { get; init; } = CurrentVersion;
@@ -272,6 +275,12 @@ public enum ModelCacheBreakpointClass
 
     /// <summary>After phase-stable policy.</summary>
     PhasePolicy,
+
+    /// <summary>After the last cacheable request content block, including chronological conversation and tool results.</summary>
+    RequestTail,
+
+    /// <summary>After completed conversation history, before request-local state and memories.</summary>
+    ConversationHistory,
 }
 
 /// <summary>One deterministic provider-neutral cache breakpoint.</summary>

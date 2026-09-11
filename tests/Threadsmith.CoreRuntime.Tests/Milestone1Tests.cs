@@ -14,6 +14,7 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Hooks;
+using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
@@ -1130,6 +1131,54 @@ public static class Milestone1Tests
             segment => segment.Text.Contains("/help", StringComparison.Ordinal));
     }
 
+    /// <summary>The help command opens the retained column dialog without writing help into MAIN or invoking a model.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_TuiKitHelpUsesModalWithoutTranscriptOutput()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        using var backend = new TUIKit.Terminal.HeadlessBackend(120, 35);
+        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var surface = new TuiKitCommandSurface(terminal, backend, ["/help\r", "\u001b", "/quit\r"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface);
+
+        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
+
+        Assert.Equal(["/help", "/quit"], surface.Submitted);
+        Assert.Equal(1, surface.HelpOpened);
+        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.DoesNotContain("Manage MCP profiles and capabilities", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Submit any other text to Threadsmith.", output, StringComparison.Ordinal);
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
+    }
+
+    /// <summary>The retained startup surface owns the logo, while MAIN retains warnings and session information.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_TuiKitStartupDoesNotEchoBanner()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
+        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var surface = new TuiKitCommandSurface(terminal, backend, ["/quit\r"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            displayWarnings: ["Startup configuration warning"]);
+
+        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
+
+        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.DoesNotContain("_____ _", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Forge better code, not slop.", output, StringComparison.Ordinal);
+        Assert.Contains("Startup configuration warning", output, StringComparison.Ordinal);
+        Assert.Contains("Current status", output, StringComparison.Ordinal);
+    }
+
     /// <summary>Completed names enter shared routing only as submitted input; unknown commands never create model work.</summary>
     [Theory]
     [InlineData("/the\t current\r")]
@@ -1248,9 +1297,9 @@ public static class Milestone1Tests
         Assert.DoesNotContain("stale", summary, StringComparison.Ordinal);
     }
 
-    /// <summary>An accepted durable checkpoint immediately announces the delegation's stable identity.</summary>
+    /// <summary>Accepted delegation checkpoints do not emit obsolete GUID navigation notices.</summary>
     [Fact]
-    public static void InteractionEventSegments_AcceptedDelegation_AnnouncesStableIdentity()
+    public static void InteractionEventSegments_AcceptedDelegation_DoesNotAnnounceIdentity()
     {
         var delegationId = DelegationId.New();
         var segments = new List<PresentationTextSegment>();
@@ -1267,11 +1316,7 @@ public static class Milestone1Tests
                 "queue children"),
             string.Empty);
 
-        Assert.Equal(
-            $"\nDelegation started: {delegationId.Value:D}\n"
-            + $"  Inspect or cancel: /agents {delegationId.Value:D}\n",
-            string.Concat(segments.Select(segment => segment.Text)));
-        Assert.All(segments, segment => Assert.Equal(PresentationTextRole.Status, segment.Role));
+        Assert.Empty(segments);
     }
 
     /// <summary>An empty-composer output yield rebuilds status before the shell reads the composer again.</summary>
@@ -1370,6 +1415,148 @@ public static class Milestone1Tests
 
         Assert.Contains("[enabled] shell-hook", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>One retained hook list applies multiple changes through the existing hook manager.</summary>
+    [Fact]
+    public static async Task HookCheckboxesApplyMultipleChangesAndRetainState()
+    {
+        var hookStore = new InMemoryHookStore();
+        var descriptors = HookDescriptorValidator.Normalize([.. new[] { "first", "second" }.Select(id => new HookHandlerDescriptor
+        {
+            Identity = new HookHandlerIdentity(new HookHandlerId(id), "1", new HookConfigurationDigest(string.Empty)),
+            Scope = HookHandlerScope.Machine, AdapterKind = HookAdapterKind.Mcp, Enabled = false,
+            HookPoints = [HookPoint.BeforeToolInvocation], Target = "profile/tool",
+        })]);
+        await using var hooks = new HookCoordinator(descriptors, [], new HookPolicyEvaluator(hookStore, []), hookStore, new SecretOutputSanitizer(), NullLogger<HookCoordinator>.Instance);
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [new HookManagementApplication(hooks, hookStore)]);
+        var surface = new ToggleInteractionSurface(["/hooks", "/hooks list", "/quit"]);
+        surface.Toggle = async (request, change, token) =>
+        {
+            Assert.Equal(2, request.Options.Count);
+            if (surface.ToggleCount == 1)
+            {
+                Assert.All(request.Options, option => Assert.False(option.Enabled));
+                Assert.True((await change("first", true, token)).Enabled);
+                Assert.True((await change("second", true, token)).Enabled);
+                Assert.False((await change("first", false, token)).Enabled);
+            }
+            else
+            {
+                Assert.False(request.Options.Single(option => option.Id == "first").Enabled);
+                Assert.True(request.Options.Single(option => option.Id == "second").Enabled);
+            }
+        };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, surface.ToggleCount);
+        Assert.Empty(surface.SelectionRequests);
+    }
+
+    /// <summary>MCP connection checkboxes reconcile failed connects and allow further changes in the same modal.</summary>
+    [Fact]
+    public static async Task McpCheckboxesConnectDisconnectAndReportFailures()
+    {
+        var manager = new ToggleMcpHandler();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [manager]);
+        var surface = new ToggleInteractionSurface(["/mcp", "/mcp list", "/quit"]);
+        surface.Toggle = async (request, change, token) =>
+        {
+            Assert.Contains("connected", request.Title, StringComparison.Ordinal);
+            if (surface.ToggleCount == 1)
+            {
+                Assert.True((await change("first", true, token)).Enabled);
+                var failed = await change("second", true, token);
+                Assert.False(failed.Enabled);
+                Assert.Equal("Authentication required", failed.Reason);
+                Assert.False((await change("first", false, token)).Enabled);
+                Assert.True((await change("first", true, token)).Enabled);
+            }
+            else
+            {
+                Assert.True(request.Options.Single(option => option.Id == "first").Enabled);
+                Assert.False(request.Options.Single(option => option.Id == "second").Enabled);
+            }
+        };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, surface.ToggleCount);
+        Assert.Equal([McpManagementAction.Connect, McpManagementAction.Connect, McpManagementAction.Disconnect, McpManagementAction.Connect], manager.Changes);
+        Assert.Empty(surface.SelectionRequests);
+    }
+
+    /// <summary>Only OAuth profiles offer authentication, with current metadata after success or cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task McpModalAuthenticationUsesExistingAuthority(bool cancel)
+    {
+        var manager = new ToggleMcpHandler();
+        manager.EnableOAuth();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [manager]);
+        var surface = new ToggleInteractionSurface(["/mcp", "/quit"])
+        {
+            Actions = async (request, action, token) =>
+        {
+            var oauth = request.Options.Single(option => option.Id == "first");
+            Assert.Equal("authenticate", Assert.Single(oauth.Actions).Id);
+            Assert.Contains("sign-in required", oauth.Label, StringComparison.Ordinal);
+            Assert.Empty(request.Options.Single(option => option.Id == "second").Actions);
+            var unsupported = await action("second", "authenticate", token);
+            Assert.False(unsupported.Enabled);
+            Assert.Empty(manager.Changes);
+            using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
+            if (cancel)
+            {
+                manager.OnAuthenticate = operation.Cancel;
+            }
+
+            var result = await action("first", "authenticate", operation.Token);
+            Assert.Equal(!cancel, result.Enabled);
+            Assert.Contains(cancel ? "sign-in required" : "authenticated", result.UpdatedOption!.Label, StringComparison.Ordinal);
+            if (cancel)
+            {
+                Assert.Equal("Authentication cancelled.", result.Reason);
+                manager.OnAuthenticate = null;
+                var retried = await action("first", "authenticate", token);
+                Assert.True(retried.Enabled);
+            }
+            },
+        };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(cancel ? 2 : 1, manager.Changes.Count);
+        Assert.All(manager.Changes, action => Assert.Equal(McpManagementAction.Authenticate, action));
+    }
+
+    /// <summary>Extension checkboxes allow repeated load/unload changes and preserve actual state after blocked unload.</summary>
+    [Fact]
+    public static async Task ExtensionCheckboxesReconcileBlockedUnload()
+    {
+        var manager = new ToggleExtensionManager();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new ToggleInteractionSurface(["/extensions", "/extensions", "/quit"]);
+        surface.Toggle = async (request, change, token) =>
+        {
+            if (surface.ToggleCount == 1)
+            {
+                Assert.True((await change("first", true, token)).Enabled);
+                Assert.True((await change("second", true, token)).Enabled);
+                var blocked = await change("second", false, token);
+                Assert.True(blocked.Enabled);
+                Assert.Contains("UnloadBlocked", blocked.Reason, StringComparison.Ordinal);
+                Assert.False((await change("first", false, token)).Enabled);
+            }
+            else
+            {
+                Assert.False(request.Options.Single(option => option.Id == "first").Enabled);
+                Assert.True(request.Options.Single(option => option.Id == "second").Enabled);
+            }
+        };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface, extensionManager: manager);
+        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, surface.ToggleCount);
+        Assert.Empty(surface.SelectionRequests);
     }
 
     /// <summary>The inline shell parses MCP capability-kind filters and dispatches them through Core contracts.</summary>
@@ -2108,6 +2295,7 @@ public static class Milestone1Tests
             [ReasoningLevel.None, ReasoningLevel.High]) with
         {
             ContextWindow = 16_000,
+            ProviderName = "Remote service",
         };
         var inspection = new ContextInspectionProjection
         {
@@ -2126,6 +2314,7 @@ public static class Milestone1Tests
             new SessionUsageSnapshot(1, 2, false));
 
         Assert.Equal("Status model", status.Model);
+        Assert.Equal("Remote service", status.ProviderName);
         Assert.Equal(8_000, status.ContextTokens);
         Assert.Equal(16_000, status.ContextLimit);
     }
@@ -3272,6 +3461,169 @@ public static class Milestone1Tests
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
+    }
+
+    /// <summary>MCP and built-in starts reach the live activity surface while completion is still withheld.</summary>
+    [Theory]
+    [InlineData(ToolActivitySourceKind.Mcp, "MCP: Green Street/search_sectors")]
+    [InlineData(ToolActivitySourceKind.BuiltIn, "TOOLS: search_sectors")]
+    public static async Task ConversationalShell_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var provider = new LeadingWhitespaceModelProvider();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
+        var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
+        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            var started = new ToolInvocationStarted(
+                harness.Events.OfType<SessionCreated>().Single().SessionId,
+                DateTimeOffset.UtcNow,
+                ToolInvocationId.New(),
+                "search_sectors",
+                Source: new ToolActivitySource(kind, "Green Street"));
+            await harness.EventStream.PublishAsync(started, timeout.Token);
+            while (!surface.ActiveStatuses.Any(status => status.StartsWith(label + " - running", StringComparison.Ordinal)))
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+
+            Assert.DoesNotContain(" - completed", surface.Output, StringComparison.Ordinal);
+            await harness.EventStream.PublishAsync(
+                new ToolInvocationCompleted(started.SessionId, DateTimeOffset.UtcNow, started.ToolInvocationId, true, ElapsedMilliseconds: 5200),
+                timeout.Token);
+            while (!surface.Output.Contains(label + " - completed", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+            await shellTask.WaitAsync(timeout.Token);
+        }
+    }
+
+    /// <summary>Overlapping MCP calls remain independent when they finish in either order and with different outcomes.</summary>
+    [Theory]
+    [InlineData(false, OperationActivityOutcome.Completed)]
+    [InlineData(true, OperationActivityOutcome.Failed)]
+    [InlineData(true, OperationActivityOutcome.Cancelled)]
+    [InlineData(false, OperationActivityOutcome.TimedOut)]
+    public static async Task ConversationalShell_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var provider = new LeadingWhitespaceModelProvider();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
+        var surface = new ConcurrentToolConsoleSurface();
+        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
+            var first = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "first", Source: new ToolActivitySource(ToolActivitySourceKind.Mcp, "Server"));
+            var second = first with { ToolInvocationId = ToolInvocationId.New(), ToolName = "second" };
+            await harness.EventStream.PublishAsync(first, timeout.Token);
+            var firstActivity = Assert.Single(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
+            await harness.EventStream.PublishAsync(second, timeout.Token);
+            var both = await surface.ToolUpdates.Reader.ReadAsync(timeout.Token);
+            Assert.Equal(2, both.Count);
+            Assert.Same(firstActivity, both[0]);
+            var finishing = reverse ? second : first;
+            var remaining = reverse ? first : second;
+            await harness.EventStream.PublishAsync(
+                new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, finishing.ToolInvocationId, outcome == OperationActivityOutcome.Completed, ElapsedMilliseconds: 5200, Outcome: outcome),
+                timeout.Token);
+            var survivor = Assert.Single(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
+            Assert.Same(both[reverse ? 0 : 1], survivor);
+            Assert.Contains(remaining.ToolName, survivor.Label, StringComparison.Ordinal);
+            await harness.EventStream.PublishAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, remaining.ToolInvocationId, true, ElapsedMilliseconds: 6100), timeout.Token);
+            Assert.Empty(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
+            while (!surface.Output.Contains($"MCP: Server/{remaining.ToolName} - completed", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+
+            var expected = outcome switch
+            {
+                OperationActivityOutcome.Completed => "completed",
+                OperationActivityOutcome.Failed => "failed",
+                OperationActivityOutcome.Cancelled => "cancelled",
+                _ => "timed out",
+            };
+            Assert.Contains($"MCP: Server/{finishing.ToolName} - {expected}", surface.Output, StringComparison.Ordinal);
+            Assert.Equal(1, CountOccurrences(surface.Output, $"MCP: Server/{finishing.ToolName} -"));
+            Assert.Equal(1, CountOccurrences(surface.Output, $"MCP: Server/{remaining.ToolName} -"));
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+            await shellTask.WaitAsync(timeout.Token);
+        }
+    }
+
+    /// <summary>Agent progress reaches the live tool before completion and is retained once beneath its timer.</summary>
+    [Fact]
+    public static async Task ConversationalShell_DelegationProgressUpdatesInsideItsTool()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var provider = new LeadingWhitespaceModelProvider();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
+        var surface = new AgentToolConsoleSurface();
+        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
+            var parent = RunId.New();
+            var tool = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "delegate_agents", RunId: parent);
+            await harness.EventStream.PublishAsync(tool, timeout.Token);
+            var initial = Assert.Single(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
+            var delegation = DelegationId.New();
+            await harness.EventStream.PublishAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, delegation, parent, DelegationCheckpointPhase.Accepted, 1, "run") { ToolInvocationId = tool.ToolInvocationId }, timeout.Token);
+            var first = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, delegation, AgentAssignmentId.New(), RunId.New(), AgentRole.Explorer, AgentRunStatus.Running, 1, "locating providers");
+            var second = first with { AssignmentId = AgentAssignmentId.New(), ChildRunId = RunId.New(), Role = AgentRole.TestReviewer, Reason = "finding tests" };
+            await harness.EventStream.PublishAsync(first, timeout.Token);
+            var running = await WaitForAgentProgressAsync(surface, "locating providers", timeout.Token);
+            Assert.Equal(initial.StartedTimestamp, running.StartedTimestamp);
+            Assert.Single(running.ToolProgress);
+            Assert.DoesNotContain("locating providers", surface.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Delegation started", surface.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Inspect or cancel", surface.Output, StringComparison.Ordinal);
+            await harness.EventStream.PublishAsync(second, timeout.Token);
+            Assert.Equal(2, (await WaitForAgentProgressAsync(surface, "finding tests", timeout.Token)).ToolProgress.Count);
+            var completed = first with { Status = AgentRunStatus.Completed, Revision = 2, Reason = "providers located" };
+            await harness.EventStream.PublishAsync(completed, timeout.Token);
+            var partial = await WaitForAgentProgressAsync(surface, "providers located", timeout.Token);
+            Assert.Contains(partial.ToolProgress, line => line.Text.Contains("Running", StringComparison.Ordinal));
+            Assert.DoesNotContain("providers located", surface.Output, StringComparison.Ordinal);
+            await harness.EventStream.PublishAsync(completed with { Revision = 3 }, timeout.Token);
+            await harness.EventStream.PublishAsync(second with { Status = AgentRunStatus.Failed, Revision = 3, Reason = "test lookup failed" }, timeout.Token);
+            var final = await WaitForAgentProgressAsync(surface, "test lookup failed", timeout.Token);
+            Assert.Equal(2, final.ToolProgress.Count);
+            await harness.EventStream.PublishAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, tool.ToolInvocationId, true, ElapsedMilliseconds: 5200) { RunId = parent }, timeout.Token);
+            while (!surface.Output.Contains("test lookup failed", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+
+            var text = surface.Output;
+            Assert.True(text.IndexOf("TOOLS: delegate_agents - completed", StringComparison.Ordinal) < text.IndexOf("providers located", StringComparison.Ordinal));
+            Assert.Equal(1, CountOccurrences(text, "providers located"));
+            Assert.Equal(1, CountOccurrences(text, "test lookup failed"));
+            Assert.Contains("│", text, StringComparison.Ordinal);
+            Assert.Contains("└", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Updated outcome", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+            await shellTask.WaitAsync(timeout.Token);
+        }
     }
 
     /// <summary>Overlapping semantic-check completion keeps the still-running semantic check live.</summary>
@@ -4693,7 +5045,42 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class FakeConsoleSurface : IConsoleSurface
+    private static async Task<InteractionActivity> WaitForAgentProgressAsync(AgentToolConsoleSurface surface, string text, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var update = await surface.ToolUpdates.Reader.ReadAsync(cancellationToken);
+            var match = update.FirstOrDefault(activity => activity.ToolProgress.Any(line => line.Text.Contains(text, StringComparison.Ordinal)));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+    }
+
+    private sealed class AgentToolConsoleSurface : ConcurrentToolConsoleSurface, IAgentWorkspaceSurface
+    {
+        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private class ConcurrentToolConsoleSurface : FakeConsoleSurface, IInteractionToolActivitySurface
+    {
+        public ConcurrentToolConsoleSurface()
+            : base(["hello", "/quit"], retainsActivity: true)
+        {
+        }
+
+        internal System.Threading.Channels.Channel<IReadOnlyList<InteractionActivity>> ToolUpdates { get; } = System.Threading.Channels.Channel.CreateUnbounded<IReadOnlyList<InteractionActivity>>();
+
+        public Task PresentToolActivitiesAsync(IReadOnlyList<InteractionActivity> activities, CancellationToken cancellationToken = default)
+        {
+            return ToolUpdates.Writer.WriteAsync(activities, cancellationToken).AsTask();
+        }
+    }
+
+    private class FakeConsoleSurface : IConsoleSurface
     {
         private readonly Lock _gate = new();
         private readonly Queue<InteractionInput> _inputs;
@@ -5072,7 +5459,7 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution
+    private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution, IStartupProgressSurface, IInteractionHelpSurface
     {
         private readonly Threadsmith.Tui.TuiKit.TuiKitSurface _surface;
         private readonly TUIKit.Terminal.HeadlessBackend _backend;
@@ -5092,6 +5479,17 @@ public static class Milestone1Tests
         internal List<InteractiveCommandInvocation> Invocations { get; } = [];
 
         internal List<PresentationBatch> Batches { get; } = [];
+
+        internal int HelpOpened { get; private set; }
+
+        public async Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
+        {
+            var help = _surface.ShowCommandHelpAsync(commands, cancellationToken);
+            await _surface.PresentAsync(new PresentationBatch([]), cancellationToken);
+            HelpOpened++;
+            _backend.FeedInput(_keys.Dequeue());
+            await help;
+        }
 
         public async Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
         {
@@ -5119,6 +5517,13 @@ public static class Milestone1Tests
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
             => _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned startup operation to the actual surface.")]
+        public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
+            => _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+
+        public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
+            => _surface.SetStartupDetailsAsync(details, cancellationToken);
+
         public Task<FrontendCommandOutcome> HandleAsync(InteractiveCommandInvocation invocation, IInteractionSurface surface, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5127,7 +5532,7 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class RecordingInteractionSurface : IInteractionSurface
+    private class RecordingInteractionSurface : IInteractionSurface
     {
         private readonly Queue<InteractionInput> _inputs;
         private readonly InteractionSelectionResult? _selectionResult;
@@ -5542,6 +5947,114 @@ public static class Milestone1Tests
     private sealed record EchoCommand(string Value) : ICommand<string>;
 
     private sealed record UnhandledCommand : ICommand<string>;
+
+    private sealed class ToggleInteractionSurface : RecordingInteractionSurface, IInteractionActionToggleSurface
+    {
+        internal ToggleInteractionSurface(IEnumerable<string> inputs)
+            : base(inputs)
+        {
+        }
+
+        internal Func<InteractionToggleRequest, Func<string, bool, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Toggle { get; set; }
+
+        internal int ToggleCount { get; private set; }
+
+        internal Func<InteractionToggleRequest, Func<string, string, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Actions { get; set; }
+
+        public Task SelectActionTogglesAsync(
+            InteractionToggleRequest request,
+            Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change,
+            Func<string, string, CancellationToken, Task<InteractionToggleResult>> action,
+            CancellationToken cancellationToken = default)
+        {
+            return Actions is { } actions ? actions(request, action, cancellationToken) : SelectTogglesAsync(request, change, cancellationToken);
+        }
+
+        public Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)
+        {
+            ToggleCount++;
+            return (Toggle ?? throw new InvalidOperationException("No toggle script"))(request, change, cancellationToken);
+        }
+    }
+
+    private sealed class ToggleMcpHandler : ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>
+    {
+        private readonly Dictionary<string, McpProfileSummary> _profiles = new[] { "first", "second" }.ToDictionary(id => id, id => new McpProfileSummary
+        {
+            ProfileId = id, DisplayName = id, ConfigurationSource = "User", Transport = "http", Trust = "TrustedRead",
+            EndpointIdentity = "https://example.com", State = "Disconnected", Eligible = true,
+        });
+
+        internal List<McpManagementAction> Changes { get; } = [];
+
+        internal Action? OnAuthenticate { get; set; }
+
+        public Task<McpManagementResult> HandleAsync(ExecuteMcpManagementCommand command, CancellationToken cancellationToken = default)
+        {
+            var request = command.Request;
+            if (request.Action == McpManagementAction.List)
+            {
+                return Task.FromResult(new McpManagementResult { Succeeded = true, Message = "Profiles", Profiles = [.. _profiles.Values] });
+            }
+
+            var id = request.ProfileId!;
+            if (request.Action == McpManagementAction.Authenticate)
+            {
+                Changes.Add(request.Action);
+                OnAuthenticate?.Invoke();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return Task.FromCanceled<McpManagementResult>(cancellationToken);
+                }
+
+                _profiles[id] = _profiles[id] with { State = "Connected", AuthenticationState = McpAuthenticationState.Authenticated };
+            }
+
+            var failed = false;
+            if (request.Action is McpManagementAction.Connect or McpManagementAction.Disconnect)
+            {
+                Changes.Add(request.Action);
+                failed = id == "second";
+                if (!failed)
+                {
+                    _profiles[id] = _profiles[id] with { State = request.Action == McpManagementAction.Connect ? "Connected" : "Disconnected" };
+                }
+            }
+
+            return Task.FromResult(new McpManagementResult
+            {
+                Succeeded = !failed, Message = failed ? "Authentication required" : "Updated",
+                Profile = new McpProfileDetail { Summary = _profiles[id] },
+            });
+        }
+
+        internal void EnableOAuth() => _profiles["first"] = _profiles["first"] with { AuthenticationState = McpAuthenticationState.SignedOut };
+    }
+
+    private sealed class ToggleExtensionManager : IExtensionManager
+    {
+        private readonly Dictionary<string, ExtensionSummary> _extensions = new[] { "first", "second" }.ToDictionary(id => id, id => new ExtensionSummary
+        {
+            ExtensionId = id, Name = id, Version = "1", Directory = id, State = "Discovered",
+        });
+
+        public IReadOnlyList<ExtensionSummary> Summaries => [.. _extensions.Values];
+
+        public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default) => Task.FromResult(Summaries);
+
+        public Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = true, State = "Active" };
+            return Task.FromResult<ExtensionSummary?>(_extensions[extensionId]);
+        }
+
+        public Task<bool> UnloadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            var blocked = extensionId == "second";
+            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = blocked, State = blocked ? "UnloadBlocked" : "Unloaded" };
+            return Task.FromResult(!blocked);
+        }
+    }
 
     private sealed class RecordingMcpManagementHandler
         : ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>

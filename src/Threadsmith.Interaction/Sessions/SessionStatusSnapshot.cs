@@ -21,8 +21,26 @@ public sealed record SessionStatusSnapshot(
     long? ContextLimit,
     SessionUsageSnapshot Usage)
 {
+    /// <summary>Gets the effective configured provider display name.</summary>
+    public string? ProviderName { get; init; }
+
     /// <summary>Gets the current local Git branch, or null when unavailable or detached.</summary>
     public string? Branch { get; init; }
+
+    /// <summary>Gets the cached host Git summary; null means unavailable.</summary>
+    public RepositoryGitStatus? GitStatus { get; init; }
+
+    /// <summary>Gets whether the repository footer is enabled independently of agent headers.</summary>
+    public bool FooterEnabled { get; init; } = true;
+
+    /// <summary>Gets current root-owned usage, excluding children and restored unowned history.</summary>
+    public SessionUsageSnapshot? AgentUsage { get; init; }
+
+    /// <summary>Gets the latest actually prepared root-owned request.</summary>
+    public AgentRequestStatus? AgentRequest { get; init; }
+
+    /// <summary>Gets whether per-agent usage is a post-resume subtotal.</summary>
+    public bool IsPostResume { get; init; }
 }
 
 /// <summary>Builds immutable status state from host-owned repository, model, and context projections.</summary>
@@ -77,6 +95,7 @@ internal static class SessionStatusAssembler
             usage)
         {
             Branch = branch,
+            ProviderName = profile?.ProviderName ?? profile?.Provider,
         };
     }
 }

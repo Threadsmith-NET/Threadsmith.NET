@@ -110,7 +110,7 @@ internal sealed class AnthropicStreamAdapter
             return block.Type switch
             {
                 "text" when block.VisibleText.Length > 0 => [new ModelChunk { Text = block.VisibleText }],
-                "thinking" when _request.IncludeReasoningText == true && block.ThinkingText.Length > 0 => [new ModelChunk { Reasoning = block.ThinkingText, SuppressReasoningDiagnostics = true }],
+                "thinking" when _request.IncludeReasoningText == true && block.ThinkingText.Length > 0 => [new ModelChunk { Reasoning = block.ThinkingText, SuppressReasoningDiagnostics = true, IsDisplayOnlyReasoning = true }],
                 _ => [],
             };
         }
@@ -133,7 +133,7 @@ internal sealed class AnthropicStreamAdapter
             return type switch
             {
                 "text_delta" when content.Length > 0 => [new ModelChunk { Text = content }],
-                "thinking_delta" when _request.IncludeReasoningText == true && content.Length > 0 => [new ModelChunk { Reasoning = content, SuppressReasoningDiagnostics = true }],
+                "thinking_delta" when _request.IncludeReasoningText == true && content.Length > 0 => [new ModelChunk { Reasoning = content, SuppressReasoningDiagnostics = true, IsDisplayOnlyReasoning = true }],
                 _ => [],
             };
         }

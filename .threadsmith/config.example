@@ -41,6 +41,20 @@
   // replace a matching id as a whole or append in declared order. Theme data
   // is bounded presentation data and cannot contain terminal control sequences.
   "tui": {
+    // Presentation names: explicit role list > shared defaultNames > compiled role defaults.
+    // Each list replaces the complete lower-priority list, including indexed CLI/env overrides.
+    // Optional shared list: "defaultNames": ["Avery", "Jordan", "Morgan"].
+    // At most 128 names/list, 32 normalized UTF-16 units/name; invalid entries warn and fall back.
+    "agentNames": {
+      "byRole": {
+        "explorer": ["Amundsen", "Cousteau", "Humboldt", "Magellan", "Shackleton", "Zheng He"],
+        "implementer": ["Lovelace", "Hopper", "Thompson", "Ritchie", "Hamilton", "Liskov"],
+        "securityReviewer": ["Turing", "Shannon", "Diffie", "Hellman", "Rivest", "Shamir"],
+        "testReviewer": ["Dijkstra", "Hoare", "Myers", "Hamming", "Knuth", "Hopper"],
+        "performanceReviewer": ["Amdahl", "Gustafson", "Cray", "Hennessy", "Patterson", "Knuth"],
+        "architectureReviewer": ["Brooks", "Parnas", "Kay", "Dijkstra", "Liskov", "Shaw"]
+      }
+    },
     // Display total request, ordinary-tool, and MCP operation durations together.
     // This is presentation-only and defaults to true.
     "showOperationDurations": true,
@@ -50,7 +64,7 @@
     // Interactive /theme selection writes this key to ordinary user configuration.
     "defaultTheme": "system",
     "footer": {
-      // Uses the native-scrollback-safe composer-adjacent status row.
+      // Fixed repository footer in TUIKit; composer-adjacent status in the original frontend.
       "enabled": true
     },
     "themes": [

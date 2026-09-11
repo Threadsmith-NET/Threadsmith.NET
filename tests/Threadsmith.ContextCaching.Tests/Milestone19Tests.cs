@@ -374,7 +374,7 @@ public sealed partial class Milestone19Tests
             ModelContinuationReassemblyReason.ModelOrLayoutChanged,
             ModelContinuationValidator.GetReassemblyReason(
                 frozen,
-                frozen with { LayoutVersion = 2 }));
+                frozen with { LayoutVersion = ModelRequestLayout.CurrentVersion + 1 }));
         Assert.Equal(
             ModelContinuationReassemblyReason.ModelOrLayoutChanged,
             ModelContinuationValidator.GetReassemblyReason(

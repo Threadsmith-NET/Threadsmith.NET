@@ -168,18 +168,18 @@ public static class OperationDurationFormatterTests
         Assert.True(disabled.Apply(completed));
 
         Assert.Equal(
-            " TOOLS: GitHub/get_issue - completed \u00B7 1.2s"
+            " MCP: GitHub/get_issue - completed \u00B7 1.2s"
                 + Environment.NewLine
                 + "   \u2514 mcp GitHub; issues/42"
                 + Environment.NewLine,
             enabled.Text);
         Assert.Equal(
-            " TOOLS: GitHub/get_issue - completed"
+            " MCP: GitHub/get_issue - completed"
                 + Environment.NewLine
                 + "   \u2514 mcp GitHub; issues/42"
                 + Environment.NewLine,
             disabled.Text);
-        Assert.DoesNotContain("MCP:", enabled.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("TOOLS:", enabled.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Transcript renders non-main tool requestors immediately after the tool label.</summary>

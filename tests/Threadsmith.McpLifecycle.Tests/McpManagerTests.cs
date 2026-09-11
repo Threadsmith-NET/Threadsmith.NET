@@ -306,6 +306,15 @@ public sealed class McpManagerTests
             });
 
         await transport.PublishChangeAsync("changed-digest");
+        var staleEnable = await manager.ExecuteAsync(new McpManagementRequest
+        {
+            Action = McpManagementAction.EnableTool,
+            ProfileId = "server",
+            CapabilityId = "server:echo",
+            ExpectedCapabilityDigest = "initial-digest",
+        });
+        Assert.False(staleEnable.Succeeded);
+        Assert.False(toolState.IsEnabled("server:echo"));
         var result = await manager.ExecuteAsync(new McpManagementRequest
         {
             Action = McpManagementAction.ListCapabilities,

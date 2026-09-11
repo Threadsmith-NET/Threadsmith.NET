@@ -27,6 +27,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly IOutputSanitizer _sanitizer;
     private readonly AgentModelSelector _selection;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly AgentDisplayStream? _display;
     private readonly IConversationToolSnapshotStore _snapshots;
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
@@ -47,7 +48,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
-        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null,
+        AgentDisplayStream? display = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -74,6 +76,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _options = options;
         _prompts = prompts;
         _sessionUsage = sessionUsage;
+        _display = display;
         _steering = steering;
     }
 
@@ -104,7 +107,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _sessionUsage,
             _steering,
             _trustedModels,
-            _compactionProfile);
+            _compactionProfile,
+            _display);
         return new AgentRoleRunnerRegistry(
             Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, execution)),
             execution);
@@ -139,7 +143,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         SessionUsageProjection? sessionUsage = null,
         RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
-        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null,
+        AgentDisplayStream? display = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -171,7 +176,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             steering,
             selection,
             trustedModels,
-            compactionProfile);
+            compactionProfile,
+            display);
     }
 
     /// <inheritdoc />

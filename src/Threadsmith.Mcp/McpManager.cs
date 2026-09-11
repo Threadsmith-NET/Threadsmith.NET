@@ -534,6 +534,11 @@ public sealed class McpManager :
     {
         var state = GetState(request);
         var capability = GetCapability(state, request);
+        if (request.ExpectedCapabilityDigest is { } reviewed && capability.Digest != reviewed)
+        {
+            return Failure(request.Action, McpManagementFailureKind.InvalidCapability, "The capability changed; review the current catalog before changing availability.");
+        }
+
         if (capability.Kind != McpCapabilityKind.Tool)
         {
             return Failure(

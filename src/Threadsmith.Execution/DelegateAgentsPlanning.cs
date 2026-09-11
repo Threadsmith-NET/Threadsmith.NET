@@ -73,6 +73,7 @@ public sealed class DelegateAgentsPlanFactory
             {
                 SessionId = context.SessionId,
                 ParentRunId = context.RunId,
+                ToolInvocationId = context.ToolInvocationId,
                 RepositoryIdentity = baseline.RepositoryPath,
                 BaselineIdentity = WorkspaceBaselineIdentity.Create(baseline),
                 WorkspaceId = workspaceId,

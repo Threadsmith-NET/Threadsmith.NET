@@ -210,6 +210,20 @@ The adapter requests streamed usage from the endpoint. When usage is absent, it 
 
 Caller cancellation interrupts the HTTP request, retry delay, or active response read and remains a cancellation outcome. Expiration of the profile's `timeoutSeconds` limit is reported as a provider timeout failure instead, so it cannot be mistaken for a user cancellation. This is the total model-request deadline, including retries, waiting for response headers, and streaming; slow inference does not have a separate first-token or inactivity deadline. The HTTP handler's `model:http:connectTimeoutSeconds` bounds connection establishment only. An independent transport cancellation before response headers uses the existing retry budget under the same model deadline and reports that transport phase if exhausted. An interruption after response headers reports the stream phase without replaying partial output. The interactive terminal renders a failed run's diagnostic once. HTTP 429, 503, and 529 responses and explicitly transient DNS, connection, protocol, or prematurely-ended HTTP transport failures are retried only within the profile's bounded retry and request-timeout policy. TLS, authentication, and configuration failures are not transient. Response content and credentials are never logged.
 
+OpenAI-compatible endpoints can also send an `error` envelope after HTTP 200 has started an event stream. Threadsmith reports this as a provider failure with a bounded numeric error code when available; it does not report an empty answer or issue corrective model requests. Provider error text can echo request content, so inspect server logs for the detailed message. Tool schemas advertised to generation grammars must avoid lookaround-dependent regexes: the `web_search` query pattern uses character classes and bounded repetition, with query validation also enforced locally before credentials or HTTP.
+
+## Reasoning-token usage
+
+When a provider supplies an output-token breakdown, the adapter exposes its reasoning subset through `ModelUsage.ReasoningTokens`:
+
+| Provider | Reported usage field |
+|---|---|
+| OpenAI Codex / Responses | `usage.output_tokens_details.reasoning_tokens` |
+| OpenAI-compatible, including vLLM when exposed | `usage.completion_tokens_details.reasoning_tokens` |
+| Anthropic | `usage.output_tokens_details.thinking_tokens` in final streamed usage |
+
+Missing, null, malformed, negative, or out-of-range optional counts stay unavailable; zero remains a reported value. Threadsmith does not estimate the count from reasoning text. TUIKit adds `(reasoning n)` after output only when available, with `(Rn)` in compact layouts. The latest-request details can show a known count even when an incomplete cumulative breakdown is hidden. Reasoning is included in output totals and cost, not added a second time. `/thinking` controls visible text independently. See [per-agent counters](agent-workspace.md#retention-privacy-and-counters).
+
 ## Reasoning models
 
 Reasoning models stream thinking separately from visible answer content. Compatibility accepts only the configured compiled response mode (`reasoningContent`, `reasoning`, `reasoningText`, `knownFields`, or `none`) and normalizes accepted text to `ModelChunk.Reasoning`. `knownFields` mirrors Pi-compatible OpenAI-completions extraction by accepting the first non-empty `reasoning_content`, `reasoning`, or `reasoning_text` delta. Display reasoning is sanitized, bounded, transient process state. It is excluded from conversation, memory, evidence, hooks, telemetry, diagnostics, and SQLite; migration 7 removes historical `modelReasoningObserved` rows. The terminal shows only transient `THINKING` activity by default, removes it before completed output, and streams future reasoning chunks with the `Reasoning` semantic style only when `/thinking on` or the equivalent toggle enables streaming for the live session.

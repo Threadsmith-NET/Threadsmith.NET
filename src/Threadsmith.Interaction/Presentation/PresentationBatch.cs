@@ -7,7 +7,16 @@ public abstract record PresentationItem;
 
 /// <summary>Already projected semantic text segments.</summary>
 /// <param name="Segments">Ordered terminal-neutral segments.</param>
-public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment> Segments) : PresentationItem;
+public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment> Segments) : PresentationItem
+{
+    /// <summary>Gets an optional transient echo for notification-capable frontends; the segments remain the output record.</summary>
+    public PresentationNotification? Notification { get; init; }
+}
+
+/// <summary>A brief host-authored notification accompanying ordinary output.</summary>
+/// <param name="Text">Short terminal-safe summary.</param>
+/// <param name="Role">Semantic severity used by the frontend's current theme.</param>
+public sealed record PresentationNotification(string Text, PresentationTextRole Role);
 
 /// <summary>Exact model source paired with its safe presentation copy.</summary>
 /// <param name="RawSource">Authoritative raw model source.</param>
@@ -35,4 +44,8 @@ public sealed record PresentationRawSourceItem(string RawSource) : PresentationI
 
 /// <summary>One immutable ordered presentation operation.</summary>
 /// <param name="Items">Items in authoritative event order.</param>
-public sealed record PresentationBatch(IReadOnlyList<PresentationItem> Items);
+public sealed record PresentationBatch(IReadOnlyList<PresentationItem> Items)
+{
+    /// <summary>Gets the accepted child destination; null preserves MAIN compatibility.</summary>
+    public Threadsmith.Interaction.Agents.AgentPresentationTarget? Target { get; init; }
+}

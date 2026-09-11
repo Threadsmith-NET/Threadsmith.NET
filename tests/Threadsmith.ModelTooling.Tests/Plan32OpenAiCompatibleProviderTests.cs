@@ -127,6 +127,8 @@ public static class Plan32OpenAiCompatibleProviderTests
 
         Assert.Equal(3, catalog.ModelCatalog.Profiles.Count);
         var second = catalog.ModelCatalog.Get(SecondModelId);
+        Assert.Equal(firstProvider.Name, second.ProviderName);
+        Assert.Equal(secondProvider.Name, catalog.ModelCatalog.Get(secondProvider.Models[0].Id).ProviderName);
         Assert.Equal(new Uri("https://first.example/v1/chat/completions"), second.Endpoint);
         Assert.Equal(64000, second.ContextWindow);
         Assert.Equal(0.7m, second.Temperature);
@@ -253,9 +255,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.False(client.DefaultRequestHeaders.Contains("X-Tenant"));
     }
 
-    /// <summary>Legacy adaptation preserves stable identity and the exact full request endpoint without file mutation.</summary>
+    /// <summary>Adapted catalog profiles include provider display metadata without changing request settings.</summary>
     [Fact]
-    public static async Task LegacyCatalog_Profile_IsPreservedInMemory()
+    public static async Task AdaptedCatalog_ProfileIncludesProviderDisplayName()
     {
         var legacy = new ConfiguredModelCatalog([CreateLegacyProfile()]).Profiles[0];
         var registration = new OpenAiCompatibleProviderRegistration();
@@ -287,9 +289,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         }
 
         var projected = catalog.ModelCatalog.Get(legacy.Id);
-        Assert.Equal(legacy, projected);
-        Assert.Equal(legacy.Endpoint, requestUri);
         var definition = catalog.Get(legacy.Id);
+        Assert.Equal(legacy with { ProviderName = definition.ProviderConfiguration.Name }, projected);
+        Assert.Equal(legacy.Endpoint, requestUri);
         Assert.Equal("legacy-" + legacy.Id.Value.ToString("N"), definition.ProviderId);
         Assert.IsType<OpenAiCompatibleProviderConfiguration>(definition.ProviderConfiguration);
         Assert.IsType<OpenAiCompatibleModelConfiguration>(definition.ModelConfiguration);

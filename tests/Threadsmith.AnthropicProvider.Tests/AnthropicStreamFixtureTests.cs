@@ -42,6 +42,30 @@ public sealed class AnthropicStreamFixtureTests
         Assert.Equal(reported ? 0L : null, cache.CacheReadTokens);
     }
 
+    /// <summary>Final Anthropic thinking usage survives the SDK without double counting output or costs.</summary>
+    [Theory]
+    [InlineData("null", null)]
+    [InlineData("{}", null)]
+    [InlineData("[]", null)]
+    [InlineData("{\"thinking_tokens\":null}", null)]
+    [InlineData("{\"thinking_tokens\":0}", 0L)]
+    [InlineData("{\"thinking_tokens\":7}", 7L)]
+    [InlineData("{\"thinking_tokens\":-1}", null)]
+    [InlineData("{\"thinking_tokens\":11}", null)]
+    [InlineData("{\"thinking_tokens\":\"7\"}", null)]
+    public async Task StreamAsync_ThinkingCountersPreserveMissingAndZero(string details, long? expected)
+    {
+        using var document = JsonDocument.Parse(details);
+        var finalUsage = new { output_tokens = 10, output_tokens_details = document.RootElement };
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: new { input_tokens = 100, output_tokens = 0, cache_creation_input_tokens = 0, cache_read_input_tokens = 0 }, finalUsage: finalUsage)));
+        var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request());
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(100, usage.InputTokens);
+        Assert.Equal(10, usage.OutputTokens);
+        Assert.Equal(expected, usage.ReasoningTokens);
+        Assert.Equal(0.0003m, usage.EstimatedCost);
+    }
+
     /// <summary>Empty native tool input needs no argument delta and remains an executable object.</summary>
     [Theory]
     [InlineData("")]

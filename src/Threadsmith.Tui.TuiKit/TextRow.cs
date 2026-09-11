@@ -28,6 +28,9 @@ internal sealed class TextRow : IWidget
     {
         var style = _style();
         surface.Fill(new Rect(0, 0, surface.Size.Width, surface.Size.Height), Cell.Blank(style));
-        _run.Draw(surface, 0, 0, _text(), style);
+        if (surface is BufferSurface buffer)
+        {
+            _run.Draw(buffer.CreateView(WorkspaceLayout.RowContent(surface.Size)), 0, 0, _text(), style);
+        }
     }
 }

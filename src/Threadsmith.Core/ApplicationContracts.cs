@@ -212,6 +212,13 @@ public interface IOutputSanitizer
     string Sanitize(string value);
 }
 
+/// <summary>Optional conservative admission for independently sanitized complete display lines.</summary>
+public interface IStreamingOutputSanitizer : IOutputSanitizer
+{
+    /// <summary>Returns true only when later text cannot extend a sensitive unit begun in this complete line.</summary>
+    bool CanFlushStandalone(string value);
+}
+
 /// <summary>Versioned structured model output.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(TextModelOutput), "text")]

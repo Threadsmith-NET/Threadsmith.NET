@@ -654,7 +654,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ModelResultContent: modelResultContent,
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
-                        MaximumTransientActivityDetailCharacters)),
+                        MaximumTransientActivityDetailCharacters)) { RunId = request.RunId },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -950,7 +950,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 IsTruncated: isTruncated,
                 Source: source,
                 ElapsedMilliseconds: elapsedMilliseconds,
-                Outcome: outcome),
+                Outcome: outcome) { RunId = request.RunId },
             CancellationToken.None);
         await InvokeAfterHookAsync(
             request,

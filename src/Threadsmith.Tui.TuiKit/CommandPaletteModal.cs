@@ -112,21 +112,34 @@ internal sealed class CommandPaletteModal : Modal
             return;
         }
 
-        var view = frame.CreateView(new Rect(1, 1, frame.Size.Width - 2, frame.Size.Height - 2));
+        var view = frame;
         var highlight = _resolveStyle(PresentationTextRole.SelectionHighlight).WithAttribute(CellAttributes.Reverse, true);
         _title.Draw(view, 0, 0, "Commands | Enter inserts | Esc closes", _resolveStyle(PresentationTextRole.SelectionPrompt));
-        _queryRun.Draw(view, 0, 1, "> " + FilterText, _resolveStyle(PresentationTextRole.Status).WithAttribute(CellAttributes.Reverse, _query.Selection.Length > 0));
-        var count = Math.Min(MaximumVisibleRows, view.Size.Height - 5);
-        RenderList(view.CreateView(new Rect(0, 2, view.Size.Width, count)), normal, highlight);
-        _noticeRun.Draw(view, 0, count + 2, _notice, _resolveStyle(PresentationTextRole.Status));
+        _queryRun.Draw(view, 0, 2, "> " + FilterText, _resolveStyle(PresentationTextRole.Status).WithAttribute(CellAttributes.Reverse, _query.Selection.Length > 0));
+        var hasNoticeRow = view.Size.Height >= 7;
+        var count = Math.Min(MaximumVisibleRows, view.Size.Height - (hasNoticeRow ? 6 : 5));
+        RenderList(view.CreateView(new Rect(0, 3, view.Size.Width, count)), normal, highlight);
+        var detailsRow = count + 3;
+        if (hasNoticeRow)
+        {
+            _noticeRun.Draw(view, 0, detailsRow++, _notice, _resolveStyle(PresentationTextRole.Status));
+        }
+
         if (_palette.SelectedItem is { } selected && _discovery.TryGet(selected.Id, out var descriptor))
         {
-            _usage.Draw(view, 0, count + 3, descriptor.Usage, _resolveStyle(PresentationTextRole.SelectionPrompt));
-            _description.Draw(view, 0, count + 4, descriptor.Description, normal);
+            _usage.Draw(view, 0, detailsRow, descriptor.Usage, _resolveStyle(PresentationTextRole.SelectionPrompt));
+            _description.Draw(view, 0, detailsRow + 1, descriptor.Description, normal);
         }
         else
         {
-            _usage.Draw(view, 0, count + 3, "No matching commands", normal);
+            _usage.Draw(view, 0, detailsRow, "No matching commands", normal);
+        }
+
+        if (!hasNoticeRow && _notice.Length > 0)
+        {
+            var notice = view.CreateView(new Rect(0, detailsRow + 1, view.Size.Width, 1));
+            notice.Fill(new Rect(0, 0, notice.Size.Width, 1), Cell.Blank(normal));
+            _noticeRun.Draw(notice, 0, 0, _notice, _resolveStyle(PresentationTextRole.Status));
         }
     }
 

@@ -345,6 +345,9 @@ public sealed record McpManagementRequest
     /// <summary>Exact profile-qualified capability identifier when required.</summary>
     public string? CapabilityId { get; init; }
 
+    /// <summary>Reviewed digest required by retained availability requests; null preserves direct command behavior.</summary>
+    public string? ExpectedCapabilityDigest { get; init; }
+
     /// <summary>Optional closed capability-kind filter.</summary>
     public McpManagedCapabilityKind? CapabilityKind { get; init; }
 

@@ -43,7 +43,8 @@ public static partial class SecretRedactor
     public static string Redact(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var redacted = QualifiedEnvironmentCredentialPattern().Replace(value, "$1[REDACTED]");
+        var withoutPrivateKeys = PrivateKeyBlockPattern().Replace(value, "[REDACTED PRIVATE KEY]");
+        var redacted = QualifiedEnvironmentCredentialPattern().Replace(withoutPrivateKeys, "$1[REDACTED]");
         var credentialInput = QualifiedQuotedCredentialPattern().Replace(redacted, "$1[REDACTED]");
         var preserveSourceArguments = ContainsSourceCredentialArgumentCandidate(credentialInput);
         redacted = preserveSourceArguments
@@ -56,19 +57,22 @@ public static partial class SecretRedactor
     }
 
     [GeneratedRegex(
-        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*(?::|=(?!>))\\s*)(?<value>\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*(?::|=(?!>))\\s*)(?<value>\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex CredentialPattern();
 
     [GeneratedRegex(
-        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=(?!>)\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=(?!>)\\s*)(?:\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex QualifiedEnvironmentCredentialPattern();
 
     [GeneratedRegex(
-        "(?i)((?<![A-Za-z0-9_])[\\\"'](?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']\\s*:\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)((?<![A-Za-z0-9_])[\\\"'](?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']\\s*:\\s*)(?:\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex QualifiedQuotedCredentialPattern();
+
+    [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex PrivateKeyBlockPattern();
 
     private static bool ContainsSourceCredentialArgumentCandidate(string value)
     {
@@ -297,7 +301,7 @@ public static partial class SecretRedactor
 }
 
 /// <summary>Sanitizes untrusted output before persistence, logging, or rendering.</summary>
-public sealed partial class SecretOutputSanitizer : IOutputSanitizer
+public sealed partial class SecretOutputSanitizer : IStreamingOutputSanitizer
 {
     /// <inheritdoc />
     public string Sanitize(string value)
@@ -306,6 +310,17 @@ public sealed partial class SecretOutputSanitizer : IOutputSanitizer
         var redacted = SecretRedactor.Redact(value);
         return UnsafeControlPattern().Replace(redacted, string.Empty);
     }
+
+    /// <inheritdoc />
+    public bool CanFlushStandalone(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return !value.Contains(':') && !value.Contains('=')
+            && !SensitiveFragmentPattern().IsMatch(value);
+    }
+
+    [GeneratedRegex("api|authorization|token|secret|password|passwd|pwd|private key", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex SensitiveFragmentPattern();
 
     [GeneratedRegex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", RegexOptions.CultureInvariant)]
     private static partial Regex UnsafeControlPattern();

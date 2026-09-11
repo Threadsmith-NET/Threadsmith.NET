@@ -32,6 +32,7 @@ internal sealed class ChildAgentModelLoop
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
+    private readonly AgentDisplayStream? _display;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentModelLoop"/> class.</summary>
     public ChildAgentModelLoop(
@@ -46,7 +47,8 @@ internal sealed class ChildAgentModelLoop
         RunSteeringCoordinator? steering = null,
         AgentModelSelector? selection = null,
         IModelProvider? trustedModels = null,
-        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null,
+        AgentDisplayStream? display = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -56,6 +58,7 @@ internal sealed class ChildAgentModelLoop
         ArgumentNullException.ThrowIfNull(parentRegistrations);
         ArgumentNullException.ThrowIfNull(prompts);
         _models = models;
+        _display = display;
         _tools = tools;
         _evidence = evidence;
         _sanitizer = sanitizer;
@@ -85,6 +88,7 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelection model,
         CancellationToken cancellationToken)
     {
+        _sessionUsage?.RegisterChild(plan.Provenance.SessionId, assignment.ChildRunId);
         var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId).ToHashSet();
         var registrations = ResolveRegistrations(assignment).ToList();
         if (!childToolContext.DenyAllTools
@@ -352,7 +356,7 @@ internal sealed class ChildAgentModelLoop
                 Messages = messages.ToArray(),
                 WireEstimate = estimate,
                 ProviderInstructions = model.ProviderInstructions,
-                IncludeReasoningText = false,
+                IncludeReasoningText = true,
                 TransientState = transientState,
             });
             var effectiveAssignment = assignment with
@@ -386,6 +390,14 @@ internal sealed class ChildAgentModelLoop
         ModelRequestTransientState transientState,
         CancellationToken cancellationToken)
     {
+        _sessionUsage?.ObserveRequest(sessionId, assignment.ChildRunId, new AgentRequestStatus(
+            model.ProfileId,
+            model.ReasoningLevel,
+            request.WireEstimate?.WireInputTokens,
+            model.ContextWindowTokens,
+            Stopwatch.GetTimestamp()));
+        var displayText = new AgentDisplayTextWriter(_display, _sanitizer, sessionId, assignment.ChildRunId, false);
+        var displayReasoning = new AgentDisplayTextWriter(_display, _sanitizer, sessionId, assignment.ChildRunId, true);
         var maximumOutputTokens = model.MaximumOutputTokens;
         var wireEstimate = request.WireEstimate
             ?? throw new InvalidOperationException("The child request has no capacity estimate.");
@@ -419,12 +431,17 @@ internal sealed class ChildAgentModelLoop
                 if (chunk.Text is { } delta)
                 {
                     text.Append(delta);
+                    displayText.Append(delta);
                 }
 
                 if (chunk.Reasoning is { } reasoning)
                 {
-                    reasoningCharacters = checked(reasoningCharacters + reasoning.Length);
-                    reasoningTokens = EstimateCharacterTokens(reasoningCharacters);
+                    displayReasoning.Append(reasoning);
+                    if (!chunk.IsDisplayOnlyReasoning)
+                    {
+                        reasoningCharacters = checked(reasoningCharacters + reasoning.Length);
+                        reasoningTokens = EstimateCharacterTokens(reasoningCharacters);
+                    }
                 }
 
                 switch (chunk.Output)
@@ -455,6 +472,7 @@ internal sealed class ChildAgentModelLoop
                         break;
                     case TextModelOutput textOutput when chunk.Text is null:
                         text.Append(textOutput.Text);
+                        displayText.Append(textOutput.Text);
                         break;
                     case null:
                     case TextModelOutput:
@@ -484,6 +502,8 @@ internal sealed class ChildAgentModelLoop
         }
         finally
         {
+            displayReasoning.Flush(false);
+            displayText.Flush(true);
             if (usage is null)
             {
                 _sessionUsage?.ObserveMissing(sessionId, usageRequestId);
@@ -851,6 +871,12 @@ internal sealed class ChildAgentModelLoop
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _usage?.ObserveRequest(_sessionId, request.RunId, new AgentRequestStatus(
+                request.CandidateProfile?.ProfileId ?? request.ProfileId,
+                request.CandidateProfile?.ReasoningLevel ?? request.ReasoningLevel,
+                null,
+                request.CandidateProfile?.ContextWindowTokens ?? request.ProfileContextWindowTokens,
+                Stopwatch.GetTimestamp()));
             return Task.CompletedTask;
         }
 

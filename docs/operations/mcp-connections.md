@@ -103,7 +103,9 @@ MCP lifecycle management retains one identity and one dynamic registration per p
 
 ## Lifecycle commands
 
-`/mcp` and `/mcp list` show every effective trusted profile, including disconnected definitions. Output contains a sanitized executable basename or HTTP origin, coarse authentication state, connection generation, bounded capability counts, enabled-tool count, and sanitized last outcome. It never prints command arguments, environment, headers, endpoint path/query, token data, or account claims.
+`/mcp` and `/mcp list` open a keyboard-only connection checkbox modal in TUIKit, including disconnected effective trusted profiles. Checked means connected. Space connects/disconnects the selected item or the visible eligible members of a group, and the modal stays open for further toggles. Esc/Enter closes while retaining completed changes. Type to filter and use F2 for details. Connection changes do not edit `autoConnect` or individual tool preferences. The original frontend retains its list/selection flow. Output contains a sanitized executable basename or HTTP origin, coarse authentication state, connection generation, bounded capability counts, enabled-tool count, and sanitized last outcome. It never prints command arguments, environment, headers, endpoint path/query, token data, or account claims.
+
+For an eligible OAuth-enabled profile, F3 opens Actions with **Sign in / Authenticate**. This explicitly starts the existing browser flow or reuses eligible cached credentials. Esc during authentication cancels the attempt and returns to the list; the connection and authentication state are then refreshed. Static-token profiles have no authentication action. The modal has no Switch account action: use `/mcp logout <profile>` and sign in again. The explicit lifecycle commands below remain available.
 
 ```text
 /mcp inspect [profile]
@@ -141,6 +143,10 @@ Headless syntax is `threadsmith --mcp <action> [profile] [capability] [key=value
 - `allowedCapabilities` accepts `tools`, `resources`, `resource-templates`, and `prompts`; imported tools still require user-owned repository/schema approval and undergo repository narrowing availability plus invocation policy.
 - Server descriptions, schemas, stderr, and results are untrusted input. Threadsmith translates them into host-owned DTOs and sanitizes rendered/persisted output.
 - For HTTP transports, add the endpoint host to the repository network allowlist before invocation.
+
+## Tool activity in the TUI
+
+An admitted MCP invocation appears immediately in its owner’s output pane as `MCP: <profile/tool> - running`, with a live elapsed timer. Its completion replaces that activity with one retained `MCP:` block containing the authoritative outcome and duration. Concurrent tool activities remain independent. Connection checkboxes control connection state; `/tools` or MCP capability management controls whether a connected tool is available.
 
 ## Timeouts and lifecycle
 

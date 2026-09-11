@@ -242,7 +242,11 @@ public sealed class DelegateAgentsToolExecutionTests
             pair => Assert.True(pair.First.Revision < pair.Second.Revision));
         Assert.All(
             observed.OfType<DelegationCheckpointWritten>(),
-            domainEvent => Assert.True(domainEvent.Revision > 0));
+            domainEvent =>
+            {
+                Assert.True(domainEvent.Revision > 0);
+                Assert.Equal(fixture.Context.ToolInvocationId, domainEvent.ToolInvocationId);
+            });
         Assert.All(
             observed.OfType<AgentRunLifecycleObserved>(),
             domainEvent => Assert.True(domainEvent.Revision > 0));

@@ -145,7 +145,11 @@ public sealed record ModelUsage(
     long OutputTokens,
     decimal EstimatedCost = 0,
     bool IsEstimate = false,
-    ModelCacheUsage? Cache = null);
+    ModelCacheUsage? Cache = null)
+{
+    /// <summary>Gets provider-reported reasoning tokens included in OutputTokens, or null when unavailable.</summary>
+    public long? ReasoningTokens { get; init; }
+}
 
 /// <summary>Provider-neutral reason that a model stream finished.</summary>
 public enum ModelFinishReason
@@ -180,6 +184,9 @@ public sealed record ModelChunk
 
     /// <summary>Reasoning text delta, separate from <see cref="Text"/>.</summary>
     public string? Reasoning { get; init; }
+
+    /// <summary>Marks an optional public summary that must not inflate host estimates of reasoning work already accounted by provider usage.</summary>
+    public bool IsDisplayOnlyReasoning { get; init; }
 
     /// <summary>Private completed-response replay metadata emitted before normalized tool calls.</summary>
     [JsonIgnore]

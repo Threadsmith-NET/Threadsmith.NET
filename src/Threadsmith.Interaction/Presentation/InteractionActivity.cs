@@ -11,6 +11,12 @@ public sealed record InteractionActivity(
     bool ShowDuration,
     TimeProvider TimeProvider)
 {
+    /// <summary>Gets the detail for a live tool block, or null for an ordinary status activity.</summary>
+    public string? ToolDetail { get; init; }
+
+    /// <summary>Gets current, single-line progress entries beneath the tool detail.</summary>
+    public IReadOnlyList<PresentationTextSegment> ToolProgress { get; init; } = [];
+
     /// <summary>Formats the current activity text without terminal control sequences.</summary>
     public string Format()
     {

@@ -10,6 +10,41 @@ using Xunit;
 /// <summary>Final memory inclusion, context-mode and sensitivity contracts independent of retrieval scoring.</summary>
 public static class Plan103ContextAssemblyTests
 {
+    /// <summary>Memory changes preserve the completed-history prefix and cannot leave deleted text in the next request.</summary>
+    [Fact]
+    public static async Task Changed_memories_follow_reusable_history()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var retriever = new TestRetriever(CreateEntry("Old memory canary."));
+        var assembler = CreateAssembler(events, retriever, conversationStore: fixture.Store);
+        var request = CreateRequest(fixture);
+        var priorRun = RunId.New();
+        foreach (var (role, content) in new[] { (ConversationRole.User, "prior question"), (ConversationRole.Assistant, "prior answer") })
+        {
+            await fixture.Store.ArchiveMessageAsync(new ConversationMessage
+            {
+                Id = ConversationMessageId.New(), SessionId = request.SessionId, RunId = priorRun, Sequence = 0,
+                Role = role, Content = content, ContentHash = "pending", EstimatedTokens = 4, OccurredAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        var first = await assembler.AssembleAsync(request);
+        retriever.Entry = retriever.Entry with { Text = "New memory canary.", Revision = 4, ContentHash = "changed-content" };
+        var changed = await assembler.AssembleAsync(request);
+        var removed = await assembler.AssembleAsync(request with { RepositoryMemoriesEnabled = false });
+        var firstMessages = first.Messages!.ToList();
+        var boundary = firstMessages.FindIndex(message => message.SectionId == "repository-memory");
+        Assert.True(boundary > firstMessages.FindLastIndex(message => message.SectionId == "recent-assistant"));
+        Assert.Contains(firstMessages.Take(boundary), message => message.SectionId == "recent-assistant");
+        Assert.Equal(ModelMessageRole.HostContext, firstMessages[boundary].Role);
+        var prefix = firstMessages.Take(boundary).Select(message => (message.Role, message.GetModelVisibleContent()));
+        Assert.Equal(prefix, changed.Messages!.Take(boundary).Select(message => (message.Role, message.GetModelVisibleContent())));
+        Assert.Equal(prefix, removed.Messages!.Take(boundary).Select(message => (message.Role, message.GetModelVisibleContent())));
+        Assert.DoesNotContain(changed.Messages!, message => message.GetModelVisibleContent().Contains("Old memory canary.", StringComparison.Ordinal));
+        Assert.DoesNotContain(removed.Messages!, message => message.SectionId == "repository-memory");
+    }
+
     /// <summary>Stateless and denied-tool policy suppress retrieval itself as well as memory text.</summary>
     [Theory]
     [InlineData(ConversationContextMode.Stateless, true, 0)]
@@ -160,7 +195,7 @@ public static class Plan103ContextAssemblyTests
         Task = new TaskSpecification("current task intent", []),
     };
 
-    private static ContextAssembler CreateAssembler(IDomainEventStream events, IHybridRepositoryMemoryRetriever retriever, IModelResolver? resolver = null)
+    private static ContextAssembler CreateAssembler(IDomainEventStream events, IHybridRepositoryMemoryRetriever retriever, IModelResolver? resolver = null, IConversationStore? conversationStore = null)
     {
         var sanitizer = new SecretOutputSanitizer();
         return new ContextAssembler(
@@ -172,6 +207,7 @@ public static class Plan103ContextAssemblyTests
             events,
             TestPromptLoader.Instance,
             modelResolver: resolver,
+            conversationStore: conversationStore,
             repositoryMemoryRetriever: retriever);
     }
 

@@ -360,6 +360,37 @@ public sealed class Plan50OpenAiCodexTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>Final Responses usage retains optional reasoning without changing output totals.</summary>
+    [Theory]
+    [InlineData("null", null)]
+    [InlineData("{}", null)]
+    [InlineData("[]", null)]
+    [InlineData("{\"reasoning_tokens\":null}", null)]
+    [InlineData("{\"reasoning_tokens\":0}", 0L)]
+    [InlineData("{\"reasoning_tokens\":7}", 7L)]
+    [InlineData("{\"reasoning_tokens\":-1}", null)]
+    [InlineData("{\"reasoning_tokens\":11}", null)]
+    [InlineData("{\"reasoning_tokens\":\"7\"}", null)]
+    public async Task Provider_ReasoningUsagePreservesMissingAndZero(string details, long? expected)
+    {
+        using var document = JsonDocument.Parse(details);
+        var stream = "data: " + JsonSerializer.Serialize(new
+        {
+            type = "response.completed",
+            response = new { usage = new { input_tokens = 100, output_tokens = 10, output_tokens_details = document.RootElement } },
+        }) + "\n\ndata: [DONE]\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(100, usage.InputTokens);
+        Assert.Equal(10, usage.OutputTokens);
+        Assert.Equal(expected, usage.ReasoningTokens);
+    }
+
     /// <summary>One Codex response can return multiple tool calls while the request keeps parallel execution enabled.</summary>
     [Fact]
     public async Task Provider_BatchedToolCalls_PreserveModelOrderAndParallelAllowance()
@@ -695,6 +726,64 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Contains("complete Codex request", exception.Message, StringComparison.Ordinal);
         Assert.Equal(0, handler.RequestCount);
+    }
+
+    /// <summary>Request-local host context retains developer authority without disturbing reusable Responses history.</summary>
+    [Fact]
+    public async Task Provider_HostContext_PreservesNativePrefixAndToolContinuation()
+    {
+        var handler = new RecordingHandler(_ => StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token");
+        static ModelMessage Message(ModelMessageRole role, string section, string text) => new()
+        {
+            Role = role, SectionId = section, Content = [new ModelContentPart { Content = text }],
+        };
+        var request = WithCapacity(CreateStreamRequest() with
+        {
+            Messages =
+            [
+                Message(ModelMessageRole.System, "host-policy", "stable host"),
+                Message(ModelMessageRole.Developer, "repository-instructions", "stable repository"),
+                Message(ModelMessageRole.User, "recent-user", "prior question"),
+                Message(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+                Message(ModelMessageRole.HostContext, "repository-memory", "old memory"),
+                Message(ModelMessageRole.HostContext, "governed-request-state", "old evidence"),
+                Message(ModelMessageRole.User, "current-user", "current question"),
+            ],
+            Tools = [CreateReadTool("read")],
+        });
+        _ = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var first = JsonDocument.Parse(handler.RequestBody!);
+        var changed = WithCapacity(request with
+        {
+            Messages = [.. request.Messages.Take(4), Message(ModelMessageRole.HostContext, "governed-request-state", "fresh evidence"), request.Messages[^1]],
+        });
+        _ = await provider.StreamAsync(changed, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var next = JsonDocument.Parse(handler.RequestBody!);
+        var originalInput = first.RootElement.GetProperty("input");
+        var nextInput = next.RootElement.GetProperty("input");
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.Equal(originalInput[index].GetRawText(), nextInput[index].GetRawText());
+        }
+
+        Assert.Equal("developer", nextInput[4].GetProperty("role").GetString());
+        Assert.DoesNotContain("old memory", next.RootElement.GetRawText(), StringComparison.Ordinal);
+        var continuation = WithCapacity(changed with
+        {
+            Messages =
+            [
+                .. changed.Messages,
+                Message(ModelMessageRole.Assistant, "call", "{\"path\":\"a.cs\"}") with { ToolCallId = "call-1", ToolName = "read" },
+                Message(ModelMessageRole.Tool, "result", "synthetic result") with { ToolCallId = "call-1", ToolName = "read" },
+            ],
+        });
+        _ = await provider.StreamAsync(continuation, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        using var continued = JsonDocument.Parse(handler.RequestBody!);
+        var continuedInput = continued.RootElement.GetProperty("input");
+        Assert.Equal(nextInput.EnumerateArray().Select(item => item.GetRawText()), continuedInput.EnumerateArray().Take(nextInput.GetArrayLength()).Select(item => item.GetRawText()));
+        Assert.Equal("function_call", continuedInput[nextInput.GetArrayLength()].GetProperty("type").GetString());
+        Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
     private static HttpResponseMessage JsonResponse(string value)

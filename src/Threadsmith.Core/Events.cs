@@ -286,7 +286,11 @@ public sealed record ToolInvocationCompleted(
     long? ElapsedMilliseconds = null,
     OperationActivityOutcome Outcome = OperationActivityOutcome.Unknown,
     string? ModelResultContent = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
+    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Gets the exact invocation owner; default supports historical events.</summary>
+    public RunId RunId { get; init; }
+}
 
 /// <summary>A semantic check started.</summary>
 public sealed record SemanticCheckStarted(
@@ -715,7 +719,11 @@ public sealed record DelegationCheckpointWritten(
     DelegationCheckpointPhase Phase,
     int Generation,
     string NextAction,
-    long Revision = 1) : DomainEvent(SessionId, OccurredAt);
+    long Revision = 1) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Originating tool invocation for exact live progress correlation.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+}
 
 /// <summary>One child reached an observable lifecycle state.</summary>
 public sealed record AgentRunLifecycleObserved(

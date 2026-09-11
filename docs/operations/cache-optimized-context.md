@@ -54,6 +54,8 @@ Provider cache counters are reported only when supplied by the provider. Missing
 
 The TUI header retains cumulative per-agent token totals. Agent details (F2 from output, then F2 for full text) also show the latest observed request's stage/round, input/output tokens, cache-read and cache-write tokens, and cache-hit percentage. Each agent owns its own latest request; an unavailable report never borrows an earlier request's counters. Percentages use the provider's normalized input semantics and remain unavailable for estimated input, missing reads, or unknown semantics. Anthropic input totals already include cache reads and writes, so they are not added twice. The raw model log's `responseSummary` entries retain each request/continuation round's normalized `Usage.Cache` counters.
 
+When available, reasoning-token counts appear as a subset of output in the header and latest-request details. Missing counts leave the old display intact, and partial cumulative reasoning is hidden. Cache read/write accounting and per-request hit percentages are independent of reasoning availability. See [provider usage fields](model-providers.md#reasoning-token-usage).
+
 For vLLM, start the server with [`--enable-prompt-tokens-details`](https://docs.vllm.ai/en/stable/cli/serve/#--enable-prompt-tokens-details) to expose per-request counters in streamed usage. Threadsmith already sends `stream_options.include_usage=true` and reads `prompt_tokens_details.cached_tokens` and `created_cache_tokens` when supplied. The server flag controls reporting, not whether prefix caching runs. vLLM's rolling server hit-rate log is not a particular request's cache-hit percentage.
 
 ## Provider acceleration and recovery

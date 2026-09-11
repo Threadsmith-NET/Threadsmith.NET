@@ -66,3 +66,7 @@ The model supplies tool names and JSON arguments only. It cannot provide claims,
 ```
 
 The host clamps concurrency to 1–16. `CompleteStarted` lets admitted siblings finish independently. `CancelBatchOnFailure` links sibling cancellation after the first terminal failure. Set `enabled` to false to reproduce sequential execution for diagnosis.
+
+## Watching a batch
+
+TUIKit shows each admitted invocation in its owner’s output pane as soon as it starts, with its own live timer and eventual outcome block. MCP labels use `MCP:`; built-in and extension labels use `TOOLS:`. Completion order can differ from request order in the display, but correlated model continuation results remain in the original ordinal order. This display support does not change the scheduling restrictions above. See [tool activity](tools.md#availability-and-live-activity).

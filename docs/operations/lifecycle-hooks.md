@@ -21,6 +21,10 @@ Lifecycle hooks notify or consult configured automation at stable host boundarie
 
 Handlers return exactly one schema-1 result: `acknowledge`, `advice`, `deny`, or `failure`. Findings and explanations are bounded untrusted text. Unknown versions/types, invalid fields, excessive output, timeout, cancellation, unavailable adapters, and budget exhaustion are normalized failures.
 
+## Interactive enablement
+
+In TUIKit, `/hooks` and `/hooks list` open a keyboard-only checkbox tree grouped by scope. Checked means enabled. Space applies an individual or filtered group toggle immediately and leaves the modal open for more changes; Esc/Enter closes without undoing successful changes. Type to filter and use F2 for details. The checkbox reflects the refreshed handler state if a change fails. Enabling a repository hook does not grant its separate approval. Direct inspect, enable/disable, test, approval, and audit commands remain available.
+
 ## Repository approval and revocation
 
 Inspect the normalized handler identity, target, points, limits, requested data/secret names, digest, and advisory authority before approving. Approval is stored in the user-owned database, not `.threadsmith`. Any identity, target, point, limit, data/secret request, or digest change requires fresh approval. Revocation takes effect on the next policy resolution.

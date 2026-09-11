@@ -9,6 +9,8 @@ Start with the [user guide](user-guide.md) for installation, startup, commands, 
 More focused references are grouped by audience:
 
 - [Operations](operations/README.md) — day-to-day commands, configuration, lifecycle, providers, tools, skills, hooks, prompts, and release installation.
+- [Full-screen agent workspace](operations/agent-workspace.md) — tabs, live tool progress, management dialogs, authentication actions, and per-agent usage.
+- [Cache reporting](operations/cache-optimized-context.md) — request layout, cache reuse, and per-request counters.
 - [Extension authoring](extension-authoring/authoring-guide.md) — stable extension contracts and lifecycle guidance.
 - [Skill authoring](skill-authoring.md) — declarative packages, schemas, workflows, verification, and distribution.
 - [Prompt files](prompt-file-reference.md) — deployed prompt locations, owners, and customization behavior.

@@ -186,7 +186,7 @@ Declining leaves the repository unchanged.
 
 After a solution or supported project is loaded, Threadsmith monitors relevant files beneath the active repository. A short bounded settling interval coalesces editor save bursts before one workspace-scoped refresh begins. An edit to an existing loaded C# document is applied incrementally when its settled path still exists and its identity and project membership remain stable, including editors that save by atomically replacing the same file. Actual document membership changes, project/solution files, build props and targets, analyzer configuration, uncertain changes, and watcher recovery use a complete semantic reload.
 
-An externally attributed cycle prints `External changes detected; updating semantic model...` once, followed by one completion or actionable failure. Watcher recovery instead starts with `External changes require semantic recovery; updating semantic model...` and uses the same single terminal projection. The refresh uses the same serialized console boundary as the composer, so background output does not submit, clear, or discard a draft. Compiler diagnostics may reduce the resulting semantic confidence without making refresh infrastructure fail.
+An externally attributed cycle prints `External changes detected; updating semantic model...` once, followed by one completion or actionable failure. TUIKit also echoes refresh start, completion, and failure as transient toasts without taking focus or changing queued-input handling. Watcher recovery instead starts with `External changes require semantic recovery; updating semantic model...` and uses the same single terminal projection. The refresh uses the same serialized console boundary as the composer, so background output does not submit, clear, or discard a draft. Compiler diagnostics may reduce the resulting semantic confidence without making refresh infrastructure fail.
 
 The semantic update itself runs without waiting for Threadsmith to regain focus or for composer input. When the composer is empty, refresh lifecycle output automatically closes and reopens that empty prompt, so the update appears without a keypress or other console interaction. Once any draft text exists, including whitespace, lifecycle output waits until the draft is submitted, cancelled, or cleared back to empty; the refresh never submits, clears, or discards the draft. Focusing the window alone does not trigger or release semantic work. A submitted model request still waits for the already-running refresh before a run is created.
 
@@ -216,7 +216,7 @@ Grant `TrustedBuild` or above only to repositories whose build scripts, analyzer
 
 ## Using the interactive terminal
 
-Startup displays the Threadsmith identity, repository and solution state, effective model, trust, session-status mode, target frameworks, semantic confidence, and terminal mode. The composer is labeled with the current repository directory name.
+Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The default TUIKit composer uses `Threadsmith >`; the repository appears in the fixed footer. The original frontend labels its composer with the current repository directory name.
 
 Ordinary prompts are conversational. A greeting or question can complete as a normal assistant response. A repository-change request remains in the same model turn, but the model must call the host-owned `propose_plan` tool before governed planning begins.
 
@@ -224,6 +224,8 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 
 | Command | Purpose |
 |---|---|
+| `/agents [<id> [cancel\|cancel-child <id>]]` | List, inspect, or cancel delegation trees; use tabs to view active agents. |
+| `/auth openai-codex [login\|status\|logout]` | Manage Codex authentication. |
 | `/clone` | Create and activate an independent governed copy of the current session. |
 | `/code_explore_inspect {on\|off}` | Show or hide future `code_explore` output in interactive tool blocks. |
 | `/code_explore_output {structured\|markdown}` | Select the session's diagnostic `code_explore` output format. |
@@ -231,29 +233,34 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/context inspect` | Inspect the latest run's included, omitted, retrieved, stale, and reduced context. |
 | `/context mode` | Report the effective cross-turn conversation mode. |
 | `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
-| `/extensions` | Browse, load, and unload discovered extensions. |
-| `/help` | Display available commands. |
-| `/memory remember <text>` | Explicitly save a concise repository note. |
-| `/memory list` | List current note IDs, origins, and text. |
+| `/extensions` | Open the loaded-extension checkbox dialog. |
+| `/fetch-authorize <url> [redirect ...]` | Authorize an exact URL chain for `web_fetch`. |
+| `/help` | Open a scrollable command/description modal in TUIKit; print command help in the original frontend. |
+| `/hooks [list\|inspect\|enable\|disable\|test\|approve\|revoke\|audit]` | Open the hook checkbox dialog or manage a specific handler. |
+| `/mcp [action] [profile]` | Open the connection checkbox dialog, authenticate eligible profiles, or manage capabilities and identity. See [MCP commands](operations/mcp-connections.md#lifecycle-commands). |
+| `/memory remember [--type standingPreference\|situational] <text>` | Explicitly save a repository note; the default type is situational. |
+| `/memory list` | List current note IDs, types, origins, and text. |
 | `/memory inspect <id>` | Inspect one note with timestamps, usage, and embedding status; no vector components. |
-| `/memory update <id> <text>` | Correct the same stable ID; `supersede` is a compatibility alias. |
+| `/memory update <id> [--type standingPreference\|situational] <text>` | Correct the same stable ID; omitted type preserves it. `supersede` is a compatibility alias. |
 | `/memory forget <id>` | Delete current memory content, search state, and usage. |
 | `/memory validate` | Retired; returns migration guidance, as do old category/validity arguments. |
-| `/models [status|refresh <provider-id>]` | Select the active repository model, inspect discovery, or refresh metadata for the next startup. |
+| `/models [status\|refresh <provider-id>]` | Select the active repository model, inspect discovery, or refresh metadata for the next startup. |
 | `/new` | Checkpoint the current session and activate a fresh empty session. |
 | `/open [path]` | Open or switch repositories. |
-| `/plan-policy [name|current|reset]` | Select, report, or revoke the plan approval policy. |
-| `/policy [name|current]` | Select or report the mutation approval policy for exact staged diffs. |
+| `/plan-policy [name\|current\|reset\|revoke]` | Select, report, or revoke the plan approval policy. |
+| `/policy [name\|current]` | Select or report the mutation approval policy for exact staged diffs. |
 | `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
 | `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
 | `/semantic_refresh` | Force and await a complete semantic refresh without creating a model run. |
-| `/theme` | Select a theme. |
+| `/skills [action]` | Inspect and manage governed skills; see [skill operations](operations/skills.md). |
+| `/theme` | Select one theme in the filtered modal. |
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
-| `/thinking [on|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/thinking [on\|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
 | `/tools` | Browse and toggle non-essential repository tools. |
-| `/trust [inspect|read|build|mutation|automation]` | Show or change repository trust. |
+| `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
+| `/validation retry` | Resume interrupted post-apply validation. |
 
 
 ### Durable session lifecycle
@@ -268,7 +275,9 @@ Run `threadsmith --tui` for the default full-screen interface; `threadsmith --tu
 
 TUIKit keeps a title bar, MAIN and active-child tabs, a bordered output pane with the selected agent’s status and activity, a bordered multiline composer (normally five content rows), and a fixed repository footer. The footer shows the folder, branch/detached state, and staged/modified/untracked/conflict counts from a bounded periodic Git query. It requires at least 40 columns by 12 rows; at that minimum it retains two output rows and one editor row. Shrinking further preserves state until the terminal grows again. `tui:footer:enabled=false` hides the repository footer while agent status and accounting remain available.
 
-Enter submits unless a command suggestion is visible, in which case it only inserts the selected command name. TUIKit moves each committed ordinary entry into the retained transcript before clearing the composer. After required startup choices, the logo splash shows actual loading phases and elapsed times. Input and paste during startup are discarded. Completed, failed, or cancelled phases remain visible in MAIN; ordinary input starts after loading finishes. Ctrl+Enter inserts a newline; Shift+Enter and Alt+Enter do so where the terminal distinguishes them. Ctrl+Alt+Enter submits. Editing supports grapheme/word movement, selection, multiline paste, bounded undo/redo, indentation, and submission history. Ordinary, secondary, and steering prompts keep separate drafts. During a run, Enter requests steering at a safe boundary when no suggestion is visible; double Escape cancels the run. Ctrl+C copies selected text and otherwise exits through process cancellation.
+Pane borders are rounded. Content has side and bottom padding; modal headings and the output status header sit flush below their top borders with a blank line beneath them. The composer has no top padding. Agent tabs have one leading space and a one-cell gap using the tab bar background; MAIN is selected even when it is the only tab. The output header starts with `Using model: (Provider Name) Model Name`, followed by reasoning effort and usage. A right-aligned `Context` bar shows the latest context percentage and capacity. `/models` lists `(Provider Name) Model Name`, sorted by provider and then model name.
+
+Enter submits unless a command suggestion is visible, in which case it only inserts the selected command name. TUIKit moves each committed ordinary entry into the retained transcript before clearing the composer. After required startup choices, the logo splash shows actual loading phases and elapsed times. Input and paste during startup are discarded. Successful startup phases and remembered-solution messages stay in the splash and are discarded when it closes. Warnings and failure/cancellation diagnostics remain in MAIN; ordinary input starts after loading finishes. Ctrl+Enter inserts a newline; Shift+Enter and Alt+Enter do so where the terminal distinguishes them. Ctrl+Alt+Enter submits. Editing supports grapheme/word movement, selection, multiline paste, bounded undo/redo, indentation, and submission history. Ordinary, secondary, and steering prompts keep separate drafts. During a run, Enter requests steering at a safe boundary when no suggestion is visible; double Escape cancels the run. Ctrl+C copies selected text and otherwise exits through process cancellation.
 
 F1 opens a non-selectable key-help list; arrows or PageUp/PageDown scroll it when needed. F7 switches keyboard focus between MAIN’s composer and output. Child tabs are read-only: selecting one preserves MAIN’s draft and blocks editing, paste, completion, submission, and steering. F7 keeps output focus on a child. Ctrl+Left/Right cycles all agents only from output; the composer retains word movement. Captured mouse clicks select tabs, including overflow arrows. F2 exposes complete agent status and labels. In the transcript, arrows/PageUp/PageDown/Home/End scroll; shifted movement selects. Incoming output preserves detached scroll position. The activity row starts with an unseen-output count and follow keys, even after a run returns to the ready prompt. Press F7 then End from the composer, or End while the transcript has focus, to reveal the latest output. Ctrl+L clears the visible viewport while bounded earlier content remains reachable with Home. Ctrl+C and F6 copy visible selected text; Ctrl+C cancels the process only when nothing is selected. Ctrl+Shift+C copies the focused selection or complete draft. F8 lists validated links from retained output so Enter can copy one. F12 releases or recaptures the mouse, allowing terminal-native selection while released. Explicit application copy is limited to 64 KiB and depends on OSC 52 terminal support. Ctrl+V/Shift+Insert request an OS clipboard read bounded to one MiB and two seconds; terminal bracketed paste is also supported.
 
@@ -278,9 +287,17 @@ Typing a partial slash token, such as `/rea`, shows up to six prefix suggestions
 
 Selectors use centered frames and block background keys, paste, and mouse input. They filter labels while preserving stable option identities. Arrows/PageUp/PageDown/Home/End navigate, Enter selects, and Escape cancels. F2 opens complete scrollable option details, including long paths and model descriptions. F8 lists validated links from retained output; Enter copies the selected target and F2 shows the complete target. Links never execute automatically.
 
-Tools and MCP tool availability use keyboard-only checkbox trees: arrows navigate, Space applies immediately through host checks, typing/paste filters, Backspace edits the filter, F2 shows complete details, and Esc/Enter closes while keeping successful changes. Filtered group toggles apply only to visible eligible members; essential tools remain locked and consent prompts retain host authority. Connection management remains separate from MCP tool enablement.
+`/tools`, `/hooks` (also `/hooks list`), `/mcp` (also `/mcp list`), MCP tool availability, and `/extensions` use keyboard-only checkbox trees. Arrows navigate; Space applies each toggle immediately and leaves the modal open for more changes. Typing/paste filters, Backspace edits the filter, F2 shows details, and Esc/Enter closes while keeping completed changes. Group toggles affect only visible eligible members. Checked means tool available, hook enabled, MCP profile connected, or extension loaded. Hook enablement does not grant repository approval; connecting a server does not enable its tools or change startup auto-connect. Failed operations restore the reported host state. `/theme` is a single-selection modal.
 
-Children receive a stable random person name plus role, such as `Shackleton · Explorer`. Each has independent output, scroll, selection, activity, effective request model/reasoning, latest context estimate/capacity, and input/cache-read/output counters. MAIN counters exclude children; aggregate session accounting is unchanged. `~` means estimated, `?` unavailable, and `+?` a known subtotal with missing usage. After resume, per-agent counters report only observations since resume; historical totals are not assigned to MAIN. A child’s terminal outcome reaches MAIN before its tab disappears.
+In `/mcp`, select an eligible OAuth profile and press F3, then choose **Sign in / Authenticate**. Esc during authentication cancels the attempt and returns to the connection list; status refreshes afterward. Static-token profiles have no sign-in action. To change identity, use `/mcp logout <profile>` and sign in again. See [management dialogs](operations/agent-workspace.md#management-dialogs).
+
+`/help` opens a modal with wrapped command and description columns. Up/Down, PageUp/PageDown, Home, and End scroll it; Esc closes it. It does not add help text to the output transcript.
+
+Children receive a stable random person name plus role, such as `Shackleton · Explorer`. Each has independent output, scroll, selection, activity, effective request model/reasoning, latest context estimate/capacity, and input/cache-read/output counters. MAIN counters exclude children; aggregate session accounting is unchanged. `~` means estimated, `?` unavailable, and `+?` a known subtotal with missing usage. After resume, per-agent counters report only observations since resume; historical totals are not assigned to MAIN. Each child’s queued, running, and final status updates a named row inside MAIN’s live `delegate_agents` tool block; the terminal update is captured before the child tab disappears. The completed tool block retains final rows beneath its timer. Repeated checkpoint outcomes are deduplicated. The old delegation-GUID announcement and inspection hint are omitted; `/agents` still provides IDs for explicit inspection or cancellation.
+
+Live tool blocks appear in the selected agent’s output pane before their operations complete. Native/extension calls use `TOOLS:` and MCP calls use `MCP:`. Concurrent calls retain independent timers and final blocks, including out-of-order completions. Short panes disclose omitted progress rows or additional running tools. `ENTER to steer; ESC-ESC to cancel` appears at the bottom of MAIN after its activity timer only during an active turn, then disappears. Live frames and hints do not accumulate in copied transcript history.
+
+When supplied by a provider, usage adds a breakdown such as `out 2,000 (reasoning 1,200)`. Missing counts leave the display unchanged, and reported zero is shown. Reasoning is already included in output totals and cost. Cumulative reasoning is hidden if any contributing request lacks the count; F2 can still show a reported count for the latest request. This is independent of `/thinking` text visibility. F2 also shows per-request cache reads, writes, and hit percentage; see [cache reporting](operations/cache-optimized-context.md).
 
 The retained transcript keeps up to 1024 chunks/512 KiB and visibly announces eviction. Child source and projected text additionally share a 4 MiB budget, with at most 8192 logical chunks across children. Transient display queues hold 256 fragments of at most 4096 UTF-16 units each; overflow is reported without dropping execution decisions, lifecycle, or usage. Completed child views are released. It is a view, not durable session history or native terminal scrollback. Themes and `NO_COLOR` remain supported; selector markers remain visible without color.
 
@@ -741,15 +758,15 @@ Child summaries default `compaction:summary:maximumInputTokens` to `0`, meaning 
 
 #### Inspecting and cancelling subagents
 
-When an accepted checkpoint is durably recorded, the TUI immediately prints the stable delegation ID, separated from preceding output by a blank line. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, role, terminal status, effective provider/profile/reasoning, selection source and fallback reason, bounded usage, lifecycle reason, and next legal action. Final child replies return through the joined result, not as interleaved child transcripts or hidden reasoning. Persisted assignments also retain the contract marker, runner version, and configured model preference. These records support inspection; there is no automatic resume API for an interrupted delegated model loop. Further delegation starts in a new generation. Approved-plan execution retains its separate [resume lifecycle](operations/execution-resumption.md).
+Accepted children appear as person/role tabs in TUIKit. MAIN shows each child’s current status inside the live `delegate_agents` tool block, then retains final rows below its completion timer. The TUI omits automatic delegation-GUID and inspection-hint messages. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, role, terminal status, effective provider/profile/reasoning, selection source and fallback reason, bounded usage, lifecycle reason, and next legal action. Final child replies return through the joined result, not as interleaved child transcripts or hidden reasoning. Persisted assignments also retain the contract marker, runner version, and configured model preference. These records support inspection; there is no automatic resume API for an interrupted delegated model loop. Further delegation starts in a new generation. Approved-plan execution retains its separate [resume lifecycle](operations/execution-resumption.md).
 
 Headless callers use `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher to inspect or cancel model-requested delegations. There is no direct headless delegation-start command. Configure scheduler admission under `agents` as documented in `.threadsmith/config.example` and ordinary delegation through trusted machine/user `agents:delegation` settings. Existing finite defaults and active request, tool, transport, and result-envelope controls remain distinct from response-format freedom. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
 
-During an active conversation, the TUI shows `Running — Enter to steer; Esc Esc to stop.` Enter creates one idempotent request and immediately acknowledges that Threadsmith is waiting for the current model/tool boundary. Pressing Enter again while the request is pending has no additional effect.
+During an active conversation on MAIN, TUIKit shows `ENTER to steer; ESC-ESC to cancel` after its activity timer at the bottom of the output pane. The hint disappears when the turn ends or pauses and is not added to the transcript. Return from a child tab to MAIN before steering. Enter creates one idempotent request and immediately acknowledges that Threadsmith is waiting for the current model/tool boundary. Pressing Enter again while the request is pending has no additional effect.
 
-Threadsmith finishes the in-flight provider response or tool batch before opening the ordinary PrettyPrompt composer as `steer >`. During a delegation, every still-running child first pauses before its next provider request or becomes terminal. The parent run remains paused while the composer is displayed, so further tool/model output cannot scroll it away. Submitted text becomes sanitized lower-authority user context for the parent and eligible children; empty/cancel resumes unchanged. Bare `/agents` can recover delegation and assignment IDs from the steering prompt before a detailed inspection or cancellation command. Completed children are not reopened and are counted as undelivered in the joined steering summary.
+Threadsmith finishes the in-flight provider response or tool batch before opening the frontend’s steering composer as `steer >`. During a delegation, every still-running child first pauses before its next provider request or becomes terminal. The parent run remains paused while the composer is displayed, so further tool/model output cannot scroll it away. Submitted text becomes sanitized lower-authority user context for the parent and eligible children; empty/cancel resumes unchanged. Bare `/agents` can recover delegation and assignment IDs from the steering prompt before a detailed inspection or cancellation command. Completed children are not reopened and are counted as undelivered in the joined steering summary.
 
-Press unmodified Escape twice within 850 ms to cooperatively cancel the active run. `Ctrl+C` remains supported. An in-flight provider or tool must still observe cancellation normally; neither shortcut fabricates mid-operation suspension. Ordinary non-hot-key typing and multi-key paste bursts received during a run are buffered for the next PrettyPrompt composer.
+Press unmodified Escape twice within 850 ms to cooperatively cancel the active run. `Ctrl+C` remains supported. An in-flight provider or tool must still observe cancellation normally; neither shortcut fabricates mid-operation suspension. On MAIN, ordinary non-hot-key typing and multi-key paste bursts received during an active run are buffered for the next composer. This differs from startup splash input, which is discarded in TUIKit; child tabs also reject composer input.
 
 ## Tools and tool availability
 
@@ -1111,7 +1128,7 @@ Codex authorization/resource authorities, client identity, scopes, redirect URI,
 
 ### Anthropic API-key setup and discovery
 
-The native `anthropic` provider uses Anthropic's Messages API and discovers models through its Models API. Add an enabled descriptor to the user `~/.threadsmith/providers.json` catalog and keep its API key in the separate owner-protected `~/.threadsmith/secrets/config.json` store. Repository keys and ambient SDK authentication cannot supply this provider. The complete descriptor and secret-reference example is in [native Anthropic operations](operations/model-providers.md#native-anthropic).
+The native `anthropic` provider uses Anthropic's Messages API and discovers models through its Models API. Add an enabled descriptor to the user `~/.threadsmith/providers.json` catalog and keep its API key in the separate user-level `~/.threadsmith/secrets/config.json` store. Repository keys and ambient SDK authentication cannot supply this provider. The complete descriptor and secret-reference example is in [native Anthropic operations](operations/model-providers.md#native-anthropic).
 
 Use `/models status <provider-id>` to inspect discovered model IDs, profile GUIDs, eligibility, and exclusion reasons. `/models refresh <provider-id>` updates bounded credential-free metadata; restart to rebuild the immutable selectable catalog. Select a model explicitly with `/models`; discovery does not replace your default. These status and refresh commands also work headlessly.
 
@@ -1247,7 +1264,7 @@ The default `system` theme inherits native terminal foreground/background. Other
 - `ocean`;
 - `high-contrast`.
 
-Use `/theme`, `/theme <id>`, or `/theme current`. A selection affects future output and atomically updates only `tui.defaultTheme` in `~/.threadsmith/config.json`, preserving unrelated settings, comments, trailing commas, and surrounding formatting. Normal configuration precedence still applies, so a higher-precedence repository, session, CLI, or environment value may override the user default at startup. Theme changes do not rewrite prior scrollback or create domain events.
+Use `/theme`, `/theme <id>`, or `/theme current`. TUIKit repaints retained views immediately; the original frontend applies the selection to future output. Selection atomically updates only `tui.defaultTheme` in `~/.threadsmith/config.json`, preserving unrelated settings, comments, trailing commas, and surrounding formatting. Normal configuration precedence still applies, so a higher-precedence repository, session, CLI, or environment value may override the user default at startup. Theme changes do not rewrite the original frontend’s native scrollback or create domain events.
 
 Configured themes use semantic roles rather than fixed screen coordinates. A configured theme's `styles` object may contain these role names:
 
@@ -1257,7 +1274,7 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Brand` | Startup branding and identity. |
 | `Muted` | Secondary or de-emphasized information. |
 | `Status` | General host status messages. |
-| `SessionStatus` | Composer-adjacent repository, model, context, and token status. |
+| `SessionStatus` | TUIKit’s fixed repository footer; composer-adjacent repository/model/context/token status in the original frontend. |
 | `Hyperlink` | Validated clickable links. |
 | `ToolSuccess` | Successful tool completion. |
 | `ToolFailure` | Failed tool completion. |
@@ -1268,12 +1285,24 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Warning` | Warnings. |
 | `Error` | Errors and failures. |
 | `UserPrompt` | User-authored transcript content. TUIKit moves each committed ordinary composer entry into its retained transcript once; the original frontend keeps the native prompt line in terminal scrollback. |
-| `ComposerPrompt` | The interactive repository-name composer prompt. |
+| `ComposerPrompt` | `Threadsmith >` in TUIKit; the repository-name prompt in the original frontend. |
 | `ThinkingIndicator` | The transient `THINKING` indicator. |
 | `Reasoning` | Streaming reasoning enabled with `/thinking` or `Ctrl+T`. |
 | `DiffAdded` | Added diff lines. |
 | `DiffRemoved` | Removed diff lines. |
 | `DiffContext` | Neutral/context diff lines, including hunk/file headers and display-only hunk spacing. |
+
+TUIKit also accepts the following workspace roles. See [the full role reference](operations/tui-themes.md#retained-workspace-role-reference) for padding, fallback, and dialog styling.
+
+| Role | Styled content |
+|---|---|
+| `TitleBarRole` | The fixed `Threadsmith.NET` title row. |
+| `AgentTabHeaderRole` | The tab bar base, unused space, and one-cell inter-tab gaps. |
+| `AgentSelectedTabRole` | The selected tab label/background, including a lone MAIN tab. |
+| `AgentNotSelectedTabRole` | Inactive tab labels/backgrounds and overflow arrows. |
+| `AgentStatusPaneRole` | The unpadded `Using model:` header, provider/model/usage, and context progress bar. |
+| `OutputStreamPaneRole` | Output border, padding, and background beneath semantic text styles. |
+| `ComposerBackgroundPaneRole` | Composer border, padding, background, and child read-only banner. |
 
 Each role accepts optional `foreground` and `background` colors plus the Boolean decorations `bold`, `dim`, `italic`, `underline`, `strikethrough`, and `invert`. An omitted or `null` color inherits. Unspecified role colors fall back through `Default`, then the built-in `system` theme, whose ordinary foreground and background inherit from the terminal. Stable system semantic decorations—such as bold headings—remain active unless that exact role explicitly overrides its decorations.
 
@@ -1414,7 +1443,7 @@ Operational principles:
 - hot replacement publishes the new generation without allowing an old unload to remove it;
 - load-context isolation is not a security boundary, so in-process extensions must be trusted.
 
-The interactive `/extensions` surface supports browsing, loading, and unloading configured extensions. Repository-level selection uses `.threadsmith/extensions.json`.
+In TUIKit, `/extensions` opens a checkbox tree: checked means loaded. Toggle several extensions or a filtered group without closing the dialog; each load/unload takes effect immediately and the checkbox reflects the resulting state. Esc keeps completed changes. The original frontend retains its selector. Repository-level selection uses `.threadsmith/extensions.json`.
 
 Extension authors should read [extension-authoring/authoring-guide.md](extension-authoring/authoring-guide.md).
 
@@ -1634,6 +1663,8 @@ Lifecycle hooks provide opt-in typed automation at repository, model, tool, plan
 
 Repository configuration may declare handlers under `hooks:repositoryHandlers`, but declarations start disabled and cannot approve themselves. Interactive users use `/hooks list`, `/hooks inspect <id>`, `/hooks enable|disable <id>`, `/hooks test <id>`, `/hooks approve|revoke <id>`, and `/hooks audit [id]`. The matching `HeadlessShell` methods expose the same operations for automation. Both surfaces dispatch the same Core commands (`ListHooksCommand`, `InspectHookCommand`, `ApproveRepositoryHookCommand`, `RevokeRepositoryHookCommand`, `SetHookEnabledCommand`, `TestHookCommand`, and `QueryHookAuditCommand`); a test command invokes only its selected handler.
 
+In TUIKit, `/hooks` or `/hooks list` opens the checkbox dialog. Space enables/disables an item or filtered group immediately; checked means enabled, and Esc keeps completed changes. Repository approval remains a separate action.
+
 Repository handlers are always advisory and fail-open. Only repository-excluding managed organization/machine/user configuration can grant blocking or fail-closed authority, and only at eligible pre-action points for an immutable handler identity and allowlisted denial codes. Completed/terminal hooks cannot undo or invalidate completed work. No result is an approval or a command.
 
 Every invocation is bounded by timeout, input/output size, concurrency, retry, call-chain depth, effective data scope, and logical-secret scope. The host abandons and discards late results when a handler ignores cancellation. `MutationStaged` runs once after exact-diff staging, `MutationApplied` runs once after the completed transaction rather than once per file, repository plan hooks receive the open repository identity, and `McpConnected` runs after successful auto-connect publishes imported capabilities. HTTP requires HTTPS except literal loopback development endpoints and does not follow redirects. Executable arguments are never shell interpolated. MCP must already be connected, and extension invocation retains existing lease/budget ownership.
@@ -1716,6 +1747,8 @@ The host also supplies a bounded `DiagnosticBundleGenerator` contract used by te
 ## MCP connection profiles
 
 Threadsmith uses one host-owned MCP manager for startup auto-connect, repository transitions, interactive commands, headless commands, and shutdown. Profiles marked `autoConnect` in repository-excluding trusted machine/user/environment configuration connect best-effort during startup; repository-owned profiles cannot authorize command execution or grant themselves trust. An eligible profile's connection failure is sanitized and does not prevent the shell from opening; malformed profile configuration fails closed during composition. Defined profiles remain visible while disconnected.
+
+In TUIKit, `/mcp` and `/mcp list` open the connection checkbox dialog: checked means connected, and Space applies each connect/disconnect immediately. Select an eligible OAuth profile and press F3 for **Sign in / Authenticate**; Esc cancels an active sign-in and returns to the list. The modal refreshes actual state after each operation. It has no Switch account action; log out with `/mcp logout <profile>` before signing in again. Tool enablement remains separate. See [MCP lifecycle commands](operations/mcp-connections.md#lifecycle-commands).
 
 Interactive lifecycle commands are:
 

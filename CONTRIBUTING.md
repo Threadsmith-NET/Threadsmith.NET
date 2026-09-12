@@ -122,7 +122,6 @@ Also run checks owned by the area you changed:
 
 - Architecture or project-reference changes: `tests/Threadsmith.Architecture.Tests`.
 - Release automation changes: run the relevant release contract checks under `eng/release/`.
-- Spike changes: build `spikes/Spikes.sln` and run the affected headless-safe spike.
 - Interactive terminal changes: update automated projection tests and the maintained [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) when real-terminal behavior changes.
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.

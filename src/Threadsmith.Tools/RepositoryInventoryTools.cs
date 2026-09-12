@@ -531,9 +531,12 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
             OmittedProjectReferences = project.OmittedProjectReferences + project.ProjectReferences.Count,
             OmittedPackages = project.OmittedPackages + project.Packages.Count,
         }).ToArray();
-        return JsonSerializer.Serialize(
+        content = JsonSerializer.Serialize(
             projection with { Projects = summarizedProjects },
             ModelJsonOptions);
+        return content.Length <= _limits.MaximumModelResultCharacters
+            ? content
+            : Bound("Inventory omitted: the summarized result exceeds the configured model-result character limit.", _limits.MaximumModelResultCharacters);
     }
 
     private static string Bound(string value, int maximumCharacters)

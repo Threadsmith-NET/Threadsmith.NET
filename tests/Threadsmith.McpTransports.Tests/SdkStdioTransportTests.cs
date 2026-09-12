@@ -12,6 +12,24 @@ using Xunit;
 /// <summary>Verifies the SDK-backed stdio MCP transport against the in-repository server.</summary>
 public sealed class SdkStdioTransportTests
 {
+    [Fact]
+    public void PromptArguments_HonorInvocationCountAndNameLimits()
+    {
+        var mapping = new McpTransportMapping(new McpResourceLimits
+        {
+            MaximumPromptArguments = 10,
+            MaximumArguments = 1,
+            MaximumArgumentNameCharacters = 3,
+        });
+        Assert.Single(mapping.MapArguments(new Dictionary<string, string> { ["one"] = "value" }));
+        Assert.Throws<InvalidOperationException>(() => mapping.MapArguments(new Dictionary<string, string>
+        {
+            ["one"] = "first",
+            ["two"] = "second",
+        }));
+        Assert.Throws<InvalidOperationException>(() => mapping.MapArguments(new Dictionary<string, string> { ["long"] = "value" }));
+    }
+
     /// <summary>Host profiles map to isolated SDK stdio process options.</summary>
     [Fact]
     public void Profile_maps_to_scoped_stdio_options()

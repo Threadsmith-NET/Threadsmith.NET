@@ -239,7 +239,7 @@ public sealed class DotNetEnvironmentResolver
 
     private static async Task<string> ReadBoundedAsync(StreamReader reader, int maximumCapturedCharacters)
     {
-        var retained = new StringBuilder(maximumCapturedCharacters);
+        var retained = new StringBuilder(Math.Min(maximumCapturedCharacters, 4096));
         var buffer = new char[4096];
         while (true)
         {

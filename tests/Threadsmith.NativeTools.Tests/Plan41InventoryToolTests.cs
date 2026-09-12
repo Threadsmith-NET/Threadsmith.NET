@@ -469,6 +469,17 @@ public sealed class Plan41InventoryToolTests
         Assert.NotNull(execution.ModelResultContent);
         Assert.Contains("Inventory.Tests.csproj", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.Contains("Example.Package", execution.ModelResultContent, StringComparison.Ordinal);
+        foreach (var maximumCharacters in new[] { 1, 64, 256 })
+        {
+            var boundedTool = new DotNetInventoryTool(service, TestPromptLoader.Instance, new SemanticResourceLimits
+            {
+                MaximumModelResultCharacters = maximumCharacters,
+            });
+            var bounded = await boundedTool.ExecuteAsync(new DotNetInventoryInput(), CreateExecutionContext(repository.Path, workspaceId: workspaceId));
+            Assert.NotNull(bounded.ModelResultContent);
+            Assert.InRange(bounded.ModelResultContent.Length, 1, maximumCharacters);
+        }
+
         Assert.DoesNotContain("repositoryRevision", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("usedEvaluation", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspaceId", inventoryTool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);

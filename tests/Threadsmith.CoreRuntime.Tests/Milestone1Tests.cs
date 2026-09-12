@@ -3762,7 +3762,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
     {
-        var provider = new LeadingWhitespaceModelProvider(trailingChunkCount: 300);
+        var provider = new LeadingWhitespaceModelProvider(trailingChunkCount: 1024);
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);

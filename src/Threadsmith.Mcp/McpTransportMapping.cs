@@ -130,16 +130,24 @@ internal sealed class McpTransportMapping
                 var name = NormalizeRequired(prompt.Name, 128, "prompt name");
                 var description = NormalizeOptional(prompt.Description, _limits.MaximumDescriptionCharacters);
                 var protocolArguments = prompt.ProtocolPrompt.Arguments ?? [];
-                if (protocolArguments.Count > _limits.MaximumPromptArguments)
+                if (protocolArguments.Count > Math.Min(_limits.MaximumPromptArguments, _limits.MaximumArguments))
                 {
                     throw new InvalidOperationException("An MCP prompt declares too many arguments.");
+                }
+
+                if (protocolArguments.Any(argument => string.IsNullOrWhiteSpace(argument.Name)
+                    || argument.Name.Length > _limits.MaximumArgumentNameCharacters
+                    || argument.Name.Any(char.IsControl))
+                    || protocolArguments.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != protocolArguments.Count)
+                {
+                    throw new InvalidOperationException("An MCP prompt declares invalid, duplicate, or oversized argument names.");
                 }
 
                 McpImportedPromptArgument[] arguments =
                 [
                     .. protocolArguments.Select(argument => new McpImportedPromptArgument
                     {
-                        Name = NormalizeRequired(argument.Name, 128, "prompt argument name"),
+                        Name = argument.Name,
                         Description = NormalizeOptional(argument.Description, 1024),
                         Required = argument.Required is true,
                     }),
@@ -305,7 +313,7 @@ internal sealed class McpTransportMapping
         IReadOnlyDictionary<string, string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (arguments.Count > _limits.MaximumPromptArguments
+        if (arguments.Count > Math.Min(_limits.MaximumPromptArguments, _limits.MaximumArguments)
             || arguments.Any(pair => (pair.Key.Length == 0 || pair.Key.Length > _limits.MaximumArgumentNameCharacters) || pair.Value.Length > _limits.MaximumArgumentCharacters))
         {
             throw new InvalidOperationException("MCP resource or prompt arguments exceed host bounds.");

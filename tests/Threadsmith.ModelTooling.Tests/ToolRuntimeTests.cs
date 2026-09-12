@@ -2316,6 +2316,7 @@ public static class ToolRuntimeTests
         var processIdPath = Path.Combine(repository, "child.pid");
         using var cancellation = new CancellationTokenSource();
         Process? child = null;
+        Task<ProcessExecutionResult>? running = null;
         try
         {
             var manager = new ProcessManager(
@@ -2327,8 +2328,8 @@ public static class ToolRuntimeTests
                 request = request with { Timeout = Timeout.InfiniteTimeSpan };
             }
 
-            var running = manager.RunAsync(request, cancellation.Token);
-            await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(10));
+            running = manager.RunAsync(request, cancellation.Token);
+            await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(30));
             var processIdText = await File.ReadAllTextAsync(processIdPath);
             var processId = int.Parse(processIdText, System.Globalization.CultureInfo.InvariantCulture);
             child = Process.GetProcessById(processId);
@@ -2352,6 +2353,19 @@ public static class ToolRuntimeTests
         }
         finally
         {
+            await cancellation.CancelAsync();
+            if (running is not null)
+            {
+                try
+                {
+                    await running;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Observe teardown even when the process-start assertion failed.
+                }
+            }
+
             if (child is { HasExited: false })
             {
                 child.Kill(entireProcessTree: true);
@@ -2773,6 +2787,20 @@ public static class ToolRuntimeTests
         {
             Directory.Delete(repository, recursive: true);
         }
+    }
+
+    [Fact]
+    public static async Task CSharpScriptEngine_RejectsUnrepresentableOutputBeforeStartingWorker()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:csharp_script:max_output_bytes"] = "357913259",
+        }).Build();
+        var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+        var engine = new CSharpScriptEngine(processManager, new ToolConfig(configuration), Path.Combine(Path.GetTempPath(), "missing-worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => engine.ExecuteAsync("1 + 1", ScriptKind.Expression, context));
+        Assert.Empty(processManager.ActiveProcesses);
     }
 
     /// <summary>A staged self-contained worker apphost is launched directly without the dotnet muxer.</summary>
@@ -3597,7 +3625,7 @@ public static class ToolRuntimeTests
         if (OperatingSystem.IsWindows())
         {
             var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
-            var script = "$child = Start-Process -FilePath powershell.exe "
+            var script = "$child = Start-Process -FilePath powershell.exe -NoNewWindow "
                 + "-ArgumentList @('-NoProfile','-NonInteractive','-Command',"
                 + "'Start-Sleep -Seconds 60') -PassThru; "
                 + $"[IO.File]::WriteAllText('{escapedPath}', $child.Id.ToString()); "

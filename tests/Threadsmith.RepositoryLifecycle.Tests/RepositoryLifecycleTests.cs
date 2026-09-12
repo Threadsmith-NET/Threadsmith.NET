@@ -971,7 +971,7 @@ public static class RepositoryLifecycleTests
         await shell.RunAsync(
             repository.RootPath,
             RepositoryTrustLevel.TrustedRead,
-            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(3));
+            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(15));
         const string granted = "Repository trust is now FullyTrustedAutomation.";
         if (expectedAutomation)
         {

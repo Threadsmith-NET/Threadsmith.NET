@@ -12,6 +12,17 @@ using Xunit;
 /// <summary>Verifies the governed web-fetch security, activation, consent, and extraction contracts.</summary>
 public sealed class WebFetchTests
 {
+    [Theory]
+    [InlineData(1048576, 131072)]
+    [InlineData(int.MaxValue, 1)]
+    [InlineData(0, 400000000)]
+    public void Options_RejectUnrepresentableSerializedOutput(int redirects, int extractedCharacters)
+    {
+        var options = new WebFetchOptions { MaximumRedirects = redirects, MaximumExtractedCharacters = extractedCharacters };
+        var exception = Assert.Throws<InvalidOperationException>(options.Validate);
+        Assert.Contains("32-bit", exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Unsafe IPv4 and IPv6 ranges are rejected.</summary>
     [Theory]
     [InlineData("127.0.0.1")]

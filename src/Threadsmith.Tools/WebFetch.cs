@@ -287,6 +287,14 @@ public sealed record WebFetchOptions
     /// <summary>Validates compiled/narrowed limits.</summary>
     public void Validate()
     {
+        var maximumSerializedBytes = (MaximumExtractedCharacters * 6m)
+            + (MaximumUrlCharacters * ((MaximumRedirects * 2m) + 4))
+            + (128 * 1024);
+        if (maximumSerializedBytes > int.MaxValue)
+        {
+            throw new InvalidOperationException("Web-fetch limits exceed the supported 32-bit serialized tool-output bound.");
+        }
+
         if (MaximumScannedUserCharacters <= 0 || MaximumUserUrlCandidates <= 0 || MaximumReferences <= 0
             || MaximumUrlCharacters <= 0
             || MaximumRedirects < 0

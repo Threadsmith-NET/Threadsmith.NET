@@ -150,6 +150,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         var maximumAssemblySettingCharacters = _toolConfig.Get("csharp_script", "max_assembly_setting_characters", 4096);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumOutputBytes, (int.MaxValue - 4096) / 6);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCodeCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAssemblies);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAssemblyNameCharacters);

@@ -219,20 +219,22 @@ public sealed class Plan42NativeValidationToolTests
     }
 
     /// <summary>Diagnostic paging uses one-shot opaque continuations rather than model-selected page bounds.</summary>
-    [Fact]
-    public async Task DiagnosticQuery_MultiplePages_UsesOpaqueContinuationAsync()
+    [Theory]
+    [InlineData(100)]
+    [InlineData(10)]
+    public async Task DiagnosticQuery_MultiplePages_UsesOpaqueContinuationAsync(int modelLimit)
     {
         using var repository = new TemporaryRepository();
         repository.Write("App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         var diagnostics = string.Join(
             Environment.NewLine,
-            Enumerable.Range(1, 101).Select(index =>
+            Enumerable.Range(1, modelLimit + 1).Select(index =>
                 $"{repository.Path}\\File{index}.cs(1,1): warning CS0168: unused {index} [{repository.Path}\\App.csproj]"));
         var process = new RecordingProcessManager
         {
             ResultFactory = request => Successful(request, diagnostics),
         };
-        var service = new NativeValidationToolService(process);
+        var service = new NativeValidationToolService(process, null, [], new ValidationResourceLimits { MaximumModelDiagnostics = modelLimit });
         var runId = RunId.New();
         await service.BuildAsync(
             repository.Path,
@@ -249,7 +251,7 @@ public sealed class Plan42NativeValidationToolTests
             new DiagnosticQuery { ContinuationToken = first.ContinuationToken },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(100, first.Items.Count);
+        Assert.Equal(modelLimit, first.Items.Count);
         Assert.NotNull(first.ContinuationToken);
         Assert.Single(second.Items);
         Assert.Null(second.ContinuationToken);

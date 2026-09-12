@@ -585,10 +585,11 @@ internal sealed class NativeValidationModelProjection
                 complete = result.IsComplete,
                 offline = result.IsOffline,
                 stale = result.IsStale,
-                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count,
+                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count || advisories.Length != result.Advisories.Count,
                 dependencies,
                 omittedDependencies = result.Dependencies.Count - dependencies.Length,
                 advisories,
+                omittedAdvisories = result.Advisories.Count - advisories.Length,
                 omissions = result.Omissions.Take(_limits.MaximumModelOmissions).Select(omission => Bound(omission, _limits.MaximumModelSummaryCharacters)).ToArray(),
             },
             ModelJsonOptions);

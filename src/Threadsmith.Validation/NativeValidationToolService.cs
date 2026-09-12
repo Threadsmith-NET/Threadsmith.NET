@@ -380,7 +380,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
         DiagnosticQueryItem[] all = [.. items];
         offset = Math.Min(offset, all.Length);
-        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(_limits.DiagnosticPageSize)];
+        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(Math.Min(_limits.DiagnosticPageSize, _limits.MaximumModelDiagnostics))];
         string? nextToken = null;
         if (offset + page.Length < all.Length)
         {

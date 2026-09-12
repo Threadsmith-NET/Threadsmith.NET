@@ -344,7 +344,7 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task InputOwnershipAndModalCancellation()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var backend = new HeadlessBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(

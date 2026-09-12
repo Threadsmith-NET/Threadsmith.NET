@@ -720,7 +720,7 @@ public sealed class GitQueryService : IGitQueryService
         Stream stream,
         CancellationToken cancellationToken)
     {
-        using var output = new MemoryStream(capacity: _limits.MaximumCapturedCharacters);
+        using var output = new MemoryStream(capacity: Math.Min(_limits.MaximumCapturedCharacters, 4096));
         var buffer = new byte[4096];
         var decoder = StrictUtf8.GetDecoder();
         var binary = false;

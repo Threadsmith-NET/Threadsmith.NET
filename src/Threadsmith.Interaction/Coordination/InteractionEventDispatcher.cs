@@ -42,16 +42,24 @@ public sealed class InteractionEventDispatcher
     {
         ArgumentNullException.ThrowIfNull(renderAsync);
         var batch = new List<IDomainEvent>(64);
-        await foreach (var domainEvent in _channel.Reader.ReadAllAsync(cancellationToken))
+        try
         {
-            batch.Add(domainEvent);
-            while (batch.Count < 64 && _channel.Reader.TryRead(out var next))
+            await foreach (var domainEvent in _channel.Reader.ReadAllAsync(cancellationToken))
             {
-                batch.Add(next);
-            }
+                batch.Add(domainEvent);
+                while (batch.Count < 64 && _channel.Reader.TryRead(out var next))
+                {
+                    batch.Add(next);
+                }
 
-            await renderAsync(batch.ToArray(), cancellationToken);
-            batch.Clear();
+                await renderAsync(batch.ToArray(), cancellationToken);
+                batch.Clear();
+            }
+        }
+        finally
+        {
+            // A failed renderer must release publishers blocked by UI backpressure.
+            Complete();
         }
     }
 }

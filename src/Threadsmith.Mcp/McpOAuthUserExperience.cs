@@ -147,14 +147,14 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
                 throw new InvalidOperationException("The OAuth callback did not contain a valid HTTP GET request.");
             }
 
-            var headerBytes = 0;
-            for (var headerCount = 0; headerCount < _limits.MaximumCallbackHeaders; headerCount++)
+            long headerBytes = 0;
+            for (var headerCount = 0; ; headerCount++)
             {
                 var header = await ReadAsciiLineAsync(stream, _limits.MaximumCallbackLineBytes, cancellationToken)
                     ?? throw new InvalidOperationException(
                         "The OAuth callback ended before its HTTP headers were complete.");
 
-                headerBytes += Encoding.ASCII.GetByteCount(header) + 2;
+                headerBytes += (long)Encoding.ASCII.GetByteCount(header) + 2;
                 if (headerBytes > _limits.MaximumCallbackHeaderBytes)
                 {
                     throw new InvalidOperationException("The OAuth callback HTTP headers exceed the host bound.");
@@ -165,7 +165,7 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
                     break;
                 }
 
-                if (headerCount == _limits.MaximumCallbackHeaders - 1)
+                if (headerCount == _limits.MaximumCallbackHeaders)
                 {
                     throw new InvalidOperationException("The OAuth callback contains too many HTTP headers.");
                 }
@@ -210,7 +210,7 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
         int maximumBytes,
         CancellationToken cancellationToken)
     {
-        var buffer = new byte[maximumBytes];
+        using var buffer = new MemoryStream(Math.Min(maximumBytes, 256));
         var count = 0;
         var singleByte = new byte[1];
         while (true)
@@ -218,25 +218,26 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
             var read = await stream.ReadAsync(singleByte, cancellationToken);
             if (read == 0)
             {
-                return count == 0 ? null : Encoding.ASCII.GetString(buffer, 0, count);
+                return count == 0 ? null : Encoding.ASCII.GetString(buffer.GetBuffer(), 0, count);
             }
 
             if (singleByte[0] == (byte)'\n')
             {
-                if (count > 0 && buffer[count - 1] == (byte)'\r')
+                if (count > 0 && buffer.GetBuffer()[count - 1] == (byte)'\r')
                 {
                     count--;
                 }
 
-                return Encoding.ASCII.GetString(buffer, 0, count);
+                return Encoding.ASCII.GetString(buffer.GetBuffer(), 0, count);
             }
 
-            if (count == buffer.Length)
+            if (count == maximumBytes)
             {
                 throw new InvalidOperationException("The OAuth callback contains an overlong HTTP line.");
             }
 
-            buffer[count++] = singleByte[0];
+            buffer.WriteByte(singleByte[0]);
+            count++;
         }
     }
 

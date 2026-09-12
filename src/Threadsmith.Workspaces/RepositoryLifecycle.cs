@@ -875,6 +875,11 @@ public sealed class RepositoryLifecycle :
                     $".config-{Guid.NewGuid():N}.tmp");
                 var serialized = root.ToJsonString(
                     new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
+                if (Encoding.UTF8.GetByteCount(serialized) > _maximumConfigurationBytes)
+                {
+                    throw new InvalidDataException("The updated repository configuration exceeds its configured byte limit.");
+                }
+
                 try
                 {
                     await File.WriteAllTextAsync(

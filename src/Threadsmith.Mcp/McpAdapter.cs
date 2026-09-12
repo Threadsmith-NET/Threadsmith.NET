@@ -81,6 +81,7 @@ public sealed class McpAdapter : IMcpAdapter
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentException.ThrowIfNullOrWhiteSpace(profile.Id);
+        McpProfileConfigurationLoader.ValidateTimeouts(profile);
         if (_connections.ContainsKey(profile.Id))
         {
             var existing = _connections[profile.Id].Status;
@@ -585,6 +586,12 @@ public sealed class McpAdapter : IMcpAdapter
                 ? secretReference["secrets:".Length..]
                 : secretReference;
             environment[key] = value;
+        }
+
+        if (environment.Count > _limits.MaximumEnvironmentVariables
+            || environment.Values.Any(value => value.Length > _limits.MaximumEnvironmentValueCharacters))
+        {
+            throw new InvalidOperationException("The resolved MCP process environment exceeds its configured limits.");
         }
 
         return environment;

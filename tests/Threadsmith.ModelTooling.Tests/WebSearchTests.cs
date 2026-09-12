@@ -11,6 +11,19 @@ using Xunit;
 /// <summary>Verifies the milestone 7.5 consent, preflight, and provider boundaries.</summary>
 public sealed class WebSearchTests
 {
+    /// <summary>Configured freshness windows cannot underflow the calendar.</summary>
+    [Fact]
+    public void FreshnessLimitMustFitCalendarRange()
+    {
+        var key = "webSearch:provider:maximumFreshnessDays";
+        var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [key] = "1000000",
+        }).Build();
+        Assert.Throws<ArgumentOutOfRangeException>(() => WebSearchOptions.FromConfiguration(invalid));
+        Assert.Equal(365, WebSearchOptions.FromConfiguration(new ConfigurationBuilder().Build()).MaximumFreshnessDays);
+    }
+
     /// <summary>Verifies repository configuration cannot manufacture consent.</summary>
     [Fact]
     public async Task RepositoryPreEnable_WithoutUserConsent_RemainsUnresolvable()

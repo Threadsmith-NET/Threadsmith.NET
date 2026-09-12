@@ -295,21 +295,11 @@ public sealed class ProcessManager : IProcessManager
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 timedOut = true;
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(CancellationToken.None)
-                        .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
-                }
+                await TerminateAndDrainAsync(process);
             }
             catch (OperationCanceledException)
             {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(CancellationToken.None)
-                        .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
-                }
+                await TerminateAndDrainAsync(process);
 
                 throw;
             }
@@ -354,6 +344,25 @@ public sealed class ProcessManager : IProcessManager
         finally
         {
             _active.TryRemove(processId, out _);
+        }
+    }
+
+    private async Task TerminateAndDrainAsync(Process process)
+    {
+        if (process.HasExited)
+        {
+            return;
+        }
+
+        process.Kill(entireProcessTree: true);
+        try
+        {
+            await process.WaitForExitAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Process {ProcessId} exceeded the configured drain deadline after termination was requested", process.Id);
         }
     }
 

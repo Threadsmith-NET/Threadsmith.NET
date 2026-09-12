@@ -27,7 +27,7 @@ internal static class InteractiveFrontendRunner
             throw new InvalidOperationException("Interactive startup requires a selected frontend.");
         }
 
-        var surface = new PrettyPromptConsoleSurface(themes.ActiveTheme);
+        var surface = new PrettyPromptConsoleSurface(themes.ActiveTheme, limits: display.Limits);
         return RunCoordinatorAsync(CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync), context, processCancellation.Token);
     }
 

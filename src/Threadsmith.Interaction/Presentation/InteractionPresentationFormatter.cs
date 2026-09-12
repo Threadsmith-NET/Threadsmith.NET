@@ -603,13 +603,17 @@ internal static class InteractionPresentationFormatter
 
     private static string PrepareMemoryOutput(string output, int maximumInspectionCharacters)
     {
+        return PrepareBoundedOutput(output, maximumInspectionCharacters, "\n[memory output truncated by console display bound]");
+    }
+
+    private static string PrepareBoundedOutput(string output, int maximumInspectionCharacters, string truncationMarker)
+    {
         var encoded = TerminalControlEncoder.Encode(NormalizeInspectionLineEndings(output));
         if (encoded.Length <= maximumInspectionCharacters)
         {
             return encoded;
         }
 
-        const string truncationMarker = "\n[memory output truncated by console display bound]";
         if (maximumInspectionCharacters <= truncationMarker.Length)
         {
             return truncationMarker[..maximumInspectionCharacters];
@@ -638,13 +642,10 @@ internal static class InteractionPresentationFormatter
 
     private static string PrepareInspectionOutput(string output, bool isJson, int maximumInspectionCharacters)
     {
-        var displayOutput = NormalizeInspectionLineEndings(isJson ? FormatJsonForInspection(output) : output);
-        var bounded = displayOutput.Length <= maximumInspectionCharacters
-            ? displayOutput
-            : displayOutput[..maximumInspectionCharacters]
-                + "\n"
-                + "[code_explore inspection truncated by TUI display bound]";
-        return TerminalControlEncoder.Encode(bounded);
+        return PrepareBoundedOutput(
+            isJson ? FormatJsonForInspection(output) : output,
+            maximumInspectionCharacters,
+            "\n[code_explore inspection truncated by TUI display bound]");
     }
 
     private static string NormalizeInspectionLineEndings(string output)

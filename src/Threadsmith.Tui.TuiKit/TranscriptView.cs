@@ -753,12 +753,24 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
                 var length = Math.Min(_limits.MaximumTranscriptLineCharacters - line.Text.Length, remaining.Length);
                 if (length < remaining.Length)
                 {
-                    var boundaries = StringInfo.ParseCombiningCharacters(remaining.ToString());
-                    length = boundaries.LastOrDefault(value => value <= length);
-                    if (length == 0)
+                    var boundary = 0;
+                    while (boundary < length)
                     {
-                        length = boundaries.Length > 1 ? boundaries[1] : remaining.Length;
+                        var elementLength = StringInfo.GetNextTextElementLength(remaining[boundary..]);
+                        if (elementLength > length - boundary)
+                        {
+                            if (boundary == 0)
+                            {
+                                boundary = elementLength;
+                            }
+
+                            break;
+                        }
+
+                        boundary += elementLength;
                     }
+
+                    length = boundary;
                 }
 
                 var fragment = remaining[..length].ToString();

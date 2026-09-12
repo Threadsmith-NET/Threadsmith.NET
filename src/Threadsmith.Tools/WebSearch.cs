@@ -149,13 +149,15 @@ public sealed record WebSearchOptions
 
         var maximumQueryCharacters = ReadPositive("webSearch:provider:maximumQueryCharacters", 500);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumQueryCharacters, WebSearchRequestContract.MaximumQueryCharacters);
+        var maximumFreshnessDays = ReadPositive("webSearch:provider:maximumFreshnessDays", 365);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumFreshnessDays, DateOnly.FromDateTime(DateTime.UtcNow).DayNumber);
         return new WebSearchOptions
         {
             MaximumQueryCharacters = maximumQueryCharacters,
             ProviderId = configuration["webSearch:provider:id"] ?? "brave",
             Kind = "brave",
             MaximumJsonDepth = ReadPositive("webSearch:provider:maximumJsonDepth", 16),
-            MaximumFreshnessDays = ReadPositive("webSearch:provider:maximumFreshnessDays", 365),
+            MaximumFreshnessDays = maximumFreshnessDays,
             MaximumTitleCharacters = ReadPositive("webSearch:provider:maximumTitleCharacters", 300),
             MaximumSnippetCharacters = ReadPositive("webSearch:provider:maximumSnippetCharacters", 1000),
 

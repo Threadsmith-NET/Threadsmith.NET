@@ -52,10 +52,23 @@ public static class McpProfileConfigurationLoader
                 AutoConnect = child.GetValue("autoConnect", false),
             };
             ValidateOAuth(profile);
+            ValidateTimeouts(profile);
             profiles.Add(profile);
         }
 
         return profiles;
+    }
+
+    /// <summary>Validates profile deadlines against the .NET 10 timer representation.</summary>
+    internal static void ValidateTimeouts(McpConnectionProfile profile)
+    {
+        var maximum = TimeSpan.FromMilliseconds(uint.MaxValue - 1L);
+        if (profile.StartupTimeout <= TimeSpan.Zero || profile.StartupTimeout > maximum
+            || profile.RequestTimeout <= TimeSpan.Zero || profile.RequestTimeout > maximum
+            || profile.DrainKillTimeout <= TimeSpan.Zero || profile.DrainKillTimeout > maximum)
+        {
+            throw new InvalidOperationException($"MCP profile '{profile.Id}' timeouts must be positive and at most {uint.MaxValue - 1L} milliseconds (the runtime timer limit).");
+        }
     }
 
     private static string GetConfigurationSource(IConfiguration configuration, string key)

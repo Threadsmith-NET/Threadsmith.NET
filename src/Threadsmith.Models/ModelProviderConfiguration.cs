@@ -455,10 +455,11 @@ public sealed record ModelHttpTransportOptions
         ArgumentNullException.ThrowIfNull(configuration);
         var pooledLifetimeSeconds = ReadPositive(configuration, "model:http:pooledConnectionLifetimeSeconds", 900);
         var pooledIdleSeconds = ReadPositive(configuration, "model:http:pooledConnectionIdleTimeoutSeconds", 120);
+        const int maximumConnectTimeoutSeconds = int.MaxValue / 1000;
         var connectTimeoutSeconds = configuration.GetValue("model:http:connectTimeoutSeconds", 30);
-        if (connectTimeoutSeconds < 0)
+        if (connectTimeoutSeconds is < 0 or > maximumConnectTimeoutSeconds)
         {
-            throw new InvalidOperationException("Configuration 'model:http:connectTimeoutSeconds' must be nonnegative; zero disables the timeout.");
+            throw new InvalidOperationException($"Configuration 'model:http:connectTimeoutSeconds' must be between 0 and {maximumConnectTimeoutSeconds} seconds (the HTTP handler's 32-bit millisecond limit); zero disables the timeout.");
         }
 
         var maxConnectionsPerServer = ReadPositive(configuration, "model:http:maxConnectionsPerServer", 16);

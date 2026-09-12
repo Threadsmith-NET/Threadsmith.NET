@@ -251,13 +251,22 @@ internal sealed class HostFoundation : IAsyncDisposable
     internal ToolInvocationPipeline ToolPipeline { get; }
 
     /// <summary>Binds and validates resource settings, rejecting misspelled or unsupported keys.</summary>
-    internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration)
+    internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration, IConfiguration? trustedConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var limits = configuration.GetSection("limits").Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
             ?? new OperationalLimits();
         limits.Validate();
-        return limits;
+        var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(
+            "limits:workspace:maximumDiffLinesForLcs", new WorkspaceResourceLimits().MaximumDiffLinesForLcs);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trustedDiffLines);
+        return limits with
+        {
+            Workspace = limits.Workspace with
+            {
+                MaximumDiffLinesForLcs = Math.Min(limits.Workspace.MaximumDiffLinesForLcs, trustedDiffLines),
+            },
+        };
     }
 
     /// <summary>Initializes persistence before subscribers, then semantic and tool services in dependency order.</summary>
@@ -274,7 +283,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(promptLoader);
 
-        var operationalLimits = LoadOperationalLimits(configuration);
+        var operationalLimits = LoadOperationalLimits(configuration, trustedConfiguration);
         var maximumCorrectiveTurns = configuration.GetValue("execution:maxCorrectiveTurns", 3);
         var executionLimits = new ExecutionLimits
         {

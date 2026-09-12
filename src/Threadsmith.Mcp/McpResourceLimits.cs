@@ -126,9 +126,11 @@ public sealed record McpResourceLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumHeaderValueCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumOAuthAuthorizationServers);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumOAuthMetadataBytes);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumOAuthMetadataBytes, Array.MaxLength);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCallbackHeaderBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCallbackHeaders);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCallbackLineBytes);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumCallbackLineBytes, Array.MaxLength);
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumArguments);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumArgumentCharacters);

@@ -387,16 +387,18 @@ public static class Plan32OpenAiCompatibleProviderTests
     }
 
     /// <summary>A finite connection timeout may exceed the former five-minute product ceiling.</summary>
-    [Fact]
-    public static void HttpTransportOptions_FiniteConnectionTimeoutHasNoProductMaximum()
+    [Theory]
+    [InlineData(600)]
+    [InlineData(int.MaxValue / 1000)]
+    public static void HttpTransportOptions_FiniteConnectionTimeoutHasNoProductMaximum(int seconds)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["model:http:connectTimeoutSeconds"] = "600",
+            ["model:http:connectTimeoutSeconds"] = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
         }).Build();
         var options = ModelHttpTransportOptions.Load(configuration);
         using var handler = new SocketsHttpHandler { ConnectTimeout = options.ConnectTimeout };
-        Assert.Equal(TimeSpan.FromMinutes(10), handler.ConnectTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(seconds), handler.ConnectTimeout);
     }
 
     /// <summary>Normal layered configuration controls bounded shared HTTP transport settings.</summary>
@@ -426,6 +428,7 @@ public static class Plan32OpenAiCompatibleProviderTests
     [InlineData("model:http:pooledConnectionLifetimeSeconds", "0")]
     [InlineData("model:http:pooledConnectionIdleTimeoutSeconds", "0")]
     [InlineData("model:http:connectTimeoutSeconds", "-1")]
+    [InlineData("model:http:connectTimeoutSeconds", "2147484")]
     [InlineData("model:http:maxConnectionsPerServer", "0")]
     public static void HttpTransportOptions_OutOfBoundsValue_IsRejected(string key, string value)
     {

@@ -248,13 +248,13 @@
     // follow normal configuration layering and fail startup when outside their
     // documented bounds. Per-model request deadlines remain `timeoutSeconds`.
     "http": {
-      // DNS-aware pooled connection recycling: 60–86400 seconds.
+      // DNS-aware pooled connection recycling: positive seconds.
       "pooledConnectionLifetimeSeconds": 900,
-      // Unused connection retention: 10–3600 seconds.
+      // Unused connection retention: positive seconds.
       "pooledConnectionIdleTimeoutSeconds": 120,
-      // Connection establishment deadline: 1–300 seconds.
+      // Connection deadline: 0 disables; maximum 2147483 seconds (HTTP handler millisecond range).
       "connectTimeoutSeconds": 30,
-      // Per-endpoint concurrency cap: 1–1024.
+      // Per-endpoint concurrency cap: positive integer.
       "maxConnectionsPerServer": 16
     },
     // Optional workload-class → profile overrides (§11.4, §11.5).
@@ -518,6 +518,7 @@
     },
     "runProcess": {
       "defaultTimeoutSeconds": 30,
+      // Maximum 4294967 seconds, imposed by the .NET 10 cancellation timer range.
       "maxTimeoutSeconds": 60,
       // Null retains the platform default (powershell on Windows, bash elsewhere).
       "shellExecutable": null,
@@ -728,7 +729,8 @@
   // OAuth uses authorization-code + PKCE and a user-owned per-profile token cache.
   "mcp": {
     // Default drain/kill timeout for unresponsive servers (seconds). Per-profile
-    // drainKillTimeoutSeconds overrides this.
+    // drainKillTimeoutSeconds overrides this. All profile timeouts require positive seconds,
+    // at most 4294967 (the .NET timer representation limit).
     "defaultDrainKillTimeoutSeconds": 10,
     "profiles": [
       {

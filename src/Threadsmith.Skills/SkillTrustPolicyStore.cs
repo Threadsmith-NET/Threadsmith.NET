@@ -119,6 +119,13 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
             };
         }
 
+        ValidatePolicy(next);
+        var content = JsonSerializer.Serialize(next, JsonOptions) + Environment.NewLine;
+        if (System.Text.Encoding.UTF8.GetByteCount(content) > _limits.MaximumPolicyFileBytes)
+        {
+            throw new InvalidDataException("User skill policy exceeds its byte limit.");
+        }
+
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -130,7 +137,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
         {
             await File.WriteAllTextAsync(
                 temporary,
-                JsonSerializer.Serialize(next, JsonOptions) + Environment.NewLine,
+                content,
                 cancellationToken);
             File.Move(temporary, _path, overwrite: true);
             lock (_gate)
@@ -162,6 +169,12 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
 
         var policy = JsonSerializer.Deserialize<UserSkillPolicy>(File.ReadAllText(path))
             ?? throw new InvalidDataException("User skill policy is empty.");
+        ValidatePolicy(policy);
+        return policy;
+    }
+
+    private void ValidatePolicy(UserSkillPolicy policy)
+    {
         if (policy.SchemaVersion != 1
             || policy.AllowlistedPackages.Count > _limits.MaximumSkillPolicyEntries
             || policy.EnabledSelectors.Count > _limits.MaximumSkillPolicyEntries
@@ -173,8 +186,6 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
         {
             throw new InvalidDataException("User skill policy is invalid or exceeds its bounds.");
         }
-
-        return policy;
     }
 
     private static SkillTrustPolicySnapshot Merge(

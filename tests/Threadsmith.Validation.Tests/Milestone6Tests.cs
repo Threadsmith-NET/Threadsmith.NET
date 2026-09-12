@@ -1723,8 +1723,8 @@ public sealed class Milestone6Tests
         var delayProperties = includeDelay
             ? """
                   <PropertyGroup>
-                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "$PID | Set-Content -NoNewline '&quot;$(MSBuildProjectDirectory)\child.pid&quot;'; Start-Sleep -Seconds 30"</DelayCommand>
-                    <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
+                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\child.pid.tmp', '$(MSBuildProjectDirectory)\child.pid'); Start-Sleep -Seconds 30"</DelayCommand>
+                    <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
                   </PropertyGroup>
                   <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
                     <Exec Command="$(DelayCommand)" />

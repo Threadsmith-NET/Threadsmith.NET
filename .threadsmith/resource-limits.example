@@ -9,6 +9,7 @@
       "maximumMutations": 100,
       "maximumMutationCharacters": 4194304,
       "maximumRationaleCharacters": 8192,
+      // Machine/user/environment ceiling; other layers can only narrow it. Larger matrices use the linear diff fallback.
       "maximumDiffLinesForLcs": 512,
       "maximumConcurrentConflictHashes": 4,
       "maximumConcurrentBaselineHashes": 8,
@@ -100,6 +101,7 @@
     },
     "policyStores": {
       "maximumApprovalEntries": 4096,
+      // Validated on load and before persisting updates.
       "maximumPolicyFileBytes": 1048576,
       "maximumSkillPolicyEntries": 2048,
       "maximumSkillPolicyItemCharacters": 1024
@@ -187,9 +189,11 @@
       "maximumClientIdCharacters": 1024,
       "maximumStandardErrorLineCharacters": 8192,
       "maximumOAuthAuthorizationServers": 4,
+      // Contiguous metadata payloads must fit Array.MaxLength; allocated incrementally.
       "maximumOAuthMetadataBytes": 65536,
       "maximumCallbackHeaderBytes": 32768,
       "maximumCallbackHeaders": 64,
+      // Must fit Array.MaxLength; short lines do not allocate the configured ceiling.
       "maximumCallbackLineBytes": 8192
     },
     "maximumConcurrentConnections": 4
@@ -398,6 +402,7 @@
     "provider": {
       "maximumQueryCharacters": 500,
       "maximumJsonDepth": 16,
+      // Cannot extend earlier than DateOnly.MinValue (0001-01-01).
       "maximumFreshnessDays": 365,
       "maximumTitleCharacters": 300,
       "maximumSnippetCharacters": 1000

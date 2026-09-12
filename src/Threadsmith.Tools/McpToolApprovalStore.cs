@@ -251,6 +251,11 @@ internal sealed class McpToolApprovalStore
                         .Select(value => (JsonNode?)JsonValue.Create(value))]),
                 };
                 var content = Encoding.UTF8.GetBytes(root.ToJsonString() + Environment.NewLine);
+                if (content.LongLength > _limits.MaximumPolicyFileBytes)
+                {
+                    throw new InvalidOperationException("The MCP tool approval store exceeds its configured byte limit.");
+                }
+
                 var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
                 try
                 {

@@ -37,6 +37,28 @@ public sealed class McpManagerTests
         Assert.Equal([McpCapabilityKind.ResourceTemplate], profile.AllowedCapabilities);
     }
 
+    /// <summary>Each configurable profile deadline is validated before creating a runtime timer.</summary>
+    [Theory]
+    [InlineData("startupTimeoutSeconds")]
+    [InlineData("requestTimeoutSeconds")]
+    [InlineData("drainKillTimeoutSeconds")]
+    public static void ProfileLoader_RejectsTimerOverflow(string setting)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["mcp:profiles:0:id"] = "fixture",
+            ["mcp:profiles:0:name"] = "Fixture",
+            ["mcp:profiles:0:command"] = "fixture-server",
+            [$"mcp:profiles:0:{setting}"] = "4294968",
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        var exception = Assert.Throws<InvalidOperationException>(() => McpProfileConfigurationLoader.Load(configuration));
+        Assert.Contains("runtime timer limit", exception.Message, StringComparison.Ordinal);
+
+        configuration[$"mcp:profiles:0:{setting}"] = "4294967";
+        Assert.Single(McpProfileConfigurationLoader.Load(configuration));
+    }
+
     /// <summary>Malformed profile entries fail closed instead of silently disappearing from inspection.</summary>
     [Fact]
     public static void ProfileLoader_MissingRequiredField_FailsClosed()
@@ -590,8 +612,10 @@ public sealed class McpManagerTests
     }
 
     /// <summary>Revocation reuses the validated metadata-proxy path after a process restart.</summary>
-    [Fact]
-    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata(bool maximumRepresentableLimit)
     {
         var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -624,7 +648,10 @@ public sealed class McpManagerTests
                 + "\"revocation_endpoint\":\"https://auth.example/revoke\"}"));
         }));
         using var httpClient = new HttpClient(handler);
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, new McpResourceLimits
+        {
+            MaximumOAuthMetadataBytes = maximumRepresentableLimit ? Array.MaxLength : 65536,
+        });
         var profile = Profile("server", oauth: true) with
         {
             Command = "https://mcp.example/mcp",
@@ -1133,6 +1160,39 @@ public sealed class McpManagerTests
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>A rejected oversized approval write preserves previously granted approvals.</summary>
+    [Fact]
+    public async Task ToolStateManager_ApprovalByteLimit_PreservesExistingApprovals()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-approval-limit-" + Guid.NewGuid().ToString("N"));
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "approvals.json");
+        try
+        {
+            var first = McpToolDefinition("mcp-first");
+            var second = McpToolDefinition("mcp-second") with { Id = "server:other" };
+            var configuration = new ConfigurationBuilder().Build();
+            var manager = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath);
+            await manager.EnableAsync(first.Id);
+            configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
+            var original = await File.ReadAllBytesAsync(approvalPath);
+            var limits = new PolicyStoreResourceLimits { MaximumPolicyFileBytes = original.Length };
+            manager = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath, policyStoreLimits: limits);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnableAsync(second.Id));
+            Assert.Equal(original, await File.ReadAllBytesAsync(approvalPath));
+            var reloaded = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath, policyStoreLimits: limits);
+            Assert.True(reloaded.IsEnabled(first.Id));
+            Assert.False(reloaded.IsEnabled(second.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
             }
         }
     }

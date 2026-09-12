@@ -1224,12 +1224,7 @@ public sealed class McpManager :
             throw new InvalidOperationException($"MCP profile '{profile.Id}' has an invalid command or endpoint.");
         }
 
-        if (profile.StartupTimeout <= TimeSpan.Zero
-            || profile.RequestTimeout <= TimeSpan.Zero
-            || profile.DrainKillTimeout <= TimeSpan.Zero)
-        {
-            throw new InvalidOperationException($"MCP profile '{profile.Id}' has a timeout outside host bounds.");
-        }
+        McpProfileConfigurationLoader.ValidateTimeouts(profile);
 
         if (profile.Arguments.Count > _limits.MaximumProfileArguments
             || profile.Arguments.Any(argument => argument.Length > _limits.MaximumProfileArgumentCharacters)

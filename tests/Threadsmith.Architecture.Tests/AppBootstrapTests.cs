@@ -14,6 +14,25 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Repository options can narrow but cannot enlarge the trusted quadratic diff budget.</summary>
+    [Theory]
+    [InlineData(20000, null, 512)]
+    [InlineData(20000, 1024, 1024)]
+    [InlineData(64, 1024, 64)]
+    public static void OperationalLimits_ConstrainDiffAllocationToTrustedConfiguration(int requested, int? trusted, int expected)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["limits:workspace:maximumDiffLinesForLcs"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["limits:workspace:maximumDiffLinesForLcs"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+
+        Assert.Equal(expected, HostFoundation.LoadOperationalLimits(effective, host).Workspace.MaximumDiffLinesForLcs);
+    }
+
     /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
     [Fact]
     public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()

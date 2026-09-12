@@ -194,6 +194,23 @@ public static class TuiKitFrontendTests
         Assert.Contains("done", string.Join(string.Empty, view.Lines), StringComparison.Ordinal);
     }
 
+    /// <summary>Tiny line windows preserve graphemes without repeatedly scanning the remaining input.</summary>
+    [Fact]
+    public static void TranscriptTinyLineWindowPreservesLongUnicodeInput()
+    {
+        var text = new string('x', 20000) + "a\u0301😀end";
+        var view = new TranscriptView(new TuiResourceLimits
+        {
+            MaximumTranscriptLineCharacters = 1,
+            MaximumTranscriptLines = 30000,
+        });
+        view.Present(new PresentationBatch([new PresentationTextItem([new(text, PresentationTextRole.Default)])]));
+
+        Assert.Equal(text, string.Concat(view.Lines));
+        Assert.Contains("a\u0301", view.Lines);
+        Assert.Contains("😀", view.Lines);
+    }
+
     /// <summary>Input echoes have exactly one blank row regardless of prior line endings, including after resize.</summary>
     [Theory]
     [InlineData("")]

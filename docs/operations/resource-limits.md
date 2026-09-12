@@ -6,11 +6,13 @@ The [complete defaults example](../../.threadsmith/resource-limits.example) is a
 
 ## Scope and validation
 
-Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user configuration; repository, session, CLI, and environment values do not widen those policies. Web-fetch repository options may narrow the trusted ceiling.
+Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user configuration; repository, session, CLI, and environment values do not widen those policies. Web-fetch repository options may narrow the trusted ceiling. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
 
 New typed limit groups reject unknown members and invalid values. Most new bounds require positive values; there is no arbitrary upper ceiling beyond the storage/runtime type. Exceptions are stated in the tables. Existing settings that support zero as disabled retain that behavior. Byte counts are bytes (KiB = 1,024; MiB = 1,048,576); character counts are .NET UTF-16 code units unless a setting explicitly says otherwise. Counts, milliseconds, and seconds are named accordingly. Related settings must remain consistent: a default cannot exceed its maximum, aggregate prompt budgets cannot be smaller than one file, and extension stability timeout cannot be shorter than its quiet interval.
 
 Most settings are captured when the application starts: restart after editing them. Repository-memory settings retain their existing repository-rebind behavior. Increasing a limit changes resource admission or retained output; it does not grant filesystem, tool, network, or secret authority.
+
+Numeric and downstream API boundaries still apply. Invalid values fail with configuration/argument errors rather than wrapping arithmetic or being silently clamped. `tools.runProcess.maxTimeoutSeconds` cannot exceed 4,294,967 whole seconds because .NET 10 cancellation timers store unsigned 32-bit milliseconds. `model.http.connectTimeoutSeconds` accepts 0 (disabled) through 2,147,483 whole seconds because `SocketsHttpHandler` uses a signed 32-bit millisecond bound. MCP profile startup, request, and drain/kill timeouts must be positive and cannot exceed 4,294,967 whole seconds for the same .NET timer reason. MCP OAuth metadata and callback-line byte ceilings cannot exceed `Array.MaxLength`; readers allocate incrementally from actual input. These are representation limits, not repository admission policies. Defaults remain unchanged.
 
 Large composer drafts with many separate graphemes can be slow in the current TUIKit grapheme splitter, which repeatedly scans preceding characters. Raising `tui.limits.maximumDraftBytes` changes admission but does not change that backend processing cost.
 
@@ -54,7 +56,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 | `maximumMutations` | `100` | Maximum mutations admitted in one batch. |
 | `maximumMutationCharacters` | `4194304` | Maximum aggregate replacement/content characters in one batch. |
 | `maximumRationaleCharacters` | `8192` | Maximum characters in the batch rationale. |
-| `maximumDiffLinesForLcs` | `512` | Line-count scale whose square bounds the LCS diff matrix. |
+| `maximumDiffLinesForLcs` | `512` | Line-count scale whose square bounds the LCS diff matrix. Ordinary configuration can only narrow the trusted machine/user/environment ceiling. Uses the existing linear diff fallback above that budget or the runtime array capacity. |
 | `maximumConcurrentConflictHashes` | `4` | Maximum concurrent hashes during conflict detection. |
 | `maximumConcurrentBaselineHashes` | `8` | Maximum concurrent hashes during baseline capture. |
 | `maximumBaselineStatusLines` | `1000` | Maximum Git status lines retained with a baseline. |
@@ -175,8 +177,8 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 | Field | Default | Purpose |
 |---|---:|---|
 | `maximumApprovalEntries` | `4096` | Maximum persisted MCP tool approvals. |
-| `maximumPolicyFileBytes` | `1048576` | Maximum MCP approval or skill trust-policy file bytes. |
-| `maximumSkillPolicyEntries` | `2048` | Maximum items per skill policy selector/package list. |
+| `maximumPolicyFileBytes` | `1048576` | Maximum MCP approval or skill trust-policy file bytes, enforced before replacing a file as well as during load. |
+| `maximumSkillPolicyEntries` | `2048` | Maximum items per skill policy selector/package list; rejected updates preserve the previous policy. |
 | `maximumSkillPolicyItemCharacters` | `1024` | Maximum skill policy item characters. |
 
 ### `tui:limits`
@@ -273,10 +275,10 @@ Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Mcp/M
 | `maximumClientIdCharacters` | `1024` | Maximum Client Id Characters. |
 | `maximumStandardErrorLineCharacters` | `8192` | Maximum Standard Error Line Characters. |
 | `maximumOAuthAuthorizationServers` | `4` | Maximum advertised OAuth authorization servers. |
-| `maximumOAuthMetadataBytes` | `65536` | Maximum OAuth metadata or identity-response bytes. |
+| `maximumOAuthMetadataBytes` | `65536` | Maximum OAuth metadata or identity-response bytes; at most `Array.MaxLength`. |
 | `maximumCallbackHeaderBytes` | `32768` | Maximum loopback OAuth request-header bytes. |
 | `maximumCallbackHeaders` | `64` | Maximum loopback OAuth request headers. |
-| `maximumCallbackLineBytes` | `8192` | Maximum loopback OAuth request-line bytes. |
+| `maximumCallbackLineBytes` | `8192` | Maximum loopback OAuth request-line bytes; at most `Array.MaxLength`. |
 
 ### `hooks:limits`
 
@@ -582,7 +584,7 @@ Trusted provider configuration. [Implementation](../../src/Threadsmith.Tools/Web
 |---|---:|---|
 | `maximumQueryCharacters` | `500` | Maximum query characters; cannot exceed the provider 600-character limit. |
 | `maximumJsonDepth` | `16` | Maximum provider response JSON depth. |
-| `maximumFreshnessDays` | `365` | Maximum requested freshness in days. |
+| `maximumFreshnessDays` | `365` | Maximum requested freshness in days; cannot exceed the days between the current UTC date and `DateOnly.MinValue`. |
 | `maximumTitleCharacters` | `300` | Maximum result title characters. |
 | `maximumSnippetCharacters` | `1000` | Maximum result snippet characters. |
 
@@ -608,7 +610,7 @@ Put `resourceLimits` on the Anthropic provider entry in `~/.threadsmith/provider
 
 - `tools.readFile.defaultLines`, `maxLines`, and `maxContentBytes` can exceed the old 2,000-line / 50 KiB maxima. `tools.readFile.maxBytes` still controls the input file size.
 - `tools.config.memories.rerankerCandidateLimit` accepts any positive count. The provider processes candidates in its supported batches; actual model token/shape limits remain in force.
-- `repository.configurationBytes` (default 1 MiB, trusted machine/user setting) is used by bootstrap and subsequent model, theme, allowed-host, and repository preference readers/writers.
+- `repository.configurationBytes` (default 1 MiB, trusted machine/user/environment setting) is used by bootstrap and subsequent model, theme, allowed-host, and repository preference readers/writers.
 - `mcp.maximumConcurrentConnections` defaults to 4 with no artificial maximum of 16. MCP profile startup/request/shutdown timeouts require positive values without the previous 30-minute / 5-minute caps.
 - Model HTTP pool connections and lifetime/idle settings, hook handler budgets, script budgets, skill package/workflow budgets, and web fetch/search resource settings retain their existing configuration locations. Former arbitrary upper validation ceilings have been removed; positive values and meaningful cross-field relationships still apply.
 - Session and hook-audit page counts are caller-supplied positive request values; they no longer have hidden 500/1,000-item ceilings.

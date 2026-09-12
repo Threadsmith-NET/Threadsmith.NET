@@ -2308,9 +2308,10 @@ public static class ToolRuntimeTests
 
     /// <summary>Cancelling a process request terminates its child process tree.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout)
+    [InlineData(false, 5000)]
+    [InlineData(true, 5000)]
+    [InlineData(false, 1)]
+    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout, int drainTimeoutMilliseconds)
     {
         var repository = CreateTemporaryDirectory();
         var processIdPath = Path.Combine(repository, "child.pid");
@@ -2321,7 +2322,8 @@ public static class ToolRuntimeTests
         {
             var manager = new ProcessManager(
                 new TestSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = drainTimeoutMilliseconds });
             var request = CreateTreeProcessRequest(repository, processIdPath);
             if (infiniteTimeout)
             {
@@ -2388,6 +2390,31 @@ public static class ToolRuntimeTests
                 }
             }
         }
+    }
+
+    /// <summary>A tiny post-kill drain deadline preserves the process timeout outcome.</summary>
+    [Fact]
+    public static async Task ProcessManager_TinyDrainDeadline_PreservesTimeoutResult()
+    {
+        var manager = new ProcessManager(
+            new TestSanitizer(),
+            NullLogger<ProcessManager>.Instance,
+            limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = 1 });
+        var request = new ProcessExecutionRequest
+        {
+            ToolInvocationId = ToolInvocationId.New(),
+            RunId = RunId.New(),
+            FileName = OperatingSystem.IsWindows() ? "powershell.exe" : "sh",
+            Arguments = OperatingSystem.IsWindows()
+                ? ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"]
+                : ["-c", "sleep 30"],
+            WorkingDirectory = Path.GetTempPath(),
+            Timeout = TimeSpan.FromMilliseconds(100),
+        };
+        var result = await manager.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.TimedOut);
+        Assert.Empty(manager.ActiveProcesses);
     }
 
     /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>

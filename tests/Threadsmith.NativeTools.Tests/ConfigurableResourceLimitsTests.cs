@@ -12,6 +12,19 @@ using Xunit;
 /// <summary>Verifies configured bounds across admission and execution layers.</summary>
 public sealed class ConfigurableResourceLimitsTests
 {
+    /// <summary>Process timeout ceilings fit the runtime timer without changing the default.</summary>
+    [Fact]
+    public void ProcessTimeoutRejectsUnrepresentableTimerValues()
+    {
+        var maximumSeconds = (int)((uint.MaxValue - 1L) / 1000);
+        new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds }.Validate();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromSeconds(maximumSeconds));
+        var invalid = new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds + 1 };
+        Assert.Throws<ArgumentOutOfRangeException>(invalid.Validate);
+        Assert.Equal(60, new ToolLimits().RunProcessMaxTimeoutSeconds);
+    }
+
     /// <summary>Verifies the configured resource policy is honored.</summary>
     [Fact]
     public void RuntimeOverridesPreserveDynamicRegistrationIdentity()

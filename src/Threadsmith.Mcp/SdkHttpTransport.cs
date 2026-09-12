@@ -397,9 +397,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (profile.Headers.Count > 64)
+        if (profile.Headers.Count > _limits.MaximumHeaders)
         {
-            throw new InvalidOperationException("An MCP profile may define at most 64 HTTP headers.");
+            throw new InvalidOperationException($"An MCP profile may define at most {_limits.MaximumHeaders} HTTP headers.");
         }
 
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

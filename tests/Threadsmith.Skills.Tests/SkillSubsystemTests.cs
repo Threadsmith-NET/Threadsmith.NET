@@ -200,6 +200,30 @@ public sealed partial class SkillSubsystemTests
         Assert.DoesNotContain(package.PackageRoot, await File.ReadAllTextAsync(policyPath));
     }
 
+    /// <summary>Rejected updates preserve both the persisted policy and its active snapshot.</summary>
+    [Fact]
+    public async Task UserPolicy_ConfiguredWriteBounds_PreserveReloadableState()
+    {
+        using var package = TemporaryPackage.CopyMaintained("upgrade-package");
+        var candidate = Assert.Single((await package.CreateCatalog(SkillScope.Repository).RefreshAsync()).Candidates);
+        var path = Path.Combine(package.Root, "policy.json");
+        var limits = new PolicyStoreResourceLimits { MaximumSkillPolicyEntries = 1 };
+        var provider = new FileSkillTrustPolicyProvider(path, new SkillTrustPolicySnapshot(), limits);
+        await provider.SetEnabledAsync(candidate, true);
+        var original = await File.ReadAllTextAsync(path);
+        var other = candidate with { Provenance = candidate.Provenance with { Scope = SkillScope.User } };
+        await Assert.ThrowsAsync<InvalidDataException>(() => provider.SetEnabledAsync(other, true));
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+        Assert.Single(provider.Snapshot.EnabledSelectors);
+        Assert.Single(new FileSkillTrustPolicyProvider(path, new SkillTrustPolicySnapshot(), limits).Snapshot.EnabledSelectors);
+
+        var tinyPath = Path.Combine(package.Root, "tiny-policy.json");
+        var tiny = new FileSkillTrustPolicyProvider(tinyPath, new SkillTrustPolicySnapshot(), new PolicyStoreResourceLimits { MaximumPolicyFileBytes = 1 });
+        await Assert.ThrowsAsync<InvalidDataException>(() => tiny.SetEnabledAsync(candidate, true));
+        Assert.False(File.Exists(tinyPath));
+        Assert.Empty(tiny.Snapshot.EnabledSelectors);
+    }
+
     /// <summary>Verifies unsupported references, unknown keywords, extra values, and integer mismatch fail closed.</summary>
     [Fact]
     public void SchemaValidator_RejectsUnsafeOrMismatchedSchemasAndValues()

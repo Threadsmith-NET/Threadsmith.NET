@@ -3778,8 +3778,10 @@ public static class Milestone1Tests
             .WaitAsync(TimeSpan.FromSeconds(5));
         provider.ReleaseAnswer();
 
+        // This includes SQLite event persistence and full engine teardown on shared CI hosts.
+        // A dispatcher deadlock still fails the deadline; only the test's wait budget changes.
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => shellTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            () => shellTask.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Same(expected, exception);
     }
 

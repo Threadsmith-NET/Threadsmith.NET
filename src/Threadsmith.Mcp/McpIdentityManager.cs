@@ -421,26 +421,28 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         }
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        var buffer = new byte[maximumBytes + 1];
-        var offset = 0;
-        while (offset < buffer.Length)
+        var buffer = new byte[Math.Min(maximumBytes, 4096)];
+        using var captured = new MemoryStream();
+        while (true)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), cancellationToken);
+            var remainingWithSentinel = (long)maximumBytes - captured.Length + 1;
+            var read = await stream.ReadAsync(
+                buffer.AsMemory(0, (int)Math.Min(buffer.Length, remainingWithSentinel)), cancellationToken);
             if (read == 0)
             {
                 break;
             }
 
-            offset += read;
-        }
+            if (read > maximumBytes - captured.Length)
+            {
+                throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
+            }
 
-        if (offset > maximumBytes)
-        {
-            throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
+            await captured.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
 
         return JsonDocument.Parse(
-            buffer.AsMemory(0, offset),
+            captured.GetBuffer().AsMemory(0, checked((int)captured.Length)),
             new JsonDocumentOptions { MaxDepth = _limits.MaximumIdentityJsonDepth });
     }
 

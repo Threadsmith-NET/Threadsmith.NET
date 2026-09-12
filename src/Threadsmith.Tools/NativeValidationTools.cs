@@ -585,12 +585,14 @@ internal sealed class NativeValidationModelProjection
                 complete = result.IsComplete,
                 offline = result.IsOffline,
                 stale = result.IsStale,
-                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count || advisories.Length != result.Advisories.Count,
+                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count || advisories.Length != result.Advisories.Count
+                    || result.Omissions.Count > _limits.MaximumModelOmissions,
                 dependencies,
                 omittedDependencies = result.Dependencies.Count - dependencies.Length,
                 advisories,
                 omittedAdvisories = result.Advisories.Count - advisories.Length,
                 omissions = result.Omissions.Take(_limits.MaximumModelOmissions).Select(omission => Bound(omission, _limits.MaximumModelSummaryCharacters)).ToArray(),
+                omittedOmissions = Math.Max(0, result.Omissions.Count - _limits.MaximumModelOmissions),
             },
             ModelJsonOptions);
     }
@@ -607,7 +609,8 @@ internal sealed class NativeValidationModelProjection
             {
                 success = result.Succeeded,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated || diagnostics.Length != result.Diagnostics.Count,
+                truncated = result.IsTruncated || diagnostics.Length != result.Diagnostics.Count
+                    || (!result.Succeeded && result.Output.Length > _limits.MaximumModelOutputCharacters),
                 diagnostics,
                 omittedDiagnostics = result.Diagnostics.Count - diagnostics.Length,
                 output = result.Succeeded ? null : Bound(result.Output, _limits.MaximumModelOutputCharacters),
@@ -668,7 +671,9 @@ internal sealed class NativeValidationModelProjection
                 failed = result.Failed,
                 skipped = result.Skipped,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated,
+                truncated = result.IsTruncated
+                    || (result.Outcome != TestOutcome.Passed && result.Output.Length > _limits.MaximumModelOutputCharacters)
+                    || result.Attachments.Count > _limits.MaximumModelAttachments,
                 output = result.Outcome == TestOutcome.Passed ? null : Bound(result.Output, _limits.MaximumModelOutputCharacters),
                 attachments = result.Attachments.Take(_limits.MaximumModelAttachments).Select(attachment => Bound(attachment, _limits.MaximumModelPathCharacters)).ToArray(),
             },

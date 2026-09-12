@@ -21,6 +21,29 @@ using Xunit;
 /// <summary>Verifies plans 10 and 11 transactional and semantic mutation contracts.</summary>
 public static partial class Milestone5Tests
 {
+    /// <summary>A configured LCS ceiling cannot require an unrepresentable matrix or reject a valid change.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_OversizedDiffMatrix_UsesLinearPreview()
+    {
+        var before = string.Concat(Enumerable.Repeat("old\n", 50000));
+        var after = string.Concat(Enumerable.Repeat("new\n", 50000));
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["large.txt"] = before,
+        });
+        await using var events = new DomainEventStream();
+        await using var workspace = await TransactionalWorkspace.CreateAsync(
+            repository.Baseline,
+            events,
+            resourceLimits: new WorkspaceResourceLimits { MaximumDiffLinesForLcs = int.MaxValue });
+        var mutation = CreateReplacement(repository, "large.txt", 0, before, after);
+        var staged = await workspace.StageAsync(CreateMutationSet(repository, [mutation]));
+        Assert.False(staged.Conflicts.HasConflicts);
+        Assert.Contains("-old", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+        Assert.Contains("+new", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+        Assert.Equal(after, await workspace.ReadStagedTextAsync(staged.MutationSet.MutationSetId, "large.txt"));
+    }
+
     /// <summary>Preview remains private until approval, can be configured per change, commits, and rolls back.</summary>
     [Fact]
     public static async Task TransactionalWorkspace_PreviewCommitRollback_PreservesBaselineAndEvents()

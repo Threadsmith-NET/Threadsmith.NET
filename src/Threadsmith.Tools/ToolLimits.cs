@@ -109,6 +109,9 @@ public sealed record ToolLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindImplementationsMaxResults);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessDefaultTimeoutSeconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessMaxTimeoutSeconds);
+
+        // CancellationTokenSource uses an unsigned 32-bit millisecond timer on .NET 10.
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(RunProcessMaxTimeoutSeconds, (int)((uint.MaxValue - 1L) / 1000));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WriteFileMaximumContentBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WriteFileMaximumPathCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SemanticMaximumModelResults);

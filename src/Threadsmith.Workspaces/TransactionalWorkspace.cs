@@ -1490,7 +1490,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         builder.Append("+++ ").Append(after is null ? "/dev/null" : $"b/{relativePath}").AppendLine();
         builder.Append("@@ -1,").Append(oldLines.Length)
             .Append(" +1,").Append(newLines.Length).AppendLine(" @@");
-        if ((long)oldLines.Length * newLines.Length > (long)_resourceLimits.MaximumDiffLinesForLcs * _resourceLimits.MaximumDiffLinesForLcs)
+        var matrixCells = ((long)oldLines.Length + 1) * ((long)newLines.Length + 1);
+        if (matrixCells > Array.MaxLength
+            || (long)oldLines.Length * newLines.Length > (long)_resourceLimits.MaximumDiffLinesForLcs * _resourceLimits.MaximumDiffLinesForLcs)
         {
             foreach (var line in oldLines)
             {

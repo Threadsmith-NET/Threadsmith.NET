@@ -441,6 +441,25 @@ public static class AgentWorkspaceTests
             timeout.Token);
     }
 
+    /// <summary>The progress omission marker is included in the configured character budget.</summary>
+    [Theory]
+    [InlineData(1, "…")]
+    [InlineData(3, "ab…")]
+    [InlineData(6, "abcdef")]
+    public static async Task ProgressSummaryIncludesMarkerWithinLimit(int limit, string expected)
+    {
+        var session = SessionId.New();
+        var target = Target(session);
+        var sink = new RecordingSurface();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, true, new TuiResourceLimits { MaximumAgentProgressCharacters = limit }, timeout.Token);
+        await projection.AttachAsync(session, timeout.Token);
+        await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
+        await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Completed, 1, "abcdef"), timeout.Token);
+        var text = string.Concat(Assert.Single(sink.Output).Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.EndsWith(" — " + expected + "\n", text, StringComparison.Ordinal);
+    }
+
     /// <summary>Child tool starts publish immediately and one completion leaves the other tool visible.</summary>
     [Fact]
     public static async Task ConcurrentChildToolsPublishIndependentActivityImmediately()

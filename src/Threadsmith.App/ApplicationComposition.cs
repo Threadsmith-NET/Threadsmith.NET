@@ -21,6 +21,25 @@ using Threadsmith.Workspaces;
 /// <summary>Composes session, mutation, repository, and validation command applications.</summary>
 internal static class ApplicationComposition
 {
+    /// <summary>Prevents repository skill metadata from widening host discovery and activation ceilings.</summary>
+    internal static ClaudeSkillCompatibilityOptions LoadClaudeSkillLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:claudeLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<ClaudeSkillCompatibilityOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<ClaudeSkillCompatibilityOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumRoots = Math.Min(effective.MaximumRoots, trusted.MaximumRoots),
+            MaximumCandidates = Math.Min(effective.MaximumCandidates, trusted.MaximumCandidates),
+            MaximumFrontmatterBytes = Math.Min(effective.MaximumFrontmatterBytes, trusted.MaximumFrontmatterBytes),
+            MaximumInstructionBytes = Math.Min(effective.MaximumInstructionBytes, trusted.MaximumInstructionBytes),
+            MaximumFiles = Math.Min(effective.MaximumFiles, trusted.MaximumFiles),
+            MaximumAggregateBytes = Math.Min(effective.MaximumAggregateBytes, trusted.MaximumAggregateBytes),
+        };
+    }
+
     /// <summary>Creates the shared context assembler, session state, governed mutation path, and dispatcher.</summary>
     internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs)
     {
@@ -623,7 +642,7 @@ internal static class ApplicationComposition
                     "repository:.claude/skills",
                     IsRepositoryControlled: true),
             ],
-            host.Configuration.GetSection("skills:claudeLimits").Get<ClaudeSkillCompatibilityOptions>(options => options.ErrorOnUnknownConfiguration = true));
+            LoadClaudeSkillLimits(host.Configuration, host.TrustedConfiguration));
             await claudeSkillCatalog.RefreshAsync();
             var baseSkillPolicy = new SkillTrustPolicySnapshot
             {

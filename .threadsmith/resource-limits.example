@@ -176,6 +176,7 @@
       "maximumLineBytes": 1048576,
       "maximumNameCharacters": 256,
       "maximumArgumentNameCharacters": 128,
+      "maximumArgumentDescriptionCharacters": 1024,
       "maximumProfileIdCharacters": 128,
       "maximumCommandCharacters": 4096,
       "maximumProfileArguments": 64,
@@ -264,6 +265,7 @@
       "maximumEnumValues": 256,
       "maximumMetadataCharacters": 4096
     },
+    // Trusted host ceilings; repository settings may narrow these bounds.
     "claudeLimits": {
       "maximumRoots": 16,
       "maximumCandidates": 256,
@@ -331,6 +333,7 @@
     }
   },
   "context": {
+    // Trusted host ceilings; repository settings may narrow these bounds.
     "promptAppends": {
       "limits": {
         "maximumFileBytes": 32768,

@@ -906,6 +906,55 @@ public sealed class McpManagerTests
         Assert.Equal("access-canary", store.Values["mcp:oauth:server:accessToken"]);
     }
 
+    /// <summary>Capability inspection honors configured metadata and argument limits.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CapabilityInspection_HonorsConfiguredMetadataLimits(bool widened)
+    {
+        var limits = widened ? new McpResourceLimits
+        {
+            MaximumNameCharacters = 400,
+            MaximumDescriptionCharacters = 3000,
+            MaximumIdentityCharacters = 5000,
+            MaximumSchemaCharacters = 70000,
+            MaximumArgumentNameCharacters = 200,
+            MaximumArgumentDescriptionCharacters = 1500,
+        }
+        : new McpResourceLimits();
+        var capability = new McpImportedCapability
+        {
+            Id = "server:prompt:review",
+            Kind = McpCapabilityKind.Prompt,
+            ServerName = new string('n', 400),
+            Description = new string('d', 3000),
+            MimeType = new string('m', 400),
+            ResourceIdentity = new string('i', 5000),
+            InputSchemaJson = new string('s', 70000),
+            Digest = "digest",
+            PromptArguments = [new() { Name = new string('a', 200), Description = new string('b', 1500) }],
+        };
+        await using var manager = CreateManager([Profile("server")], new FakeAdapter { Capabilities = [capability] }, limits: limits);
+        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" });
+        var result = await manager.ExecuteAsync(new McpManagementRequest
+        {
+            Action = McpManagementAction.InspectCapability,
+            ProfileId = "server",
+            CapabilityId = capability.Id,
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        var mapped = Assert.Single(result.Capabilities);
+        Assert.Equal(limits.MaximumNameCharacters, mapped.Name.Length);
+        Assert.Equal(limits.MaximumNameCharacters, mapped.MimeType?.Length);
+        Assert.Equal(limits.MaximumDescriptionCharacters, mapped.Description.Length);
+        Assert.Equal(limits.MaximumIdentityCharacters, mapped.ResourceIdentity?.Length);
+        Assert.Equal(limits.MaximumSchemaCharacters, mapped.InputSchemaJson?.Length);
+        var argument = Assert.Single(mapped.Arguments);
+        Assert.Equal(limits.MaximumArgumentNameCharacters, argument.Name.Length);
+        Assert.Equal(limits.MaximumArgumentDescriptionCharacters, argument.Description.Length);
+    }
+
     /// <summary>Final projections honor raised bounds and mark narrower label/MIME truncation.</summary>
     [Theory]
     [InlineData(2048, 512, false)]
@@ -1499,7 +1548,7 @@ public sealed class McpManagerTests
         private readonly Dictionary<string, McpConnectionStatus> _connections = new(StringComparer.Ordinal);
         private int _activeConnects;
 
-        internal IReadOnlyList<McpImportedCapability> Capabilities { get; } =
+        internal IReadOnlyList<McpImportedCapability> Capabilities { get; init; } =
         [
             new()
             {

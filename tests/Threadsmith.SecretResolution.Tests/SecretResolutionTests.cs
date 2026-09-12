@@ -37,6 +37,47 @@ public sealed class SecretResolutionTests
         Assert.Equal(value, new SecretValue(value, 80000).Reveal());
     }
 
+    /// <summary>Deep configured stores use iterative validation while preserving duplicate-name rejection.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UserProvider_ValidatesDeepStoreWithoutRecursionAsync(bool duplicate)
+    {
+        using var fixture = new SecretFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.UserStorePath)!);
+        const int depth = 2000;
+        var nested = string.Concat(Enumerable.Repeat("{\"nested\":", depth))
+            + (duplicate ? "{\"key\":\"a\",\"KEY\":\"b\"}" : "\"leaf\"") + new string('}', depth);
+        var json = "{\"secrets\":{\"tests\":{\"" + fixture.Id + "\":\"value\"}},\"extra\":" + nested + "}";
+        await File.WriteAllTextAsync(fixture.UserStorePath, json, new UTF8Encoding(false));
+        var result = await new UserFileSecretProvider(fixture.UserStorePath, new()
+        {
+            MaximumJsonDepth = depth + 4,
+            MaximumProperties = depth + 10,
+        }).TryResolveAsync(fixture.CreateRequest());
+
+        if (duplicate)
+        {
+            Assert.NotEqual(SecretResolutionFailure.None, result.Failure);
+        }
+        else
+        {
+            Assert.Equal("value", result.Value?.Reveal());
+        }
+    }
+
+    /// <summary>Explicit deadlines are checked against the runtime timer range before provider work.</summary>
+    [Fact]
+    public async Task Resolver_RejectsUnrepresentableExplicitTimeoutAsync()
+    {
+        using var fixture = new SecretFixture();
+        var request = fixture.CreateRequest() with { ProviderTimeout = TimeSpan.FromMilliseconds(uint.MaxValue) };
+        var resolver = new SecretResolver([new EnvironmentSecretProvider()]);
+        await Assert.ThrowsAsync<ArgumentException>(() => resolver.ResolveAsync(request));
+        var result = await resolver.ResolveAsync(request with { ProviderTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1d) });
+        Assert.NotEqual(SecretResolutionFailure.None, result.Failure);
+    }
+
     /// <summary>References are canonical, bounded, and reject traversal or ambiguous separators.</summary>
     [Theory]
     [InlineData("")]

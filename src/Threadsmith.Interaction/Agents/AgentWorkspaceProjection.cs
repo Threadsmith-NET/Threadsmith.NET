@@ -354,7 +354,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
     {
         var safe = TerminalControlEncoder.Encode(reason);
         safe = safe.Replace('\r', ' ').Replace('\n', ' ');
-        safe = safe.Length > _limits.MaximumAgentProgressCharacters ? safe[.._limits.MaximumAgentProgressCharacters] + "…" : safe;
+        safe = safe.Length > _limits.MaximumAgentProgressCharacters ? safe[..(_limits.MaximumAgentProgressCharacters - 1)] + "…" : safe;
         var entry = new PresentationTextSegment(
             $"{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}",
             snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status);

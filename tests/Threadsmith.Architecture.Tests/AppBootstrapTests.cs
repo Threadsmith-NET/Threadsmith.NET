@@ -33,6 +33,48 @@ public static class AppBootstrapTests
         Assert.Equal(expected, HostFoundation.LoadOperationalLimits(effective, host).Workspace.MaximumDiffLinesForLcs);
     }
 
+    /// <summary>Repositories may narrow prompt appends but cannot raise trusted admission bounds.</summary>
+    [Theory]
+    [InlineData(100000, 200000, null, null, 32768, 65536)]
+    [InlineData(100000, 200000, 50000, 100000, 50000, 100000)]
+    [InlineData(1000, 2000, 50000, 100000, 1000, 2000)]
+    [InlineData(100000, 1000, null, null, 1000, 1000)]
+    public static void PromptAppendLimits_RespectTrustedCeilings(int file, int total, int? trustedFile, int? trustedTotal, int expectedFile, int expectedTotal)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["context:promptAppends:limits:maximumFileBytes"] = file.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["context:promptAppends:limits:maximumTotalBytes"] = total.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["context:promptAppends:limits:maximumFileBytes"] = trustedFile?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["context:promptAppends:limits:maximumTotalBytes"] = trustedTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }.Where(pair => pair.Value is not null)).Build();
+
+        var result = HostFoundation.LoadPromptAppendLimits(effective, host);
+        Assert.Equal(expectedFile, result.MaximumFileBytes);
+        Assert.Equal(expectedTotal, result.MaximumTotalBytes);
+    }
+
+    /// <summary>Untrusted Claude skill configuration can only narrow each host ceiling.</summary>
+    [Theory]
+    [InlineData(1000000, null, 262144)]
+    [InlineData(1000000, 500000, 500000)]
+    [InlineData(1000, 500000, 1000)]
+    public static void ClaudeSkillLimits_RespectTrustedCeilings(int requested, int? trusted, int expected)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["skills:claudeLimits:maximumInstructionBytes"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["skills:claudeLimits:maximumInstructionBytes"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }.Where(pair => pair.Value is not null)).Build();
+        Assert.Equal(expected, ApplicationComposition.LoadClaudeSkillLimits(effective, host).MaximumInstructionBytes);
+    }
+
     /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
     [Fact]
     public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()

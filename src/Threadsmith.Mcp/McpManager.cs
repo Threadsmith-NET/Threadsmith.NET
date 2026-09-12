@@ -890,7 +890,7 @@ public sealed class McpManager :
         return new McpProfileSummary
         {
             ProfileId = state.Profile.Id,
-            DisplayName = Bound(_sanitizer.Sanitize(state.Profile.DisplayName), 256),
+            DisplayName = Bound(_sanitizer.Sanitize(state.Profile.DisplayName), _limits.MaximumNameCharacters),
             ConfigurationSource = state.Profile.ConfigurationSource,
             Transport = state.Profile.Transport.ToString(),
             Trust = state.Profile.Trust.ToString(),
@@ -939,27 +939,27 @@ public sealed class McpManager :
             CapabilityId = capability.Id,
             ProfileId = profileId,
             Kind = MapKind(capability.Kind),
-            Name = Bound(_sanitizer.Sanitize(capability.ServerName), 256),
-            Description = Bound(_sanitizer.Sanitize(capability.Description), 2048),
+            Name = Bound(_sanitizer.Sanitize(capability.ServerName), _limits.MaximumNameCharacters),
+            Description = Bound(_sanitizer.Sanitize(capability.Description), _limits.MaximumDescriptionCharacters),
             Digest = capability.Digest,
             Enabled = capability.Kind == McpCapabilityKind.Tool ? IsToolEnabled(capability.Id) : null,
             MimeType = capability.MimeType is null
                 ? null
-                : Bound(_sanitizer.Sanitize(capability.MimeType), 256),
+                : Bound(_sanitizer.Sanitize(capability.MimeType), _limits.MaximumNameCharacters),
             ResourceIdentity = capability.ResourceIdentity is null
                 ? null
-                : Bound(_sanitizer.Sanitize(capability.ResourceIdentity), 4096),
+                : Bound(_sanitizer.Sanitize(capability.ResourceIdentity), _limits.MaximumIdentityCharacters),
             Arguments =
             [
                 .. capability.PromptArguments.Select(argument => new McpPromptArgumentDescriptor
                 {
-                    Name = Bound(_sanitizer.Sanitize(argument.Name), 128),
-                    Description = Bound(_sanitizer.Sanitize(argument.Description), 1024),
+                    Name = Bound(_sanitizer.Sanitize(argument.Name), _limits.MaximumArgumentNameCharacters),
+                    Description = Bound(_sanitizer.Sanitize(argument.Description), _limits.MaximumArgumentDescriptionCharacters),
                     Required = argument.Required,
                 }),
             ],
             InputSchemaJson = includeSchema && capability.InputSchemaJson is { } schema
-                ? Bound(_sanitizer.Sanitize(schema), 64 * 1024)
+                ? Bound(_sanitizer.Sanitize(schema), _limits.MaximumSchemaCharacters)
                 : null,
         };
     }
@@ -1354,7 +1354,7 @@ public sealed class McpManager :
     {
         if (profile.Transport == McpTransport.Stdio)
         {
-            return Bound(_sanitizer.Sanitize(Path.GetFileName(profile.Command)), 256);
+            return Bound(_sanitizer.Sanitize(Path.GetFileName(profile.Command)), _limits.MaximumNameCharacters);
         }
 
         return Uri.TryCreate(profile.Command, UriKind.Absolute, out var endpoint)

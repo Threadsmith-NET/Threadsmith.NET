@@ -148,7 +148,7 @@ internal sealed class McpTransportMapping
                     .. protocolArguments.Select(argument => new McpImportedPromptArgument
                     {
                         Name = argument.Name,
-                        Description = NormalizeOptional(argument.Description, 1024),
+                        Description = NormalizeOptional(argument.Description, _limits.MaximumArgumentDescriptionCharacters),
                         Required = argument.Required is true,
                     }),
                 ];

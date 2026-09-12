@@ -269,6 +269,23 @@ internal sealed class HostFoundation : IAsyncDisposable
         };
     }
 
+    /// <summary>Allows repository prompt bounds to narrow the trusted host ceilings.</summary>
+    internal static PromptAppendLimits LoadPromptAppendLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "context:promptAppends:limits";
+        var trusted = trustedConfiguration.GetSection(section).Get<PromptAppendLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<PromptAppendLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trusted.MaximumFileBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trusted.MaximumTotalBytes);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(trusted.MaximumFileBytes, trusted.MaximumTotalBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(effective.MaximumFileBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(effective.MaximumTotalBytes);
+        var total = Math.Min(effective.MaximumTotalBytes, trusted.MaximumTotalBytes);
+        return new(Math.Min(Math.Min(effective.MaximumFileBytes, trusted.MaximumFileBytes), total), total);
+    }
+
     /// <summary>Initializes persistence before subscribers, then semantic and tool services in dependency order.</summary>
     internal static async Task<HostFoundation> CreateAsync(
         IConfiguration configuration,
@@ -366,7 +383,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     : telemetry.ObserveAsync(domainEvent, cancellationToken),
                 subscriberCapacity);
             var evidenceStore = new EvidenceStore(events, sanitizer);
-            var promptAppendLoader = new PromptAppendLoader(sanitizer, configuration.GetSection("context:promptAppends:limits").Get<PromptAppendLimits>(options => options.ErrorOnUnknownConfiguration = true));
+            var promptAppendLoader = new PromptAppendLoader(sanitizer, LoadPromptAppendLimits(configuration, trustedConfiguration));
             contextLifecycle = new ContextLifecycleObserver(
                 evidenceStore,
                 promptAppendLoader);

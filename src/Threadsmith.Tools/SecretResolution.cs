@@ -379,7 +379,7 @@ public sealed class SecretResolver : ISecretResolver
             || request.Purpose.Length > 256
             || request.Purpose.Any(char.IsControl)
             || request.ProviderTimeout <= TimeSpan.Zero
-)
+            || request.ProviderTimeout.TotalMilliseconds > uint.MaxValue - 1d)
         {
             throw new ArgumentException("Secret requests require bounded safe component, purpose, and timeout values.", nameof(request));
         }
@@ -1147,25 +1147,30 @@ public abstract class JsonFileSecretProvider : ISecretProvider
 
     private bool ValidateElement(JsonElement element, ref int propertyCount)
     {
-        if (element.ValueKind == JsonValueKind.String)
+        var pending = new Stack<JsonElement>();
+        pending.Push(element);
+        while (pending.TryPop(out var current))
         {
-            return true;
-        }
+            if (current.ValueKind == JsonValueKind.String)
+            {
+                continue;
+            }
 
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in element.EnumerateObject())
-        {
-            propertyCount++;
-            if (propertyCount > _limits.MaximumProperties
-                || !names.Add(property.Name)
-                || !ValidateElement(property.Value, ref propertyCount))
+            if (current.ValueKind != JsonValueKind.Object)
             {
                 return false;
+            }
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in current.EnumerateObject())
+            {
+                if (propertyCount >= _limits.MaximumProperties || !names.Add(property.Name))
+                {
+                    return false;
+                }
+
+                propertyCount++;
+                pending.Push(property.Value);
             }
         }
 

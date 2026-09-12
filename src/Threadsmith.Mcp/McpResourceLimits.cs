@@ -63,6 +63,9 @@ public sealed record McpResourceLimits
     /// <summary>Maximum Argument Name Characters.</summary>
     public int MaximumArgumentNameCharacters { get; init; } = 128;
 
+    /// <summary>Maximum prompt argument description characters.</summary>
+    public int MaximumArgumentDescriptionCharacters { get; init; } = 1024;
+
     /// <summary>Maximum Profile Id Characters.</summary>
     public int MaximumProfileIdCharacters { get; init; } = 128;
 
@@ -148,6 +151,7 @@ public sealed record McpResourceLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumLineBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumNameCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumArgumentNameCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumArgumentDescriptionCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumProfileIdCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCommandCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumProfileArguments);

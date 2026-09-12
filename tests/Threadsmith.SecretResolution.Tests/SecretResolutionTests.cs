@@ -580,11 +580,23 @@ public sealed class SecretResolutionTests
 
     private sealed class SecretFixture : IDisposable
     {
+        private readonly string _temporaryParent;
         private bool _gitInitialized;
 
         internal SecretFixture()
         {
-            Root = Path.Combine(Path.GetTempPath(), "Threadsmith", "secret-tests", Guid.NewGuid().ToString("N"));
+            // macOS's /var temporary path is a system symlink; valid-store fixtures
+            // use its physical path so link rejection is tested independently.
+            var temporaryPath = Path.GetFullPath(Path.GetTempPath());
+            var resolved = Path.GetPathRoot(temporaryPath)!;
+            foreach (var segment in temporaryPath[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+                resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+            }
+
+            _temporaryParent = Path.Combine(resolved, "Threadsmith", "secret-tests");
+            Root = Path.Combine(_temporaryParent, Guid.NewGuid().ToString("N"));
             RepositoryRoot = Path.Combine(Root, "repo");
             UserStorePath = Path.Combine(Root, "user", "secrets", "config.json");
             Id = "key" + Guid.NewGuid().ToString("N");
@@ -602,10 +614,7 @@ public sealed class SecretResolutionTests
         public void Dispose()
         {
             var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root));
-            var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(
-                Path.GetTempPath(),
-                "Threadsmith",
-                "secret-tests")));
+            var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_temporaryParent));
             if (!string.Equals(
                     Path.GetDirectoryName(normalizedRoot),
                     normalizedParent,

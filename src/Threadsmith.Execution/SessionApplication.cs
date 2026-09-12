@@ -931,13 +931,17 @@ public sealed partial class SessionApplication :
                 return;
             }
 
+            registration.Cancellation.Token.ThrowIfCancellationRequested();
+
+            // Once the terminal state commits, publish its outcome and release waiters even
+            // if cancellation arrives while subscribers are processing that final publication.
             await registration.Machine.TransitionAsync(
                 RunPhase.Completion,
                 "scripted activity completed",
-                registration.Cancellation.Token);
+                CancellationToken.None);
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, true),
-                registration.Cancellation.Token);
+                CancellationToken.None);
             registration.Completion.TrySetResult(true);
         }
         catch (OperationCanceledException)

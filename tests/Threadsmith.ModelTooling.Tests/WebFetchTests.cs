@@ -12,6 +12,19 @@ using Xunit;
 /// <summary>Verifies the governed web-fetch security, activation, consent, and extraction contracts.</summary>
 public sealed class WebFetchTests
 {
+    /// <summary>Fetch deadlines cannot exceed the platform timer delay.</summary>
+    [Fact]
+    public void TimeoutMustFitRuntimeTimerRange()
+    {
+        var maximum = TimeSpan.FromMilliseconds(uint.MaxValue - 1L);
+        new WebFetchOptions { Timeout = maximum }.Validate();
+        using var deadline = new CancellationTokenSource();
+        deadline.CancelAfter(maximum);
+        Assert.Throws<InvalidOperationException>(() =>
+            new WebFetchOptions { Timeout = maximum + TimeSpan.FromMilliseconds(1) }.Validate());
+        Assert.Equal(TimeSpan.FromSeconds(15), new WebFetchOptions().Timeout);
+    }
+
     /// <summary>Combined serialized-result budgets must fit the tool output representation.</summary>
     [Theory]
     [InlineData(1048576, 131072)]

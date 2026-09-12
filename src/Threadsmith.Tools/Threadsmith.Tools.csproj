@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Skills" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

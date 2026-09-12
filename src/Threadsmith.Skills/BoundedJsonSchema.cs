@@ -11,7 +11,7 @@ public sealed record SkillSchemaOptions
     /// <summary>Maximum value bytes.</summary>
     public int MaximumValueBytes { get; init; } = 1024 * 1024;
 
-    /// <summary>Maximum schema/value depth.</summary>
+    /// <summary>Maximum schema/value depth; at most 64 to protect recursive validation.</summary>
     public int MaximumDepth { get; init; } = 16;
 
     /// <summary>Maximum object properties across a schema.</summary>
@@ -63,7 +63,7 @@ public sealed class BoundedJsonSchemaValidator
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumMetadataCharacters);
         if (_options.MaximumSchemaBytes < 1
             || _options.MaximumValueBytes < 1
-            || _options.MaximumDepth < 1
+            || _options.MaximumDepth is < 1 or > 64
             || _options.MaximumProperties < 1
             || _options.MaximumArrayItems < 1)
         {

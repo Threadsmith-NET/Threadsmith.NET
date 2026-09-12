@@ -119,7 +119,7 @@ public static class Program
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
         var promptLoader = await DeployedPromptLoader.LoadAsync(
             AppContext.BaseDirectory,
-            configuration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
+            trustedConfiguration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
             CancellationToken.None);
         var promptLogger = loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts");
         if (promptLogger.IsEnabled(LogLevel.Information))

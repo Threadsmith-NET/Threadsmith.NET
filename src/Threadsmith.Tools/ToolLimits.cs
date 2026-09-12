@@ -116,6 +116,7 @@ public sealed record ToolLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WriteFileMaximumPathCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SemanticMaximumModelResults);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchRegexTimeoutMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(SearchRegexTimeoutMilliseconds, int.MaxValue - 1);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchProcessTimeoutMilliseconds);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(ListFilesDefaultEntries, ListFilesMaxEntries);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(ReadFileDefaultLines, ReadFileMaxLines);

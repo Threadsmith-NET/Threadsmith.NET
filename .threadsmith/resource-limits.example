@@ -256,6 +256,7 @@
     "schemaLimits": {
       "maximumSchemaBytes": 131072,
       "maximumValueBytes": 1048576,
+      // At most 64: recursive schema/value validation must remain stack-safe.
       "maximumDepth": 16,
       "maximumProperties": 256,
       "maximumArrayItems": 1024,
@@ -324,6 +325,7 @@
     },
     "search": {
       "maxQueryCharacters": 500,
+      // Regex engine finite timeout ceiling: 2147483646 milliseconds.
       "regexTimeoutMilliseconds": 250,
       "processTimeoutMilliseconds": 25000
     }
@@ -343,6 +345,7 @@
         "maximumTotalBytes": 262144
       }
     },
+    // Host assets: machine/user/environment only; repository/session/CLI overrides do not apply.
     "deployedPrompts": {
       "limits": {
         "maximumFileBytes": 131072,

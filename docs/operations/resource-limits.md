@@ -6,7 +6,7 @@ The [complete defaults example](../../.threadsmith/resource-limits.example) is a
 
 ## Scope and validation
 
-Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user configuration; repository, session, CLI, and environment values do not widen those policies. Web-fetch repository options may narrow the trusted ceiling. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
+Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user/environment configuration; repository, session, and CLI values do not widen those policies. Web-fetch repository options may narrow the trusted ceiling. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
 
 New typed limit groups reject unknown members and invalid values. Most new bounds require positive values; there is no arbitrary upper ceiling beyond the storage/runtime type. Exceptions are stated in the tables. Existing settings that support zero as disabled retain that behavior. Byte counts are bytes (KiB = 1,024; MiB = 1,048,576); character counts are .NET UTF-16 code units unless a setting explicitly says otherwise. Counts, milliseconds, and seconds are named accordingly. Related settings must remain consistent: a default cannot exceed its maximum, aggregate prompt budgets cannot be smaller than one file, and extension stability timeout cannot be shorter than its quiet interval.
 
@@ -17,6 +17,8 @@ Numeric and downstream API boundaries still apply. Invalid values fail with conf
 Large composer drafts with many separate graphemes can be slow in the current TUIKit grapheme splitter, which repeatedly scans preceding characters. Raising `tui.limits.maximumDraftBytes` changes admission but does not change that backend processing cost.
 
 Shipped defaults preserve the previous fixed values. Lowering semantic traversal ceilings also lowers tool-owned request defaults; callers are not required to override hidden request fields. MCP management caps requested result counts at `mcp.limits.maximumCapabilities`, including its normal 256-item request default, without disabling connection or authentication operations. `execution.maxAgentDisplayFragmentCharacters` retains its 4,096 default and accepts values of at least two UTF-16 code units so a complete Unicode scalar can fit. Smaller values produce a configuration error. Skill dependency-cycle validation is iterative and introduces no graph-depth admission ceiling.
+
+Web-search and web-fetch request timeouts must fit the .NET timer range: at most 4,294,967,294 milliseconds (4,294,967 whole seconds). Values above that range are rejected during configuration/provider construction, before a request starts. Their defaults remain 15 seconds.
 
 ## Tool runtime overrides
 
@@ -237,7 +239,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Markd
 
 ### `mcp:limits`
 
-Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Mcp/McpResourceLimits.cs).
+Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Mcp/McpResourceLimits.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -282,7 +284,7 @@ Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Mcp/M
 
 ### `hooks:limits`
 
-Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Hooks/HookResourceLimits.cs).
+Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Hooks/HookResourceLimits.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -303,7 +305,7 @@ Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Hooks
 
 ### `secretResolution:limits`
 
-Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Tools/SecretResourceLimits.cs).
+Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Tools/SecretResourceLimits.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -315,7 +317,7 @@ Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Tools
 
 ### `model:catalogLimits`
 
-Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Models/ModelProviderConfiguration.cs).
+Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Models/ModelProviderConfiguration.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -355,7 +357,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/BoundedJso
 |---|---:|---|
 | `maximumSchemaBytes` | `131072` | Maximum schema bytes. |
 | `maximumValueBytes` | `1048576` | Maximum value bytes. |
-| `maximumDepth` | `16` | Maximum schema/value depth. |
+| `maximumDepth` | `16` | Maximum schema/value depth; values above the original 64-level recursive-validation ceiling are rejected to prevent stack overflow. |
 | `maximumProperties` | `256` | Maximum object properties across a schema. |
 | `maximumArrayItems` | `1024` | Maximum array items. |
 | `maximumPropertyNameCharacters` | `128` | Maximum schema property-name characters. |
@@ -387,7 +389,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/SkillPacka
 
 ### `skills:runtimeLimits`
 
-Trusted machine/user configuration. [Implementation](../../src/Threadsmith.Skills/SkillRuntimeLimits.cs).
+Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Skills/SkillRuntimeLimits.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -445,7 +447,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Context/Repositor
 
 ### `context:deployedPrompts:limits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Context/DeployedPromptLoader.cs).
+Trusted machine/user/environment configuration only. Repository, session, and CLI overrides cannot change admission of the host's shipped prompt assets. [Implementation](../../src/Threadsmith.Context/DeployedPromptLoader.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -544,7 +546,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/BuiltInTool
 | Field | Default | Purpose |
 |---|---:|---|
 | `maxQueryCharacters` | `500` | Maximum file-search query characters. |
-| `regexTimeoutMilliseconds` | `250` | Per-match regex timeout. |
+| `regexTimeoutMilliseconds` | `250` | Per-match regex timeout; at most 2,147,483,646 milliseconds, the regex engine's finite timeout ceiling. |
 | `processTimeoutMilliseconds` | `25000` | Ripgrep process deadline. |
 
 ### `tools:config:csharp_script`

@@ -850,7 +850,6 @@ public abstract class JsonFileSecretProvider : ISecretProvider
     private const int MacOpenNoFollow = 0x00000100;
     private const int MacOpenCloseOnExec = 0x01000000;
     private const int MacOpenNonBlocking = 0x00000004;
-    private const int MacGetPath = 50;
     private const ushort UnixFileTypeMask = 0xF000;
     private const ushort UnixRegularFile = 0x8000;
 
@@ -1136,14 +1135,8 @@ public abstract class JsonFileSecretProvider : ISecretProvider
 
         if (OperatingSystem.IsMacOS())
         {
-            var path = new byte[1024];
-            if (GetFilePathMac(handle.DangerousGetHandle().ToInt32(), MacGetPath, path) != 0)
-            {
-                throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
-            }
-
-            var terminator = Array.IndexOf(path, (byte)0);
-            return Encoding.UTF8.GetString(path, 0, terminator >= 0 ? terminator : path.Length);
+            return MacFileHandlePath.GetPath(handle)
+                ?? throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
         }
 
         var descriptorPath = $"/proc/self/fd/{handle.DangerousGetHandle()}";
@@ -1229,7 +1222,4 @@ public abstract class JsonFileSecretProvider : ISecretProvider
     private static extern int GetFileStatusMac(
         int fileDescriptor,
         out DarwinFileStatus status);
-
-    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int GetFilePathMac(int fileDescriptor, int command, byte[] path);
 }

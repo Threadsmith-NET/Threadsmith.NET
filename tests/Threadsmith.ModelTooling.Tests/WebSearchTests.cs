@@ -11,6 +11,24 @@ using Xunit;
 /// <summary>Verifies the milestone 7.5 consent, preflight, and provider boundaries.</summary>
 public sealed class WebSearchTests
 {
+    /// <summary>Provider deadlines must fit the same timer used by requests.</summary>
+    [Fact]
+    public void TimeoutMustFitRuntimeTimerRange()
+    {
+        const int maximumSeconds = (int)((uint.MaxValue - 1L) / 1000);
+        var values = new Dictionary<string, string?>
+        {
+            ["webSearch:provider:timeoutSeconds"] = maximumSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+        var options = WebSearchOptions.FromConfiguration(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        using var deadline = new CancellationTokenSource();
+        deadline.CancelAfter(options.Timeout);
+        values["webSearch:provider:timeoutSeconds"] = (maximumSeconds + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Throws<InvalidOperationException>(() =>
+            WebSearchOptions.FromConfiguration(new ConfigurationBuilder().AddInMemoryCollection(values).Build()));
+        Assert.Equal(TimeSpan.FromSeconds(15), new WebSearchOptions().Timeout);
+    }
+
     /// <summary>Configured freshness windows cannot underflow the calendar.</summary>
     [Fact]
     public void FreshnessLimitMustFitCalendarRange()

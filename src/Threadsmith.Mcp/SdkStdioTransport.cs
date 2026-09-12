@@ -435,7 +435,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
         var maximumRetainedLineCharacters = _limits.MaximumStandardErrorLineCharacters;
         using var reader = process.StandardError;
         var buffer = new char[2048];
-        var line = new System.Text.StringBuilder(maximumRetainedLineCharacters);
+        var line = new System.Text.StringBuilder(Math.Min(maximumRetainedLineCharacters, buffer.Length));
         var discardRemainder = false;
         try
         {

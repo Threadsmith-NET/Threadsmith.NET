@@ -401,6 +401,46 @@ public static class Milestone1Tests
         Assert.Equal(new SessionUsageSnapshot(2, 3, false), harness.Usage.GetSnapshot(sessionId));
     }
 
+    /// <summary>Cancellation cannot interrupt publication after the terminal state has committed.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task SessionApplication_CancellationDuringCompletion_FinishesWaiter(bool duringTransition)
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        {
+            Turns = [new ScriptedTurn { Text = "hello" }],
+        });
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = harness.EventStream.Subscribe(async (item, token) =>
+        {
+            if (duringTransition
+                ? item is RunTransitioned { Destination: RunPhase.Completion }
+                : item is RunCompleted { Succeeded: true })
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        });
+        var sessionId = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("test"));
+        var runId = await harness.Dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "request"));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(await harness.Dispatcher.DispatchAsync(new CancelRunCommand(sessionId, runId)));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId))
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Single(harness.Events.OfType<RunCompleted>());
+        Assert.DoesNotContain(harness.Events, item => item is RunTransitionFailed);
+    }
+
     /// <summary>A completed provider request without usage metadata remains explicitly unknown.</summary>
     [Fact]
     public static async Task SessionApplication_MissingProviderUsage_RecordsUnknownUsage()

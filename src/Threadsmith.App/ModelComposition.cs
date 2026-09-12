@@ -451,7 +451,7 @@ internal static class ModelComposition
         var hasCatalog = File.Exists(paths.UserProviderCatalog) || File.Exists(paths.RepositoryProviderCatalog);
         if (!hasCatalog)
         {
-            return (LoadEffectiveCatalog(configuration, paths, openAiRegistration, registry, loggerFactory),
+            return (LoadEffectiveCatalog(configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory),
                 LoadTrustedCatalog(trustedConfiguration, paths, openAiRegistration, registry, loggerFactory));
         }
 
@@ -709,6 +709,7 @@ internal static class ModelComposition
     /// <summary>Loads dedicated catalogs or adapts legacy profiles without allowing ambiguous mixed schemas.</summary>
     private static EffectiveModelProviderCatalog? LoadEffectiveCatalog(
         IConfiguration configuration,
+        IConfiguration trustedConfiguration,
         ConfigurationPaths paths,
         OpenAiCompatibleProviderRegistration openAiRegistration,
         ModelProviderRegistry registry,
@@ -728,7 +729,7 @@ internal static class ModelComposition
                 Path.GetFullPath(paths.UserProviderCatalog),
                 Path.GetFullPath(paths.RepositoryProviderCatalog),
                 registry,
-                limits: configuration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true),
+                limits: trustedConfiguration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 enforceHttps: enforceHttps,
                 observeDiagnostic: diagnostic =>
                 {

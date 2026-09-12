@@ -224,6 +224,19 @@ public sealed partial class SkillSubsystemTests
         Assert.Empty(tiny.Snapshot.EnabledSelectors);
     }
 
+    /// <summary>Configured recursion depth cannot exceed the original stack-safety ceiling.</summary>
+    [Theory]
+    [InlineData(65)]
+    [InlineData(int.MaxValue)]
+    public void SchemaValidator_RejectsUnsafeRecursionDepth(int depth)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new BoundedJsonSchemaValidator(new SkillSchemaOptions { MaximumDepth = depth }));
+        var validator = new BoundedJsonSchemaValidator(new SkillSchemaOptions { MaximumDepth = 64 });
+        Assert.NotNull(validator.Compile("{\"type\":\"string\"}"));
+        Assert.Equal(16, new SkillSchemaOptions().MaximumDepth);
+    }
+
     /// <summary>Verifies unsupported references, unknown keywords, extra values, and integer mismatch fail closed.</summary>
     [Fact]
     public void SchemaValidator_RejectsUnsafeOrMismatchedSchemasAndValues()

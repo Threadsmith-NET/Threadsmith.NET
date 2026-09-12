@@ -298,7 +298,7 @@ public sealed record WebFetchOptions
         if (MaximumScannedUserCharacters <= 0 || MaximumUserUrlCandidates <= 0 || MaximumReferences <= 0
             || MaximumUrlCharacters <= 0
             || MaximumRedirects < 0
-            || Timeout <= TimeSpan.Zero
+            || Timeout <= TimeSpan.Zero || Timeout > TimeSpan.FromMilliseconds(uint.MaxValue - 1L)
             || MaximumCompressedBytes <= 0
             || MaximumDecodedBytes <= 0
             || MaximumExtractedCharacters <= 0

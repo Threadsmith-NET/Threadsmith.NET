@@ -25,6 +25,20 @@ public sealed class ConfigurableResourceLimitsTests
         Assert.Equal(60, new ToolLimits().RunProcessMaxTimeoutSeconds);
     }
 
+    /// <summary>Regex timeout admission matches the regex engine's finite millisecond range.</summary>
+    [Fact]
+    public void RegexTimeoutRejectsUnrepresentableValues()
+    {
+        new ToolLimits { SearchRegexTimeoutMilliseconds = int.MaxValue - 1 }.Validate();
+        _ = new System.Text.RegularExpressions.Regex(
+            "x",
+            System.Text.RegularExpressions.RegexOptions.None,
+            TimeSpan.FromMilliseconds(int.MaxValue - 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ToolLimits { SearchRegexTimeoutMilliseconds = int.MaxValue }.Validate());
+        Assert.Equal(250, new ToolLimits().SearchRegexTimeoutMilliseconds);
+    }
+
     /// <summary>Verifies the configured resource policy is honored.</summary>
     [Fact]
     public void RuntimeOverridesPreserveDynamicRegistrationIdentity()

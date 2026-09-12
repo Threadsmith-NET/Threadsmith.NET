@@ -132,7 +132,7 @@ public sealed record WebSearchOptions
         var maximumBytes = configuration.GetValue("webSearch:provider:maximumResponseBytes", 1_048_576);
         var retries = configuration.GetValue("webSearch:provider:retryLimit", 1);
         var intervalMilliseconds = configuration.GetValue("webSearch:provider:minimumRequestIntervalMilliseconds", 200);
-        if (timeoutSeconds <= 0
+        if (timeoutSeconds <= 0 || timeoutSeconds > (uint.MaxValue - 1L) / 1000
             || maximumBytes <= 0
             || retries < 0
             || intervalMilliseconds < 0)
@@ -198,6 +198,8 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.Timeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Timeout, TimeSpan.FromMilliseconds(uint.MaxValue - 1L));
         ArgumentNullException.ThrowIfNull(prompts);
         _httpClient = httpClient;
         _secretResolver = secretResolver;

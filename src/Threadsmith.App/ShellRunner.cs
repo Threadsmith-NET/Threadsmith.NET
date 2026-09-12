@@ -340,6 +340,9 @@ internal sealed record ShellRunContext
     /// <summary>Gets the effective normal-layer configuration.</summary>
     internal required IConfiguration Configuration { get; init; }
 
+    /// <summary>Gets the machine/user-owned ceiling for reading and rewriting user configuration.</summary>
+    internal required int MaximumUserConfigurationBytes { get; init; }
+
     /// <summary>Gets the host command dispatcher shared by terminal modes.</summary>
     internal required CommandDispatcher Dispatcher { get; init; }
 

@@ -101,7 +101,7 @@ public sealed class TestDiscoverer
                 .Where(element => element.Name.LocalName == "ProjectReference")
                 .Select(element => (string?)element.Attribute("Include"))
                 .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(value => Path.GetFullPath((value ?? string.Empty).Replace('/', Path.DirectorySeparatorChar), projectDirectory))
+                .Select(value => Path.GetFullPath((value ?? string.Empty).Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar), projectDirectory))
                 .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
                 .OrderBy(path => path, OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)];
             discovered.Add(new TestProject

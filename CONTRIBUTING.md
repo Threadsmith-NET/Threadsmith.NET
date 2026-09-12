@@ -61,7 +61,7 @@ dotnet --version
 4. Run the test suite:
 
    ```powershell
-   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
    ```
 
 5. Create a focused branch:
@@ -115,7 +115,7 @@ Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the f
 ```powershell
 dotnet restore src/Threadsmith.sln
 dotnet build src/Threadsmith.sln --configuration Debug --no-restore
-dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
 ```
 
 Also run checks owned by the area you changed:

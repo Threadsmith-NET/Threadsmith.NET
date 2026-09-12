@@ -194,16 +194,22 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     public ReadFileTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
+        _limits = limits ?? ToolLimits.Default;
         _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
             "read_file",
-            promptLoader.Get(PromptFileNames.ToolReadFileDescription),
+            promptLoader.Render(PromptFileNames.ToolReadFileDescription, new Dictionary<string, string>
+            {
+                ["DefaultLines"] = _limits.ReadFileDefaultLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumLines"] = _limits.ReadFileMaxLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumContentBytes"] = _limits.ReadFileMaximumContentBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumFileBytes"] = _limits.ReadFileMaximumBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }),
             ToolCategory.FileRead,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(10),
             384 * 1024);
-        _limits = limits ?? ToolLimits.Default;
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);

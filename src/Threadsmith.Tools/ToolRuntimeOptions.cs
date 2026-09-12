@@ -116,17 +116,46 @@ internal sealed class ToolRuntimePolicy
 /// <summary>Forwards execution unchanged while exposing the host-configured runtime contract.</summary>
 internal sealed class ConfiguredTool : ITool
 {
+    private readonly Lock _definitionGate = new();
+    private ToolDefinition _sourceDefinition;
+    private ToolDefinition _definition;
+
     /// <summary>Initializes a new instance of the <see cref="ConfiguredTool"/> class.</summary>
     internal ConfiguredTool(ITool inner, ToolDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(definition);
         Inner = inner;
-        Definition = definition;
+        _sourceDefinition = inner.Definition;
+        _definition = definition;
     }
 
     /// <inheritdoc />
-    public ToolDefinition Definition { get; }
+    public ToolDefinition Definition
+    {
+        get
+        {
+            lock (_definitionGate)
+            {
+                var source = Inner.Definition;
+                if (!ReferenceEquals(source, _sourceDefinition))
+                {
+                    _definition = source with
+                    {
+                        Timeout = _definition.Timeout,
+                        MaximumOutputBytes = _definition.MaximumOutputBytes,
+                        Scheduling = source.Scheduling with
+                        {
+                            MaximumSourceConcurrency = _definition.Scheduling.MaximumSourceConcurrency,
+                        },
+                    };
+                    _sourceDefinition = source;
+                }
+
+                return _definition;
+            }
+        }
+    }
 
     /// <summary>Returns the implementation that owns tool-specific policy and output behavior.</summary>
     internal static ITool Unwrap(ITool tool) => tool is ConfiguredTool configured ? configured.Inner : tool;

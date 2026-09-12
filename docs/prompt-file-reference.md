@@ -620,7 +620,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Advertised description for `memories`. | `None` |
+| `Tool-memories-Description.md` | Advertised description for `memories`. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Advertised description for `nuget_health`. | `None` |
 
 #### `propose_mutations` family
@@ -639,8 +639,8 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_file-Description.md` | Advertised description for `read_file`. | `None` |
-| `Tool-write_file-Description.md` | Advertised description for `write_file`. | `None` |
+| `Tool-read_file-Description.md` | Advertised description for `read_file`. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
 
@@ -694,7 +694,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-web_search-Description.md` | Advertised description for `web_search`. | `None` |
+| `Tool-web_search-Description.md` | Advertised description for `web_search`. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters), [`MaximumFreshnessDays`](#placeholder-maximumfreshnessdays) |
 | `Tool-web_search-TrustBoundary.md` | Mandatory trust boundary serialized with `web_search` results. | `None` |
 
 ### Skill prompts
@@ -825,7 +825,13 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |
-| <a id="placeholder-maximumquerycharacters"></a>`MaximumQueryCharacters` | Configured maximum characters in a file-search query. |
+| <a id="placeholder-defaultlines"></a>`DefaultLines` | Configured default line count for read_file. |
+| <a id="placeholder-maximumlines"></a>`MaximumLines` | Configured maximum line count for read_file. |
+| <a id="placeholder-maximumcontentbytes"></a>`MaximumContentBytes` | Configured UTF-8 content byte limit for the advertised read_file or write_file tool. |
+| <a id="placeholder-maximumfilebytes"></a>`MaximumFileBytes` | Configured maximum input-file bytes for read_file. |
+| <a id="placeholder-maximumtextcharacters"></a>`MaximumTextCharacters` | Current repository memory character limit; refreshed when repository settings change. |
+| <a id="placeholder-maximumfreshnessdays"></a>`MaximumFreshnessDays` | Configured maximum web-search freshness window in days. |
+| <a id="placeholder-maximumquerycharacters"></a>`MaximumQueryCharacters` | Configured maximum characters in the advertised file-search or web-search query. |
 | <a id="placeholder-message"></a>`Message` | Bounded message content for the surrounding item. |
 | <a id="placeholder-modedescription"></a>`ModeDescription` | User-facing explanation of the selected execution or tool mode. |
 | <a id="placeholder-modeltokens"></a>`ModelTokens` | Measured model-token usage for a child or operation. |

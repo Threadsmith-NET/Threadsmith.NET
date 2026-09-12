@@ -769,7 +769,7 @@ public sealed partial class SessionApplication
         if (chunk.Output is PlanModelOutput planOutput)
         {
             streamState.ObserveToolProducingOutput(isPlanProposal: true);
-            ModelOutputValidator.Validate(planOutput);
+            ModelOutputValidator.Validate(planOutput, planLimits: _limits.Plan);
             loopState.AddRetainedPlanOutputCharacters(planOutput.Plan);
             streamState.Plan = planOutput.Plan;
         }
@@ -2325,7 +2325,7 @@ public sealed partial class SessionApplication
                 .Select(sanitizer.Sanitize)
                 .ToArray(),
         };
-        ModelOutputValidator.Validate(new PlanModelOutput(plan));
+        ModelOutputValidator.Validate(new PlanModelOutput(plan), planLimits: _limits.Plan);
 
         if (previousPlan is { } pendingPlan)
         {

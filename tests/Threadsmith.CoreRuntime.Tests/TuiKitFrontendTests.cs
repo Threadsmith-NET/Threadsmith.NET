@@ -442,9 +442,15 @@ public static class TuiKitFrontendTests
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var activity = new InteractionActivity("THINKING", TimeProvider.System.GetTimestamp(), true, TimeProvider.System);
             var display = surface.PresentActivityUntilAsync(activity, completion.Task, token);
+            var output = string.Empty;
+            while (!output.Contains("THINKING", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, token);
+                output += backend.TakeOutput();
+            }
+
             await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
             {
-                var output = string.Empty;
                 while (!output.Contains("ENTER to steer; ESC-ESC to cancel", StringComparison.Ordinal))
                 {
                     await Task.Delay(10, token);

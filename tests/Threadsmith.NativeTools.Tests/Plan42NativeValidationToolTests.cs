@@ -278,7 +278,10 @@ public sealed class Plan42NativeValidationToolTests
             false,
             TimeSpan.FromMilliseconds(1)));
         process.Results.Enqueue(SuccessfulRequestResult("Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1"));
-        var service = new NativeValidationToolService(process);
+        var service = new NativeValidationToolService(process, null, [], new ValidationResourceLimits
+        {
+            MaximumBuildOutputCharacters = 12345,
+        });
         var runId = RunId.New();
 
         var discovery = await service.DiscoverTestsAsync(
@@ -297,6 +300,7 @@ public sealed class Plan42NativeValidationToolTests
             TestContext.Current.CancellationToken);
 
         Assert.Contains("--filter-trait", process.Requests[0].Arguments);
+        Assert.Equal(12345, process.Requests[0].MaximumOutputCharacters);
         Assert.DoesNotContain("--filter", process.Requests[0].Arguments);
         Assert.Contains("Category=Fast", process.Requests[0].Arguments);
         Assert.Contains("--filter-method", process.Requests[1].Arguments);

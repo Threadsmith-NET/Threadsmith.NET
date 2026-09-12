@@ -142,7 +142,11 @@ public sealed class WebSearchTests
                 TestPromptLoader.Instance,
                 authority);
             Assert.Equal(
-                TestPromptLoader.Instance.Get(PromptFileNames.ToolWebSearchDescription),
+                TestPromptLoader.Instance.Render(PromptFileNames.ToolWebSearchDescription, new Dictionary<string, string>
+                {
+                    ["MaximumQueryCharacters"] = "500",
+                    ["MaximumFreshnessDays"] = "365",
+                }),
                 tool.Definition.Description);
             var context = new ToolExecutionContext(
                 ToolInvocationId.New(),

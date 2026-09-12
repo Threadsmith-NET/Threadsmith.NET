@@ -502,6 +502,18 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
                 ? finalPath.ToString()[4..]
                 : finalPath.ToString();
         }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // Darwin F_GETPATH uses a MAXPATHLEN (1024-byte) buffer.
+            var finalPath = new byte[1024];
+            if (GetFilePathMac(stream.SafeFileHandle, 50, finalPath) != 0)
+            {
+                throw new InvalidDataException("The opened Claude skill resource could not be validated.");
+            }
+
+            var terminator = Array.IndexOf(finalPath, (byte)0);
+            openedPath = Encoding.UTF8.GetString(finalPath, 0, terminator >= 0 ? terminator : finalPath.Length);
+        }
         else
         {
             var descriptorPath = $"/proc/self/fd/{stream.SafeFileHandle.DangerousGetHandle()}";
@@ -527,6 +539,12 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         await stream.ReadExactlyAsync(bytes, cancellationToken);
         return bytes;
     }
+
+    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+    private static extern int GetFilePathMac(
+        Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        int command,
+        [Out] byte[] path);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(

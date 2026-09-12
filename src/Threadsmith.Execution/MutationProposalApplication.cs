@@ -378,7 +378,7 @@ public sealed class MutationProposalApplication :
 
         var operationBudget = _budgetFactory()
             ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
-        ModelOutputValidator.Validate(new PlanModelOutput(command.ApprovedPlan));
+        ModelOutputValidator.Validate(new PlanModelOutput(command.ApprovedPlan), planLimits: _limits.Plan);
         if (command.Phase is not RunPhase.MutationPreparation
             and not RunPhase.ImplementationModelTurn
             and not RunPhase.CorrectionModelTurn)

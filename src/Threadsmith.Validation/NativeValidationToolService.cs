@@ -52,7 +52,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         _limits.Validate();
         _processManager = processManager;
         _secretResolver = secretResolver;
-        _testDiscoverer = new TestDiscoverer(processManager);
+        _testDiscoverer = new TestDiscoverer(processManager, _limits);
         NuGetAdvisorySourceOptions[] configuredSources = [.. sources];
         if (configuredSources.Length > _limits.MaximumAdvisorySources
             || configuredSources.Any(source => !IsValidSource(source)

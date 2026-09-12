@@ -18,6 +18,30 @@ using Xunit;
 /// <summary>Exercises explicit memory admission and actual conversation dispatch boundaries.</summary>
 public static class MemoriesToolTests
 {
+    /// <summary>Repository switches refresh advertised limits without changing runtime registration identity.</summary>
+    [Fact]
+    public static void Description_FollowsRepositoryLimitsThroughRuntimeOverride()
+    {
+        var first = Path.Combine(Path.GetTempPath(), "memory-first");
+        var second = Path.Combine(Path.GetTempPath(), "memory-second");
+        var empty = new ConfigurationBuilder().Build();
+        var options = new RepositoryMemoryConfiguration(empty, empty, first);
+        var tool = new MemoriesTool(new MemoryService(), options, TestPromptLoader.Instance);
+        var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions
+        {
+            Defaults = new ToolRuntimeOverride { TimeoutMilliseconds = 12345 },
+        });
+        var registered = registry.Get("memories");
+        Assert.Contains("2000 characters", registered.Definition.Description, StringComparison.Ordinal);
+        options.BindRepository(second, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:MaximumTextCharacters"] = "4321",
+        }).Build());
+        Assert.Same(registered, registry.Get("memories"));
+        Assert.Contains("4321 characters", registered.Definition.Description, StringComparison.Ordinal);
+        Assert.Equal(TimeSpan.FromMilliseconds(12345), registered.Definition.Timeout);
+    }
+
     /// <summary>Canonical provider definitions retain closed memory-type admission and four actions.</summary>
     [Fact]
     public static void Schema_IsClosedAndNullable()
@@ -412,6 +436,8 @@ public static class MemoriesToolTests
     private sealed class Options : IRepositoryMemoryOptionsProvider
     {
         public int StandingPreferenceWarningThreshold { get; init; } = 3;
+
+        public RepositoryMemoryOptions CaptureCurrent() => Capture(string.Empty);
 
         public RepositoryMemoryOptions Capture(string repositoryIdentity) => new()
         {

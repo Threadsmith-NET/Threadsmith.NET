@@ -813,8 +813,16 @@ public sealed class Milestone17CompatibilityTests
     {
         public TemporaryDirectory()
         {
+            var temporaryPath = System.IO.Path.GetFullPath(System.IO.Path.GetTempPath());
+            var resolved = System.IO.Path.GetPathRoot(temporaryPath)!;
+            foreach (var segment in temporaryPath[resolved.Length..].Split(System.IO.Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var directory = new DirectoryInfo(System.IO.Path.Combine(resolved, segment));
+                resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+            }
+
             Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
+                resolved,
                 $"threadsmith-m17-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
         }

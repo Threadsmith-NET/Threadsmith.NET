@@ -274,6 +274,7 @@ public static class Program
                 CommandLine = commandLine,
                 Paths = paths,
                 Configuration = configuration,
+                MaximumUserConfigurationBytes = trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
                 Dispatcher = dispatcher,
                 Projections = foundation.Projections,
                 Events = foundation.Events,

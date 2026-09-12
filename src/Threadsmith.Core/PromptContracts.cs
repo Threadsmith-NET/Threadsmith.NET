@@ -1735,6 +1735,10 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionGitBlameInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
                     [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),
+                    [PromptFileNames.ToolReadFileDescription] = Set("DefaultLines", "MaximumLines", "MaximumContentBytes", "MaximumFileBytes"),
+                    [PromptFileNames.ToolWriteFileDescription] = Set("MaximumContentBytes"),
+                    [PromptFileNames.ToolMemoriesDescription] = Set("MaximumTextCharacters"),
+                    [PromptFileNames.ToolWebSearchDescription] = Set("MaximumQueryCharacters", "MaximumFreshnessDays"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",

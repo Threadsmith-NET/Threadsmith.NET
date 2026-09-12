@@ -36,4 +36,4 @@ jobs:
         run: dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 
       - name: Test
-        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4

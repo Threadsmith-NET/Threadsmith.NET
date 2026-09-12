@@ -143,17 +143,31 @@ public sealed class LifecycleHookTests
         var store = new InMemoryHookStore();
         var descriptor = HookDescriptorValidator.Normalize([
             Descriptor(HookHandlerScope.Machine, HookAuthority.Advisory, HookFailureMode.FailOpen)])[0];
-        await using var coordinator = Coordinator(descriptor, store, new CancellingAdapter(), []);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+        var adapter = new CancellingAdapter();
+        await using var coordinator = Coordinator(descriptor, store, adapter, []);
+        using var cancellation = new CancellationTokenSource();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.InvokeAsync(
+        var invocation = coordinator.InvokeAsync(
             HookPoint.BeforeToolInvocation,
             SessionId.New(),
             RunId.New(),
             "repo-1",
             Guid.NewGuid(),
             0,
-            cancellationToken: cancellation.Token));
+            cancellationToken: cancellation.Token);
+        await adapter.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await cancellation.CancelAsync();
+        OperationCanceledException? cancelled = null;
+        try
+        {
+            await invocation;
+        }
+        catch (OperationCanceledException exception)
+        {
+            cancelled = exception;
+        }
+
+        Assert.NotNull(cancelled);
 
         var audit = Assert.Single(await store.QueryAuditAsync("repo-1", null, 10));
         Assert.Equal(HookInvocationStatus.Cancelled, audit.Status);
@@ -277,6 +291,19 @@ public sealed class LifecycleHookTests
         Assert.Throws<ArgumentException>(() => HookDescriptorValidator.Normalize([descriptor]));
     }
 
+    /// <summary>Retry arithmetic cannot wrap either the attempt counter or aggregate budget.</summary>
+    [Theory]
+    [InlineData(int.MaxValue, 1)]
+    [InlineData(int.MaxValue - 1, 10000000)]
+    public static void RetryBudget_DoesNotOverflow(int retries, long timeoutTicks)
+    {
+        var descriptor = Descriptor(HookHandlerScope.Machine, HookAuthority.Advisory, HookFailureMode.FailOpen) with
+        {
+            Limits = new HookHandlerLimits { MaximumRetries = retries, Timeout = TimeSpan.FromTicks(timeoutTicks) },
+        };
+        Assert.Throws<ArgumentException>(() => HookDescriptorValidator.Normalize([descriptor]));
+    }
+
     /// <summary>Migration 6 and the SQLite store preserve exact approvals and audit.</summary>
     [Fact]
     public async Task MigrationAndSqliteStore_RoundTripApprovalAndAudit()
@@ -385,6 +412,8 @@ public sealed class LifecycleHookTests
 
     private sealed class CancellingAdapter : IHookHandlerAdapter
     {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public HookAdapterKind Kind => HookAdapterKind.Mcp;
 
         public async Task<HookHandlerResult> InvokeAsync(
@@ -392,6 +421,7 @@ public sealed class LifecycleHookTests
             HookInvocationEnvelope envelope,
             CancellationToken cancellationToken = default)
         {
+            Started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new HookAcknowledgeResult();
         }

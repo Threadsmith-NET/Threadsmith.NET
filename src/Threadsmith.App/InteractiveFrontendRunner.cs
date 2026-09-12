@@ -50,7 +50,7 @@ internal static class InteractiveFrontendRunner
         var extensionHost = context.ExtensionHost ?? throw new InvalidOperationException("Interactive startup requires the extension host.");
         var names = AgentNameConfiguration.Load(context.Configuration);
         var terminalWarnings = surface is TuiKitSurface tuiKit ? tuiKit.ThemeDiagnostics : [];
-        var themeCommands = new ThemeCommandContribution(themes, applyTheme, new UserConfigurationThemePreferenceStore(context.Paths.UserConfiguration, context.Configuration.GetValue("repository:configurationBytes", 1024 * 1024)));
+        var themeCommands = new ThemeCommandContribution(themes, applyTheme, new UserConfigurationThemePreferenceStore(context.Paths.UserConfiguration, context.MaximumUserConfigurationBytes));
         return new InteractionCoordinator(
             new InteractionPresenter(context.Dispatcher, context.Projections),
             context.Events,

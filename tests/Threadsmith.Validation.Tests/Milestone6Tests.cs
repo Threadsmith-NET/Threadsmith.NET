@@ -1080,7 +1080,7 @@ public sealed class Milestone6Tests
                 Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
                 var childPidText = await File.ReadAllTextAsync(childPidPath);
                 Assert.True(int.TryParse(
-                    childPidText,
+                    childPidText.Trim(),
                     NumberStyles.None,
                     CultureInfo.InvariantCulture,
                     out childPid));

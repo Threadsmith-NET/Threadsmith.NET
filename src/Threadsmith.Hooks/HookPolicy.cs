@@ -33,7 +33,7 @@ public static class HookDescriptorValidator
                 ? descriptor
                 : throw new ArgumentException($"Duplicate hook handler id '{descriptor.Identity.Id}'.", nameof(descriptors)))];
         var aggregateSeconds = normalized.Where(descriptor => descriptor.Enabled)
-            .Sum(descriptor => descriptor.Limits.Timeout.TotalSeconds * (descriptor.Limits.MaximumRetries + 1));
+            .Sum(descriptor => descriptor.Limits.Timeout.TotalSeconds * ((long)descriptor.Limits.MaximumRetries + 1));
         if (aggregateSeconds > TimeSpan.FromMilliseconds(options.MaximumAggregateTimeoutMilliseconds).TotalSeconds)
         {
             throw new ArgumentException("The aggregate configured hook run budget exceeds the configured limit.", nameof(descriptors));
@@ -103,7 +103,7 @@ public static class HookDescriptorValidator
             || limits.MaximumInputBytes <= 0
             || limits.MaximumOutputBytes <= 0
             || limits.MaximumConcurrency <= 0
-            || limits.MaximumRetries < 0)
+            || limits.MaximumRetries is < 0 or int.MaxValue)
         {
             throw new ArgumentException("Hook resource limits are invalid.", nameof(descriptor));
         }

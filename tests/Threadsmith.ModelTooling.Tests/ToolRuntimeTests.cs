@@ -2004,7 +2004,15 @@ public static class ToolRuntimeTests
             tool => Assert.Equal(
                 tool.Definition.Id == "search"
                     ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["MaximumQueryCharacters"] = "500" })
-                    : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
+                    : tool.Definition.Id == "read_file"
+                        ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string>
+                        {
+                            ["DefaultLines"] = "2000",
+                            ["MaximumLines"] = "2000",
+                            ["MaximumContentBytes"] = "51200",
+                            ["MaximumFileBytes"] = "1048576",
+                        })
+                        : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
                 tool.Definition.Description));
 
         var runProcess = new RunProcessTool(

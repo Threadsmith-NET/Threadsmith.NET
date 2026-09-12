@@ -69,9 +69,9 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | None |
 | `Tool-ReadAgentEvidence-Description.md` | `Threadsmith.Execution` | `prompts/Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | None |
 | `Tool-list_files-Description.md` | `Threadsmith.Tools` | `prompts/Tool-list_files-Description.md` | Advertised description for `list_files`. | None |
-| `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Advertised description for `read_file`. | None |
-| `Tool-write_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-write_file-Description.md` | Advertised description for `write_file`. | None |
-| `Tool-memories-Description.md` | `Threadsmith.Tools` | `prompts/Tool-memories-Description.md` | Advertised description for `memories`. | None |
+| `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Advertised description for `read_file`. | `DefaultLines`, `MaximumLines`, `MaximumContentBytes`, `MaximumFileBytes` |
+| `Tool-write_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-write_file-Description.md` | Advertised description for `write_file`. | `MaximumContentBytes` |
+| `Tool-memories-Description.md` | `Threadsmith.Tools` | `prompts/Tool-memories-Description.md` | Advertised description for `memories`. | `MaximumTextCharacters` |
 | `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | `MaximumQueryCharacters` |
 | `Tool-git_status-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_status-Description.md` | Advertised description for `git_status`. | None |
 | `Tool-find_symbol-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_symbol-Description.md` | Advertised description for `find_symbol`. | None |
@@ -122,7 +122,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-web_fetch-DirectAuthorizationInactive.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-DirectAuthorizationInactive.md` | Recovery guidance when direct fetch authorization is inactive. | None |
 | `Tool-web_fetch-DirectAuthorizationUnavailable.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-DirectAuthorizationUnavailable.md` | Recovery guidance when direct fetch authorization is transiently unavailable. | `Origin`, `Path`, `UrlDigest` |
 | `Tool-web_fetch-TrustBoundary.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-TrustBoundary.md` | Mandatory trust boundary serialized with `web_fetch` results. | None |
-| `Tool-web_search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-Description.md` | Advertised description for `web_search`. | None |
+| `Tool-web_search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-Description.md` | Advertised description for `web_search`. | `MaximumQueryCharacters`, `MaximumFreshnessDays` |
 | `Tool-web_search-TrustBoundary.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-TrustBoundary.md` | Mandatory trust boundary serialized with `web_search` results. | None |
 | `Tool-invoke_skill-Description.md` | `Threadsmith.Skills` | `prompts/Tool-invoke_skill-Description.md` | Advertised description for `invoke_skill`. | None |
 | `Tool-propose_plan-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_plan-Description.md` | Advertised description for `propose_plan`. | None |

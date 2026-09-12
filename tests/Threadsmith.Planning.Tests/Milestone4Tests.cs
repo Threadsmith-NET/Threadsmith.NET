@@ -2020,6 +2020,62 @@ public static class Milestone4Tests
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
+    /// <summary>Both plan output transports retain configured bounds through sanitization.</summary>
+    [Theory]
+    [InlineData(true, 6000)]
+    [InlineData(false, 6000)]
+    [InlineData(true, 3000)]
+    [InlineData(false, 3000)]
+    public static async Task SessionApplication_PlanUsesConfiguredLimits(bool directOutput, int maximumSummaryCharacters)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var events = new DomainEventStream();
+        var observed = new System.Collections.Concurrent.ConcurrentQueue<IDomainEvent>();
+        var approvalRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            if (domainEvent is ApprovalRequested)
+            {
+                approvalRequested.TrySetResult();
+            }
+
+            return Task.CompletedTask;
+        });
+        var plan = CreatePlan(new string('a', 5000), 1);
+        ModelOutput output = directOutput
+            ? new PlanModelOutput(plan)
+            : new ToolRequestModelOutput("propose_plan", SerializePlanProposal(plan));
+        var application = new SessionApplication(
+            events,
+            new ChunkModelProvider(new ModelChunk { Output = output }),
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with
+            {
+                MaxCorrectiveTurns = 0,
+                Plan = new PlanResourceLimits { MaximumSummaryCharacters = maximumSummaryCharacters },
+            },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("configured plan"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
+        if (maximumSummaryCharacters > plan.Summary.Length)
+        {
+            await approvalRequested.Task.WaitAsync(timeout.Token);
+            Assert.Single(observed.OfType<PlanProposed>());
+            Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete"), timeout.Token));
+            Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token));
+        }
+        else
+        {
+            await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token));
+            Assert.Empty(observed.OfType<PlanProposed>());
+        }
+    }
+
     /// <summary>ReviewRisky auto-approves a low-risk valid plan without removing mutation gates.</summary>
     [Fact]
     public static async Task SessionApplication_ReviewRiskyAutoApprovesLowRiskPlan()

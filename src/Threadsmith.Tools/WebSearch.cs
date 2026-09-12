@@ -434,7 +434,11 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         _fetchAuthorization = fetchAuthorization;
         var definition = ToolDefinitionFactory.Create<WebSearchRequest, WebSearchResponse>(
             "web_search",
-            promptLoader.Get(PromptFileNames.ToolWebSearchDescription),
+            promptLoader.Render(PromptFileNames.ToolWebSearchDescription, new Dictionary<string, string>
+            {
+                ["MaximumQueryCharacters"] = options.MaximumQueryCharacters.ToString(CultureInfo.InvariantCulture),
+                ["MaximumFreshnessDays"] = options.MaximumFreshnessDays.ToString(CultureInfo.InvariantCulture),
+            }),
             ToolCategory.ExternalSearch,
             RepositoryTrustLevel.UntrustedInspection,
             ApprovalLevel.None,

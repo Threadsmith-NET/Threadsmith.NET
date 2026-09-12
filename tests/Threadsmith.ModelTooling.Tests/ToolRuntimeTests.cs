@@ -2373,7 +2373,20 @@ public static class ToolRuntimeTests
             }
 
             child?.Dispose();
-            Directory.Delete(repository, recursive: true);
+            // Windows can retain a directory handle briefly after process-tree exit.
+            // Process termination is asserted above; cleanup must not mask that result.
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(repository, recursive: true);
+                    break;
+                }
+                catch (IOException) when (OperatingSystem.IsWindows() && attempt < 99)
+                {
+                    await Task.Delay(50);
+                }
+            }
         }
     }
 
@@ -2705,7 +2718,8 @@ public static class ToolRuntimeTests
             IConfiguration configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["tools:config:csharp_script:timeout_ms"] = "5000",
+                    // Successful cases include cold worker startup and Roslyn compilation on shared CI hosts.
+                    ["tools:config:csharp_script:timeout_ms"] = "30000",
                     ["tools:config:csharp_script:max_output_bytes"] = "256",
                     ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
                 })

@@ -126,6 +126,8 @@ Also run checks owned by the area you changed:
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
 
+`Threadsmith.NativeTools.Tests` runs independent test fixtures sequentially because the pinned Roslyn 5.6 dependency [shares one in-memory SQLite write cache across workspaces on non-Windows platforms](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs), while scheduling writes per workspace. Concurrency exercised explicitly inside a test remains enabled. Other test assemblies can still run in parallel.
+
 ## Commits
 
 Use concise, imperative commit subjects that describe the outcome, for example:

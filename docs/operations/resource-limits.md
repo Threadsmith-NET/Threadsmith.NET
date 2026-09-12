@@ -486,11 +486,11 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/Delegat
 
 ### `events`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/DomainEventStream.cs).
+Trusted-only machine/user/environment configuration. Repository, session, and CLI settings cannot shorten durable event delivery. [Implementation](../../src/Threadsmith.Execution/DomainEventStream.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `committedDeliveryTimeoutMilliseconds` | `5000` | Deadline for committed event delivery. |
+| `committedDeliveryTimeoutMilliseconds` | `5000` | Positive deadline for committed event delivery. Expiry removes a subscriber; choose a value that accommodates persistence latency. |
 
 ### `embeddings`
 

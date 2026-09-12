@@ -1070,9 +1070,19 @@ public sealed class Milestone6Tests
             var stopwatch = Stopwatch.StartNew();
             var childPidPath = Path.Combine(baseline.RepositoryPath, "child.pid");
             var childPid = 0;
-            var cancellationCoordinator = Task.Run(async () =>
+            var buildTask = executor.ExecuteAsync(
+                new BuildValidationRequest
+                {
+                    SessionId = new SessionId(Guid.NewGuid()),
+                    RunId = new RunId(Guid.NewGuid()),
+                    Baseline = baseline,
+                    Confidence = SemanticConfidenceLevel.FullSemantic,
+                },
+                cancellation.Token);
+            try
             {
-                for (var attempt = 0; attempt < 200 && !File.Exists(childPidPath); attempt++)
+                // Cold MSBuild startup is separate from cancellation latency.
+                for (var attempt = 0; attempt < 1200 && !File.Exists(childPidPath) && !buildTask.IsCompleted; attempt++)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(25));
                 }
@@ -1084,19 +1094,22 @@ public sealed class Milestone6Tests
                     NumberStyles.None,
                     CultureInfo.InvariantCulture,
                     out childPid));
+                stopwatch.Restart();
                 await cancellation.CancelAsync();
-            });
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => executor.ExecuteAsync(
-                new BuildValidationRequest
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.WaitAsync(TestContext.Current.CancellationToken));
+            }
+            finally
+            {
+                await cancellation.CancelAsync();
+                try
                 {
-                    SessionId = new SessionId(Guid.NewGuid()),
-                    RunId = new RunId(Guid.NewGuid()),
-                    Baseline = baseline,
-                    Confidence = SemanticConfidenceLevel.FullSemantic,
-                },
-                cancellation.Token));
-            await cancellationCoordinator;
+                    await buildTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Observe cancellation even when the startup assertion failed.
+                }
+            }
 
             var childExited = false;
             for (var attempt = 0; attempt < 200 && !childExited; attempt++)

@@ -225,12 +225,12 @@ internal sealed class CommandPaletteModal : Modal
         // TUIKit 0.10.1 renders labels one UTF-16 code unit per cell and hardcodes default
         // colors. Render the bounded full labels offscreen, then reflow whole graphemes using
         // our existing safe text renderer. Matching, ordering and scrolling remain TUIKit-owned.
-        _listBuffer.Resize(_discovery.Limits.MaximumCommandTitleCharacters, view.Size.Height + 1);
+        _listBuffer.Resize(_discovery.MaximumRenderedTitleLength, view.Size.Height + 1);
         _listBuffer.Clear(CellStyle.Default);
         _palette.HighlightStyle = highlight;
         _palette.MatchStyle = CellStyle.Default;
         _palette.Render(new BufferSurface(_listBuffer));
-        var text = new StringBuilder(_discovery.Limits.MaximumCommandTitleCharacters);
+        var text = new StringBuilder(_listBuffer.Width);
         for (var row = 0; row < view.Size.Height; row++)
         {
             text.Clear();

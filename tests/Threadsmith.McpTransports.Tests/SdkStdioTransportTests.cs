@@ -12,6 +12,7 @@ using Xunit;
 /// <summary>Verifies the SDK-backed stdio MCP transport against the in-repository server.</summary>
 public sealed class SdkStdioTransportTests
 {
+    /// <summary>Prompt mapping honors both invocation and prompt-specific argument bounds.</summary>
     [Fact]
     public void PromptArguments_HonorInvocationCountAndNameLimits()
     {

@@ -4980,7 +4980,9 @@ public static class Milestone1Tests
                 yield return new ModelChunk { Text = "\n\n" };
                 _whitespaceEmitted.TrySetResult();
                 await _releaseAnswer.Task.WaitAsync(cancellationToken);
-                yield return new ModelChunk { Text = "answer" };
+                // Flush a complete paragraph before the verbose tail so rendering fails
+                // while the producer still has work, rather than after Markdown buffering.
+                yield return new ModelChunk { Text = _trailingChunkCount > 0 ? "answer\n\n" : "answer" };
                 for (var index = 0; index < _trailingChunkCount; index++)
                 {
                     yield return new ModelChunk { Text = index.ToString(CultureInfo.InvariantCulture) };

@@ -345,6 +345,24 @@ public static class AppBootstrapTests
         Assert.False(trusted.GetSection("mcp:profiles").Exists());
     }
 
+    /// <summary>Repository event deadlines cannot override the trusted persistence deadline.</summary>
+    [Fact]
+    public static void ConfigurationBootstrap_EventDeadline_UsesTrustedLayers()
+    {
+        using var temporary = new TemporaryDirectory("event-deadline");
+        var paths = CreatePaths(temporary.Root);
+        Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
+        File.WriteAllText(paths.RepositoryConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":1}}");
+        File.WriteAllText(paths.SessionConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":2}}");
+        var trusted = ConfigurationBootstrap.BuildTrusted(paths);
+        Assert.Equal(5000, trusted.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.UserConfiguration)!);
+        File.WriteAllText(paths.UserConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":15000}}");
+        trusted = ConfigurationBootstrap.BuildTrusted(paths);
+        Assert.Equal(15000, trusted.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000));
+    }
+
     /// <summary>Secret environment values remain resolver-only while ordinary prefixed settings still bind.</summary>
     [Fact]
     public static async Task ConfigurationBootstrap_EnvironmentSecrets_StayOutsideOrdinaryConfiguration()

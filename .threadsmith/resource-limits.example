@@ -369,6 +369,7 @@
     }
   },
   "events": {
+    // Trusted machine/user/environment setting; repository/session/CLI overrides are excluded.
     "committedDeliveryTimeoutMilliseconds": 5000
   },
   "embeddings": {

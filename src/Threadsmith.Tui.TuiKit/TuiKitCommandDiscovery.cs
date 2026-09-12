@@ -30,9 +30,11 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
         _byName = _entries.ToFrozenDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
         foreach (var entry in _entries)
         {
+            var title = PaletteTitle(entry);
+            MaximumRenderedTitleLength = Math.Max(MaximumRenderedTitleLength, title.Length);
             _registry.Add(new Command(
                 entry.Name,
-                PaletteTitle(entry),
+                title,
                 () => complete(entry.Name),
                 category: "Threadsmith"));
         }
@@ -40,6 +42,9 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
 
     /// <summary>Immutable discovery rendering limits.</summary>
     internal TuiResourceLimits Limits { get; }
+
+    /// <summary>Actual UTF-16 width required by the registered labels, including an empty-list cell.</summary>
+    internal int MaximumRenderedTitleLength { get; } = 1;
 
     /// <inheritdoc />
     public IReadOnlyList<string> Suggest(string input)

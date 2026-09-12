@@ -305,7 +305,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         executionLimits.Validate();
         var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
         var codeExploreOptions = CodeExploreConfiguration.FromConfiguration(configuration);
-        var events = new DomainEventStream(TimeSpan.FromMilliseconds(configuration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000)));
+        var events = new DomainEventStream(TimeSpan.FromMilliseconds(trustedConfiguration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000)));
         var projections = new InMemoryProjectionStore(executionLimits);
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
         var projectionSubscription = events.Subscribe(

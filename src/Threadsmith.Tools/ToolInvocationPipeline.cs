@@ -832,7 +832,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         var sanitized = _sanitizer.Sanitize(detail);
-        var normalized = new StringBuilder(Math.Min(sanitized.Length, maximumCharacters + 2));
+        var normalized = new StringBuilder(Math.Min(sanitized.Length, maximumCharacters));
         var previousWasWhitespace = false;
         foreach (var rune in sanitized.EnumerateRunes())
         {
@@ -861,6 +861,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var result = normalized.ToString().Trim();
         if (result.Length > maximumCharacters)
         {
+            if (maximumCharacters <= 3)
+            {
+                return "..."[..maximumCharacters];
+            }
+
             var maximumContentCharacters = maximumCharacters - 3;
             normalized.Clear();
             foreach (var rune in result.EnumerateRunes())

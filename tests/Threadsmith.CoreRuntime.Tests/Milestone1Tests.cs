@@ -3778,10 +3778,16 @@ public static class Milestone1Tests
             .WaitAsync(TimeSpan.FromSeconds(5));
         provider.ReleaseAnswer();
 
-        // This includes SQLite event persistence and full engine teardown on shared CI hosts.
-        // A dispatcher deadlock still fails the deadline; only the test's wait budget changes.
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Record.ExceptionAsync(
             () => shellTask.WaitAsync(TimeSpan.FromSeconds(30)));
+        var eventCounts = harness.Events.GroupBy(item => item.GetType().Name)
+            .OrderBy(group => group.Key)
+            .Select(group => $"{group.Key}={group.Count()}");
+        Assert.True(
+            exception is InvalidOperationException,
+            $"Expected the rendering failure, received {exception}. "
+                + $"Activity lifecycle: {string.Join(" | ", surface.Lifecycle)}. "
+                + $"Observed events: {string.Join(", ", eventCounts)}.");
         Assert.Same(expected, exception);
     }
 

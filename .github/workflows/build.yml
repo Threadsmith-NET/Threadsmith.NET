@@ -37,3 +37,43 @@ jobs:
 
       - name: Test
         run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
+
+      - name: Report macOS native test crashes
+        if: ${{ failure() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          decoder = json.JSONDecoder()
+          report_roots = [
+              Path.home() / "Library/Logs/DiagnosticReports",
+              Path("/Library/Logs/DiagnosticReports"),
+          ]
+          count = 0
+          for root in report_roots:
+              for path in sorted(root.glob("*.ips")):
+                  if not any(name in path.name.lower() for name in ("dotnet", "threadsmith", "testhost")):
+                      continue
+                  try:
+                      raw = path.read_text()
+                      header, offset = decoder.raw_decode(raw)
+                      report = json.loads(raw[offset:].strip()) if raw[offset:].strip() else header
+                      threads = report.get("threads", [])
+                      index = report.get("faultingThread", -1)
+                      frames = threads[index].get("frames", []) if 0 <= index < len(threads) else []
+                      images = report.get("usedImages", [])
+                      print(json.dumps({
+                          "report": path.name,
+                          "process": report.get("procName"),
+                          "exception": report.get("exception"),
+                          "termination": report.get("termination"),
+                          "faultingFrames": frames,
+                          "images": [{"name": image.get("name"), "base": image.get("base")} for image in images],
+                      }, indent=2))
+                      count += 1
+                  except (OSError, ValueError, TypeError) as error:
+                      print(f"Could not read {path.name}: {error}")
+          print(f"Native crash reports found: {count}")
+          PY

@@ -13,6 +13,31 @@ using Xunit;
 /// <summary>Verifies bounded semantic Markdown parsing, layout, fallback, and display configuration.</summary>
 public static class TuiMarkdownRenderingTests
 {
+    /// <summary>Configuration cannot raise recursive traversal beyond its stack-safety ceiling.</summary>
+    [Theory]
+    [InlineData(33)]
+    [InlineData(int.MaxValue)]
+    public static void ConfiguredDepthRejectsStackOverflowRisk(int depth)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tui:limits:markdown:maximumDepth"] = depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        Assert.Throws<ArgumentOutOfRangeException>(() => TuiDisplayOptions.Load(configuration));
+    }
+
+    /// <summary>Deep valid Markdown falls back to source instead of unbounded recursive traversal.</summary>
+    [Theory]
+    [InlineData(4)]
+    [InlineData(32)]
+    public static void Parse_ExcessiveNesting_PreservesSource(int depth)
+    {
+        var source = string.Concat(Enumerable.Repeat("> ", 100)) + "deep";
+        var result = new MarkdownParser(new MarkdownRenderingLimits { MaximumDepth = depth }).Parse(source);
+        Assert.False(result.Succeeded);
+        Assert.Equal(source, result.SafeSource);
+    }
+
     /// <summary>Maps supported CommonMark and selected extensions into the closed host document model.</summary>
     [Fact]
     public static void Parse_SupportedMarkdown_ProducesSemanticDocument()

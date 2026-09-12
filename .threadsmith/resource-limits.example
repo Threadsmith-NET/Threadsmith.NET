@@ -142,6 +142,7 @@
       "markdown": {
         "maximumSourceBytes": 262144,
         "maximumNodes": 10000,
+        // 1..32: recursive traversal retains its stack-overflow safety ceiling.
         "maximumDepth": 32,
         "maximumListItems": 1000,
         "maximumTableRows": 200,

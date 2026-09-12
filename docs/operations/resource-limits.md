@@ -226,7 +226,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Markd
 |---|---:|---|
 | `maximumSourceBytes` | `262144` | Maximum UTF-8 answer bytes parsed as Markdown; longer answers stream as escaped source. |
 | `maximumNodes` | `10000` | Maximum parser and semantic nodes. |
-| `maximumDepth` | `32` | Maximum semantic nesting depth. |
+| `maximumDepth` | `32` | Maximum semantic nesting depth, from 1 through 32. The recursive parser/validator/layout retain a host-owned stack-safety ceiling; deeper content uses escaped-source fallback. |
 | `maximumListItems` | `1000` | Maximum items per list. |
 | `maximumTableRows` | `200` | Maximum rows per table. |
 | `maximumTableColumns` | `20` | Maximum columns per table. |
@@ -624,6 +624,7 @@ These are not general resource-capacity knobs:
 - **Closed syntax and identity contracts:** enum members, recognized color/style syntax, canonical secret-reference grammar, schema identities, JSON duplicate/member validation, path confinement, and control-character rejection. These checks remain regardless of resource settings.
 - **Hook attempt representation:** `maximumRetries` must be at most 2,147,483,646 so the one-based integer attempt field can represent the initial attempt plus every retry. Aggregate timeout validation uses wider arithmetic.
 - **Serialized output representation:** C# script `max_output_bytes` cannot exceed 357,913,258 because JSON escaping plus envelope overhead must fit the process capture's 32-bit character count. Web-fetch URL, redirect, and extracted-content limits must together fit the 32-bit serialized tool-output byte count. Invalid combinations fail explicitly before execution.
+- **Recursive Markdown traversal:** nesting is configurable from 1 through 32, preserving the original recursive renderer's safety ceiling. This prevents an unrecoverable stack overflow; deeper content falls back to escaped source. Raising the ceiling requires an iterative implementation, not a configuration override.
 - **Algorithms and layout:** relevance/ranking thresholds, fuzzy edit distance, diversity sampling, generated-source classification probes, viewport row counts, Markdown heading levels, and fixed synchronization/coalescing channel capacities. These define behavior or screen layout rather than rejecting a repository for its size.
 - **Cancellation cleanup:** the short noncooperative Roslyn-compilation backstop remains an internal cancellation mechanism, separate from the configured normal query deadline. Platform interop buffer dimensions and ordinary I/O block sizes remain implementation details.
 

@@ -9,7 +9,7 @@ public sealed record MarkdownRenderingLimits
     /// <summary>Maximum parser and semantic nodes.</summary>
     public int MaximumNodes { get; init; } = 10000;
 
-    /// <summary>Maximum semantic nesting depth.</summary>
+    /// <summary>Maximum semantic nesting depth, up to the recursive renderer's 32-level safety ceiling.</summary>
     public int MaximumDepth { get; init; } = 32;
 
     /// <summary>Maximum items per list.</summary>
@@ -33,12 +33,13 @@ public sealed record MarkdownRenderingLimits
     /// <summary>Maximum code language identifier characters.</summary>
     public int MaximumLanguageCharacters { get; init; } = 64;
 
-    /// <summary>Rejects nonpositive limits.</summary>
+    /// <summary>Rejects nonpositive limits and unsafe recursive nesting.</summary>
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumSourceBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumNodes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDepth);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumDepth, MarkdownParser.MaximumDepth);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumListItems);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTableRows);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTableColumns);

@@ -398,3 +398,4 @@ artifacts/release/
 !.crew/graphs/
 !.crew/artifacts/.gitkeep
 !.crew/graphs/.gitkeep
+/src/Threadsmith.App/Properties/launchSettings.json

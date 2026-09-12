@@ -272,7 +272,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -348,7 +348,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1049,7 +1049,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1135,7 +1135,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1714,6 +1714,25 @@ public sealed class Milestone6Tests
             [],
             SelectedSolutionPath: Path.Combine(root, "src", "Threadsmith.Validation", "Threadsmith.Validation.csproj"),
             TrustLevel: trustLevel);
+    }
+
+    private static async Task DeleteBuildFixtureAsync(string path)
+    {
+        // Windows can report the terminated process as exited before its directory
+        // handle is released. Retry only fixture cleanup; lifecycle assertions run first.
+        var cleanup = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (cleanup.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), TestContext.Current.CancellationToken);
+            }
+        }
     }
 
     private static async Task<WorkspaceBaseline> CreateBuildableBaselineAsync(bool includeDelay)

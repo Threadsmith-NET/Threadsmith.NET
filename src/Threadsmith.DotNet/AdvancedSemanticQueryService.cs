@@ -246,9 +246,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private readonly CodeExploreOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly SemanticEngineRegistry _registry;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
-    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts, CodeExploreOptions? options = null, SemanticResourceLimits? resourceLimits = null)
+    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts, CodeExploreOptions? options = null, SemanticResourceLimits? resourceLimits = null, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(prompts);
@@ -257,6 +258,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         _resourceLimits.Validate();
         _registry = registry;
         _prompts = prompts;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -272,7 +274,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
-        using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
+        using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         var nodes = new Dictionary<string, CallHierarchyNode>(StringComparer.Ordinal);
         var edges = new List<CallHierarchyEdge>();
         var pending = new Queue<(ISymbol Symbol, int Depth)>();
@@ -412,7 +414,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
-        using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
+        using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         var rootIdentity = CreateIdentity(root);
         var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal)
         {
@@ -629,7 +631,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ValidatePattern(request);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
-        using var timeout = CreateTimeout(request.TimeoutMilliseconds, cancellationToken);
+        using var timeout = new QueryTimeout(request.TimeoutMilliseconds, _timeProvider, cancellationToken);
         var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
         var matches = new List<CSharpPatternMatch>();
         var timeReached = false;
@@ -785,7 +787,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(sourceReader);
         request = _options.ResolveRequest(request);
         ValidateCodeExploreRequest(request);
-        using var timeout = CreateTimeout(request.Limits.TimeoutMilliseconds, cancellationToken);
+        using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         timeout.Token.ThrowIfCancellationRequested();
         var engine = _registry.GetEngine(workspaceId);
         var readiness = engine.CaptureCodeExploreReadinessSnapshot();
@@ -13736,15 +13738,27 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
-    private static CancellationTokenSource CreateTimeout(int milliseconds, CancellationToken cancellationToken)
+    private sealed class QueryTimeout : IDisposable
     {
-        var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (milliseconds > 0)
+        private readonly CancellationTokenSource _deadline;
+        private readonly CancellationTokenSource _linked;
+
+        internal QueryTimeout(int milliseconds, TimeProvider timeProvider, CancellationToken cancellationToken)
         {
-            timeout.CancelAfter(TimeSpan.FromMilliseconds(milliseconds));
+            var duration = milliseconds > 0 ? TimeSpan.FromMilliseconds(milliseconds) : Timeout.InfiniteTimeSpan;
+            _deadline = new CancellationTokenSource(duration, timeProvider);
+            _linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _deadline.Token);
         }
 
-        return timeout;
+        internal CancellationToken Token => _linked.Token;
+
+        internal bool IsCancellationRequested => _linked.IsCancellationRequested;
+
+        public void Dispose()
+        {
+            _linked.Dispose();
+            _deadline.Dispose();
+        }
     }
 
     private static async Task<Compilation?> GetCompilationBoundedAsync(Project project, CancellationToken cancellationToken)

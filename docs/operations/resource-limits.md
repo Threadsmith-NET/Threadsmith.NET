@@ -110,7 +110,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 | Field | Default | Purpose |
 |---|---:|---|
 | `timeoutMilliseconds` | `30000` | Maximum elapsed milliseconds per Git query. |
-| `maximumCapturedCharacters` | `524288` | Maximum captured process output characters. |
+| `maximumCapturedCharacters` | `524288` | Maximum captured text-command characters; also the byte ceiling for raw Git blobs. Truncated UTF-8 blobs end at a complete scalar and retain their truncation flag. |
 | `maximumCommits` | `500` | Maximum log commits returned. |
 | `maximumBlameLines` | `500` | Maximum blame lines returned. |
 | `maximumChangedPaths` | `500` | Maximum changed paths returned. |

@@ -906,6 +906,33 @@ public sealed class McpManagerTests
         Assert.Equal("access-canary", store.Values["mcp:oauth:server:accessToken"]);
     }
 
+    /// <summary>Final projections honor raised bounds and mark narrower label/MIME truncation.</summary>
+    [Theory]
+    [InlineData(2048, 512, false)]
+    [InlineData(12, 8, true)]
+    public async Task ResourceRead_HonorsConfiguredLabelAndMimeBounds(int labelLimit, int mimeLimit, bool truncated)
+    {
+        var adapter = new FakeAdapter { ResourceLabel = new string('l', 1800), ResourceMimeType = new string('m', 400) };
+        await using var manager = CreateManager(
+            [Profile("server")],
+            adapter,
+            limits: new McpResourceLimits { MaximumResourceLabelCharacters = labelLimit, MaximumNameCharacters = mimeLimit });
+        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" });
+
+        var result = await manager.ExecuteAsync(new McpManagementRequest
+        {
+            Action = McpManagementAction.ReadResource,
+            ProfileId = "server",
+            CapabilityId = "server:resource:fixture",
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        var item = Assert.Single(result.Content);
+        Assert.Equal(Math.Min(1800, labelLimit), item.Label.Length);
+        Assert.Equal(Math.Min(400, mimeLimit), item.MimeType?.Length);
+        Assert.Equal(truncated, item.IsTruncated);
+    }
+
     /// <summary>Explicit external content is redacted before it crosses the Core result boundary.</summary>
     [Fact]
     public async Task ResourceRead_RedactsExternalContentProjection()
@@ -1512,6 +1539,10 @@ public sealed class McpManagerTests
 
         internal bool ExternalContentIsTruncated { get; init; }
 
+        internal string ResourceLabel { get; init; } = "resource";
+
+        internal string? ResourceMimeType { get; init; }
+
         internal bool ProcessPresent { get; init; }
 
         internal int ConnectCount { get; private set; }
@@ -1611,7 +1642,7 @@ public sealed class McpManagerTests
         {
             return Task.FromResult(new McpTransportContentResult
             {
-                Content = [new McpTransportContentItem { Label = "resource", Text = "untrusted-resource" }],
+                Content = [new McpTransportContentItem { Label = ResourceLabel, Text = "untrusted-resource", MimeType = ResourceMimeType }],
                 IsTruncated = ExternalContentIsTruncated,
             });
         }

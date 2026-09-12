@@ -1192,14 +1192,16 @@ public sealed class McpManager :
     {
         var maximumTextCharacters = _limits.MaximumContentCharacters;
         var sanitizedText = _sanitizer.Sanitize(content.Text);
+        var sanitizedLabel = _sanitizer.Sanitize(content.Label);
+        var sanitizedMimeType = content.MimeType is null ? null : _sanitizer.Sanitize(content.MimeType);
         return new McpExternalContent
         {
-            Label = Bound(_sanitizer.Sanitize(content.Label), 1024),
+            Label = Bound(sanitizedLabel, _limits.MaximumResourceLabelCharacters),
             Text = Bound(sanitizedText, maximumTextCharacters),
-            MimeType = content.MimeType is null
-                ? null
-                : Bound(_sanitizer.Sanitize(content.MimeType), 256),
-            IsTruncated = content.IsTruncated || sanitizedText.Length > maximumTextCharacters,
+            MimeType = sanitizedMimeType is null ? null : Bound(sanitizedMimeType, _limits.MaximumNameCharacters),
+            IsTruncated = content.IsTruncated || sanitizedText.Length > maximumTextCharacters
+                || sanitizedLabel.Length > _limits.MaximumResourceLabelCharacters
+                || sanitizedMimeType?.Length > _limits.MaximumNameCharacters,
         };
     }
 

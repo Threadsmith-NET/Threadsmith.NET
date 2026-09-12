@@ -767,6 +767,24 @@ public sealed class GitQueryService : IGitQueryService
             }
         }
 
+        if (truncated && !binary && output.Length > 0)
+        {
+            // The complete stream is valid UTF-8, but its retained prefix may end
+            // inside a scalar. Drop only that incomplete final scalar.
+            var bytes = output.GetBuffer();
+            var lastScalarStart = (int)output.Length - 1;
+            while (lastScalarStart > 0 && (bytes[lastScalarStart] & 0xC0) == 0x80)
+            {
+                lastScalarStart--;
+            }
+
+            if (Rune.DecodeFromUtf8(bytes.AsSpan(lastScalarStart, (int)output.Length - lastScalarStart), out _, out _)
+                == System.Buffers.OperationStatus.NeedMoreData)
+            {
+                output.SetLength(lastScalarStart);
+            }
+        }
+
         return new BoundedBytes(output.ToArray(), truncated, binary);
     }
 

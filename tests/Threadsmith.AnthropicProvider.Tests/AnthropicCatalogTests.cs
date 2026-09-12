@@ -9,6 +9,24 @@ using Threadsmith.Models.Anthropic;
 /// <summary>Verifies native SDK discovery, immutable catalogs, trusted policy, and cache failure behavior.</summary>
 public sealed class AnthropicCatalogTests
 {
+    /// <summary>Hydration and final registration use the same configurable model-override count.</summary>
+    [Fact]
+    public void RegistrationHonorsRaisedModelOverrideLimit()
+    {
+        var descriptor = Provider() with
+        {
+            ResourceLimits = new AnthropicResourceLimits { MaximumDiscoveredModels = 129 },
+            ModelOverrides = Enumerable.Range(0, 129)
+                .Select(index => new AnthropicModelOverrideConfiguration { ModelId = $"fixture-model-{index}" })
+                .ToArray(),
+        };
+        var hydrated = AnthropicCatalogHydrator.Hydrate(descriptor, [Model()], AnthropicReviewedModels.All);
+        var registration = new AnthropicProviderRegistration();
+        registration.Validate(hydrated);
+        Assert.Throws<InvalidOperationException>(() =>
+            registration.Validate(hydrated with { ResourceLimits = new AnthropicResourceLimits() }));
+    }
+
     /// <summary>Checks profile identifier is stable exact and provider scoped.</summary>
     [Fact]
     public void ProfileIdentifierIsStableExactAndProviderScoped()

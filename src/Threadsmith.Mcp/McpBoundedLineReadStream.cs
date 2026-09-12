@@ -8,7 +8,7 @@ internal sealed class McpBoundedLineReadStream : Stream
 
     private readonly int _maximumLineBytes;
     private readonly Stream _inner;
-    private int _currentLineBytes;
+    private long _currentLineBytes;
 
     /// <summary>Initializes a new instance of the <see cref="McpBoundedLineReadStream"/> class.</summary>
     internal McpBoundedLineReadStream(Stream inner, int maximumLineBytes = MaximumLineBytes)

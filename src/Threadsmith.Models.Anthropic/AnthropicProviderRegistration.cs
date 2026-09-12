@@ -36,7 +36,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
                 $"Anthropic provider '{configured.Id}' requires a secrets: key reference.");
         }
 
-        if (configured.ModelOverrides.Count > 128
+        if (configured.ModelOverrides.Count > configured.ResourceLimits.MaximumDiscoveredModels
             || configured.ModelOverrides.Any(overrideConfiguration => string.IsNullOrWhiteSpace(overrideConfiguration.ModelId)
                 || overrideConfiguration.ModelId.Length > 256
                 || overrideConfiguration.ModelId.Any(char.IsControl)))

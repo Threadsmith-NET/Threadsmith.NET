@@ -2369,6 +2369,7 @@ public static class ToolRuntimeTests
             if (child is { HasExited: false })
             {
                 child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             }
 
             child?.Dispose();
@@ -2789,6 +2790,7 @@ public static class ToolRuntimeTests
         }
     }
 
+    /// <summary>Derived capture sizes outside the process contract fail before a worker starts.</summary>
     [Fact]
     public static async Task CSharpScriptEngine_RejectsUnrepresentableOutputBeforeStartingWorker()
     {
@@ -3625,11 +3627,11 @@ public static class ToolRuntimeTests
         if (OperatingSystem.IsWindows())
         {
             var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
-            var script = "$child = Start-Process -FilePath powershell.exe -NoNewWindow "
-                + "-ArgumentList @('-NoProfile','-NonInteractive','-Command',"
-                + "'Start-Sleep -Seconds 60') -PassThru; "
+            var script = "$start = [Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 60 127.0.0.1'); "
+                + "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; "
+                + "$child = [Diagnostics.Process]::Start($start); "
                 + $"[IO.File]::WriteAllText('{escapedPath}', $child.Id.ToString()); "
-                + "Wait-Process -Id $child.Id";
+                + "$child.WaitForExit()";
             return new ProcessExecutionRequest
             {
                 ToolInvocationId = ToolInvocationId.New(),

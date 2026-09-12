@@ -14,6 +14,8 @@ Most settings are captured when the application starts: restart after editing th
 
 Large composer drafts with many separate graphemes can be slow in the current TUIKit grapheme splitter, which repeatedly scans preceding characters. Raising `tui.limits.maximumDraftBytes` changes admission but does not change that backend processing cost.
 
+Shipped defaults preserve the previous fixed values. Lowering semantic traversal ceilings also lowers tool-owned request defaults; callers are not required to override hidden request fields. MCP management caps requested result counts at `mcp.limits.maximumCapabilities`, including its normal 256-item request default, without disabling connection or authentication operations. `execution.maxAgentDisplayFragmentCharacters` retains its 4,096 default and accepts values of at least two UTF-16 code units so a complete Unicode scalar can fit. Smaller values produce a configuration error. Skill dependency-cycle validation is iterative and introduces no graph-depth admission ceiling.
+
 ## Tool runtime overrides
 
 Every registered tool has a deadline, serialized result-byte limit, and source concurrency declaration. `tools.runtime.defaults` overrides those declarations; `tools.runtime.byTool` overrides matching fields for an exact registered tool ID (case-insensitive). Omitted fields retain the declaration or global override. Dynamic MCP/extension registrations use the same policy and preserve replacement identity. IDs for unloaded dynamic tools can be configured before they register. Entries form an array with a `toolId` field so colon-qualified MCP IDs survive configuration binding; duplicate IDs are rejected.

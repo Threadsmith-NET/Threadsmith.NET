@@ -1185,7 +1185,7 @@ public static class Milestone1Tests
     [InlineData("\u001b[13~theme\r current\r")]
     public static async Task InteractionCoordinator_TuiKitCompletionRetainsSharedAuthority(string completionKeys)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
         await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);

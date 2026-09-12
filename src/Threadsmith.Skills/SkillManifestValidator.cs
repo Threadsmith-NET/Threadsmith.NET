@@ -107,7 +107,6 @@ internal static partial class SkillManifestValidator
         ArgumentNullException.ThrowIfNull(workflow);
         if (workflow.SchemaVersion != 1
             || string.IsNullOrWhiteSpace(workflow.WorkflowId)
-
             || workflow.Steps.Count < 1)
         {
             throw new InvalidDataException("Skill workflow identity, schema, or size is invalid.");
@@ -210,37 +209,40 @@ internal static partial class SkillManifestValidator
 
     private static void DetectCycles(IReadOnlyDictionary<string, SkillWorkflowStep> steps)
     {
-        var visiting = new HashSet<string>(StringComparer.Ordinal);
-        var visited = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var id in steps.Keys)
+        var remainingDependencies = steps.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.DependsOn.Count,
+            StringComparer.Ordinal);
+        var dependents = steps.Keys.ToDictionary(
+            id => id,
+            _ => new List<string>(),
+            StringComparer.Ordinal);
+        foreach (var step in steps.Values)
         {
-            Visit(id, steps, visiting, visited);
-        }
-    }
-
-    private static void Visit(
-        string id,
-        IReadOnlyDictionary<string, SkillWorkflowStep> steps,
-        HashSet<string> visiting,
-        HashSet<string> visited)
-    {
-        if (visited.Contains(id))
-        {
-            return;
+            foreach (var dependency in step.DependsOn)
+            {
+                dependents[dependency].Add(step.StepId);
+            }
         }
 
-        if (!visiting.Add(id))
+        var ready = new Queue<string>(remainingDependencies.Where(pair => pair.Value == 0).Select(pair => pair.Key));
+        var visited = 0;
+        while (ready.TryDequeue(out var id))
+        {
+            visited++;
+            foreach (var dependent in dependents[id])
+            {
+                if (--remainingDependencies[dependent] == 0)
+                {
+                    ready.Enqueue(dependent);
+                }
+            }
+        }
+
+        if (visited != steps.Count)
         {
             throw new InvalidDataException("Skill workflow graph contains a cycle.");
         }
-
-        foreach (var dependency in steps[id].DependsOn)
-        {
-            Visit(dependency, steps, visiting, visited);
-        }
-
-        visiting.Remove(id);
-        visited.Add(id);
     }
 
     private static bool ActionMatchesStepKind(SkillWorkflowStepKind step)

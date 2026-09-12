@@ -218,6 +218,7 @@ public sealed class McpManager :
         try
         {
             ValidateRequest(request);
+            request = request with { MaximumCount = Math.Min(request.MaximumCount, _limits.MaximumCapabilities) };
             var result = request.Action switch
             {
                 McpManagementAction.List => await ListAsync(request, cancellationToken),
@@ -1252,11 +1253,11 @@ public sealed class McpManager :
 
     private void ValidateRequest(McpManagementRequest request)
     {
-        if (request.MaximumCount < 1 || request.MaximumCount > _limits.MaximumCapabilities)
+        if (request.MaximumCount < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                $"MCP maximumCount must be between 1 and {_limits.MaximumCapabilities}.");
+                "MCP maximumCount must be positive; the host caps result lists at the configured maximumCapabilities.");
         }
 
         if (request.Arguments.Count > _limits.MaximumArguments

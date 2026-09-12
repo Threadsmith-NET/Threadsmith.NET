@@ -162,7 +162,9 @@ internal sealed class AgentDisplayTextWriter
         for (var offset = 0; offset < safe.Length;)
         {
             var length = Math.Min(_stream.Limits.MaxAgentDisplayFragmentCharacters, safe.Length - offset);
-            if (offset + length < safe.Length && char.IsHighSurrogate(safe[offset + length - 1]))
+            if (offset + length < safe.Length
+                && char.IsHighSurrogate(safe[offset + length - 1])
+                && char.IsLowSurrogate(safe[offset + length]))
             {
                 length--;
             }

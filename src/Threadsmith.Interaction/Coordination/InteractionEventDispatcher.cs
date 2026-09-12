@@ -26,7 +26,15 @@ public sealed class InteractionEventDispatcher
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
-        await _channel.Writer.WriteAsync(domainEvent, cancellationToken);
+        try
+        {
+            await _channel.Writer.WriteAsync(domainEvent, cancellationToken);
+        }
+        catch (ChannelClosedException)
+        {
+            // The UI observer has stopped. Its drain task owns any rendering failure;
+            // engine publication must still finish so cancellation can join the run.
+        }
     }
 
     /// <summary>Signals that no further UI events will be queued.</summary>

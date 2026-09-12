@@ -16,6 +16,32 @@ using Xunit;
 /// <summary>Verifies governed skill discovery, trust, schemas, loading, workflow, restoration, and persistence.</summary>
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Long acyclic and cyclic dependency chains are validated without consuming recursive stack frames.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void WorkflowValidationHandlesDeepGraphsWithoutRecursiveStackUse(bool cyclic)
+    {
+        const int count = 20000;
+        var steps = Enumerable.Range(0, count).Select(index => new SkillWorkflowStep
+        {
+            StepId = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Kind = SkillWorkflowStepKind.AwaitPlanApproval,
+            DependsOn = index + 1 < count
+                ? [(index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)]
+                : cyclic ? ["0"] : [],
+        }).ToArray();
+        var workflow = new SkillWorkflowDefinition { WorkflowId = "deep-graph", Steps = steps };
+        if (cyclic)
+        {
+            Assert.Throws<InvalidDataException>(() => SkillManifestValidator.ValidateWorkflow(workflow, []));
+        }
+        else
+        {
+            SkillManifestValidator.ValidateWorkflow(workflow, []);
+        }
+    }
+
     /// <summary>Verifies startup discovery reads metadata while a declared body is exclusively locked.</summary>
     [Fact]
     public async Task CatalogRefresh_DoesNotOpenDeclaredBodies()

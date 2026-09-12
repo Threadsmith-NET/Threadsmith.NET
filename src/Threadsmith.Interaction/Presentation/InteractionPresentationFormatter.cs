@@ -610,8 +610,13 @@ internal static class InteractionPresentationFormatter
         }
 
         const string truncationMarker = "\n[memory output truncated by console display bound]";
-        var length = Math.Max(0, maximumInspectionCharacters - truncationMarker.Length);
-        if (char.IsHighSurrogate(encoded[length - 1]))
+        if (maximumInspectionCharacters <= truncationMarker.Length)
+        {
+            return truncationMarker[..maximumInspectionCharacters];
+        }
+
+        var length = maximumInspectionCharacters - truncationMarker.Length;
+        if (length > 0 && char.IsHighSurrogate(encoded[length - 1]))
         {
             length--;
         }

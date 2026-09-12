@@ -243,7 +243,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         var task = request.TaskIntent?.Trim();
         var includeTask = !string.IsNullOrWhiteSpace(task) && !string.Equals(current, task, StringComparison.Ordinal);
         bounded = current.Length + (includeTask ? 1L + task?.Length : 0) > request.Options.MaximumQueryCharacters;
-        var builder = new StringBuilder(request.Options.MaximumQueryCharacters);
+        var builder = new StringBuilder(Math.Min(current.Length, request.Options.MaximumQueryCharacters));
         builder.Append(current.AsSpan(0, Math.Min(current.Length, request.Options.MaximumQueryCharacters)));
         if (includeTask && task is not null && builder.Length < request.Options.MaximumQueryCharacters)
         {

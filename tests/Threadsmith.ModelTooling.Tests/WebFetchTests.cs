@@ -12,6 +12,7 @@ using Xunit;
 /// <summary>Verifies the governed web-fetch security, activation, consent, and extraction contracts.</summary>
 public sealed class WebFetchTests
 {
+    /// <summary>Combined serialized-result budgets must fit the tool output representation.</summary>
     [Theory]
     [InlineData(1048576, 131072)]
     [InlineData(int.MaxValue, 1)]

@@ -30,9 +30,7 @@ public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput,
         CallHierarchyInput input,
         CancellationToken cancellationToken)
     {
-        var limits = input.Depth is { } depth
-            ? new SemanticTraversalLimits { MaximumDepth = depth }
-            : new SemanticTraversalLimits();
+        var limits = CreateTraversalLimits(input.Depth);
         return Service.QueryCallHierarchyAsync(
             workspaceId,
             new CallHierarchyRequest
@@ -101,7 +99,7 @@ public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactInput, S
     {
         return Service.QuerySymbolImpactAsync(
             workspaceId,
-            new SymbolImpactRequest { SymbolId = input.SymbolId },
+            new SymbolImpactRequest { SymbolId = input.SymbolId, Limits = CreateTraversalLimits() },
             cancellationToken);
     }
 
@@ -397,6 +395,19 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(60),
             1024 * 1024);
+    }
+
+    /// <summary>Fits host-owned request defaults within the configured traversal ceilings.</summary>
+    protected SemanticTraversalLimits CreateTraversalLimits(int? depth = null)
+    {
+        var defaults = new SemanticTraversalLimits();
+        return defaults with
+        {
+            MaximumDepth = depth ?? Math.Min(defaults.MaximumDepth, Limits.MaximumTraversalDepth),
+            MaximumNodes = Math.Min(defaults.MaximumNodes, Limits.MaximumTraversalNodes),
+            MaximumEdges = Math.Min(defaults.MaximumEdges, Limits.MaximumTraversalEdges),
+            TimeoutMilliseconds = Math.Min(defaults.TimeoutMilliseconds, Limits.MaximumTraversalTimeoutMilliseconds),
+        };
     }
 
     /// <summary>Validates common graph limits.</summary>

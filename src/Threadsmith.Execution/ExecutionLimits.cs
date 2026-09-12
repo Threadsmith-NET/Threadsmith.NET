@@ -79,7 +79,7 @@ public sealed record ExecutionLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPlanSanityIssues);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSteeringCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxAgentDisplayFragments);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxAgentDisplayFragmentCharacters);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxAgentDisplayFragmentCharacters, 2);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxAgentDisplayLineCharacters);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetainedToolCalls);
         Plan.Validate();

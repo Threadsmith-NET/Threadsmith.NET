@@ -135,12 +135,17 @@ public sealed class McpManagerTests
     }
 
     /// <summary>Automatic OAuth connections suppress UX while an explicit connection retains it.</summary>
-    [Fact]
-    public async Task AutoConnect_OAuthProfile_SuppressesOnlyAutomaticUserInteraction()
+    [Theory]
+    [InlineData(256)]
+    [InlineData(1)]
+    public async Task AutoConnect_OAuthProfile_SuppressesOnlyAutomaticUserInteraction(int maximumCapabilities)
     {
         var adapter = new FakeAdapter();
         var profile = Profile("remote", oauth: true) with { AutoConnect = true };
-        await using var manager = CreateManager([profile], adapter);
+        await using var manager = CreateManager(
+            [profile],
+            adapter,
+            limits: new McpResourceLimits { MaximumCapabilities = maximumCapabilities });
 
         await manager.AutoConnectAsync();
         _ = await manager.ExecuteAsync(new McpManagementRequest
@@ -1202,7 +1207,8 @@ public sealed class McpManagerTests
         FakeToolStateManager? tools = null,
         FakeIdentityManager? identityManager = null,
         IOutputSanitizer? sanitizer = null,
-        ILogger<McpManager>? logger = null)
+        ILogger<McpManager>? logger = null,
+        McpResourceLimits? limits = null)
     {
         return new McpManager(
             profiles,
@@ -1210,7 +1216,8 @@ public sealed class McpManagerTests
             tools ?? new FakeToolStateManager(),
             identityManager ?? new FakeIdentityManager(),
             sanitizer ?? new IdentitySanitizer(),
-            logger ?? NullLogger<McpManager>.Instance);
+            logger ?? NullLogger<McpManager>.Instance,
+            limits: limits);
     }
 
     private static string GetServerAssemblyPath()
